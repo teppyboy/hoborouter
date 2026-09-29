@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1790660916512,
+      "tag": "0000_common_zarda",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790660916513,
+      "tag": "0001_append_only_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790661966852,
+      "tag": "0002_foamy_luminals",
+      "breakpoints": true
+    }
+  ]
+}
