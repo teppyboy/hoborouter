@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "typeRoots": ["../node_modules/@types", "../apps/api/node_modules/bun-types"],
+    "paths": {
+      "bun:sqlite": ["../apps/api/node_modules/bun-types/sqlite.d.ts"],
+      "bun": ["../apps/api/node_modules/bun-types/bun.d.ts"],
+      "@hoborouter/db": ["../packages/db/src/index.ts"]
+    }
+  },
+  "include": ["."]
+}
