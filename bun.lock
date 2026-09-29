@@ -17,6 +17,7 @@
       "dependencies": {
         "@better-auth/drizzle-adapter": "1.7.6",
         "@elysiajs/openapi": "2.0.0-exp.0",
+        "@hoborouter/catalog": "workspace:*",
         "@hoborouter/db": "workspace:*",
         "@hoborouter/keys": "workspace:*",
         "better-auth": "1.7.6",
@@ -43,6 +44,16 @@
         "typescript": "~6.0.2",
         "vite": "npm:@voidzero-dev/vite-plus-core@1.0.0",
         "vite-plus": "1.0.0",
+      },
+    },
+    "packages/catalog": {
+      "name": "@hoborouter/catalog",
+      "version": "0.0.0",
+      "dependencies": {
+        "@hoborouter/db": "workspace:",
+      },
+      "devDependencies": {
+        "bun-types": "^1.4.2",
       },
     },
     "packages/db": {
@@ -72,6 +83,16 @@
     "packages/shared": {
       "name": "@hoborouter/shared",
       "version": "0.0.0",
+    },
+    "packages/wallet": {
+      "name": "@hoborouter/wallet",
+      "version": "0.0.0",
+      "dependencies": {
+        "@hoborouter/db": "workspace:",
+      },
+      "devDependencies": {
+        "bun-types": "^1.4.2",
+      },
     },
     "tests": {
       "name": "@hoborouter/tests",
@@ -246,6 +267,8 @@
 
     "@hoborouter/api": ["@hoborouter/api@workspace:apps/api"],
 
+    "@hoborouter/catalog": ["@hoborouter/catalog@workspace:packages/catalog"],
+
     "@hoborouter/db": ["@hoborouter/db@workspace:packages/db"],
 
     "@hoborouter/keys": ["@hoborouter/keys@workspace:packages/keys"],
@@ -253,6 +276,8 @@
     "@hoborouter/shared": ["@hoborouter/shared@workspace:packages/shared"],
 
     "@hoborouter/tests": ["@hoborouter/tests@workspace:tests"],
+
+    "@hoborouter/wallet": ["@hoborouter/wallet@workspace:packages/wallet"],
 
     "@hoborouter/web": ["@hoborouter/web@workspace:apps/web"],
 

@@ -37,9 +37,9 @@ export async function signUp(
 export function req(
   app: ReturnType<typeof buildApp>,
   path: string,
-  opts: { method?: string; cookie?: string; body?: unknown } = {},
+  opts: { method?: string; cookie?: string; body?: unknown; headers?: Record<string, string> } = {},
 ) {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.cookie) headers.cookie = opts.cookie;
   if (opts.body !== undefined) headers["content-type"] = "application/json";
   return app.handle(

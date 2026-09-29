@@ -1,0 +1,272 @@
+// Task 7: published catalog routes — admin CRUD, member view, /v1 key-auth view.
+import { describe, expect, test, beforeAll } from "bun:test";
+import type { Database } from "bun:sqlite";
+import { createDb, migrate } from "@hoborouter/db";
+import { createAuth } from "../src/auth";
+import { buildApp } from "../src/app";
+import {
+  signUp,
+  req,
+  createWorkspace,
+  addMember,
+  userIdByEmail,
+  makeInstanceAdmin,
+} from "./helpers";
+
+const A = "ws-a";
+const B = "ws-b";
+const OWNER = "mowner@example.com";
+const ADMIN = "madmin@example.com";
+const MEMBER = "mmember@example.com";
+const IADMIN = "miadmin@example.com";
+
+let db: Database;
+let app: ReturnType<typeof buildApp>;
+let owner: string, admin: string, member: string, iadmin: string;
+let keyA: string; // plaintext for ws-a key
+
+function seedBinding(o: {
+  id: string;
+  wsId: string | null;
+  publicModel: string;
+  cpaAlias: string;
+  status?: string;
+  pin?: number;
+  pout?: number;
+}) {
+  db.prepare(
+    "INSERT INTO model_bindings (id, workspace_id, public_model, cpa_alias, status, price_input_per_1m, price_output_per_1m, effective_at) VALUES (?,?,?,?,?,?,?,?)",
+  ).run(
+    o.id,
+    o.wsId,
+    o.publicModel,
+    o.cpaAlias,
+    o.status ?? "published",
+    o.pin ?? 1000,
+    o.pout ?? 2000,
+    Date.now(),
+  );
+}
+
+async function makeKey(cookie: string, wsId: string, name: string): Promise<string> {
+  const res = await req(app, `/api/workspaces/${wsId}/keys`, {
+    method: "POST",
+    cookie,
+    body: { name },
+  });
+  expect(res.status).toBe(201);
+  const body = (await res.json()) as { plaintext: string };
+  return body.plaintext;
+}
+
+const bearer = (token: string) => ({
+  method: "GET",
+  headers: { authorization: `Bearer ${token}` },
+});
+
+beforeAll(async () => {
+  db = createDb(":memory:");
+  migrate(db);
+  const auth = createAuth(db);
+  app = buildApp({ db, auth });
+
+  owner = await signUp(app, OWNER, "O");
+  admin = await signUp(app, ADMIN, "Ad");
+  member = await signUp(app, MEMBER, "M");
+  iadmin = await signUp(app, IADMIN, "IA");
+
+  createWorkspace(db, A, userIdByEmail(db, OWNER), "A");
+  addMember(db, A, userIdByEmail(db, ADMIN), "admin");
+  addMember(db, A, userIdByEmail(db, MEMBER), "member");
+  createWorkspace(db, B, userIdByEmail(db, ADMIN), "B"); // admin also owns B → cross-ws negative
+  makeInstanceAdmin(db, userIdByEmail(db, IADMIN));
+
+  seedBinding({
+    id: "mb-global",
+    wsId: null,
+    publicModel: "global-model",
+    cpaAlias: "secret-alias",
+  });
+  seedBinding({ id: "mb-a", wsId: A, publicModel: "wsa-model", cpaAlias: "wsa-alias" });
+  seedBinding({ id: "mb-b", wsId: B, publicModel: "wsb-model", cpaAlias: "wsb-alias" });
+  seedBinding({
+    id: "mb-off",
+    wsId: null,
+    publicModel: "off-model",
+    cpaAlias: "off-alias",
+    status: "disabled",
+  });
+
+  keyA = await makeKey(owner, A, "test-key-a");
+});
+
+describe("GET /api/workspaces/:id/models (member+ read-only view)", () => {
+  test("member can read own workspace view (global ∪ own), no cpa_alias", async () => {
+    const res = await req(app, `/api/workspaces/${A}/models`, { cookie: member });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const ids = (body as { id: string }[]).map((m) => m.id);
+    expect(ids).toContain("mb-global");
+    expect(ids).toContain("mb-a");
+    expect(ids).not.toContain("mb-b");
+    expect(ids).not.toContain("mb-off");
+    expect(JSON.stringify(body)).not.toContain("secret-alias");
+    expect(JSON.stringify(body)).not.toContain("cpa_alias");
+  });
+
+  test("non-member → 403", async () => {
+    const outsider = await signUp(app, "outsider@example.com", "X");
+    const res = await req(app, `/api/workspaces/${A}/models`, { cookie: outsider });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("POST /api/admin/models (instance admin only)", () => {
+  test("workspace owner → 403", async () => {
+    const res = await req(app, "/api/admin/models", {
+      method: "POST",
+      cookie: owner,
+      body: { public_model: "x", cpa_alias: "y", price_input_per_1m: 1, price_output_per_1m: 1 },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("workspace admin → 403", async () => {
+    const res = await req(app, "/api/admin/models", {
+      method: "POST",
+      cookie: admin,
+      body: { public_model: "x", cpa_alias: "y", price_input_per_1m: 1, price_output_per_1m: 1 },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("instance admin → 201, snapshot published, audit written", async () => {
+    const res = await req(app, "/api/admin/models", {
+      method: "POST",
+      cookie: iadmin,
+      body: {
+        public_model: "new-model",
+        cpa_alias: "new-alias",
+        price_input_per_1m: 500,
+        price_output_per_1m: 700,
+      },
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string };
+    const snap = db
+      .prepare("SELECT * FROM price_snapshots WHERE binding_id = ? ORDER BY created_at DESC")
+      .get(body.id) as { price_input: number; price_output: number } | undefined;
+    expect(snap).toBeDefined();
+    expect(snap!.price_input).toBe(500);
+    const audit = db
+      .prepare("SELECT * FROM audit_log WHERE target = ? AND action LIKE 'model%'")
+      .get(body.id) as { id: string } | undefined;
+    expect(audit).toBeDefined();
+  });
+
+  test("unauthenticated → 401", async () => {
+    const res = await req(app, "/api/admin/models", { method: "POST", body: {} });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("PUT /api/admin/models/:id (price change → NEW snapshot)", () => {
+  test("instance admin updates prices; old snapshot row untouched, new row added", async () => {
+    const before = db
+      .prepare("SELECT price_input FROM price_snapshots WHERE binding_id = 'mb-global'")
+      .all() as { price_input: number }[];
+    const res = await req(app, "/api/admin/models/mb-global", {
+      method: "PUT",
+      cookie: iadmin,
+      body: { price_input_per_1m: 3000, price_output_per_1m: 4000, status: "published" },
+    });
+    expect(res.status).toBe(200);
+    const after = db
+      .prepare("SELECT price_input FROM price_snapshots WHERE binding_id = 'mb-global'")
+      .all() as { price_input: number }[];
+    expect(after.length).toBe(before.length + 1);
+    expect(after.at(-1)!.price_input).toBe(3000);
+    // immutability: original rows unchanged
+    for (let i = 0; i < before.length; i++)
+      expect(after[i]!.price_input).toBe(before[i]!.price_input);
+  });
+
+  test("price-only PUT preserves existing disabled status; explicit published reactivates", async () => {
+    seedBinding({ id: "mb-dis", wsId: null, publicModel: "d", cpaAlias: "d", status: "disabled" });
+    const res = await req(app, "/api/admin/models/mb-dis", {
+      method: "PUT",
+      cookie: iadmin,
+      body: { price_input_per_1m: 5, price_output_per_1m: 6 },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe("disabled");
+    expect(
+      (db.prepare("SELECT status FROM model_bindings WHERE id = 'mb-dis'").get() as { status: string })
+        .status,
+    ).toBe("disabled");
+    const res2 = await req(app, "/api/admin/models/mb-dis", {
+      method: "PUT",
+      cookie: iadmin,
+      body: { price_input_per_1m: 5, price_output_per_1m: 6, status: "published" },
+    });
+    expect(((await res2.json()) as { status: string }).status).toBe("published");
+  });
+
+  test("non-instance-admin → 403", async () => {
+    const res = await req(app, "/api/admin/models/mb-global", {
+      method: "PUT",
+      cookie: owner,
+      body: { price_input_per_1m: 1, price_output_per_1m: 1 },
+    });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("GET /v1/models + /v1/models/:id (Bearer sk-hbr- key auth)", () => {
+  test("missing/invalid bearer → 401", async () => {
+    expect((await req(app, "/v1/models")).status).toBe(401);
+    expect((await req(app, "/v1/models", bearer("sk-hbr-deadbeef"))).status).toBe(401);
+  });
+
+  test("revoked key → 401", async () => {
+    const plaintext = await makeKey(owner, A, "revoke-me");
+    expect((await req(app, "/v1/models", bearer(plaintext))).status).toBe(200);
+    const row = db
+      .prepare("SELECT id FROM api_keys WHERE key_prefix || '' LIKE '%' AND name = 'revoke-me'")
+      .get() as { id: string };
+    db.prepare("UPDATE api_keys SET status = 'revoked' WHERE id = ?").run(row.id);
+    expect((await req(app, "/v1/models", bearer(plaintext))).status).toBe(401);
+  });
+
+  test("lists published global ∪ own-workspace bindings; no cpa_alias anywhere", async () => {
+    const res = await req(app, "/v1/models", bearer(keyA));
+    expect(res.status).toBe(200);
+    const text = JSON.stringify(await res.json());
+    expect(text).not.toContain("cpa_alias");
+    expect(text).not.toContain("secret-alias");
+    expect(text).not.toContain("wsb-alias");
+    expect(text).not.toContain("off-alias");
+    expect(text).toContain("global-model");
+    expect(text).toContain("wsa-model");
+  });
+
+  test("workspace B binding not visible to ws-a key", async () => {
+    const res = await req(app, "/v1/models", bearer(keyA));
+    const text = JSON.stringify(await res.json());
+    expect(text).not.toContain("wsb-model");
+  });
+
+  test("GET /v1/models/:id returns one binding; disabled/foreign → 404", async () => {
+    expect((await req(app, "/v1/models/mb-global", bearer(keyA))).status).toBe(200);
+    expect((await req(app, "/v1/models/mb-b", bearer(keyA))).status).toBe(404);
+    expect((await req(app, "/v1/models/mb-off", bearer(keyA))).status).toBe(404);
+  });
+
+  test("disabled binding absent from /v1/models on the NEXT request (no caching)", async () => {
+    const res1 = await req(app, "/v1/models", bearer(keyA));
+    expect(JSON.stringify(await res1.json())).toContain("wsa-model");
+    db.prepare("UPDATE model_bindings SET status = 'disabled' WHERE id = 'mb-a'").run();
+    const res2 = await req(app, "/v1/models", bearer(keyA));
+    expect(JSON.stringify(await res2.json())).not.toContain("wsa-model");
+  });
+});

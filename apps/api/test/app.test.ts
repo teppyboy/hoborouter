@@ -117,7 +117,6 @@ describe("static SPA serving", () => {
     for (const path of [
       "/api",
       "/v1",
-      "/v1/models",
       "/v1/chat/completions",
       "/v1/responses",
       "/webhooks",
@@ -128,6 +127,12 @@ describe("static SPA serving", () => {
       expect(res.headers.get("content-type")).toContain("application/json");
       expect(await res.text()).not.toContain("<html>");
     }
+  });
+
+  test("/v1/models without key → 401 JSON (route exists, key-auth gated)", async () => {
+    const res = await req("/v1/models");
+    expect(res.status).toBe(401);
+    expect(res.headers.get("content-type")).toContain("application/json");
   });
 
   test("double-encoded reserved prefixes → 404, never SPA HTML", async () => {
