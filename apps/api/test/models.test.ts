@@ -201,8 +201,11 @@ describe("PUT /api/admin/models/:id (price change → NEW snapshot)", () => {
     expect(res.status).toBe(200);
     expect(((await res.json()) as { status: string }).status).toBe("disabled");
     expect(
-      (db.prepare("SELECT status FROM model_bindings WHERE id = 'mb-dis'").get() as { status: string })
-        .status,
+      (
+        db.prepare("SELECT status FROM model_bindings WHERE id = 'mb-dis'").get() as {
+          status: string;
+        }
+      ).status,
     ).toBe("disabled");
     const res2 = await req(app, "/api/admin/models/mb-dis", {
       method: "PUT",

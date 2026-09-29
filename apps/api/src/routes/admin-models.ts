@@ -102,14 +102,14 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
       const userId = gate.session.user.id;
       const denied = requireInstanceAdmin(db, userId);
       if (denied) return denied;
-      const existing = db.prepare("SELECT id, status FROM model_bindings WHERE id = ?").get(params.id) as
-        | { id: string; status: string }
-        | undefined;
+      const existing = db
+        .prepare("SELECT id, status FROM model_bindings WHERE id = ?")
+        .get(params.id) as { id: string; status: string } | undefined;
       if (!existing) return jsonError(404, "NOT_FOUND", "Model binding not found");
       const b = (body ?? {}) as Record<string, unknown>;
       const pin = b.price_input_per_1m;
       const pout = b.price_output_per_1m;
-      const status = b.status as string | undefined ?? existing.status;
+      const status = (b.status as string | undefined) ?? existing.status;
       if (
         typeof pin !== "number" ||
         !Number.isSafeInteger(pin) ||
