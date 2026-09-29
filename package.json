@@ -1,0 +1,24 @@
+{
+  "name": "hoborouter",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "tests"
+  ],
+  "scripts": {
+    "test": "vp test",
+    "check": "vp check",
+    "lint": "vp lint",
+    "fmt": "vp fmt",
+    "dev": "vp dev",
+    "build": "vp build"
+  },
+  "devDependencies": {
+    "@better-auth/cli": "1.4.21",
+    "@types/node": "^26.6.3",
+    "typescript": "~6.0.2",
+    "vite-plus": "1.0.0"
+  },
+  "packageManager": "bun@1.4.0"
+}

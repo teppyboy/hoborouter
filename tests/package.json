@@ -1,0 +1,9 @@
+{
+  "name": "@hoborouter/tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@hoborouter/shared": "workspace:"
+  }
+}
