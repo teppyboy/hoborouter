@@ -35,20 +35,15 @@ function overflowCheckedAdd(name: string, a: number, b: number): number {
   return sum;
 }
 
-function getWalletRow(
-  db: Database,
-  walletId: string,
-): { id: string; balance: number; reserved: number; version: number } {
-  const row = db
-    .prepare("SELECT id, balance, reserved, version FROM wallets WHERE id = ?")
-    .get(walletId) as
-    | { id: string; balance: number; reserved: number; version: number }
-    | undefined;
-  if (!row) throw new WalletError("not_found", `wallet not found: ${walletId}`);
-  return row;
-}
-
-function beginImmediate<T>(db: Database, fn: () => T): T {
+/**
+ * Transaction composition for callers that group multiple mutations (e.g. the
+ * mock payment webhook: event insert + credit + status update in ONE atomic
+ * unit). Opens BEGIN IMMEDIATE unless already inside a transaction — in that
+ * case it runs fn inline and the OUTERMOST transaction owns commit/rollback.
+ * creditWallet's own atomicity/CAS behavior is unchanged either way.
+ */
+export function runInImmediate<T>(db: Database, fn: () => T): T {
+  if (db.inTransaction) return fn();
   db.exec("BEGIN IMMEDIATE");
   try {
     const result = fn();
@@ -64,6 +59,19 @@ function beginImmediate<T>(db: Database, fn: () => T): T {
   }
 }
 
+function getWalletRow(
+  db: Database,
+  walletId: string,
+): { id: string; balance: number; reserved: number; version: number } {
+  const row = db
+    .prepare("SELECT id, balance, reserved, version FROM wallets WHERE id = ?")
+    .get(walletId) as
+    | { id: string; balance: number; reserved: number; version: number }
+    | undefined;
+  if (!row) throw new WalletError("not_found", `wallet not found: ${walletId}`);
+  return row;
+}
+
 export function creditWallet(
   db: Database,
   opts: {
@@ -75,7 +83,7 @@ export function creditWallet(
   },
 ): { ledgerEntryId: string; balanceAfter: number } {
   const amount = requirePositiveSafeInteger("amount", opts.amount);
-  return beginImmediate(db, () => {
+  return runInImmediate(db, () => {
     const wallet = getWalletRow(db, opts.walletId);
     if (opts.paymentId !== null) {
       const existing = db

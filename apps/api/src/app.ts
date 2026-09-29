@@ -12,6 +12,9 @@ import { keysRoutes } from "./routes/keys";
 import { cpaHealthRoutes } from "./routes/cpahealth";
 import { adminModelsRoutes } from "./routes/admin-models";
 import { v1ModelsRoutes } from "./routes/v1-models";
+import { paymentsRoutes } from "./routes/payments";
+import { mockWebhookRoutes } from "./routes/webhooks-mock";
+import { mockWebhookConfig } from "./mock-config";
 import { createAuth } from "./auth";
 
 const defaultWebDist = new URL("../../web/dist", import.meta.url).pathname;
@@ -31,6 +34,7 @@ export const buildApp = (deps: AppDeps = {}) => {
       return d;
     })();
   const auth = deps.auth ?? createAuth(db);
+  const mockPayments = mockWebhookConfig();
 
   return new Elysia({ name: "hoborouter-api" })
     .use(healthRoutes)
@@ -40,6 +44,8 @@ export const buildApp = (deps: AppDeps = {}) => {
     .use(membersRoutes(db, auth))
     .use(auditRoutes(db, auth))
     .use(keysRoutes(db, auth))
+    .use(paymentsRoutes(db, auth, mockPayments))
+    .use(mockWebhookRoutes(db, mockPayments))
     .use(cpaHealthRoutes(db, auth))
     .use(adminModelsRoutes(db, auth))
     .use(v1ModelsRoutes(db))

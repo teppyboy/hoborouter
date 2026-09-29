@@ -13,6 +13,8 @@
     "@hoborouter/catalog": "workspace:*",
     "@hoborouter/db": "workspace:*",
     "@hoborouter/keys": "workspace:*",
+    "@hoborouter/payments": "workspace:*",
+    "@hoborouter/wallet": "workspace:*",
     "better-auth": "1.7.6",
     "drizzle-orm": "0.45.3",
     "elysia": "2.0.0-exp.64"

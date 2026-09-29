@@ -20,6 +20,8 @@
         "@hoborouter/catalog": "workspace:*",
         "@hoborouter/db": "workspace:*",
         "@hoborouter/keys": "workspace:*",
+        "@hoborouter/payments": "workspace:*",
+        "@hoborouter/wallet": "workspace:*",
         "better-auth": "1.7.6",
         "drizzle-orm": "0.45.3",
         "elysia": "2.0.0-exp.64",
@@ -77,6 +79,17 @@
       },
       "devDependencies": {
         "@types/node": "^26.6.3",
+        "bun-types": "^1.4.2",
+      },
+    },
+    "packages/payments": {
+      "name": "@hoborouter/payments",
+      "version": "0.0.0",
+      "dependencies": {
+        "@hoborouter/db": "workspace:",
+        "@hoborouter/wallet": "workspace:",
+      },
+      "devDependencies": {
         "bun-types": "^1.4.2",
       },
     },
@@ -272,6 +285,8 @@
     "@hoborouter/db": ["@hoborouter/db@workspace:packages/db"],
 
     "@hoborouter/keys": ["@hoborouter/keys@workspace:packages/keys"],
+
+    "@hoborouter/payments": ["@hoborouter/payments@workspace:packages/payments"],
 
     "@hoborouter/shared": ["@hoborouter/shared@workspace:packages/shared"],
 
