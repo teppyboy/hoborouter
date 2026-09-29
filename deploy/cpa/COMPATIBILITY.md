@@ -16,7 +16,7 @@
 | ------------------------- | ----------------------------------- | ----------------------------------------------------- |
 | `management.allow-remote` | `false`                             | `true`                                                |
 | `management.secret-key`   | `""`                                | `$CPA_MANAGEMENT_KEY` (64 hex chars, pre-substituted) |
-| `access.api-keys`         | 3 example keys `your-api-key-1/2/3` | single entry `$CPA_ACCESS_KEY` (pre-substituted)      |
+| `access.api-keys`         | 3 placeholder example keys (redacted here; verbatim in the snapshot) | single entry `$CPA_ACCESS_KEY` (pre-substituted)      |
 
 `server.port` is already `8317` in the snapshot — unchanged. No other field is touched; the render script fails if the diff contains any other line.
 

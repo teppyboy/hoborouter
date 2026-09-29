@@ -89,6 +89,8 @@ test("deploy/: no committed secrets, rendered config untracked", async () => {
     .trim()
     .split("\n");
   for (const f of tracked.filter(Boolean)) {
+    // pinned snapshot (upstream's own example keys) and render script (placeholder replacement logic) contain placeholders by design, not secrets
+    if (f === "deploy/cpa/config.example.yaml" || f === "deploy/cpa/render-config.sh") continue;
     const text = await Bun.file(f).text();
     expect(text).not.toContain("your-api-key");
     expect(text).not.toMatch(/\$\{CPA_/); // CPA config values are substituted pre-parse, never templated into CPA files
