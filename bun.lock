@@ -18,6 +18,7 @@
         "@better-auth/drizzle-adapter": "1.7.6",
         "@elysiajs/openapi": "2.0.0-exp.0",
         "@hoborouter/db": "workspace:*",
+        "@hoborouter/keys": "workspace:*",
         "better-auth": "1.7.6",
         "drizzle-orm": "0.45.3",
         "elysia": "2.0.0-exp.64",
@@ -55,6 +56,17 @@
         "@types/node": "^26.6.3",
         "bun-types": "^1.4.2",
         "drizzle-kit": "0.31.11",
+      },
+    },
+    "packages/keys": {
+      "name": "@hoborouter/keys",
+      "version": "0.0.0",
+      "dependencies": {
+        "@hoborouter/db": "workspace:",
+      },
+      "devDependencies": {
+        "@types/node": "^26.6.3",
+        "bun-types": "^1.4.2",
       },
     },
     "packages/shared": {
@@ -235,6 +247,8 @@
     "@hoborouter/api": ["@hoborouter/api@workspace:apps/api"],
 
     "@hoborouter/db": ["@hoborouter/db@workspace:packages/db"],
+
+    "@hoborouter/keys": ["@hoborouter/keys@workspace:packages/keys"],
 
     "@hoborouter/shared": ["@hoborouter/shared@workspace:packages/shared"],
 

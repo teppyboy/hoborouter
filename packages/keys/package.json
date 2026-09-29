@@ -1,0 +1,16 @@
+{
+  "name": "@hoborouter/keys",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/keys.ts"
+  },
+  "dependencies": {
+    "@hoborouter/db": "workspace:"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "bun-types": "^1.4.2"
+  }
+}
