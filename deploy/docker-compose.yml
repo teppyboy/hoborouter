@@ -1,0 +1,39 @@
+---
+services:
+  # Start this stack ONLY via scripts/cpa-preflight.sh — a direct
+  # `docker compose up` skips the PF/host-probe gate (documented residual
+  # risk; the host PF rule itself is the control).
+  # Real gateway image wiring lands with the containerization work; this
+  # committed peer acts as the in-network reachability probe host (see
+  # cpa-reachability.test.ts and COMPATIBILITY.md).
+  gateway:
+    image: curlimages/curl:8.12.1
+    entrypoint: ["sleep", "infinity"]
+    networks: [cpa-net]
+
+  cpa:
+    image: eceasy/cli-proxy-api:v8.0.4
+    restart: unless-stopped
+    volumes:
+      # Rendered config at the path in pinned upstream Compose.
+      - ./cpa/config.yaml:/CLIProxyAPI/config.yaml:ro
+    networks:
+      cpa-net:
+        # Dedicated, conflict-checked subnet; fixed CPA address so the host
+        # PF rule (deploy/pf/) targets a stable IP. See
+        # docs/ops/runbook-foundation.md.
+        ipv4_address: 192.168.231.3
+    # NO ports: — CPA must never be published to the host
+
+networks:
+  cpa-net:
+    internal: true
+    # IPv6 explicitly off: the PF rule is IPv4-only; a default flip must not
+    # silently open the v6 bypass (preflight also verifies live absence).
+    enable_ipv6: false
+    ipam:
+      config:
+        # Conflicts checked against host routes + existing Docker networks
+        # (192.168.215.0/24 OrbStack default, 10.11.168.0/21 LAN) on 2026-09-29.
+        - subnet: 192.168.231.0/24
+          gateway: 192.168.231.1

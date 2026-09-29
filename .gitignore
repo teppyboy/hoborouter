@@ -12,3 +12,5 @@ dist/
 .superpowers/
 *.sqlite
 *.sqlite-*
+deploy/.env
+deploy/cpa/config.yaml

@@ -9,6 +9,7 @@ import { workspacesRoutes } from "./routes/workspaces";
 import { membersRoutes } from "./routes/members";
 import { auditRoutes } from "./routes/audit";
 import { keysRoutes } from "./routes/keys";
+import { cpaHealthRoutes } from "./routes/cpahealth";
 import { createAuth } from "./auth";
 
 const defaultWebDist = new URL("../../web/dist", import.meta.url).pathname;
@@ -37,6 +38,7 @@ export const buildApp = (deps: AppDeps = {}) => {
     .use(membersRoutes(db, auth))
     .use(auditRoutes(db, auth))
     .use(keysRoutes(db, auth))
+    .use(cpaHealthRoutes(db, auth))
     .get(
       "/api/*",
       () =>
