@@ -26,6 +26,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  delete process.env.HBR_WEB_DIST; // don't leak the fixture path into other test files
   rmSync(fixtureDist, { recursive: true, force: true });
   rmSync(outsideFile, { force: true });
 });

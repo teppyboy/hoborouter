@@ -11,7 +11,16 @@ import { createDb, schema } from "@hoborouter/db";
 
 /** Build a Better Auth instance over an existing bun:sqlite Database. */
 export function createAuth(db: Database) {
+  const baseURL =
+    process.env.BETTER_AUTH_URL || process.env.HBR_BASE_URL || "http://localhost:3000";
+  if (
+    process.env.NODE_ENV === "production" &&
+    !(process.env.BETTER_AUTH_URL || process.env.HBR_BASE_URL)
+  ) {
+    throw new Error("BETTER_AUTH_URL (or HBR_BASE_URL) is required when NODE_ENV=production");
+  }
   return betterAuth({
+    baseURL,
     database: drizzleAdapter(drizzle(db, { schema }), {
       provider: "sqlite",
       schema: { ...schema, user: schema.users },
