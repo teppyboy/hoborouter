@@ -1,0 +1,22 @@
+{
+  "name": "@hoborouter/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./auth": "./src/auth.ts"
+  },
+  "dependencies": {
+    "@better-auth/drizzle-adapter": "1.7.6",
+    "@elysiajs/openapi": "2.0.0-exp.0",
+    "@hoborouter/db": "workspace:*",
+    "better-auth": "1.7.6",
+    "drizzle-orm": "0.45.3",
+    "elysia": "2.0.0-exp.64"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "bun-types": "^1.4.2"
+  }
+}
