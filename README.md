@@ -19,7 +19,7 @@ bun test
 bunx tsc --noEmit -p apps/api
 ```
 
-CPA operations require the preflight gate; see [`docs/ops/runbook-foundation.md`](docs/ops/runbook-foundation.md). Architecture and paid-traffic decisions: [`docs/architecture/architecture.md`](docs/architecture/architecture.md) §8.
+CPA runs on `127.0.0.1:8317` with a generated 256-bit management key. Use `scripts/cpa-dev.sh up|down|status`. Paid AI traffic remains disabled; production use requires explicit approval.
 
 ## Environment
 
