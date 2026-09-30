@@ -90,3 +90,65 @@ Isolation is verified live per start only. Re-run on every start.
   `host CANNOT reach CPA bridge IP`) run ONLY with `CPA_PF_INSTALLED=1`
   (normal test — a reachable host FAILS); default suite skips visibly and
   never starts CPA ungated. No `test.failing` masking.
+
+## Local setup and operations
+
+From the repository root:
+
+```sh
+bun install
+cp deploy/.env.example deploy/.env
+bun run dev
+```
+
+`deploy/.env` is gitignored. Set these values there as appropriate:
+
+- `HBR_DB_PATH` — SQLite path; defaults to `:memory:`.
+- `HBR_WEB_DIST` — web distribution override.
+- `HBR_MOCK_PAYMENTS` and `HBR_MOCK_PAYMENTS_WEBHOOK_KEY` — development/demo
+  only; mock payments require `HBR_MOCK_PAYMENTS=on`, a non-empty key, and a
+  non-production `NODE_ENV`.
+- `CPA_MANAGEMENT_KEY` and `CPA_ACCESS_KEY` — CPA credentials.
+- `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL` — optional bootstrap admin email.
+
+### Compose lifecycle and probe rerun
+
+Do not start CPA with a direct Compose command. Use the gated preflight:
+
+```sh
+sudo scripts/cpa-preflight.sh
+```
+
+The preflight starts the stack, runs peer and host reachability probes, and
+leaves CPA running only on success. To run checks without starting it:
+
+```sh
+sudo scripts/cpa-preflight.sh --check-only
+```
+
+Manual teardown (including failed-run cleanup):
+
+```sh
+docker compose -f deploy/docker-compose.yml down -v
+```
+
+Re-run the Phase 0 probe after configuration or host-network changes with
+`sudo scripts/cpa-preflight.sh`; it must fail closed if PF, the anchor rule,
+or the host probe is not verified.
+
+### Verify paid routes remain disabled
+
+```sh
+curl -fsS http://localhost:3000/openapi.json | grep -E 'v1/(chat/completions|responses)' && exit 1 || true
+curl -i http://localhost:3000/v1/chat/completions
+```
+
+The first command must find no paid proxy route. The second must not return a
+working paid route (404 is expected). The exact banner is:
+
+> PAID AI TRAFFIC DISABLED — Phase 0 probe does not authorize it; see architecture.md §8 open human decisions.
+
+Mock payment routes are for local development/demo only; never enable them in
+production. Docker/Compose reachability and PF host isolation are currently
+**UNVERIFIED** on this host until the preflight and live probe pass. No
+isolation success claim is made here.

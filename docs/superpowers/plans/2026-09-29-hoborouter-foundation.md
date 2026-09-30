@@ -31,7 +31,7 @@
 - **Phase 0 mock provider runs as a Compose service on `cpa-net`** (not in-process) so the `internal: true` network can reach it at a fixed internal URL (`http://mock-provider:8318`). Its config overlay is rendered only AFTER the pinned release's `config.example.yaml` is fetched, using field paths read verbatim from that snapshot; unconfirmable field paths → UNKNOWN verdict, never an invented path.
 - **Private network ≠ egress policy (P1 note):** `internal: true` blocks ALL egress including provider calls. Foundation has zero provider usage so this is correct now. **Phase 2 must revisit:** a later plan needs an explicit egress-capable network design (host-isolated but provider-egress-allowing) and its own review. This plan does not decide it.
 - Inbound client headers `X-CPA-TRACE-ID`, `X-Request-Id`, `OpenAI-Request-Id` are stripped at the gateway; only allowlisted CPA response headers forwarded (api-boundaries.md §5).
-- **No git operations during authoring or execution.** The repository has no `.git`; whether/when to `git init` is a separate human decision. Task commit steps are replaced by verification commands; implementers do NOT init or commit.
+- **No git operations during authoring or execution.** This repository is Git-backed; task commit steps are replaced by verification commands. Implementers do NOT stage, commit, reset, or push.
 - License: no AGPL code or paraphrase from new-api; concept-level reference only (docs/research/new-api.md).
 - Mock payment provider is development/demo only: behind auth + feature flag, disabled when `NODE_ENV=production` (api-boundaries.md §3).
 - Workspace roles are `owner|admin|member`. **Instance admin is provisioned independently of workspace roles** via an `instance_admins` table (user_id PK, FK → users) with a bootstrap procedure — see Task 3.
@@ -380,14 +380,14 @@
 
 **Interfaces:**
 
-- Produces: `stripUntrustedHeaders` plugin (removes inbound `X-CPA-TRACE-ID`, `X-Request-Id`, `OpenAI-Request-Id` on all routes); error plugin: every non-2xx response body is `{error: {code, message, request_id}}`; `X-HBR-Request-Id` response header set on handled requests. Runbook documents `HBR_MOCK_PAYMENTS`, `HBR_WEB_DIST`, `CPA_MANAGEMENT_KEY`, `CPA_ACCESS_KEY`, `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL`, DB path env.
+- Produces: `stripUntrustedHeaders` plugin (removes inbound `X-CPA-TRACE-ID`, `X-Request-Id`, `OpenAI-Request-Id` on all routes); errors (4xx/5xx) return `{error: {code, message, request_id}}`; native 3xx responses preserve `Location` and `Set-Cookie`; 204, 304, and HEAD responses remain bodyless. `X-HBR-Request-Id` response header set on handled requests. Runbook documents `HBR_MOCK_PAYMENTS`, `HBR_WEB_DIST`, `CPA_MANAGEMENT_KEY`, `CPA_ACCESS_KEY`, `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL`, DB path env.
 - Consumes: all prior tasks.
 
-- [ ] **Step 1: Failing security tests.** Request with all three stripped headers → handler-visible context has none of them; response carries `X-HBR-Request-Id` (UUID); error response shape asserted on a 404 and a 403 route (`{error:{code,message,request_id}}`). **No 402 test — no route in this foundation returns 402** (wallet logic is package-only; the 402-bearing proxy route is Phase 2). No stack trace in any error body; `GET /openapi.json` does not document any `/v1/chat/completions` or `/v1/responses` POST route (paid traffic disabled, machine-checked).
+- [ ] **Step 1: Failing security tests.** Request with all three stripped headers → handler-visible context has none of them; successful/static and error responses carry UUID `X-HBR-Request-Id`; error response shape asserted on 404 and 403 routes (`{error:{code,message,request_id}}`), plus 500 redaction/no stack. Native 302 preserves `Location` and multiple `Set-Cookie`; 304 and HEAD responses stay bodyless. **No 402 test — no route in this foundation returns 402** (wallet logic is package-only; the 402-bearing proxy route is Phase 2). `GET /openapi.json` does not document any `/v1/chat/completions` or `/v1/responses` POST route (paid traffic disabled, machine-checked).
 - [ ] **Step 2: Red run** → FAIL.
 - [ ] **Step 3: Implement** plugins; wire into `buildApp()`.
 - [ ] **Step 4: Full suite green** — `bun test` (workspace root) → ALL PASS; `vp check` → exit 0.
-- [ ] **Step 5: Docs.** README + runbook include the banner: "PAID AI TRAFFIC DISABLED — Phase 0 probe does not authorize it; see architecture.md §8 open human decisions." README also states: "repository intentionally not a git repo yet; git init is a pending human decision."
+- [ ] **Step 5: Docs.** README + runbook include the banner: "PAID AI TRAFFIC DISABLED — Phase 0 probe does not authorize it; see architecture.md §8 open human decisions." README accurately describes this as a Git-backed repository.
 - [ ] **Step 6: NO commit.**
 
 ---

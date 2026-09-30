@@ -53,7 +53,8 @@ test("cpa health: instance admin ok; each upstream hit exactly once; no auth ret
     expect(seenAuth).toEqual([`Bearer ${process.env.CPA_MANAGEMENT_KEY}`]);
     const text = await res.text();
     const body = JSON.parse(text) as { error?: { code?: string } };
-    expect(body.error?.code).toBe("CPA_MANAGEMENT_UNAVAILABLE");
+    // Boundary redacts all 5xx details to the global safe error shape.
+    expect(body.error?.code).toBe("INTERNAL_ERROR");
     expect(text).not.toContain(process.env.CPA_MANAGEMENT_KEY!);
   } finally {
     server.stop(true);
