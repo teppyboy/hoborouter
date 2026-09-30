@@ -1,7 +1,7 @@
 # STATUS
 
 - Milestone: 6–8 partial; architecture/research foundation complete and approved by owner. Existing foundation remains separate from missing paid gateway, payOS, and dashboard slices.
-- Current work: expedited next-slice plan at `docs/superpowers/plans/2026-09-30-paid-gateway.md`; gateway remains disabled. No paid gateway implementation or migration executed.
+- Current progress: Task1 money verified in local commit `0957b6b`; next schema/catalog/reservation. Gateway remains disabled.
 - CPA evidence: v8.0.4 + `z-ai/glm-5.3-flash` captured Chat JSON/SSE `$.usage`, Responses JSON `$.usage` with cached/reasoning details, Responses SSE `response.completed` `$.response.usage`; Chat streaming injects `include_usage`. Chat cached/reasoning absence is not zero-cost proof. Model echo is not alias-translation proof. No inbound request-ID echo; retain local ID + CPA trace. Usage queue was empty; schema/correlation unverified and queue cannot settle billing.
 - Known blockers: implementation of forward migration/preflight, bounded capture/settlement, immediate payOS, and fresh independent review, billing audit, and shell-capable QA before enablement. Populated incompatible data requires explicit owner approval before mutation; no destructive reset.
 - Next tasks: money seam, then schema/catalog/reservation and key permissions, bounded extractor/atomic settlement/refunds, paid routes and restart reconciliation, then immediate Mock/payOS provider plus dev fixtures. Preserve forward migration; request approval before mutating incompatible populated data. payOS remains the immediate provider task.
