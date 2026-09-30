@@ -22,6 +22,15 @@ bun run dev
 - `CPA_MANAGEMENT_KEY` and `CPA_ACCESS_KEY` — CPA credentials.
 - `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL` — optional bootstrap admin email.
 
+### Add a provider via the CPA web UI
+
+```sh
+scripts/cpa-dev.sh up
+scripts/cpa-dev.sh key
+```
+
+Open http://127.0.0.1:8317/management.html and paste the key. Add API-key providers directly. OAuth providers use the published callback ports; keep the browser on this local machine.
+
 ### Compose lifecycle
 
 Start and stop CPA with the development helper:

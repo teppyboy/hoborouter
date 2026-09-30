@@ -14,3 +14,4 @@ dist/
 *.sqlite-*
 deploy/.env
 deploy/cpa/config.yaml
+deploy/cpa/auths/

@@ -19,7 +19,7 @@ bun test
 bunx tsc --noEmit -p apps/api
 ```
 
-CPA runs on `127.0.0.1:8317` with a generated 256-bit management key. Use `scripts/cpa-dev.sh up|down|status`. Paid AI traffic remains disabled; production use requires explicit approval.
+CPA runs on `127.0.0.1:8317` with a generated 256-bit management key. Add providers: `scripts/cpa-dev.sh up`, `scripts/cpa-dev.sh key`, then open http://127.0.0.1:8317/management.html and paste the key. API-key providers save directly; OAuth providers require the local callback ports. Paid AI traffic remains disabled; production use requires explicit approval.
 
 ## Environment
 
