@@ -1,7 +1,7 @@
 # STATUS
 
 - Milestone: 6–8 partial; architecture/research foundation complete and approved by owner. Existing foundation remains separate from missing paid gateway, payOS, and dashboard slices.
-- Current progress: Task1 money verified in local commit `0957b6b`. Task2 schema gate done: canonical billing schema + atomic forward migration landed (QA: 53 pass packages/db, 231 pass whole repo, tsc clean); gateway still disabled. Next: runtime catalog/key wiring.
+- Current progress: Task1 money verified in local commit `0957b6b`. Task2 schema gate done: canonical billing schema + atomic forward migration landed (QA: 58 pass packages/db, 236 pass whole repo, tsc clean); gateway still disabled. Next: runtime catalog/key wiring.
 - CPA evidence
 - CPA evidence: v8.0.4 + `z-ai/glm-5.3-flash` captured Chat JSON/SSE `$.usage`, Responses JSON `$.usage` with cached/reasoning details, Responses SSE `response.completed` `$.response.usage`; Chat streaming injects `include_usage`. Chat cached/reasoning absence is not zero-cost proof. Model echo is not alias-translation proof. No inbound request-ID echo; retain local ID + CPA trace. Usage queue was empty; schema/correlation unverified and queue cannot settle billing.
 - Known blockers: implementation of forward migration/preflight, bounded capture/settlement, immediate payOS, and fresh independent review, billing audit, and shell-capable QA before enablement. Populated incompatible data requires explicit owner approval before mutation; no destructive reset.
