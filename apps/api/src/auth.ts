@@ -32,6 +32,28 @@ export function createAuth(db: Database) {
       schema: { ...schema, user: schema.users },
     }),
     user: { modelName: "users" },
+    databaseHooks: {
+      user: {
+        create: {
+          after: async (user) => {
+            // Dev/test-only convenience: auto-grant instance admin to the
+            // configured bootstrap email at signup. Production never lands here.
+            const adminEmail = process.env.HBR_DEV_ADMIN_EMAIL;
+            const env = process.env.NODE_ENV;
+            if (
+              (env === "development" || env === "test") &&
+              adminEmail &&
+              typeof user.email === "string" &&
+              user.email.toLowerCase() === adminEmail.toLowerCase()
+            ) {
+              db.prepare(
+                "INSERT OR IGNORE INTO instance_admins (user_id, created_at, added_by) VALUES (?, ?, NULL)",
+              ).run(user.id, Date.now());
+            }
+          },
+        },
+      },
+    },
     emailAndPassword: { enabled: true },
   });
 }

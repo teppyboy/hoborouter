@@ -4,15 +4,16 @@ import path from "node:path";
 import { defineConfig, lazyPlugins } from "vite-plus";
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(() => ({
   resolve: {
     alias: { "@": path.resolve(__dirname, "src") },
   },
   server: {
     proxy: {
-      "/api": "http://localhost:3000",
-      "/v1": "http://localhost:3000",
-      "/webhooks": "http://localhost:3000",
+      // Isolated E2E stacks override with HBR_API_URL (e.g. :3099).
+      "/api": process.env.HBR_API_URL ?? "http://localhost:3000",
+      "/v1": process.env.HBR_API_URL ?? "http://localhost:3000",
+      "/webhooks": process.env.HBR_API_URL ?? "http://localhost:3000",
     },
   },
   staged: {
@@ -43,4 +44,4 @@ export default defineConfig({
     ],
   },
   plugins: lazyPlugins(() => [react(), tailwindcss()]),
-});
+}));
