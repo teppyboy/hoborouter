@@ -32,7 +32,12 @@ function connect(wsUrl: string): Promise<void> {
     ws.addEventListener("open", () => resolve());
     ws.addEventListener("error", () => reject(new Error("CDP websocket error")));
     ws.addEventListener("message", (ev) => {
-      const msg = JSON.parse(String(ev.data));
+      let msg: any;
+      try {
+        msg = JSON.parse(String(ev.data));
+      } catch {
+        return; // CDP always sends JSON; ignore anything else
+      }
       if (msg.id !== undefined) {
         const p = pending.get(msg.id);
         if (p) {
@@ -101,6 +106,9 @@ onEvent((m) => {
   } else if (m.method === "Network.responseReceived") {
     const { status, url } = m.params.response;
     if (status >= 400 && !url.includes("/_vite")) {
+      // useIsAdmin() probes GET /admin/system; 403 is the app's designed
+      // "not an instance admin" signal, not an error.
+      if (status === 403 && url.includes("/api/v1/admin/system")) return;
       current.http.push(`${status} ${url}`);
     }
   }
@@ -115,6 +123,19 @@ const HELPERS = `
       const r = el.getBoundingClientRect();
       return r.width > 0 && r.height > 0;
     },
+    // Radix triggers (dropdown, select) open on pointerdown, not click:
+    // emit the full pointer sequence a real mouse produces.
+    press(el) {
+      const r = el.getBoundingClientRect();
+      const o = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1,
+        clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
+        pointerId: 1, pointerType: 'mouse', isPrimary: true };
+      el.dispatchEvent(new PointerEvent('pointerdown', o));
+      el.dispatchEvent(new MouseEvent('mousedown', o));
+      el.dispatchEvent(new PointerEvent('pointerup', { ...o, buttons: 0 }));
+      el.dispatchEvent(new MouseEvent('mouseup', { ...o, buttons: 0 }));
+      el.click();
+    },
     clickableText(text, exact) {
       const els = [...document.querySelectorAll('button, [role="button"], a, [role="menuitem"], [role="option"], [role="tab"]')];
       const match = els.filter((el) =>
@@ -123,7 +144,7 @@ const HELPERS = `
           ? el.textContent.trim() === text
           : el.textContent.trim().includes(text)));
       if (match.length === 0) throw new Error('clickable not found: "' + text + '"');
-      match[match.length - 1].click();
+      this.press(match[match.length - 1]);
       return match.length;
     },
     clickButtonWithText(text) { return this.clickableText(text, true); },
@@ -190,16 +211,32 @@ async function installHelpers() {
   await evaluate(HELPERS);
 }
 
+// Lazy-loaded pages render after document load: retry "not found" lookups
+// for up to 8s instead of failing on the first frame.
+async function evaluateWhenPresent<T = unknown>(expression: string, timeoutMs = 8000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      return await evaluate<T>(expression);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/not found|no control for label/.test(msg) || Date.now() > deadline) throw err;
+      await sleep(200);
+    }
+  }
+}
+
 const page = {
   click: (text: string, exact = true) =>
-    evaluate(
+    evaluateWhenPresent(
       `window.__hbr.${exact ? "clickButtonWithText" : "clickIncludesText"}(${JSON.stringify(text)})`,
     ),
   setInput: (label: string, value: string) =>
-    evaluate(`window.__hbr.setInput(${JSON.stringify(label)}, ${JSON.stringify(value)})`),
+    evaluateWhenPresent(`window.__hbr.setInput(${JSON.stringify(label)}, ${JSON.stringify(value)})`),
   setInputById: (id: string, value: string) =>
-    evaluate(`window.__hbr.setInputById(${JSON.stringify(id)}, ${JSON.stringify(value)})`),
-  clickSwitch: (id: string) => evaluate(`window.__hbr.switchById(${JSON.stringify(id)})`),
+    evaluateWhenPresent(`window.__hbr.setInputById(${JSON.stringify(id)}, ${JSON.stringify(value)})`),
+  clickSwitch: (id: string) =>
+    evaluateWhenPresent(`window.__hbr.switchById(${JSON.stringify(id)})`),
   has: (text: string) => evaluate<boolean>(`window.__hbr.bodyHas(${JSON.stringify(text)})`),
   waitForText: (text: string, timeout = 8000) =>
     waitForExpr(`window.__hbr.bodyHas(${JSON.stringify(text)})`, `text "${text}"`, timeout),
@@ -212,8 +249,8 @@ const page = {
 
 /** Radix Select: click trigger (by id or label), then the option with the text. */
 async function selectOption(triggerSelector: string, optionText: string) {
-  await evaluate(
-    `(document.querySelector(${JSON.stringify(triggerSelector)}) ?? (()=>{throw new Error('trigger not found: ${triggerSelector}')})()).click()`,
+  await evaluateWhenPresent(
+    `window.__hbr.press(document.querySelector(${JSON.stringify(triggerSelector)}) ?? (()=>{throw new Error('trigger not found: ${triggerSelector}')})())`,
   );
   await page.click(optionText);
   await sleep(100);
@@ -222,7 +259,10 @@ async function selectOption(triggerSelector: string, optionText: string) {
 // ---------- step runner ----------
 const results: { name: string; pass: boolean; expected?: string; actual?: string }[] = [];
 
+const ONLY = process.env.E2E_ONLY ? new RegExp(process.env.E2E_ONLY) : null;
+
 async function step(name: string, run: () => Promise<void>) {
+  if (ONLY && !ONLY.test(name)) return;
   current = { console: [], pageErrors: [], http: [] };
   try {
     await run();
@@ -279,6 +319,11 @@ async function main() {
     mobile: false,
   });
   await installHelpers();
+  // Fresh storage per run: persisted workspace ids from previous runs point at
+  // workspaces that no longer exist in the fresh SQLite DB.
+  await navigate(BASE);
+  await evaluate(`localStorage.clear()`);
+  await sleep(100);
 
   let apiKey = "";
   const wsName = "E2E Main";
@@ -300,8 +345,9 @@ async function main() {
   await step("create first workspace", async () => {
     await page.setInputById("workspace-name", wsName);
     await page.click("Create");
-    await page.waitForText("Overview");
-    assert(await page.has(wsName), "workspace name visible in switcher");
+    // "Overview" is also a sidebar label, so wait for the switcher instead.
+    await page.waitForText(wsName);
+    await page.waitForText("Last 30 days of activity");
   });
 
   // --- second user signup (logout via UI first) ---
@@ -440,7 +486,7 @@ async function main() {
     await page.setInputById("key-name", "e2e-key");
     await page.click("Create");
     await page.waitForText("Copy your API key");
-    apiKey = (await page.text("dialog code")) ?? "";
+    apiKey = (await page.text('[role="dialog"] code')) ?? "";
     assert(apiKey.startsWith("sk-hbr-"), "plaintext key shown");
     await page.click("Done");
   });

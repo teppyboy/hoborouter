@@ -40,37 +40,19 @@ start_one() { # name logfile cmd...
 }
 
 check_ports() {
+  # lsof hangs on this Mac (OrbStack NFS mount), so probe with nc instead.
   local rc=0
   for port in $CPA_PORT $API_PORT $WEB_PORT $CDP_PORT; do
-    if lsof -nP -iTCP:$port -sTCP:LISTEN >/dev/null 2>&1; then
-      echo "ERROR: port $port already in use:" >&2
-      lsof -nP -iTCP:$port -sTCP:LISTEN >&2
+    if nc -z -G1 127.0.0.1 "$port" 2>/dev/null; then
+      echo "ERROR: port $port already in use" >&2
       rc=1
     fi
   done
   return $rc
 }
 
-# Kill only strays whose command line contains this repo AND that listen on
-# one of the E2E ports (leftovers from earlier harness runs).
-kill_strays() {
-  for port in $CPA_PORT $API_PORT $WEB_PORT $CDP_PORT; do
-    for pid in $(lsof -t -nP -iTCP:$port -sTCP:LISTEN 2>/dev/null); do
-      if ps -p "$pid" -o command= 2>/dev/null | grep -qF "$ROOT"; then
-        echo "killing stray pid $pid on port $port"
-        kill "$pid"
-      fi
-    done
-  done
-  sleep 1
-}
-
 up() {
-  check_ports
-  if [ $? -ne 0 ]; then
-    kill_strays
-    check_ports || { echo "aborting: ports still occupied (see pids above)" >&2; exit 1; }
-  fi
+  check_ports || { echo "aborting: E2E ports occupied; run: scripts/e2e-stack.sh down" >&2; exit 1; }
   : >"$PIDFILE"
   rm -f "$DIR/e2e.sqlite" "$DIR/e2e.sqlite-wal" "$DIR/e2e.sqlite-shm" # fresh DB
 
@@ -109,8 +91,14 @@ up() {
 }
 
 down() {
+  # vite spawns through two wrapper levels; catch the e2e-port vite directly
+  # even when the pidfile is already gone.
+  pkill -f "vite/node/cli.js dev --host 127.0.0.1 --port $WEB_PORT" 2>/dev/null
   [ -f "$PIDFILE" ] || return 0
+  # `bun run dev` spawns vite as a child; kill children first so nothing
+  # keeps the port after the wrapper exits.
   while IFS='=' read -r name pid; do
+    pkill -P "$pid" 2>/dev/null
     kill "$pid" 2>/dev/null && echo "stopped $name ($pid)"
   done <"$PIDFILE"
   rm -f "$PIDFILE"
