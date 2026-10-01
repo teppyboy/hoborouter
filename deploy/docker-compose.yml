@@ -13,3 +13,23 @@ services:
     volumes:
       - ./cpa/config.yaml:/CLIProxyAPI/config.yaml
       - ./cpa/auths:/root/.cli-proxy-api
+
+  hoborouter:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - cpa
+    ports:
+      - "127.0.0.1:3000:3000"
+    env_file:
+      - ./.env
+    environment:
+      CPA_BASE_URL: http://cpa:8317
+      HBR_GATEWAY_ENABLED: ${HBR_GATEWAY_ENABLED:-0}
+    volumes:
+      - hoborouter-data:/data
+
+volumes:
+  hoborouter-data:
