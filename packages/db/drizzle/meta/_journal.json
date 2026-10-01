@@ -22,6 +22,20 @@
       "when": 1790661966852,
       "tag": "0002_foamy_luminals",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1790756530889,
+      "tag": "0003_paid_gateway_task2a",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1790757794185,
+      "tag": "0004_paid_gateway_fix",
+      "breakpoints": true
     }
   ]
 }

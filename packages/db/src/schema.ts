@@ -25,6 +25,12 @@ import {
 import { users, session, account, verification } from "./auth-schema";
 export { users, session, account, verification };
 
+/** Largest integer representable exactly in IEEE doubles — upper bound for all canonical money/token columns. */
+export const MAX_SAFE_INTEGER_MONEY = 9007199254740991;
+const MAX_BOUND = sql.raw(String(MAX_SAFE_INTEGER_MONEY));
+const intBounded = (col: unknown) =>
+  sql`typeof(${col}) = 'integer' AND ${col} >= 0 AND ${col} <= ${MAX_BOUND}`;
+
 // --- workspaces & keys ---
 export const workspaces = sqliteTable("workspaces", {
   id: text("id").primaryKey(),
@@ -70,7 +76,7 @@ export const apiKeys = sqliteTable(
     key_hash: text("key_hash").notNull(),
     key_prefix: text("key_prefix").notNull(),
     name: text("name").notNull(),
-    status: text("status", { enum: ["active", "revoked"] })
+    status: text("status", { enum: ["active", "enabled", "disabled", "revoked"] })
       .notNull()
       .default("active"),
     created_at: integer("created_at").notNull(),
@@ -79,7 +85,7 @@ export const apiKeys = sqliteTable(
   },
   (t) => [
     uniqueIndex("api_keys_key_hash").on(t.key_hash),
-    check("api_keys_status", sql`${t.status} IN ('active','revoked')`),
+    check("api_keys_status", sql`${t.status} IN ('active','enabled','disabled','revoked')`),
   ],
 );
 
@@ -124,6 +130,7 @@ export const ledgerEntries = sqliteTable(
       .notNull()
       .references(() => wallets.id),
     direction: text("direction", { enum: ["debit", "credit"] }).notNull(),
+    billing_reservation_id: text("billing_reservation_id").references(() => billingReservations.id),
     amount: integer("amount").notNull(),
     kind: text("kind", { enum: ["topup", "settle", "adjustment", "refund"] }).notNull(),
     reservation_id: text("reservation_id").references(() => reservations.id),
@@ -137,6 +144,7 @@ export const ledgerEntries = sqliteTable(
   },
   (t) => [
     index("ledger_wallet_idx").on(t.wallet_id),
+    index("ledger_billing_reservation_idx").on(t.billing_reservation_id),
     uniqueIndex("ledger_one_settle_per_reservation")
       .on(t.reservation_id)
       .where(sql`kind = 'settle'`),
@@ -201,6 +209,76 @@ export const paymentEvents = sqliteTable(
   (t) => [uniqueIndex("payment_events_provider_reference").on(t.provider, t.provider_reference)],
 );
 
+// --- canonical paid-gateway catalog ---
+export const models = sqliteTable(
+  "models",
+  {
+    id: text("id").primaryKey(),
+    public_id: text("public_id").notNull(),
+    slug: text("slug").notNull(),
+    display_name: text("display_name").notNull(),
+    provider: text("provider").notNull(),
+    description: text("description"),
+    capabilities: text("capabilities", { mode: "json" }),
+    context_window: integer("context_window"),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    published: integer("published", { mode: "boolean" }).notNull().default(false),
+    created_at: integer("created_at").notNull(),
+    updated_at: integer("updated_at").notNull(),
+  },
+  (t) => [uniqueIndex("models_public_id").on(t.public_id)],
+);
+
+export const providerModelMappings = sqliteTable("provider_model_mappings", {
+  id: text("id").primaryKey(),
+  model_id: text("model_id")
+    .notNull()
+    .references(() => models.id),
+  provider: text("provider").notNull(),
+  upstream_model: text("upstream_model").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  created_at: integer("created_at").notNull(),
+  updated_at: integer("updated_at").notNull(),
+});
+
+export const modelPrices = sqliteTable(
+  "model_prices",
+  {
+    id: text("id").primaryKey(),
+    model_id: text("model_id")
+      .notNull()
+      .references(() => models.id),
+    input_usd_micro_per_1m: integer("input_usd_micro_per_1m").notNull(),
+    output_usd_micro_per_1m: integer("output_usd_micro_per_1m").notNull(),
+    cached_input_usd_micro_per_1m: integer("cached_input_usd_micro_per_1m").notNull(),
+    reasoning_usd_micro_per_1m: integer("reasoning_usd_micro_per_1m").notNull(),
+    markup_ppm: integer("markup_ppm").notNull(),
+    effective_at: integer("effective_at").notNull(),
+    retired_at: integer("retired_at"),
+  },
+  (t) => [
+    check(
+      "model_prices_integer_nonnegative",
+      sql`typeof(${t.input_usd_micro_per_1m}) = 'integer' AND ${intBounded(t.input_usd_micro_per_1m)} AND typeof(${t.output_usd_micro_per_1m}) = 'integer' AND ${intBounded(t.output_usd_micro_per_1m)} AND typeof(${t.cached_input_usd_micro_per_1m}) = 'integer' AND ${intBounded(t.cached_input_usd_micro_per_1m)} AND typeof(${t.reasoning_usd_micro_per_1m}) = 'integer' AND ${intBounded(t.reasoning_usd_micro_per_1m)}`,
+    ),
+    check("model_prices_markup", intBounded(t.markup_ppm)),
+  ],
+);
+
+export const apiKeyModelPermissions = sqliteTable(
+  "api_key_model_permissions",
+  {
+    api_key_id: text("api_key_id")
+      .notNull()
+      .references(() => apiKeys.id),
+    model_id: text("model_id")
+      .notNull()
+      .references(() => models.id),
+    created_at: integer("created_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.api_key_id, t.model_id] })],
+);
+
 // --- model catalog & price snapshots ---
 export const modelBindings = sqliteTable(
   "model_bindings",
@@ -251,15 +329,21 @@ export const requests = sqliteTable(
       .notNull()
       .references(() => workspaces.id),
     api_key_id: text("api_key_id").references(() => apiKeys.id),
-    model_binding_id: text("model_binding_id")
-      .notNull()
-      .references(() => modelBindings.id),
+    model_binding_id: text("model_binding_id").references(() => modelBindings.id),
+    model_id: text("model_id").references(() => models.id),
+    provider_model_mapping_id: text("provider_model_mapping_id").references(
+      () => providerModelMappings.id,
+    ),
     endpoint: text("endpoint").notNull(),
     mode: text("mode", { enum: ["stream", "non-stream"] }).notNull(),
     cpa_trace_id: text("cpa_trace_id"),
     status: text("status", {
       enum: ["pending", "ok", "client_abort", "upstream_error", "unknown"],
     }).notNull(),
+    dispatch_state: text("dispatch_state", { enum: ["reserved", "dispatching", "terminal"] })
+      .notNull()
+      .default("reserved"),
+    dispatched_at: integer("dispatched_at"),
     http_status: integer("http_status"),
     ttft_ms: integer("ttft_ms"),
     duration_ms: integer("duration_ms"),
@@ -272,6 +356,14 @@ export const requests = sqliteTable(
     check(
       "requests_status",
       sql`${t.status} IN ('pending','ok','client_abort','upstream_error','unknown')`,
+    ),
+    check(
+      "requests_dispatch_state",
+      sql`${t.dispatch_state} IN ('reserved','dispatching','terminal')`,
+    ),
+    check(
+      "requests_model_source",
+      sql`${t.model_binding_id} IS NOT NULL OR ${t.model_id} IS NOT NULL`,
     ),
   ],
 );
@@ -324,27 +416,121 @@ export const reservations = sqliteTable(
   ],
 );
 
+export const billingReservations = sqliteTable(
+  "billing_reservations",
+  {
+    id: text("id").primaryKey(),
+    wallet_id: text("wallet_id")
+      .notNull()
+      .references(() => wallets.id),
+    request_id: text("request_id")
+      .notNull()
+      .unique()
+      .references(() => requests.id),
+    api_key_id: text("api_key_id").references(() => apiKeys.id),
+    model_id: text("model_id")
+      .notNull()
+      .references(() => models.id),
+    model_price_id: text("model_price_id")
+      .notNull()
+      .references(() => modelPrices.id),
+    usd_vnd_exchange_rate: integer("usd_vnd_exchange_rate").notNull(),
+    markup_ppm: integer("markup_ppm").notNull(),
+    cap_vnd: integer("cap_vnd").notNull(),
+    status: text("status", {
+      enum: ["held", "settled", "settled_full_hold", "released"],
+    }).notNull(),
+    created_at: integer("created_at").notNull(),
+    resolved_at: integer("resolved_at"),
+  },
+  (t) => [
+    check(
+      "billing_reservations_money",
+      sql`typeof(${t.cap_vnd}) = 'integer' AND ${t.cap_vnd} > 0 AND ${t.cap_vnd} <= ${MAX_BOUND} AND typeof(${t.usd_vnd_exchange_rate}) = 'integer' AND ${t.usd_vnd_exchange_rate} > 0 AND ${t.usd_vnd_exchange_rate} <= ${MAX_BOUND} AND typeof(${t.markup_ppm}) = 'integer' AND ${t.markup_ppm} >= 0 AND ${t.markup_ppm} <= ${MAX_BOUND}`,
+    ),
+    check(
+      "billing_reservations_status",
+      sql`${t.status} IN ('held','settled','settled_full_hold','released')`,
+    ),
+  ],
+);
+
+export const usageLogs = sqliteTable(
+  "usage_logs",
+  {
+    id: text("id").primaryKey(),
+    idempotency_key: text("idempotency_key").notNull().unique(),
+    request_id: text("request_id")
+      .notNull()
+      .unique()
+      .references(() => requests.id),
+    api_key_id: text("api_key_id").references(() => apiKeys.id),
+    workspace_id: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    provider: text("provider").notNull(),
+    public_model: text("public_model").notNull(),
+    upstream_model: text("upstream_model").notNull(),
+    input_tokens: integer("input_tokens").notNull(),
+    output_tokens: integer("output_tokens").notNull(),
+    cached_input_tokens: integer("cached_input_tokens").notNull(),
+    reasoning_tokens: integer("reasoning_tokens").notNull(),
+    status: text("status").notNull(),
+    failure: text("failure"),
+    latency_ms: integer("latency_ms"),
+    ttft_ms: integer("ttft_ms"),
+    upstream_cost_usd_micro: integer("upstream_cost_usd_micro"),
+    usd_vnd_exchange_rate: integer("usd_vnd_exchange_rate"),
+    markup_ppm: integer("markup_ppm"),
+    charged_vnd: integer("charged_vnd"),
+    raw_payload: text("raw_payload"),
+    created_at: integer("created_at").notNull(),
+  },
+  (t) => [
+    check(
+      "usage_logs_tokens_nonnegative",
+      sql`typeof(${t.input_tokens}) = 'integer' AND ${intBounded(t.input_tokens)} AND typeof(${t.output_tokens}) = 'integer' AND ${intBounded(t.output_tokens)} AND typeof(${t.cached_input_tokens}) = 'integer' AND ${intBounded(t.cached_input_tokens)} AND typeof(${t.reasoning_tokens}) = 'integer' AND ${intBounded(t.reasoning_tokens)} AND ${t.cached_input_tokens} <= ${t.input_tokens} AND ${t.reasoning_tokens} <= ${t.output_tokens}`,
+    ),
+    check(
+      "usage_logs_snapshot_money",
+      sql`(${t.upstream_cost_usd_micro} IS NULL OR (typeof(${t.upstream_cost_usd_micro}) = 'integer' AND ${t.upstream_cost_usd_micro} >= 0 AND ${t.upstream_cost_usd_micro} <= ${MAX_BOUND})) AND (${t.usd_vnd_exchange_rate} IS NULL OR (typeof(${t.usd_vnd_exchange_rate}) = 'integer' AND ${t.usd_vnd_exchange_rate} > 0 AND ${t.usd_vnd_exchange_rate} <= ${MAX_BOUND})) AND (${t.markup_ppm} IS NULL OR (typeof(${t.markup_ppm}) = 'integer' AND ${t.markup_ppm} >= 0 AND ${t.markup_ppm} <= ${MAX_BOUND})) AND (${t.charged_vnd} IS NULL OR (typeof(${t.charged_vnd}) = 'integer' AND ${t.charged_vnd} >= 0 AND ${t.charged_vnd} <= ${MAX_BOUND}))`,
+    ),
+  ],
+);
+
 // --- Phase 2 settlement tables (schema preserved per spec; no app code touches them) ---
 export const settlements = sqliteTable(
   "settlements",
   {
     id: text("id").primaryKey(),
-    reservation_id: text("reservation_id")
-      .notNull()
-      .references(() => reservations.id),
+    reservation_id: text("reservation_id").references(() => reservations.id),
+    billing_reservation_id: text("billing_reservation_id").references(() => billingReservations.id),
     charged_input: integer("charged_input").notNull(),
     charged_output: integer("charged_output").notNull(),
     charged_total: integer("charged_total").notNull(),
     settled_at: integer("settled_at").notNull(),
+    charged_vnd: integer("charged_vnd"),
+    usage_log_id: text("usage_log_id").references(() => usageLogs.id),
+    reason: text("reason"),
+    created_at: integer("created_at"),
   },
   (t) => [
     uniqueIndex("settlements_reservation_id").on(t.reservation_id),
+    uniqueIndex("settlements_billing_reservation_id").on(t.billing_reservation_id),
     check("st_charged_input_type", sql`typeof(${t.charged_input}) = 'integer'`),
     check("st_charged_output_type", sql`typeof(${t.charged_output}) = 'integer'`),
     check("st_charged_input_nonneg", sql`${t.charged_input} >= 0`),
     check("st_charged_output_nonneg", sql`${t.charged_output} >= 0`),
     check("st_charged_total_type", sql`typeof(${t.charged_total}) = 'integer'`),
     check("st_charged_total_nonneg", sql`${t.charged_total} >= 0`),
+    check(
+      "st_charged_vnd_nonneg",
+      sql`${t.charged_vnd} IS NULL OR (typeof(${t.charged_vnd}) = 'integer' AND ${t.charged_vnd} >= 0 AND ${t.charged_vnd} <= ${MAX_BOUND})`,
+    ),
+    check(
+      "st_one_reservation",
+      sql`(${t.reservation_id} IS NOT NULL) != (${t.billing_reservation_id} IS NOT NULL)`,
+    ),
   ],
 );
 
