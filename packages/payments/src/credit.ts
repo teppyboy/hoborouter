@@ -23,6 +23,8 @@ export class MockPaymentError extends Error {
 }
 
 export interface ProcessMockEventArgs {
+  /** Provider slug stored on payments.provider; defaults to the legacy 'mock'. */
+  provider?: string;
   orderCode: string;
   providerReference: string;
   amount: number;
@@ -35,12 +37,13 @@ export type ProcessMockEventResult =
 
 /** Process one verified mock webhook event atomically; idempotent on replay. */
 export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs) {
+  const provider = args.provider ?? "mock";
   return runInImmediate(db, () => {
     const payment = db
       .prepare(
-        "SELECT id, amount, status, workspace_id FROM payments WHERE provider = 'mock' AND provider_order_code = ?",
+        "SELECT id, amount, status, workspace_id FROM payments WHERE provider = ? AND provider_order_code = ?",
       )
-      .get(args.orderCode) as
+      .get(provider, args.orderCode) as
       | { id: string; amount: number; status: string; workspace_id: string }
       | undefined;
     if (!payment) throw new MockPaymentError("not_found", `unknown order ${args.orderCode}`);
@@ -71,7 +74,7 @@ export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs
       ).run(
         crypto.randomUUID(),
         payment.id,
-        "mock",
+        provider,
         args.providerReference,
         args.rawPayload,
         Date.now(),
@@ -80,9 +83,9 @@ export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs
       if ((err as { code?: string })?.code !== "SQLITE_CONSTRAINT_UNIQUE") throw err;
       const existing = db
         .prepare(
-          "SELECT payment_id FROM payment_events WHERE provider = 'mock' AND provider_reference = ?",
+          "SELECT payment_id FROM payment_events WHERE provider = ? AND provider_reference = ?",
         )
-        .get(args.providerReference) as { payment_id: string } | undefined;
+        .get(provider, args.providerReference) as { payment_id: string } | undefined;
       if (existing && existing.payment_id !== payment.id) {
         throw new MockPaymentError(
           "invalid",
@@ -93,7 +96,10 @@ export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs
         return { outcome: "already_processed", paymentId: payment.id } as const;
       }
       if (existing) {
-        throw new MockPaymentError("invalid", `payment ${payment.id} has an event but is still pending`);
+        throw new MockPaymentError(
+          "invalid",
+          `payment ${payment.id} has an event but is still pending`,
+        );
       }
       throw err; // UNIQUE hit with no matching row: propagate, don't mask.
     }
@@ -119,7 +125,7 @@ export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs
       amount: payment.amount,
       kind: "topup",
       paymentId: payment.id,
-      memo: `mock topup ${args.providerReference}`,
+      memo: `${provider} topup ${args.providerReference}`,
     });
 
     db.prepare("UPDATE payments SET status = 'succeeded' WHERE id = ?").run(payment.id);
