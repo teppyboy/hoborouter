@@ -21,6 +21,7 @@
         "@hoborouter/db": "workspace:*",
         "@hoborouter/keys": "workspace:*",
         "@hoborouter/payments": "workspace:*",
+        "@hoborouter/usage": "workspace:*",
         "@hoborouter/wallet": "workspace:*",
         "better-auth": "1.7.6",
         "drizzle-orm": "0.45.3",

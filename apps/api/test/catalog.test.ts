@@ -318,6 +318,37 @@ describe("PUT public_id collision + /v1/models/:id gating", () => {
     expect(auditsAfter).toBe(auditsBefore);
   });
 
+  test("PUT with changed public_id → 400 INVALID immutable, no write, no audit", async () => {
+    const m = await createModel({ slug: "immutable-id", public_id: "openai/immutable-id" });
+    const auditsBefore = (
+      db
+        .prepare("SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'")
+        .get() as { c: number }
+    ).c;
+    const res = await req(app, `/api/admin/catalog/models/${m.id}`, {
+      method: "PUT",
+      cookie: iadmin,
+      body: { public_id: "openai/renamed-id" },
+    });
+    expect(res.status).toBe(400);
+    expect(
+      ((await res.json()) as { error: { code: string; message: string } }).error,
+    ).toMatchObject({
+      code: "INVALID",
+      message: "public_id is immutable",
+    });
+    const row = db.prepare("SELECT public_id FROM models WHERE id = ?").get(m.id) as {
+      public_id: string;
+    };
+    expect(row.public_id).toBe("openai/immutable-id");
+    const auditsAfter = (
+      db
+        .prepare("SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'")
+        .get() as { c: number }
+    ).c;
+    expect(auditsAfter).toBe(auditsBefore);
+  });
+
   test("/v1/models/:id → 404 for unpublished model", async () => {
     const u = await createModel({ slug: "unpub-id", public_id: "openai/unpub-id" });
     await addMapping(u.id);

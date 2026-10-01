@@ -13,8 +13,13 @@ import { cpaHealthRoutes } from "./routes/cpahealth";
 import { adminModelsRoutes } from "./routes/admin-models";
 import { adminCatalogRoutes } from "./routes/admin-catalog";
 import { v1ModelsRoutes } from "./routes/v1-models";
+import { gatewayRoutes } from "./routes/v1-gateway";
+import { recoverPending } from "@hoborouter/wallet";
 import { paymentsRoutes } from "./routes/payments";
 import { mockWebhookRoutes } from "./routes/webhooks-mock";
+import { payosWebhookRoutes } from "./routes/webhooks-payos";
+import { devPaymentsRoutes } from "./routes/dev-payments";
+import { payosConfigFromEnv } from "@hoborouter/payments";
 import { mockWebhookConfig } from "./mock-config";
 import { createAuth } from "./auth";
 
@@ -47,10 +52,13 @@ export const buildApp = (deps: AppDeps = {}) => {
     .use(keysRoutes(db, auth))
     .use(paymentsRoutes(db, auth, mockPayments))
     .use(mockWebhookRoutes(db, mockPayments))
+    .use(payosWebhookRoutes(db, payosConfigFromEnv()))
+    .use(devPaymentsRoutes(db, auth))
     .use(cpaHealthRoutes(db, auth))
     .use(adminModelsRoutes(db, auth))
     .use(adminCatalogRoutes(db, auth))
     .use(v1ModelsRoutes(db))
+    .use(gatewayRoutes(db))
     .get(
       "/api/*",
       () =>
@@ -65,6 +73,9 @@ export const buildApp = (deps: AppDeps = {}) => {
         ),
     )
     .use(staticSpa(webDist));
+
+  // Crash-safe reconciliation of stale reserved/dispatching rows at startup.
+  recoverPending(db, Date.now());
 
   const handle = app.handle.bind(app);
   Object.defineProperty(app, "handle", {

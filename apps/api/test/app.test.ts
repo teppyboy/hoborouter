@@ -46,7 +46,7 @@ describe("health + openapi", () => {
     expect(Object.keys(doc.paths ?? {})).toContain("/healthz");
   });
 
-  test("no paid-traffic proxy routes documented", async () => {
+  test("paid-traffic proxy routes not documented", async () => {
     const res = await req("/openapi.json");
     const doc = (await res.json()) as { paths?: Record<string, unknown> };
     const paths = Object.keys(doc.paths ?? {});

@@ -138,6 +138,10 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         | undefined;
       if (!existing) return jsonError(404, "NOT_FOUND", "Model not found");
       const b = (body ?? {}) as Record<string, unknown>;
+      // public_id is the stable public identifier and never mutable (P2).
+      if (b.public_id !== undefined && b.public_id !== existing.public_id) {
+        return jsonError(400, "INVALID", "public_id is immutable");
+      }
       const merged = {
         public_id: b.public_id ?? existing.public_id,
         slug: b.slug ?? (existing.slug as string),
@@ -148,12 +152,6 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
       };
       const invalid = validateModelBody(merged as Record<string, unknown>);
       if (invalid) return jsonError(400, "INVALID", invalid);
-      // Reject public_id collisions (same handling as POST duplicate).
-      if (
-        merged.public_id !== existing.public_id &&
-        db.prepare("SELECT 1 FROM models WHERE public_id = ?").get(merged.public_id as string)
-      )
-        return jsonError(400, "DUPLICATE", "public_id already exists");
       db.transaction(() => {
         db.prepare(
           "UPDATE models SET slug = ?, display_name = ?, provider = ?, description = ?, capabilities = ?, context_window = ?, enabled = ?, published = ?, updated_at = ? WHERE id = ?",
