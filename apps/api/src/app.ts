@@ -19,6 +19,9 @@ import { paymentsRoutes } from "./routes/payments";
 import { mockWebhookRoutes } from "./routes/webhooks-mock";
 import { payosWebhookRoutes } from "./routes/webhooks-payos";
 import { devPaymentsRoutes } from "./routes/dev-payments";
+import { dashboardRoutes } from "./routes/dashboard";
+import { adminExtraRoutes } from "./routes/admin-extra";
+import { catalogPublicRoutes } from "./routes/catalog-public";
 import { payosConfigFromEnv } from "@hoborouter/payments";
 import { mockWebhookConfig } from "./mock-config";
 import { createAuth } from "./auth";
@@ -57,6 +60,9 @@ export const buildApp = (deps: AppDeps = {}) => {
     .use(cpaHealthRoutes(db, auth))
     .use(adminModelsRoutes(db, auth))
     .use(adminCatalogRoutes(db, auth))
+    .use(dashboardRoutes(db, auth))
+    .use(adminExtraRoutes(db, auth))
+    .use(catalogPublicRoutes(db, auth))
     .use(v1ModelsRoutes(db))
     .use(gatewayRoutes(db))
     .get(
