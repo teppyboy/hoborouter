@@ -154,8 +154,9 @@ describe("POST /api/workspaces/:wsId/keys", () => {
     };
     createdPlaintext = body.plaintext;
     createdKeyBody = JSON.stringify(body);
-    expect(body.plaintext).toMatch(/^sk-hbr-[0-9a-f]{32}$/);
-    expect(body.key_prefix).toBe("sk-hbr-…" + body.plaintext.slice(-4));
+    expect(body.plaintext).toMatch(/^sk-hbr-[A-Za-z0-9_-]{43}$/);
+    const secret = body.plaintext.slice("sk-hbr-".length);
+    expect(body.key_prefix).toBe("sk-hbr-" + secret.slice(0, 4) + "..." + secret.slice(-6));
     // stored hash matches
     const row = db.prepare("SELECT key_hash FROM api_keys WHERE id = ?").get(body.id) as any;
     expect(row.key_hash).toBe(hashApiKey(body.plaintext));
@@ -187,8 +188,8 @@ describe("GET /api/workspaces/:wsId/keys", () => {
     expect(list.length).toBeGreaterThanOrEqual(2);
     expect(JSON.stringify(list)).not.toContain(createdPlaintext);
     for (const k of list) {
-      expect(k.key_prefix).toMatch(/^sk-hbr-…[0-9a-f]{4}$/);
-      expect(k.status).toBe("active");
+      expect(k.key_prefix).toMatch(/^sk-hbr-[A-Za-z0-9_-]{4}\.\.\.[A-Za-z0-9_-]{6}$/);
+      expect(k.status).toBe("enabled");
     }
     // no B keys in A's list — asserted by count of rows bound to A
     const count = (
@@ -227,9 +228,9 @@ describe("DELETE /api/workspaces/:wsId/keys/:keyId", () => {
       cookie: owner,
     });
     expect([404, 403]).toContain(viaA.status);
-    // and B's key still active
+    // and B's key still usable (legacy assertion: not revoked)
     const row = db.prepare("SELECT status FROM api_keys WHERE id = ?").get(bKey.id) as any;
-    expect(row.status).toBe("active");
+    expect(row.status).toBe("enabled");
   });
 
   test("admin revokes own-ws key immediately", async () => {
