@@ -5,8 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
+import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatVnd, formatDate } from "../../lib/format";
-import { useWorkspaceStore } from "../../lib/workspace";
 import { PageHeader, EmptyState, ErrorState, DataTable } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -52,7 +52,7 @@ type Values = z.infer<typeof schema>;
 const PRESETS = [50_000, 100_000, 200_000, 500_000];
 
 export default function BillingCreditsPage() {
-  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const workspaceId = useCurrentWorkspaceId();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const form = useForm<z.input<typeof schema>, unknown, Values>({

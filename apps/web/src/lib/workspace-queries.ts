@@ -28,3 +28,15 @@ export function useWorkspaces() {
 
   return query;
 }
+
+/**
+ * Workspace id validated against the fetched list: only an id the current user
+ * actually belongs to, null until the list loads. Prevents a persisted id from
+ * another account hitting workspace-scoped APIs before validation (401/403).
+ */
+export function useCurrentWorkspaceId(): string | null {
+  const stored = useWorkspaceStore((s) => s.workspaceId);
+  const { data, isSuccess } = useWorkspaces();
+  if (!isSuccess || !data?.length) return null;
+  return data.some((w) => w.id === stored) ? stored : (data[0]?.id ?? null);
+}

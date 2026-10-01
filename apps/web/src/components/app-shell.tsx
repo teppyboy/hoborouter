@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { LogOut, Monitor, Moon, Shield, Sun } from "lucide-react";
 import { api } from "../lib/api";
 import { authClient, useSession } from "../lib/auth";
 import { applyTheme, useThemeStore, type Theme } from "../lib/theme";
 import { useWorkspaceStore } from "../lib/workspace";
-import { useWorkspaces, type Workspace } from "../lib/workspace-queries";
+import { useCurrentWorkspaceId, useWorkspaces, type Workspace } from "../lib/workspace-queries";
 import { CreateWorkspace } from "./create-workspace";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -103,7 +104,7 @@ function ThemeToggle() {
 
 function WorkspaceSwitcher() {
   const { data: workspaces, isSuccess } = useWorkspaces();
-  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const workspaceId = useCurrentWorkspaceId();
   const setWorkspaceId = useWorkspaceStore((s) => s.setWorkspaceId);
   if (!isSuccess || !workspaces?.length) return null;
   return (
@@ -126,6 +127,7 @@ function WorkspaceSwitcher() {
 
 function UserMenu() {
   const { data: session } = useSession();
+  const queryClient = useQueryClient();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -138,7 +140,13 @@ function UserMenu() {
         <DropdownMenuSeparator />
         <DropdownMenuItem
           variant="destructive"
-          onClick={() => authClient.signOut().then(() => window.location.assign("/login"))}
+          onClick={() => {
+            // Drop workspace-scoped queries before the session dies so no
+            // refetch fires against an invalidated cookie (401 noise).
+            useWorkspaceStore.setState({ workspaceId: null });
+            void queryClient.cancelQueries();
+            authClient.signOut().then(() => window.location.assign("/login"));
+          }}
         >
           <LogOut className="size-4" /> Sign out
         </DropdownMenuItem>

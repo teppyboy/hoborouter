@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
-import { useWorkspaceStore } from "../../lib/workspace";
+import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { PageHeader } from "../../components/page";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import GeneralTab from "./general";
@@ -9,7 +9,7 @@ import AccountTab from "./account";
 import DangerZone from "./danger-zone";
 
 export default function SettingsPage() {
-  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const workspaceId = useCurrentWorkspaceId();
 
   const { data: ws } = useQuery({
     queryKey: ["workspace", workspaceId],

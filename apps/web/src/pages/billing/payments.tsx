@@ -3,8 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
+import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatVnd, formatDate } from "../../lib/format";
-import { useWorkspaceStore } from "../../lib/workspace";
 import { PageHeader, EmptyState, ErrorState, DataTable, CopyButton } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
@@ -28,7 +28,7 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
 };
 
 export default function BillingPaymentsPage() {
-  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const workspaceId = useCurrentWorkspaceId();
   const location = useLocation();
   // Router has no validateSearch on this route — read the param from the URL.
   const [selectedId] = useState(() => new URLSearchParams(location.search).get("payment"));

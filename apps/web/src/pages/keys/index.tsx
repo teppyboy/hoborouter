@@ -6,7 +6,7 @@ import { z } from "zod";
 import { MoreHorizontal, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
-import { useWorkspaceStore } from "../../lib/workspace";
+import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatDate } from "../../lib/format";
 import { Button } from "../../components/ui/button";
 import { Badge } from "../../components/ui/badge";
@@ -58,7 +58,7 @@ type NameValues = z.infer<typeof nameSchema>;
 const is403 = (e: unknown) => e instanceof ApiError && e.status === 403;
 
 export default function KeysPage() {
-  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const workspaceId = useCurrentWorkspaceId();
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [created, setCreated] = useState<{ name: string; plaintext: string } | null>(null);

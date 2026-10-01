@@ -2,7 +2,7 @@ import { PageHeader, EmptyState, ErrorState } from "../../components/page";
 import { Skeleton } from "../../components/ui/skeleton";
 import { formatTokens, formatVnd } from "../../lib/format";
 import { ApiError } from "../../lib/api";
-import { useWorkspaceStore } from "../../lib/workspace";
+import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useUsageSummary } from "../logs/api";
 
 function StatTile({
@@ -45,7 +45,7 @@ function BarChart({
 }
 
 export default function OverviewPage() {
-  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const workspaceId = useCurrentWorkspaceId();
   const summary = useUsageSummary(workspaceId);
 
   if (summary.isPending) {

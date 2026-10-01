@@ -11,11 +11,11 @@ import {
 import { Skeleton } from "../../components/ui/skeleton";
 import { formatTokens, formatVnd } from "../../lib/format";
 import { ApiError } from "../../lib/api";
-import { useWorkspaceStore } from "../../lib/workspace";
+import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useUsageSummary } from "../logs/api";
 
 export default function UsagePage() {
-  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const workspaceId = useCurrentWorkspaceId();
   const [days, setDays] = useState(30);
   const query = useUsageSummary(workspaceId, days);
 

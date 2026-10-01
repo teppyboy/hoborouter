@@ -16,7 +16,7 @@ import {
 } from "../../components/ui/sheet";
 import { formatDate, formatTokens, formatVnd } from "../../lib/format";
 import { ApiError } from "../../lib/api";
-import { useWorkspaceStore } from "../../lib/workspace";
+import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useRequestLogs, type UsageLogRow } from "./api";
 
 function StatusBadge({ status }: { status: string }) {
@@ -45,7 +45,7 @@ function DetailField({ label, children }: { label: string; children: React.React
 }
 
 export default function LogsPage() {
-  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const workspaceId = useCurrentWorkspaceId();
   const query = useRequestLogs(workspaceId);
   const [selected, setSelected] = useState<UsageLogRow | null>(null);
   const [filter, setFilter] = useState("");
