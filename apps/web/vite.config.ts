@@ -1,8 +1,20 @@
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import path from "node:path";
 import { defineConfig, lazyPlugins } from "vite-plus";
 
 // https://vite.dev/config/
 export default defineConfig({
+  resolve: {
+    alias: { "@": path.resolve(__dirname, "src") },
+  },
+  server: {
+    proxy: {
+      "/api": "http://localhost:3000",
+      "/v1": "http://localhost:3000",
+      "/webhooks": "http://localhost:3000",
+    },
+  },
   staged: {
     "*": "vp check --fix",
   },
@@ -30,5 +42,5 @@ export default defineConfig({
       },
     ],
   },
-  plugins: lazyPlugins(() => [react()]),
+  plugins: lazyPlugins(() => [react(), tailwindcss()]),
 });
