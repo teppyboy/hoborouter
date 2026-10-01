@@ -12,7 +12,8 @@
     "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
 
-    "erasableSyntaxOnly": true
+    "erasableSyntaxOnly": true,
+    "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src"]
 }
