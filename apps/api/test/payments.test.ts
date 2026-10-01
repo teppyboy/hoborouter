@@ -45,9 +45,9 @@ beforeAll(async () => {
   ).run(`wal-${wsB}`, wsB, Date.now());
 });
 
-describe("POST /api/workspaces/:id/payments", () => {
+describe("POST /api/v1/workspaces/:id/payments", () => {
   test("member creates pending mock payment with positive integer amount + mock link", async () => {
-    const res = await req(app, `/api/workspaces/${wsA}/payments`, {
+    const res = await req(app, `/api/v1/workspaces/${wsA}/payments`, {
       method: "POST",
       cookie: memberCookie,
       body: { amount: 50000 },
@@ -75,7 +75,7 @@ describe("POST /api/workspaces/:id/payments", () => {
 
   test("rejects non-positive / non-integer amounts", async () => {
     for (const amount of [0, -5, 10.5, "100", null]) {
-      const res = await req(app, `/api/workspaces/${wsA}/payments`, {
+      const res = await req(app, `/api/v1/workspaces/${wsA}/payments`, {
         method: "POST",
         cookie: memberCookie,
         body: { amount },
@@ -85,7 +85,7 @@ describe("POST /api/workspaces/:id/payments", () => {
   });
 
   test("non-member gets 403", async () => {
-    const res = await req(app, `/api/workspaces/${wsA}/payments`, {
+    const res = await req(app, `/api/v1/workspaces/${wsA}/payments`, {
       method: "POST",
       cookie: outsiderCookie,
       body: { amount: 1000 },
@@ -94,7 +94,7 @@ describe("POST /api/workspaces/:id/payments", () => {
   });
 
   test("unauthenticated gets 401", async () => {
-    const res = await req(app, `/api/workspaces/${wsA}/payments`, {
+    const res = await req(app, `/api/v1/workspaces/${wsA}/payments`, {
       method: "POST",
       body: { amount: 1000 },
     });
@@ -111,23 +111,23 @@ describe("POST /api/workspaces/:id/payments", () => {
     const fresh = buildApp({ db: d });
     const cookie = await signUp(fresh, "pay-gated@test.dev", "G");
     createWorkspace(d, "ws-gated", userIdByEmail(d, "pay-gated@test.dev"));
-    const post = await req(fresh, "/api/workspaces/ws-gated/payments", {
+    const post = await req(fresh, "/api/v1/workspaces/ws-gated/payments", {
       method: "POST",
       cookie,
       body: { amount: 1000 },
     });
     expect(post.status).toBe(404);
-    const get = await req(fresh, "/api/workspaces/ws-gated/payments/some-id", { cookie });
+    const get = await req(fresh, "/api/v1/workspaces/ws-gated/payments/some-id", { cookie });
     expect(get.status).toBe(404); // unknown id still 404 via GET path, not route-gated
     if (saved === undefined) delete process.env.HBR_MOCK_PAYMENTS;
     else process.env.HBR_MOCK_PAYMENTS = saved;
   });
 });
 
-describe("GET /api/workspaces/:id/payments/:paymentId", () => {
+describe("GET /api/v1/workspaces/:id/payments/:paymentId", () => {
   let paymentId: string;
   beforeAll(async () => {
-    const res = await req(app, `/api/workspaces/${wsA}/payments`, {
+    const res = await req(app, `/api/v1/workspaces/${wsA}/payments`, {
       method: "POST",
       cookie: memberCookie,
       body: { amount: 12345 },
@@ -136,7 +136,7 @@ describe("GET /api/workspaces/:id/payments/:paymentId", () => {
   });
 
   test("member of own workspace can read", async () => {
-    const res = await req(app, `/api/workspaces/${wsA}/payments/${paymentId}`, {
+    const res = await req(app, `/api/v1/workspaces/${wsA}/payments/${paymentId}`, {
       cookie: memberCookie,
     });
     expect(res.status).toBe(200);
@@ -145,7 +145,7 @@ describe("GET /api/workspaces/:id/payments/:paymentId", () => {
 
   test("cross-workspace denial: member of ws A gets 403 on ws B path even when id exists", async () => {
     // payment exists and belongs to wsA; request via wsB path with wsA member cookie
-    const res = await req(app, `/api/workspaces/${wsB}/payments/${paymentId}`, {
+    const res = await req(app, `/api/v1/workspaces/${wsB}/payments/${paymentId}`, {
       cookie: memberCookie,
     });
     // member of wsA has no role in wsB -> 403 from role gate
@@ -154,7 +154,7 @@ describe("GET /api/workspaces/:id/payments/:paymentId", () => {
 
   test("cross-workspace denial: wsA member requesting payment via wsB scope -> 403", async () => {
     // Create a payment in wsB, then read it via wsA scope with wsA member.
-    const resB = await req(app, `/api/workspaces/${wsB}/payments`, {
+    const resB = await req(app, `/api/v1/workspaces/${wsB}/payments`, {
       method: "POST",
       cookie: cookieOf(
         await app.handle(
@@ -171,14 +171,14 @@ describe("GET /api/workspaces/:id/payments/:paymentId", () => {
       body: { amount: 777 },
     });
     const bId = ((await resB.json()) as { id: string }).id;
-    const res = await req(app, `/api/workspaces/${wsA}/payments/${bId}`, {
+    const res = await req(app, `/api/v1/workspaces/${wsA}/payments/${bId}`, {
       cookie: memberCookie,
     });
     expect(res.status).toBe(403);
   });
 
   test("unknown id 404", async () => {
-    const res = await req(app, `/api/workspaces/${wsA}/payments/nope`, { cookie: memberCookie });
+    const res = await req(app, `/api/v1/workspaces/${wsA}/payments/nope`, { cookie: memberCookie });
     expect(res.status).toBe(404);
   });
 });

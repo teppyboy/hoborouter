@@ -1,4 +1,4 @@
-// Task 4: POST /api/dev/payments/:id/complete — dev-only completion fixture.
+// Task 4: POST /api/v1/dev/payments/:id/complete — dev-only completion fixture.
 // Gated: NODE_ENV !== 'production' AND HBR_DEV_PAYMENTS === '1', else 404.
 // Instance admin or workspace owner; credits through the same idempotent path.
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
@@ -30,7 +30,9 @@ function buildApp() {
 }
 
 const POST = (app: ReturnType<typeof buildApp>, id: string) =>
-  app.handle(new Request(`http://localhost/api/dev/payments/${id}/complete`, { method: "POST" }));
+  app.handle(
+    new Request(`http://localhost/api/v1/dev/payments/${id}/complete`, { method: "POST" }),
+  );
 
 beforeAll(() => {
   db = createDb(":memory:");

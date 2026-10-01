@@ -31,7 +31,7 @@ describe("security middleware", () => {
 
   test("normalizes 404 and authz 403 errors with request ID", async () => {
     const { app } = await makeApp();
-    for (const path of ["/api/missing", "/api/workspaces/no-such-id/members"]) {
+    for (const path of ["/api/missing", "/api/v1/workspaces/no-such-id/members"]) {
       const res = await request(app, path);
       expect(res.status).toBeGreaterThanOrEqual(400);
       const body = await res.json();

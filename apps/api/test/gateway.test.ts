@@ -162,7 +162,7 @@ afterAll(() => {
 
 describe("gateway core", () => {
   test("disabled -> 503 gateway_disabled, no DB writes, no fetch", async () => {
-    delete process.env.HBR_GATEWAY_ENABLED;
+    process.env.HBR_GATEWAY_ENABLED = "0";
     startFakeCpa(() => chatJson());
     const before = requestCount();
     const res = await gwr(CHAT_PATH, { model: "openai/gw-test", messages: [] });

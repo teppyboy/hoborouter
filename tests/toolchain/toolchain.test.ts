@@ -11,5 +11,5 @@ test("workspace layout exists", () => {
   for (const dir of ["apps/web", "apps/api", "packages/shared"])
     expect(existsSync(dir), dir).toBe(true);
   expect(existsSync("apps/api/src/index.ts")).toBe(true);
-  expect(existsSync("apps/web/src/App.tsx")).toBe(true);
+  expect(existsSync("apps/web/src/main.tsx")).toBe(true);
 });

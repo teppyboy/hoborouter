@@ -59,10 +59,10 @@ beforeAll(async () => {
   makeInstanceAdmin(db, userIdByEmail(db, INST));
 });
 
-// POST /api/workspaces — any authenticated user ✓
+// POST /api/v1/workspaces — any authenticated user ✓
 describe("workspace create/list", () => {
   test("member can create own workspace (becomes owner)", async () => {
-    const res = await req(ctx.app, "/api/workspaces", {
+    const res = await req(ctx.app, "/api/v1/workspaces", {
       method: "POST",
       cookie: member,
       body: { name: "M's ws" },
@@ -76,7 +76,7 @@ describe("workspace create/list", () => {
   });
 
   test("list shows only own memberships", async () => {
-    const res = await req(ctx.app, "/api/workspaces", { cookie: member });
+    const res = await req(ctx.app, "/api/v1/workspaces", { cookie: member });
     const list = (await res.json()) as { id: string }[];
     expect(list.map((w) => w.id)).toContain(A);
     expect(list.length).toBe(2);
@@ -86,38 +86,42 @@ describe("workspace create/list", () => {
 // Detail/delete: member ✓ detail, — delete; instance admin — on ws-scoped
 describe("workspace detail + delete", () => {
   test("member GET detail → 200", async () => {
-    expect((await req(ctx.app, `/api/workspaces/${A}`, { cookie: member })).status).toBe(200);
+    expect((await req(ctx.app, `/api/v1/workspaces/${A}`, { cookie: member })).status).toBe(200);
   });
 
   test("member DELETE → 403", async () => {
     expect(
-      (await req(ctx.app, `/api/workspaces/${A}`, { method: "DELETE", cookie: member })).status,
+      (await req(ctx.app, `/api/v1/workspaces/${A}`, { method: "DELETE", cookie: member })).status,
     ).toBe(403);
   });
 
   test("admin DELETE → 403", async () => {
     expect(
-      (await req(ctx.app, `/api/workspaces/${A}`, { method: "DELETE", cookie: admin })).status,
+      (await req(ctx.app, `/api/v1/workspaces/${A}`, { method: "DELETE", cookie: admin })).status,
     ).toBe(403);
   });
 
   test("owner DELETE → 200", async () => {
-    const res = await req(ctx.app, `/api/workspaces/${B}`, { method: "DELETE", cookie: outsider });
+    const res = await req(ctx.app, `/api/v1/workspaces/${B}`, {
+      method: "DELETE",
+      cookie: outsider,
+    });
     expect(res.status).toBe(200);
   });
 
   test("instance admin GET ws detail → 403 (no implicit workspace role)", async () => {
-    expect((await req(ctx.app, `/api/workspaces/${A}`, { cookie: inst })).status).toBe(403);
+    expect((await req(ctx.app, `/api/v1/workspaces/${A}`, { cookie: inst })).status).toBe(403);
   });
 
   test("cross-workspace: member of A GET ws B (recreated) → 403", async () => {
     createWorkspace(db, B, userIdByEmail(db, OUTSIDER), "B2");
-    expect((await req(ctx.app, `/api/workspaces/${B}`, { cookie: member })).status).toBe(403);
+    expect((await req(ctx.app, `/api/v1/workspaces/${B}`, { cookie: member })).status).toBe(403);
   });
 
   test("unrelated user DELETE someone else's ws → 403", async () => {
     expect(
-      (await req(ctx.app, `/api/workspaces/${A}`, { method: "DELETE", cookie: outsider })).status,
+      (await req(ctx.app, `/api/v1/workspaces/${A}`, { method: "DELETE", cookie: outsider }))
+        .status,
     ).toBe(403);
   });
 });
@@ -125,7 +129,7 @@ describe("workspace detail + delete", () => {
 // Members CRUD + role mutation: owner-only per matrix
 describe("members CRUD", () => {
   test("member GET members → 200", async () => {
-    expect((await req(ctx.app, `/api/workspaces/${A}/members`, { cookie: member })).status).toBe(
+    expect((await req(ctx.app, `/api/v1/workspaces/${A}/members`, { cookie: member })).status).toBe(
       200,
     );
   });
@@ -133,7 +137,7 @@ describe("members CRUD", () => {
   test("member POST member → 403", async () => {
     expect(
       (
-        await req(ctx.app, `/api/workspaces/${A}/members`, {
+        await req(ctx.app, `/api/v1/workspaces/${A}/members`, {
           method: "POST",
           cookie: member,
           body: { email: NEWBIE, role: "member" },
@@ -145,7 +149,7 @@ describe("members CRUD", () => {
   test("admin POST member → 403", async () => {
     expect(
       (
-        await req(ctx.app, `/api/workspaces/${A}/members`, {
+        await req(ctx.app, `/api/v1/workspaces/${A}/members`, {
           method: "POST",
           cookie: admin,
           body: { email: NEWBIE, role: "member" },
@@ -155,7 +159,7 @@ describe("members CRUD", () => {
   });
 
   test("owner POST member → 200, role persisted", async () => {
-    const res = await req(ctx.app, `/api/workspaces/${A}/members`, {
+    const res = await req(ctx.app, `/api/v1/workspaces/${A}/members`, {
       method: "POST",
       cookie: owner,
       body: { email: NEWBIE, role: "member" },
@@ -166,7 +170,7 @@ describe("members CRUD", () => {
   test("POST member with unknown email → 404", async () => {
     expect(
       (
-        await req(ctx.app, `/api/workspaces/${A}/members`, {
+        await req(ctx.app, `/api/v1/workspaces/${A}/members`, {
           method: "POST",
           cookie: owner,
           body: { email: "ghost@example.com", role: "member" },
@@ -178,7 +182,7 @@ describe("members CRUD", () => {
   test("instance admin POST member → 403 (no implicit role)", async () => {
     expect(
       (
-        await req(ctx.app, `/api/workspaces/${A}/members`, {
+        await req(ctx.app, `/api/v1/workspaces/${A}/members`, {
           method: "POST",
           cookie: inst,
           body: { email: NEWBIE, role: "admin" },
@@ -189,7 +193,7 @@ describe("members CRUD", () => {
 
   test("owner PATCH member role → 200; audit written", async () => {
     const newbieId = userIdByEmail(db, NEWBIE);
-    const res = await req(ctx.app, `/api/workspaces/${A}/members/${newbieId}`, {
+    const res = await req(ctx.app, `/api/v1/workspaces/${A}/members/${newbieId}`, {
       method: "PATCH",
       cookie: owner,
       body: { role: "admin" },
@@ -209,7 +213,7 @@ describe("members CRUD", () => {
     const outsiderId = userIdByEmail(db, OUTSIDER);
     expect(
       (
-        await req(ctx.app, `/api/workspaces/${A}/members/${outsiderId}`, {
+        await req(ctx.app, `/api/v1/workspaces/${A}/members/${outsiderId}`, {
           method: "PATCH",
           cookie: owner,
           body: { role: "member" },
@@ -222,7 +226,7 @@ describe("members CRUD", () => {
     const ownerId = userIdByEmail(db, OWNER);
     expect(
       (
-        await req(ctx.app, `/api/workspaces/${A}/members/${ownerId}`, {
+        await req(ctx.app, `/api/v1/workspaces/${A}/members/${ownerId}`, {
           method: "PATCH",
           cookie: owner,
           body: { role: "member" },
@@ -231,7 +235,7 @@ describe("members CRUD", () => {
     ).toBe(409);
     expect(
       (
-        await req(ctx.app, `/api/workspaces/${A}/members/${ownerId}`, {
+        await req(ctx.app, `/api/v1/workspaces/${A}/members/${ownerId}`, {
           method: "DELETE",
           cookie: owner,
         })
@@ -241,19 +245,19 @@ describe("members CRUD", () => {
 
   test("owner can demote THEMSELVES when another owner exists", async () => {
     const ownerId = userIdByEmail(db, OWNER);
-    await req(ctx.app, `/api/workspaces/${A}/members/${userIdByEmail(db, NEWBIE)}`, {
+    await req(ctx.app, `/api/v1/workspaces/${A}/members/${userIdByEmail(db, NEWBIE)}`, {
       method: "PATCH",
       cookie: owner,
       body: { role: "owner" },
     });
-    const res = await req(ctx.app, `/api/workspaces/${A}/members/${ownerId}`, {
+    const res = await req(ctx.app, `/api/v1/workspaces/${A}/members/${ownerId}`, {
       method: "PATCH",
       cookie: owner,
       body: { role: "admin" },
     });
     expect(res.status).toBe(200);
     // restore via the other owner (actor keeps owner rights)
-    await req(ctx.app, `/api/workspaces/${A}/members/${ownerId}`, {
+    await req(ctx.app, `/api/v1/workspaces/${A}/members/${ownerId}`, {
       method: "PATCH",
       cookie: newbie,
       body: { role: "owner" },
@@ -261,7 +265,7 @@ describe("members CRUD", () => {
   });
 
   test("owner DELETE member → 200", async () => {
-    const res = await req(ctx.app, `/api/workspaces/${A}/members/${userIdByEmail(db, NEWBIE)}`, {
+    const res = await req(ctx.app, `/api/v1/workspaces/${A}/members/${userIdByEmail(db, NEWBIE)}`, {
       method: "DELETE",
       cookie: owner,
     });
@@ -274,10 +278,10 @@ describe("members CRUD", () => {
   });
 });
 
-// PATCH /api/workspaces/:id — owner-only rename per matrix
+// PATCH /api/v1/workspaces/:id — owner-only rename per matrix
 describe("workspace rename (PATCH)", () => {
   test("unauthenticated PATCH → 401", async () => {
-    const res = await req(ctx.app, `/api/workspaces/${A}`, {
+    const res = await req(ctx.app, `/api/v1/workspaces/${A}`, {
       method: "PATCH",
       body: { name: "x" },
     });
@@ -287,7 +291,7 @@ describe("workspace rename (PATCH)", () => {
   test("member PATCH → 403; cross-workspace outsider PATCH → 403", async () => {
     expect(
       (
-        await req(ctx.app, `/api/workspaces/${A}`, {
+        await req(ctx.app, `/api/v1/workspaces/${A}`, {
           method: "PATCH",
           cookie: member,
           body: { name: "Nope" },
@@ -296,7 +300,7 @@ describe("workspace rename (PATCH)", () => {
     ).toBe(403);
     expect(
       (
-        await req(ctx.app, `/api/workspaces/${A}`, {
+        await req(ctx.app, `/api/v1/workspaces/${A}`, {
           method: "PATCH",
           cookie: outsider,
           body: { name: "Nope" },
@@ -309,7 +313,7 @@ describe("workspace rename (PATCH)", () => {
   test("blank/whitespace name → 400; unknown ws → 404", async () => {
     expect(
       (
-        await req(ctx.app, `/api/workspaces/${A}`, {
+        await req(ctx.app, `/api/v1/workspaces/${A}`, {
           method: "PATCH",
           cookie: owner,
           body: { name: "   " },
@@ -318,7 +322,7 @@ describe("workspace rename (PATCH)", () => {
     ).toBe(400);
     expect(
       (
-        await req(ctx.app, "/api/workspaces/ws-nope", {
+        await req(ctx.app, "/api/v1/workspaces/ws-nope", {
           method: "PATCH",
           cookie: owner,
           body: { name: "x" },
@@ -328,7 +332,7 @@ describe("workspace rename (PATCH)", () => {
   });
 
   test("owner PATCH → 200, name trimmed, audit written", async () => {
-    const res = await req(ctx.app, `/api/workspaces/${B}`, {
+    const res = await req(ctx.app, `/api/v1/workspaces/${B}`, {
       method: "PATCH",
       cookie: outsider,
       body: { name: "  Renamed  " },
@@ -350,7 +354,7 @@ describe("workspace rename (PATCH)", () => {
 // Members POST: 409 only for real duplicate membership; other DB errors → 500
 describe("members POST error handling", () => {
   test("duplicate membership → 409", async () => {
-    const res = await req(ctx.app, `/api/workspaces/${A}/members`, {
+    const res = await req(ctx.app, `/api/v1/workspaces/${A}/members`, {
       method: "POST",
       cookie: owner,
       body: { email: ADMIN, role: "member" },
@@ -365,7 +369,7 @@ describe("members POST error handling", () => {
        BEGIN SELECT RAISE(ABORT, 'boom'); END`,
     );
     try {
-      const res = await req(ctx.app, `/api/workspaces/${A}/members`, {
+      const res = await req(ctx.app, `/api/v1/workspaces/${A}/members`, {
         method: "POST",
         cookie: owner,
         body: { email: NEWBIE, role: "member" },
@@ -380,35 +384,35 @@ describe("members POST error handling", () => {
 // Audit read: admin/owner own ws ✓, member —, instance admin global ✓
 describe("audit read", () => {
   test("member → 403", async () => {
-    expect((await req(ctx.app, `/api/audit?workspace_id=${A}`, { cookie: member })).status).toBe(
+    expect((await req(ctx.app, `/api/v1/audit?workspace_id=${A}`, { cookie: member })).status).toBe(
       403,
     );
   });
 
   test("admin own ws → 200", async () => {
-    expect((await req(ctx.app, `/api/audit?workspace_id=${A}`, { cookie: admin })).status).toBe(
+    expect((await req(ctx.app, `/api/v1/audit?workspace_id=${A}`, { cookie: admin })).status).toBe(
       200,
     );
   });
 
   test("admin other ws → 403", async () => {
-    expect((await req(ctx.app, `/api/audit?workspace_id=${B}`, { cookie: admin })).status).toBe(
+    expect((await req(ctx.app, `/api/v1/audit?workspace_id=${B}`, { cookie: admin })).status).toBe(
       403,
     );
   });
 
   test("owner own ws → 200", async () => {
-    expect((await req(ctx.app, `/api/audit?workspace_id=${A}`, { cookie: owner })).status).toBe(
+    expect((await req(ctx.app, `/api/v1/audit?workspace_id=${A}`, { cookie: owner })).status).toBe(
       200,
     );
   });
 
   test("instance admin global (no workspace_id) → 200", async () => {
-    expect((await req(ctx.app, "/api/audit", { cookie: inst })).status).toBe(200);
+    expect((await req(ctx.app, "/api/v1/audit", { cookie: inst })).status).toBe(200);
   });
 
   test("non-instance-admin without workspace_id → 403", async () => {
-    expect((await req(ctx.app, "/api/audit", { cookie: owner })).status).toBe(403);
+    expect((await req(ctx.app, "/api/v1/audit", { cookie: owner })).status).toBe(403);
   });
 });
 

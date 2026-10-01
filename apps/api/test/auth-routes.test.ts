@@ -30,14 +30,14 @@ describe("Better Auth mounted at /api/auth/*", () => {
     expect(cookieOf(res)).toContain("better-auth.session_token=");
   });
 
-  test("unauthenticated /api/workspaces → 401", async () => {
-    const res = await req(ctx.app, "/api/workspaces");
+  test("unauthenticated /api/v1/workspaces → 401", async () => {
+    const res = await req(ctx.app, "/api/v1/workspaces");
     expect(res.status).toBe(401);
   });
 
   test("authenticated with cookie → 200 (empty list)", async () => {
     const cookie = await signUp(ctx.app, "c@example.com", "C");
-    const res = await req(ctx.app, "/api/workspaces", { cookie });
+    const res = await req(ctx.app, "/api/v1/workspaces", { cookie });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
   });

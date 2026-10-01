@@ -1,4 +1,4 @@
-// Canonical catalog admin API (/api/admin/catalog) — instance-admin only,
+// Canonical catalog admin API (/api/v1/admin/catalog) — instance-admin only,
 // atomic audit, immutable prices — and canonical /v1/models listing.
 import { describe, expect, test, beforeAll } from "bun:test";
 import type { Database } from "bun:sqlite";
@@ -22,7 +22,7 @@ const MODEL = {
 };
 
 async function createModel(overrides: Record<string, unknown> = {}) {
-  const res = await req(app, "/api/admin/catalog/models", {
+  const res = await req(app, "/api/v1/admin/catalog/models", {
     method: "POST",
     cookie: iadmin,
     body: { ...MODEL, ...overrides },
@@ -32,7 +32,7 @@ async function createModel(overrides: Record<string, unknown> = {}) {
 }
 
 async function addPrice(modelId: string, input = 500) {
-  return req(app, `/api/admin/catalog/models/${modelId}/prices`, {
+  return req(app, `/api/v1/admin/catalog/models/${modelId}/prices`, {
     method: "POST",
     cookie: iadmin,
     body: {
@@ -46,7 +46,7 @@ async function addPrice(modelId: string, input = 500) {
 }
 
 async function addMapping(modelId: string, upstream = "gpt-4o-mini") {
-  return req(app, `/api/admin/catalog/models/${modelId}/mappings`, {
+  return req(app, `/api/v1/admin/catalog/models/${modelId}/mappings`, {
     method: "POST",
     cookie: iadmin,
     body: { provider: "openai", upstream_model: upstream, enabled: true },
@@ -61,13 +61,13 @@ beforeAll(async () => {
   makeInstanceAdmin(db, userIdByEmail(db, "catalog-admin@example.com"));
   owner = await signUp(app, "catalog-owner@example.com", "O");
   const wsOwner = await signUp(app, "catalog-wsowner@example.com", "W");
-  const wsRes = await req(app, "/api/workspaces", {
+  const wsRes = await req(app, "/api/v1/workspaces", {
     method: "POST",
     cookie: wsOwner,
     body: { name: "ws" },
   });
   const wsId = ((await wsRes.json()) as { id: string }).id;
-  const keyRes = await req(app, `/api/workspaces/${wsId}/keys`, {
+  const keyRes = await req(app, `/api/v1/workspaces/${wsId}/keys`, {
     method: "POST",
     cookie: wsOwner,
     body: { name: "k" },
@@ -75,15 +75,15 @@ beforeAll(async () => {
   key = ((await keyRes.json()) as { plaintext: string }).plaintext;
 });
 
-describe("POST /api/admin/catalog/models", () => {
+describe("POST /api/v1/admin/catalog/models", () => {
   test("unauthenticated → 401", async () => {
     expect(
-      (await req(app, "/api/admin/catalog/models", { method: "POST", body: MODEL })).status,
+      (await req(app, "/api/v1/admin/catalog/models", { method: "POST", body: MODEL })).status,
     ).toBe(401);
   });
 
   test("non-admin → 403", async () => {
-    const res = await req(app, "/api/admin/catalog/models", {
+    const res = await req(app, "/api/v1/admin/catalog/models", {
       method: "POST",
       cookie: owner,
       body: MODEL,
@@ -133,10 +133,10 @@ describe("POST /api/admin/catalog/models", () => {
   });
 });
 
-describe("PUT /api/admin/catalog/models/:id", () => {
+describe("PUT /api/v1/admin/catalog/models/:id", () => {
   test("updates fields; audit written", async () => {
     const { id } = await createModel({ slug: "put-model", public_id: "openai/put-model" });
-    const res = await req(app, `/api/admin/catalog/models/${id}`, {
+    const res = await req(app, `/api/v1/admin/catalog/models/${id}`, {
       method: "PUT",
       cookie: iadmin,
       body: { display_name: "Renamed", published: true },
@@ -154,7 +154,7 @@ describe("PUT /api/admin/catalog/models/:id", () => {
 
   test("non-admin → 403", async () => {
     const { id } = await createModel({ slug: "put-403", public_id: "openai/put-403" });
-    const res = await req(app, `/api/admin/catalog/models/${id}`, {
+    const res = await req(app, `/api/v1/admin/catalog/models/${id}`, {
       method: "PUT",
       cookie: owner,
       body: { display_name: "x" },
@@ -193,7 +193,7 @@ describe("mappings + prices", () => {
   test("invalid prices → 400 (negative, fraction, MAX_SAFE_INTEGER_MONEY + 1)", async () => {
     const { id } = await createModel({ slug: "bad-price", public_id: "openai/bad-price" });
     for (const input of [-1, 1.5, 9007199254740992]) {
-      const res = await req(app, `/api/admin/catalog/models/${id}/prices`, {
+      const res = await req(app, `/api/v1/admin/catalog/models/${id}/prices`, {
         method: "POST",
         cookie: iadmin,
         body: {
@@ -212,7 +212,7 @@ describe("mappings + prices", () => {
     const { id } = await createModel({ slug: "forbidden", public_id: "openai/forbidden" });
     expect(
       (
-        await req(app, `/api/admin/catalog/models/${id}/mappings`, {
+        await req(app, `/api/v1/admin/catalog/models/${id}/mappings`, {
           method: "POST",
           cookie: owner,
           body: { provider: "openai", upstream_model: "x", enabled: true },
@@ -221,7 +221,7 @@ describe("mappings + prices", () => {
     ).toBe(403);
     expect(
       (
-        await req(app, `/api/admin/catalog/models/${id}/prices`, {
+        await req(app, `/api/v1/admin/catalog/models/${id}/prices`, {
           method: "POST",
           cookie: owner,
           body: {
@@ -267,7 +267,7 @@ describe("GET /v1/models (canonical)", () => {
     const a = await createModel({ slug: "unpub-v1", public_id: "openai/unpub-v1" });
     await addMapping(a.id!);
     await addPrice(a.id!);
-    await req(app, `/api/admin/catalog/models/${a.id}`, {
+    await req(app, `/api/v1/admin/catalog/models/${a.id}`, {
       method: "PUT",
       cookie: iadmin,
       body: { published: false },
@@ -298,7 +298,7 @@ describe("PUT public_id collision + /v1/models/:id gating", () => {
         c: number;
       }
     ).c;
-    const res = await req(app, `/api/admin/catalog/models/${a.id}`, {
+    const res = await req(app, `/api/v1/admin/catalog/models/${a.id}`, {
       method: "PUT",
       cookie: iadmin,
       body: { public_id: "openai/col-b" },
@@ -325,7 +325,7 @@ describe("PUT public_id collision + /v1/models/:id gating", () => {
         .prepare("SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'")
         .get() as { c: number }
     ).c;
-    const res = await req(app, `/api/admin/catalog/models/${m.id}`, {
+    const res = await req(app, `/api/v1/admin/catalog/models/${m.id}`, {
       method: "PUT",
       cookie: iadmin,
       body: { public_id: "openai/renamed-id" },
@@ -353,7 +353,7 @@ describe("PUT public_id collision + /v1/models/:id gating", () => {
     const u = await createModel({ slug: "unpub-id", public_id: "openai/unpub-id" });
     await addMapping(u.id);
     await addPrice(u.id);
-    await req(app, `/api/admin/catalog/models/${u.id}`, {
+    await req(app, `/api/v1/admin/catalog/models/${u.id}`, {
       method: "PUT",
       cookie: iadmin,
       body: { published: false },

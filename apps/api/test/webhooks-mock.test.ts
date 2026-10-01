@@ -206,10 +206,12 @@ describe("mock webhook — feature gating", () => {
     else process.env.HBR_MOCK_PAYMENTS = saved;
   });
 
-  test("NODE_ENV=production with flag on -> 404", async () => {
+  test("webhook key unset -> 404 (NODE_ENV irrelevant)", async () => {
     const savedEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = "production";
     process.env.HBR_BASE_URL = process.env.HBR_BASE_URL || "http://localhost:3000";
+    const savedKey = process.env.HBR_MOCK_PAYMENTS_WEBHOOK_KEY;
+    delete process.env.HBR_MOCK_PAYMENTS_WEBHOOK_KEY;
     const { buildApp } = await import("../src/app");
     const { createDb, migrate } = await import("@hoborouter/db");
     const d = createDb(":memory:");
@@ -221,6 +223,8 @@ describe("mock webhook — feature gating", () => {
     expect(res.status).toBe(404);
     if (savedEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = savedEnv;
+    if (savedKey === undefined) delete process.env.HBR_MOCK_PAYMENTS_WEBHOOK_KEY;
+    else process.env.HBR_MOCK_PAYMENTS_WEBHOOK_KEY = savedKey;
   });
 });
 

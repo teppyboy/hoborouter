@@ -114,11 +114,11 @@ function leakScan(plaintext: string, except: string) {
 let createdPlaintext: string;
 let createdKeyBody: string;
 
-describe("POST /api/workspaces/:wsId/keys", () => {
+describe("POST /api/v1/workspaces/:wsId/keys", () => {
   test("member → 403", async () => {
     expect(
       (
-        await areq(`/api/workspaces/${A}/keys`, {
+        await areq(`/api/v1/workspaces/${A}/keys`, {
           method: "POST",
           cookie: member,
           body: { name: "k" },
@@ -130,7 +130,7 @@ describe("POST /api/workspaces/:wsId/keys", () => {
   test("cross-workspace admin → 403", async () => {
     expect(
       (
-        await areq(`/api/workspaces/${B}/keys`, {
+        await areq(`/api/v1/workspaces/${B}/keys`, {
           method: "POST",
           cookie: admin,
           body: { name: "k" },
@@ -140,7 +140,7 @@ describe("POST /api/workspaces/:wsId/keys", () => {
   });
 
   test("admin of own workspace → 201, plaintext once, sk-hbr- format", async () => {
-    const res = await areq(`/api/workspaces/${A}/keys`, {
+    const res = await areq(`/api/v1/workspaces/${A}/keys`, {
       method: "POST",
       cookie: admin,
       body: { name: "ci-key" },
@@ -163,7 +163,7 @@ describe("POST /api/workspaces/:wsId/keys", () => {
   });
 
   test("owner of own workspace → 201", async () => {
-    const res = await areq(`/api/workspaces/${A}/keys`, {
+    const res = await areq(`/api/v1/workspaces/${A}/keys`, {
       method: "POST",
       cookie: owner,
       body: { name: "o-key" },
@@ -172,17 +172,17 @@ describe("POST /api/workspaces/:wsId/keys", () => {
   });
 });
 
-describe("GET /api/workspaces/:wsId/keys", () => {
+describe("GET /api/v1/workspaces/:wsId/keys", () => {
   test("member → 403", async () => {
-    expect((await areq(`/api/workspaces/${A}/keys`, { cookie: member })).status).toBe(403);
+    expect((await areq(`/api/v1/workspaces/${A}/keys`, { cookie: member })).status).toBe(403);
   });
 
   test("cross-workspace → 403", async () => {
-    expect((await areq(`/api/workspaces/${B}/keys`, { cookie: admin })).status).toBe(403);
+    expect((await areq(`/api/v1/workspaces/${B}/keys`, { cookie: admin })).status).toBe(403);
   });
 
   test("admin → list without plaintext, filtered to ws", async () => {
-    const res = await areq(`/api/workspaces/${A}/keys`, { cookie: admin });
+    const res = await areq(`/api/v1/workspaces/${A}/keys`, { cookie: admin });
     expect(res.status).toBe(200);
     const list = (await res.clone().json()) as { key_prefix: string; status: string }[];
     expect(list.length).toBeGreaterThanOrEqual(2);
@@ -199,18 +199,18 @@ describe("GET /api/workspaces/:wsId/keys", () => {
   });
 });
 
-describe("DELETE /api/workspaces/:wsId/keys/:keyId", () => {
+describe("DELETE /api/v1/workspaces/:wsId/keys/:keyId", () => {
   test("member → 403", async () => {
     const keyId = (db.prepare("SELECT id FROM api_keys WHERE workspace_id=? LIMIT 1").get(A) as any)
       .id;
     expect(
-      (await areq(`/api/workspaces/${A}/keys/${keyId}`, { method: "DELETE", cookie: member }))
+      (await areq(`/api/v1/workspaces/${A}/keys/${keyId}`, { method: "DELETE", cookie: member }))
         .status,
     ).toBe(403);
   });
 
   test("cross-workspace: owner of A cannot revoke a B key → 404", async () => {
-    const res = await areq(`/api/workspaces/${B}/keys`, {
+    const res = await areq(`/api/v1/workspaces/${B}/keys`, {
       method: "POST",
       cookie: bowner,
       body: { name: "bk" },
@@ -218,12 +218,12 @@ describe("DELETE /api/workspaces/:wsId/keys/:keyId", () => {
     const bKey = (await res.json()) as { id: string; plaintext: string };
     capturedBodies.push(createdKeyBody); // keep scan context stable
     // owner of A attempts to revoke B's key via B's route (not a member of B) → 403; via A's route with B's key id → 404
-    const viaB = await areq(`/api/workspaces/${B}/keys/${bKey.id}`, {
+    const viaB = await areq(`/api/v1/workspaces/${B}/keys/${bKey.id}`, {
       method: "DELETE",
       cookie: owner,
     });
     expect(viaB.status).toBe(403);
-    const viaA = await areq(`/api/workspaces/${A}/keys/${bKey.id}`, {
+    const viaA = await areq(`/api/v1/workspaces/${A}/keys/${bKey.id}`, {
       method: "DELETE",
       cookie: owner,
     });
@@ -235,7 +235,7 @@ describe("DELETE /api/workspaces/:wsId/keys/:keyId", () => {
 
   test("admin revokes own-ws key immediately", async () => {
     // create a dedicated key
-    const res = await areq(`/api/workspaces/${A}/keys`, {
+    const res = await areq(`/api/v1/workspaces/${A}/keys`, {
       method: "POST",
       cookie: admin,
       body: { name: "revoke-me" },
@@ -243,7 +243,7 @@ describe("DELETE /api/workspaces/:wsId/keys/:keyId", () => {
     const body = (await res.json()) as { id: string; plaintext: string };
     expect(verifyApiKey(db, body.plaintext)).not.toBeNull();
 
-    const del = await areq(`/api/workspaces/${A}/keys/${body.id}`, {
+    const del = await areq(`/api/v1/workspaces/${A}/keys/${body.id}`, {
       method: "DELETE",
       cookie: admin,
     });
@@ -257,7 +257,7 @@ describe("DELETE /api/workspaces/:wsId/keys/:keyId", () => {
     // immediately invalid
     expect(verifyApiKey(db, body.plaintext)).toBeNull();
     // double revoke → 404 (already revoked = gone for mutation purposes)
-    const again = await areq(`/api/workspaces/${A}/keys/${body.id}`, {
+    const again = await areq(`/api/v1/workspaces/${A}/keys/${body.id}`, {
       method: "DELETE",
       cookie: admin,
     });

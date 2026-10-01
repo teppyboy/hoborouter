@@ -57,7 +57,7 @@ async function signUpLocal(email: string, name: string): Promise<string> {
 }
 
 async function makeKey(ws: string, cookie: string, name: string) {
-  const res = await req(app, `/api/workspaces/${ws}/keys`, {
+  const res = await req(app, `/api/v1/workspaces/${ws}/keys`, {
     method: "POST",
     cookie,
     body: { name },
@@ -97,16 +97,16 @@ describe("GET keys — legacy 'active' normalized to 'enabled'", () => {
   });
 
   test("list shows normalized statuses", async () => {
-    const res = await req(app, `/api/workspaces/${A}/keys`, { cookie: owner });
+    const res = await req(app, `/api/v1/workspaces/${A}/keys`, { cookie: owner });
     const list = (await res.json()) as { status: string }[];
     for (const k of list) expect(k.status).toBe("enabled");
   });
 });
 
-describe("PATCH /api/workspaces/:id/keys/:keyId", () => {
+describe("PATCH /api/v1/workspaces/:id/keys/:keyId", () => {
   test("member → 403", async () => {
     const k = await makeKey(A, owner, "pm");
-    const res = await req(app, `/api/workspaces/${A}/keys/${k.id}`, {
+    const res = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}`, {
       method: "PATCH",
       cookie: member,
       body: { status: "disabled" },
@@ -116,7 +116,7 @@ describe("PATCH /api/workspaces/:id/keys/:keyId", () => {
 
   test("cross-workspace key → 404", async () => {
     const k = await makeKey(A, owner, "xws");
-    const res = await req(app, `/api/workspaces/${B}/keys/${k.id}`, {
+    const res = await req(app, `/api/v1/workspaces/${B}/keys/${k.id}`, {
       method: "PATCH",
       cookie: bowner,
       body: { status: "disabled" },
@@ -126,7 +126,7 @@ describe("PATCH /api/workspaces/:id/keys/:keyId", () => {
 
   test("invalid status value → 400", async () => {
     const k = await makeKey(A, owner, "inv");
-    const res = await req(app, `/api/workspaces/${A}/keys/${k.id}`, {
+    const res = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}`, {
       method: "PATCH",
       cookie: owner,
       body: { status: "active" },
@@ -136,7 +136,7 @@ describe("PATCH /api/workspaces/:id/keys/:keyId", () => {
 
   test("enabled → disabled → enabled", async () => {
     const k = await makeKey(A, owner, "cycle");
-    const d = await req(app, `/api/workspaces/${A}/keys/${k.id}`, {
+    const d = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}`, {
       method: "PATCH",
       cookie: owner,
       body: { status: "disabled" },
@@ -145,7 +145,7 @@ describe("PATCH /api/workspaces/:id/keys/:keyId", () => {
     expect((db.prepare("SELECT status FROM api_keys WHERE id=?").get(k.id) as any).status).toBe(
       "disabled",
     );
-    const e = await req(app, `/api/workspaces/${A}/keys/${k.id}`, {
+    const e = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}`, {
       method: "PATCH",
       cookie: owner,
       body: { status: "enabled" },
@@ -158,9 +158,9 @@ describe("PATCH /api/workspaces/:id/keys/:keyId", () => {
 
   test("revoked is terminal: 409 on disable/enable of revoked", async () => {
     const k = await makeKey(A, owner, "term");
-    await req(app, `/api/workspaces/${A}/keys/${k.id}`, { method: "DELETE", cookie: owner });
+    await req(app, `/api/v1/workspaces/${A}/keys/${k.id}`, { method: "DELETE", cookie: owner });
     for (const status of ["disabled", "enabled"]) {
-      const res = await req(app, `/api/workspaces/${A}/keys/${k.id}`, {
+      const res = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}`, {
         method: "PATCH",
         cookie: owner,
         body: { status },
@@ -173,12 +173,12 @@ describe("PATCH /api/workspaces/:id/keys/:keyId", () => {
 
   test("audit rows written for key.disable / key.enable", async () => {
     const k = await makeKey(A, owner, "aud");
-    await req(app, `/api/workspaces/${A}/keys/${k.id}`, {
+    await req(app, `/api/v1/workspaces/${A}/keys/${k.id}`, {
       method: "PATCH",
       cookie: owner,
       body: { status: "disabled" },
     });
-    await req(app, `/api/workspaces/${A}/keys/${k.id}`, {
+    await req(app, `/api/v1/workspaces/${A}/keys/${k.id}`, {
       method: "PATCH",
       cookie: owner,
       body: { status: "enabled" },
@@ -191,22 +191,22 @@ describe("PATCH /api/workspaces/:id/keys/:keyId", () => {
   });
 });
 
-describe("model restrictions GET/PUT /api/workspaces/:id/keys/:keyId/models", () => {
+describe("model restrictions GET/PUT /api/v1/workspaces/:id/keys/:keyId/models", () => {
   test("member → 403", async () => {
     const k = await makeKey(A, owner, "mperm");
-    const res = await req(app, `/api/workspaces/${A}/keys/${k.id}/models`, { cookie: member });
+    const res = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}/models`, { cookie: member });
     expect(res.status).toBe(403);
   });
 
   test("cross-workspace key → 404", async () => {
     const k = await makeKey(A, owner, "mperm-x");
-    const res = await req(app, `/api/workspaces/${B}/keys/${k.id}/models`, { cookie: bowner });
+    const res = await req(app, `/api/v1/workspaces/${B}/keys/${k.id}/models`, { cookie: bowner });
     expect(res.status).toBe(404);
   });
 
   test("default (no rows) → modelIds [] meaning unrestricted", async () => {
     const k = await makeKey(A, owner, "mfree");
-    const res = await req(app, `/api/workspaces/${A}/keys/${k.id}/models`, { cookie: owner });
+    const res = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}/models`, { cookie: owner });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { modelIds: string[] };
     expect(body.modelIds).toEqual([]);
@@ -214,13 +214,13 @@ describe("model restrictions GET/PUT /api/workspaces/:id/keys/:keyId/models", ()
 
   test("PUT replaces set atomically; GET returns it", async () => {
     const k = await makeKey(A, owner, "mset");
-    const put = await req(app, `/api/workspaces/${A}/keys/${k.id}/models`, {
+    const put = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}/models`, {
       method: "PUT",
       cookie: owner,
       body: { modelIds: [A_KEY_MODEL, A_KEY_MODEL_2, A_KEY_MODEL] }, // dup removed
     });
     expect(put.status).toBe(200);
-    const get = await req(app, `/api/workspaces/${A}/keys/${k.id}/models`, { cookie: owner });
+    const get = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}/models`, { cookie: owner });
     const body = (await get.json()) as { modelIds: string[] };
     expect(body.modelIds.sort()).toEqual([A_KEY_MODEL, A_KEY_MODEL_2].sort());
     const rows = db
@@ -231,12 +231,12 @@ describe("model restrictions GET/PUT /api/workspaces/:id/keys/:keyId/models", ()
 
   test("PUT with unknown model id → 400, set unchanged", async () => {
     const k = await makeKey(A, owner, "mbad");
-    await req(app, `/api/workspaces/${A}/keys/${k.id}/models`, {
+    await req(app, `/api/v1/workspaces/${A}/keys/${k.id}/models`, {
       method: "PUT",
       cookie: owner,
       body: { modelIds: [A_KEY_MODEL] },
     });
-    const put = await req(app, `/api/workspaces/${A}/keys/${k.id}/models`, {
+    const put = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}/models`, {
       method: "PUT",
       cookie: owner,
       body: { modelIds: [A_KEY_MODEL, "nope/unknown"] },
@@ -250,12 +250,12 @@ describe("model restrictions GET/PUT /api/workspaces/:id/keys/:keyId/models", ()
 
   test("PUT [] clears restrictions → unrestricted", async () => {
     const k = await makeKey(A, owner, "mclear");
-    await req(app, `/api/workspaces/${A}/keys/${k.id}/models`, {
+    await req(app, `/api/v1/workspaces/${A}/keys/${k.id}/models`, {
       method: "PUT",
       cookie: owner,
       body: { modelIds: [A_KEY_MODEL] },
     });
-    const put = await req(app, `/api/workspaces/${A}/keys/${k.id}/models`, {
+    const put = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}/models`, {
       method: "PUT",
       cookie: owner,
       body: { modelIds: [] },
@@ -269,7 +269,7 @@ describe("model restrictions GET/PUT /api/workspaces/:id/keys/:keyId/models", ()
 
   test("audit key.models.set written", async () => {
     const k = await makeKey(A, owner, "maud");
-    await req(app, `/api/workspaces/${A}/keys/${k.id}/models`, {
+    await req(app, `/api/v1/workspaces/${A}/keys/${k.id}/models`, {
       method: "PUT",
       cookie: owner,
       body: { modelIds: [A_KEY_MODEL] },

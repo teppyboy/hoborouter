@@ -49,7 +49,7 @@ function seedBinding(o: {
 }
 
 async function makeKey(cookie: string, wsId: string, name: string): Promise<string> {
-  const res = await req(app, `/api/workspaces/${wsId}/keys`, {
+  const res = await req(app, `/api/v1/workspaces/${wsId}/keys`, {
     method: "POST",
     cookie,
     body: { name },
@@ -100,9 +100,9 @@ beforeAll(async () => {
   keyA = await makeKey(owner, A, "test-key-a");
 });
 
-describe("GET /api/workspaces/:id/models (member+ read-only view)", () => {
+describe("GET /api/v1/workspaces/:id/models (member+ read-only view)", () => {
   test("member can read own workspace view (global ∪ own), no cpa_alias", async () => {
-    const res = await req(app, `/api/workspaces/${A}/models`, { cookie: member });
+    const res = await req(app, `/api/v1/workspaces/${A}/models`, { cookie: member });
     expect(res.status).toBe(200);
     const body = await res.json();
     const ids = (body as { id: string }[]).map((m) => m.id);
@@ -116,14 +116,14 @@ describe("GET /api/workspaces/:id/models (member+ read-only view)", () => {
 
   test("non-member → 403", async () => {
     const outsider = await signUp(app, "outsider@example.com", "X");
-    const res = await req(app, `/api/workspaces/${A}/models`, { cookie: outsider });
+    const res = await req(app, `/api/v1/workspaces/${A}/models`, { cookie: outsider });
     expect(res.status).toBe(403);
   });
 });
 
-describe("POST /api/admin/models (instance admin only)", () => {
+describe("POST /api/v1/admin/models (instance admin only)", () => {
   test("workspace owner → 403", async () => {
-    const res = await req(app, "/api/admin/models", {
+    const res = await req(app, "/api/v1/admin/models", {
       method: "POST",
       cookie: owner,
       body: { public_model: "x", cpa_alias: "y", price_input_per_1m: 1, price_output_per_1m: 1 },
@@ -132,7 +132,7 @@ describe("POST /api/admin/models (instance admin only)", () => {
   });
 
   test("workspace admin → 403", async () => {
-    const res = await req(app, "/api/admin/models", {
+    const res = await req(app, "/api/v1/admin/models", {
       method: "POST",
       cookie: admin,
       body: { public_model: "x", cpa_alias: "y", price_input_per_1m: 1, price_output_per_1m: 1 },
@@ -141,7 +141,7 @@ describe("POST /api/admin/models (instance admin only)", () => {
   });
 
   test("instance admin → 201, snapshot published, audit written", async () => {
-    const res = await req(app, "/api/admin/models", {
+    const res = await req(app, "/api/v1/admin/models", {
       method: "POST",
       cookie: iadmin,
       body: {
@@ -165,17 +165,17 @@ describe("POST /api/admin/models (instance admin only)", () => {
   });
 
   test("unauthenticated → 401", async () => {
-    const res = await req(app, "/api/admin/models", { method: "POST", body: {} });
+    const res = await req(app, "/api/v1/admin/models", { method: "POST", body: {} });
     expect(res.status).toBe(401);
   });
 });
 
-describe("PUT /api/admin/models/:id (price change → NEW snapshot)", () => {
+describe("PUT /api/v1/admin/models/:id (price change → NEW snapshot)", () => {
   test("instance admin updates prices; old snapshot row untouched, new row added", async () => {
     const before = db
       .prepare("SELECT price_input FROM price_snapshots WHERE binding_id = 'mb-global'")
       .all() as { price_input: number }[];
-    const res = await req(app, "/api/admin/models/mb-global", {
+    const res = await req(app, "/api/v1/admin/models/mb-global", {
       method: "PUT",
       cookie: iadmin,
       body: { price_input_per_1m: 3000, price_output_per_1m: 4000, status: "published" },
@@ -193,7 +193,7 @@ describe("PUT /api/admin/models/:id (price change → NEW snapshot)", () => {
 
   test("price-only PUT preserves existing disabled status; explicit published reactivates", async () => {
     seedBinding({ id: "mb-dis", wsId: null, publicModel: "d", cpaAlias: "d", status: "disabled" });
-    const res = await req(app, "/api/admin/models/mb-dis", {
+    const res = await req(app, "/api/v1/admin/models/mb-dis", {
       method: "PUT",
       cookie: iadmin,
       body: { price_input_per_1m: 5, price_output_per_1m: 6 },
@@ -207,7 +207,7 @@ describe("PUT /api/admin/models/:id (price change → NEW snapshot)", () => {
         }
       ).status,
     ).toBe("disabled");
-    const res2 = await req(app, "/api/admin/models/mb-dis", {
+    const res2 = await req(app, "/api/v1/admin/models/mb-dis", {
       method: "PUT",
       cookie: iadmin,
       body: { price_input_per_1m: 5, price_output_per_1m: 6, status: "published" },
@@ -216,7 +216,7 @@ describe("PUT /api/admin/models/:id (price change → NEW snapshot)", () => {
   });
 
   test("non-instance-admin → 403", async () => {
-    const res = await req(app, "/api/admin/models/mb-global", {
+    const res = await req(app, "/api/v1/admin/models/mb-global", {
       method: "PUT",
       cookie: owner,
       body: { price_input_per_1m: 1, price_output_per_1m: 1 },
@@ -242,7 +242,7 @@ describe("GET /v1/models + /v1/models/:id (canonical catalog, Bearer sk-hbr- key
   });
 
   test("lists canonical models only (legacy bindings absent) in OpenAI shape", async () => {
-    const res = await req(app, "/api/admin/catalog/models", {
+    const res = await req(app, "/api/v1/admin/catalog/models", {
       method: "POST",
       cookie: iadmin,
       body: {
@@ -260,7 +260,7 @@ describe("GET /v1/models + /v1/models/:id (canonical catalog, Bearer sk-hbr- key
     const { id } = (await res.json()) as { id: string };
     expect(
       (
-        await req(app, `/api/admin/catalog/models/${id}/mappings`, {
+        await req(app, `/api/v1/admin/catalog/models/${id}/mappings`, {
           method: "POST",
           cookie: iadmin,
           body: { provider: "openai", upstream_model: "gpt-4o-mini", enabled: true },
@@ -269,7 +269,7 @@ describe("GET /v1/models + /v1/models/:id (canonical catalog, Bearer sk-hbr- key
     ).toBe(201);
     expect(
       (
-        await req(app, `/api/admin/catalog/models/${id}/prices`, {
+        await req(app, `/api/v1/admin/catalog/models/${id}/prices`, {
           method: "POST",
           cookie: iadmin,
           body: {
