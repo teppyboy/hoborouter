@@ -64,7 +64,7 @@ const balance = () =>
 describe("dev payments completion gate", () => {
   test("flag off -> 404, no credit", async () => {
     process.env.HBR_DEV_PAYMENTS = "0";
-    delete process.env.NODE_ENV;
+    process.env.NODE_ENV = "test";
     const id = seedPayment("mock", "MOCK-DEV-1", 1000);
     const res = await POST(buildApp(), id);
     expect(res.status).toBe(404);
@@ -83,7 +83,7 @@ describe("dev payments completion gate", () => {
 
   test("flag on, non-production -> owner can complete a mock payment, credited once", async () => {
     process.env.HBR_DEV_PAYMENTS = "1";
-    delete process.env.NODE_ENV;
+    process.env.NODE_ENV = "test";
     const id = seedPayment("mock", "MOCK-DEV-3", 5000);
     const res = await POST(buildApp(), id);
     expect(res.status).toBe(200);

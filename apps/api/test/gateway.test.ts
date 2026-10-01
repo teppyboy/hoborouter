@@ -326,3 +326,27 @@ describe("gateway core", () => {
     expect(lastCharge().status).toBe("settled_full_hold");
   });
 });
+
+describe("gateway body cap", () => {
+  test("oversized content-length -> 413 before any DB write", async () => {
+    captured = [];
+    const before = requestCount();
+    const big = "x".repeat(1024 * 1024 + 1);
+    const res = await gw(
+      new Request("http://localhost" + CHAT_PATH, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${PLAINTEXT}`,
+          "content-length": String(big.length),
+        },
+        body: big,
+      }),
+    );
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe("payload_too_large");
+    expect(requestCount()).toBe(before);
+    expect(captured.length).toBe(0);
+  });
+});

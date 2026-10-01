@@ -208,7 +208,10 @@ describe("mock webhook — feature gating", () => {
 
   test("webhook key unset -> 404 (NODE_ENV irrelevant)", async () => {
     const savedEnv = process.env.NODE_ENV;
+    const savedSecret = process.env.BETTER_AUTH_SECRET;
     process.env.NODE_ENV = "production";
+    // production now asserts a >=32 char auth secret at startup
+    process.env.BETTER_AUTH_SECRET = "test-secret-0123456789abcdef0123456789abcdef";
     process.env.HBR_BASE_URL = process.env.HBR_BASE_URL || "http://localhost:3000";
     const savedKey = process.env.HBR_MOCK_PAYMENTS_WEBHOOK_KEY;
     delete process.env.HBR_MOCK_PAYMENTS_WEBHOOK_KEY;
@@ -223,6 +226,8 @@ describe("mock webhook — feature gating", () => {
     expect(res.status).toBe(404);
     if (savedEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = savedEnv;
+    if (savedSecret === undefined) delete process.env.BETTER_AUTH_SECRET;
+    else process.env.BETTER_AUTH_SECRET = savedSecret;
     if (savedKey === undefined) delete process.env.HBR_MOCK_PAYMENTS_WEBHOOK_KEY;
     else process.env.HBR_MOCK_PAYMENTS_WEBHOOK_KEY = savedKey;
   });
