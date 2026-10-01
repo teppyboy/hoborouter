@@ -97,6 +97,14 @@
       "name": "@hoborouter/shared",
       "version": "0.0.0",
     },
+    "packages/usage": {
+      "name": "@hoborouter/usage",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@types/node": "^26.6.3",
+        "bun-types": "^1.4.2",
+      },
+    },
     "packages/wallet": {
       "name": "@hoborouter/wallet",
       "version": "0.0.0",
@@ -291,6 +299,8 @@
     "@hoborouter/shared": ["@hoborouter/shared@workspace:packages/shared"],
 
     "@hoborouter/tests": ["@hoborouter/tests@workspace:tests"],
+
+    "@hoborouter/usage": ["@hoborouter/usage@workspace:packages/usage"],
 
     "@hoborouter/wallet": ["@hoborouter/wallet@workspace:packages/wallet"],
 

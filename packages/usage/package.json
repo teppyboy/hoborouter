@@ -1,0 +1,13 @@
+{
+  "name": "@hoborouter/usage",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/usage.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "bun-types": "^1.4.2"
+  }
+}
