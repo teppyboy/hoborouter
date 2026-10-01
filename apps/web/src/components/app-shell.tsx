@@ -1,17 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import {
-  LogOut,
-  Monitor,
-  Moon,
-  Shield,
-  Sun,
-} from "lucide-react";
+import { LogOut, Monitor, Moon, Shield, Sun } from "lucide-react";
 import { api } from "../lib/api";
 import { authClient, useSession } from "../lib/auth";
 import { applyTheme, useThemeStore, type Theme } from "../lib/theme";
 import { useWorkspaceStore } from "../lib/workspace";
 import { useWorkspaces, type Workspace } from "../lib/workspace-queries";
+import { CreateWorkspace } from "./create-workspace";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import {
@@ -112,10 +107,7 @@ function WorkspaceSwitcher() {
   const setWorkspaceId = useWorkspaceStore((s) => s.setWorkspaceId);
   if (!isSuccess || !workspaces?.length) return null;
   return (
-    <Select
-      value={workspaceId ?? workspaces[0]?.id}
-      onValueChange={setWorkspaceId}
-    >
+    <Select value={workspaceId ?? workspaces[0]?.id} onValueChange={setWorkspaceId}>
       <SelectTrigger aria-label="Workspace" className="w-full">
         <span className="truncate">
           {workspaces.find((w: Workspace) => w.id === workspaceId)?.name ?? workspaces[0]?.name}
@@ -158,6 +150,9 @@ function UserMenu() {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isAdmin = useIsAdmin();
+  // Empty workspace list means every workspace-scoped query is stuck pending; offer creation instead.
+  const { data: workspaces, isSuccess: wsLoaded } = useWorkspaces();
+  const emptyWorkspaces = wsLoaded && workspaces?.length === 0;
 
   return (
     <div className="flex min-h-screen">
@@ -170,9 +165,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {NAV_GROUPS.map((group, gi) => (
             <div key={gi} className={cn(gi > 0 && "mt-4")}>
               {group.label && (
-                <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">
-                  {group.label}
-                </p>
+                <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">{group.label}</p>
               )}
               {group.items.map((item) => (
                 <Link
@@ -226,7 +219,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Separator orientation="vertical" className="h-4" />
           <UserMenu />
         </header>
-        <main className="min-w-0 flex-1">{children}</main>
+        <main className="min-w-0 flex-1">{emptyWorkspaces ? <CreateWorkspace /> : children}</main>
       </div>
     </div>
   );

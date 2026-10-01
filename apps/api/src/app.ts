@@ -82,6 +82,8 @@ export const buildApp = (deps: AppDeps = {}) => {
   const auth = deps.auth ?? createAuth(db);
   const mockPayments = mockWebhookConfig();
 
+  const authHandler = (ctx: { request: Request }) => auth.handler(ctx.request);
+
   const app = new Elysia({ name: "hoborouter-api" })
     .use(healthRoutes)
     .use(
@@ -91,7 +93,10 @@ export const buildApp = (deps: AppDeps = {}) => {
         documentation: openapiDocumentation,
       }),
     )
-    .all("/api/auth/*", (ctx) => auth.handler(ctx.request))
+    // Elysia 2.0.0-exp.64: the method-specific .get("/api/*") 404 wildcard
+    // beats .all("/api/auth/*") for GET, so register GET explicitly.
+    .get("/api/auth/*", authHandler)
+    .all("/api/auth/*", authHandler)
     .use(workspacesRoutes(db, auth))
     .use(membersRoutes(db, auth))
     .use(auditRoutes(db, auth))
@@ -136,7 +141,17 @@ export const buildApp = (deps: AppDeps = {}) => {
       for (const name of ["x-cpa-trace-id", "x-request-id", "openai-request-id"]) {
         headers.delete(name);
       }
-      const cleanRequest = new Request(request, { headers });
+      // Bun ignores init.headers when cloning a Request, so rebuild from the
+      // URL to actually drop the stripped headers.
+      const cleanRequest = new Request(request.url, {
+        method: request.method,
+        headers,
+        body: request.body,
+        redirect: request.redirect,
+        signal: request.signal,
+        // @ts-expect-error Bun requires duplex for streaming request bodies
+        duplex: "half",
+      });
       let response: Response;
       try {
         response = await handle(cleanRequest);

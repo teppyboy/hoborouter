@@ -80,8 +80,7 @@ function protectedRoute(path: string, PageComponent: React.ComponentType) {
   });
 }
 
-const routes = [
-  // Public
+const publicRoutes = [
   createRoute({
     getParentRoute: () => rootRoute,
     path: "/login",
@@ -100,8 +99,10 @@ const routes = [
       </Page>
     ),
   }),
+];
+
+const protectedRoutes = [
   protectedRoute("/", overview),
-  protectedLayout,
   protectedRoute("/models", models),
   // Splat: public model ids may contain "/"; read via useParams().["*"] (decoded).
   protectedRoute("/models/$", modelDetail),
@@ -120,7 +121,10 @@ const routes = [
   protectedRoute("/admin/system", adminSystem),
 ];
 
-export const routeTree = rootRoute.addChildren(routes);
+export const routeTree = rootRoute.addChildren([
+  ...publicRoutes,
+  protectedLayout.addChildren(protectedRoutes),
+]);
 
 export const router = createRouter({
   routeTree,

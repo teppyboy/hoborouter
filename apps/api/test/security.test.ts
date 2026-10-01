@@ -29,6 +29,16 @@ describe("security middleware", () => {
     expect(seen.has("openai-request-id")).toBe(false);
   });
 
+  test("GET auth endpoints reach Better Auth; unknown /api/v1 stays 404", async () => {
+    const { app } = await makeApp();
+    const res = await request(app, "/api/auth/get-session");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toBe(null);
+    const missing = await request(app, "/api/v1/nonexistent");
+    expect(missing.status).toBe(404);
+    expect((await missing.json()).error.code).toBe("NOT_FOUND");
+  });
+
   test("normalizes 404 and authz 403 errors with request ID", async () => {
     const { app } = await makeApp();
     for (const path of ["/api/missing", "/api/v1/workspaces/no-such-id/members"]) {
