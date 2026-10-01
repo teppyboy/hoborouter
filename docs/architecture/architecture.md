@@ -94,7 +94,7 @@ charged_vnd = ceil(upstream_cost_usd_micro * r * m / 1e12); USD prices are per 1
 
 All arithmetic is checked integer arithmetic. Ceiling rounds UP in the customer charge, preventing fractional-token/unit
 truncation from undercharging; snapshots are stored on the usage/reservation
-and never recomputed from current prices. `HOBOROUTER_USD_VND_RATE=26000` supplies the
+and never recomputed from current prices. `HBR_USD_VND_RATE=26000` supplies the
 rate; an authenticated admin override supplies a later snapshot value.
 
 Wallets hold integer VND. A reservation increases `reserved`; settlement
@@ -131,7 +131,7 @@ and payOS is in scope now but not yet implemented. The
 interface is
 `createPayment`, `getPayment`, `verifyWebhook`, and optional `cancelPayment`.
 Payment state transitions and webhook replay/idempotency credit the wallet only
-once. `POST /api/dev/payments/:id/complete` is development/demo-only and
+once. `POST /api/v1/dev/payments/:id/complete` is development/demo-only and
 replaces the old mock webhook route. payOS uses signature fixtures, so tests
 need no merchant credentials.
 

@@ -119,7 +119,7 @@ charged_vnd = ceil(upstream_cost_usd_micro * r * m / 1_000_000_000_000)
 
 Checked integer arithmetic rejects overflow and negative values. Ceiling rounds UP in the customer charge: no fractional micro-unit/token
 calculation silently undercharges. Store all operands and results; never recalculate history.
-`HOBOROUTER_USD_VND_RATE` defaults to `26000`; an authenticated admin override
+`HBR_USD_VND_RATE` defaults to `26000`; an authenticated admin override
 changes the rate used by future snapshots.
 
 ## Payments
@@ -130,7 +130,7 @@ provider_reference UNIQUE per provider, raw_payload, signature_valid,
 processed_at)`. `PaymentService` depends on
 `PaymentProvider { createPayment, getPayment, verifyWebhook, cancelPayment? }`.
 `MockPaymentProvider` exercises pending→paid→verified event→top-up ledger.
-`POST /api/dev/payments/:id/complete` is development/demo-only. payOS uses
+`POST /api/v1/dev/payments/:id/complete` is development/demo-only. payOS uses
 signature fixtures and webhook replay/idempotency; tests require no merchant
 credentials.
 

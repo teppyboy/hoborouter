@@ -28,6 +28,43 @@ import { createAuth } from "./auth";
 
 const defaultWebDist = new URL("../../web/dist", import.meta.url).pathname;
 
+const openapiDocumentation = {
+  info: {
+    title: "Hoborouter API",
+    version: "1.0.0",
+    description:
+      "Hoborouter control-plane API (versioned under /api/v1), OpenAI-compatible gateway (/v1), and Better Auth endpoints (/api/auth). Session-cookie routes use cookieAuth; programmatic keys use bearerAuth.",
+  },
+  tags: [
+    { name: "Workspaces", description: "Workspace create, list, and management" },
+    { name: "Members", description: "Workspace membership and roles" },
+    { name: "Keys", description: "API key (sk-hbr-) issuance and lifecycle" },
+    { name: "Audit", description: "Audit log query" },
+    { name: "Catalog", description: "Public model catalog" },
+    { name: "Admin", description: "Instance-admin catalog and payments management" },
+    { name: "Dashboard", description: "Wallet, ledger, request, and usage views" },
+    { name: "Billing", description: "Payments and wallet top-ups" },
+    { name: "Payments", description: "Payment provider callbacks" },
+    { name: "System", description: "CPA health and system status" },
+    { name: "Health", description: "Liveness and readiness" },
+  ],
+  components: {
+    securitySchemes: {
+      cookieAuth: {
+        type: "apiKey",
+        in: "cookie",
+        name: "better-auth.session_token",
+        description: "Better Auth session cookie",
+      },
+      bearerAuth: {
+        type: "http",
+        scheme: "bearer",
+        description: "Programmatic API key (sk-hbr-...)",
+      },
+    },
+  },
+} satisfies Partial<import("openapi-types").OpenAPIV3.Document>;
+
 export interface AppDeps {
   db?: Database;
   auth?: BetterAuthInstance;
@@ -47,7 +84,13 @@ export const buildApp = (deps: AppDeps = {}) => {
 
   const app = new Elysia({ name: "hoborouter-api" })
     .use(healthRoutes)
-    .use(openapi({ path: "/docs", specPath: "/openapi.json" }))
+    .use(
+      openapi({
+        path: "/docs",
+        specPath: "/openapi.json",
+        documentation: openapiDocumentation,
+      }),
+    )
     .all("/api/auth/*", (ctx) => auth.handler(ctx.request))
     .use(workspacesRoutes(db, auth))
     .use(membersRoutes(db, auth))
@@ -104,6 +147,20 @@ export const buildApp = (deps: AppDeps = {}) => {
       if (status >= 400) {
         let code = status >= 500 ? "INTERNAL_ERROR" : status === 404 ? "NOT_FOUND" : "ERROR";
         let message = status >= 500 ? "Internal server error" : "Request failed";
+        // Elysia 2.0.0-exp.64 emits validation failures as 422
+        // application/problem+json { type: 'validation', title, status } —
+        // no 'VALIDATION' code field. Normalize to the API's 400 contract
+        // without echoing internal schema details.
+        if (status === 422) {
+          return await boundaryResponse(
+            request,
+            400,
+            JSON.stringify({ error: { code: "INVALID", message: "Request failed validation" } }),
+            response,
+            requestId,
+            true,
+          );
+        }
         if (status < 500) {
           try {
             const body = await response.clone().json();

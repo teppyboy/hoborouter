@@ -95,7 +95,7 @@ overbuild team UI.
 - Customer currency VND, displayed `20.000 ₫`.
 - Upstream prices usually USD. Usage records store `upstream_cost_usd_micro`,
   `usd_vnd_exchange_rate`, `markup`, `charged_vnd`; never recompute history.
-- Env `HOBOROUTER_USD_VND_RATE=26000`; admin setting may override.
+- Env `HBR_USD_VND_RATE=26000`; admin setting may override.
 
 ## Payments
 
@@ -103,7 +103,7 @@ overbuild team UI.
 cancelPayment?() }`. Billing must not care which provider paid.
 - `MockPaymentProvider` exercises the real pipeline: pending → provider reports
   paid → verified event → PaymentService → ledger TOPUP → wallet.
-- Dev endpoint `POST /api/dev/payments/:id/complete`, disabled outside
+- Dev endpoint `POST /api/v1/dev/payments/:id/complete`, disabled outside
   demo/development.
 - Next: `VietQRStaticProvider` (real QR, manual/mock settlement), payOS
   (owner: now), later VNPay/MoMo. Frontend never mutates wallet directly.

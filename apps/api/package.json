@@ -22,6 +22,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
-    "bun-types": "^1.4.2"
+    "bun-types": "^1.4.2",
+    "openapi-types": "^12.1.3"
   }
 }

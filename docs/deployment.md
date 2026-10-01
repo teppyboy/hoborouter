@@ -24,7 +24,7 @@ Alternative from a host with sqlite3 against a stopped container's volume: `sqli
 
 ## payOS webhook URL
 
-Point the payOS dashboard webhook at `https://<your-domain>/api/webhooks/payos` (confirm the exact path in `apps/api/src/routes/payments.ts` before going live). The URL must be publicly reachable over HTTPS.
+Point the payOS dashboard webhook at `https://<your-domain>/webhooks/payments/payos` (confirm the exact path in `apps/api/src/routes/webhooks-payos.ts` before going live). The URL must be publicly reachable over HTTPS.
 
 ## Paid gateway
 
@@ -36,7 +36,7 @@ Point the payOS dashboard webhook at `https://<your-domain>/api/webhooks/payos` 
 
 ## Payments: mock provider is the default
 
-Top-ups use the built-in mock provider by default: users create a mock payment via `POST /api/workspaces/:id/payments`; an INSTANCE ADMIN (only) completes it with `POST /api/admin/payments/:id/complete` after confirming the money out-of-band. payOS stays optional — set all of `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY` to use it instead. The signed mock webhook (`HBR_MOCK_PAYMENTS_WEBHOOK_KEY`) is optional; without it the route 404s and startup is unaffected. Set `HBR_MOCK_PAYMENTS=off` to disable mock top-up creation. `/api/dev/payments/:id/complete` self-completion exists ONLY when `NODE_ENV !== 'production'` and `HBR_DEV_PAYMENTS=1`.
+Top-ups use the built-in mock provider by default: users create a mock payment via `POST /api/v1/workspaces/:id/payments`; an INSTANCE ADMIN (only) completes it with `POST /api/v1/admin/payments/:id/complete` after confirming the money out-of-band. payOS stays optional — set all of `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY` to use it instead. The signed mock webhook (`HBR_MOCK_PAYMENTS_WEBHOOK_KEY`) is optional; without it the route 404s and startup is unaffected. Set `HBR_MOCK_PAYMENTS=off` to disable mock top-up creation. `/api/v1/dev/payments/:id/complete` self-completion exists ONLY when `NODE_ENV !== 'production'` and `HBR_DEV_PAYMENTS=1`.
 
 ## Upgrade / migration policy
 

@@ -1,8 +1,15 @@
 # Hoborouter API boundaries
 
 Elysia 2 serves the static React SPA and JSON APIs. `/v1/*` uses Bearer
-`sk-hbr-` keys. `/api/*` uses Better Auth secure-cookie sessions. CPA is never
+`sk-hbr-` keys. `/api/v1/*` uses Better Auth secure-cookie sessions. CPA is never
 public through the gateway management surface.
+
+## API versioning
+
+- Control plane: versioned under `/api/v1/...`.
+- OpenAI-compatible gateway: `/v1/...` (unversioned path prefix, OpenAI convention).
+- Authentication: `/api/auth/*` (Better Auth, library-owned — not versioned).
+- OpenAPI spec: `/openapi.json`; interactive docs at `/docs`.
 
 ## Public AI API
 
@@ -55,13 +62,13 @@ full-hold policy. Persist usage and billing snapshots before settlement.
 Session-protected routes include:
 
 - `POST /api/auth/*` (Better Auth), workspace/member routes.
-- `GET/POST /api/keys`, `PATCH /api/keys/:id` enable/disable, revoke; plaintext
+- `GET/POST /api/v1/keys`, `PATCH /api/v1/keys/:id` enable/disable, revoke; plaintext
   shown once. Model permissions are managed with the key.
-- `GET /api/wallet`, `GET /api/ledger`, `GET /api/requests`,
-  `GET /api/requests/:id`, `GET /api/usage/summary`.
-- `POST /api/payments`, `GET /api/payments/:id`; PaymentService owns provider
+- `GET /api/v1/wallet`, `GET /api/v1/ledger`, `GET /api/v1/requests`,
+  `GET /api/v1/requests/:id`, `GET /api/v1/usage/summary`.
+- `POST /api/v1/payments`, `GET /api/v1/payments/:id`; PaymentService owns provider
   selection and wallet credit.
-- Instance-admin catalog routes `/api/admin/models`, pricing, providers,
+- Instance-admin catalog routes `/api/v1/admin/models`, pricing, providers,
   users, payments, audit, and unknown/review operations.
 
 Payment boundary:
@@ -73,7 +80,7 @@ PaymentService -> PaymentProvider
 ```
 
 Provider interface: `createPayment`, `getPayment`, `verifyWebhook`, optional
-`cancelPayment`. `POST /api/dev/payments/:id/complete` is dev/demo-only and
+`cancelPayment`. `POST /api/v1/dev/payments/:id/complete` is dev/demo-only and
 replaces the old mock webhook completion route. Real webhooks verify provider
 signatures, validate order/amount, insert a replay-keyed event, then invoke
 PaymentService; duplicate webhooks produce one top-up. payOS tests use

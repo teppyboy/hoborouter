@@ -2,7 +2,7 @@
 // Gated: NODE_ENV !== 'production' AND HBR_DEV_PAYMENTS === '1'; otherwise 404.
 // Instance admin or workspace owner. Credits through the same idempotent
 // payment_events path used by webhooks (one top-up per payment).
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, isInstanceAdmin, wsRole, writeAudit, jsonError } from "../authz";
@@ -10,13 +10,24 @@ import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments"
 
 export const devPaymentsRoutes = (db: Database, auth: BetterAuthInstance) =>
   new Elysia({ name: "dev-payments" }).post(
-    "/api/dev/payments/:id/complete",
+    "/api/v1/dev/payments/:id/complete",
+    {
+      params: t.Object({ id: t.String() }),
+      response: t.Object({ success: t.Boolean(), outcome: t.String() }),
+      detail: {
+        tags: ["Payments"],
+        summary: "Complete mock payment (dev only)",
+        description:
+          "Dev/demo-only completion; requires NODE_ENV != production and HBR_DEV_PAYMENTS=1, instance admin or workspace owner.",
+        security: [{ cookieAuth: [] }],
+      },
+    },
     async ({ request, params }) => {
       if (process.env.NODE_ENV === "production" || process.env.HBR_DEV_PAYMENTS !== "1") {
         return jsonError(404, "NOT_FOUND", "Not found");
       }
       const gate = await requireSession(auth, request);
-      if ("error" in gate) return gate.error;
+      if (gate.error) return gate.error;
       const userId = gate.session.user.id;
       const payment = db
         .prepare(

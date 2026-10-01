@@ -1,7 +1,7 @@
 // Admin-extra: instance-admin-only overview routes (users, payments,
 // usage-logs, CPA model discovery, system status). No secrets ever emitted:
 // no key hashes, no raw provider payloads, no env values — booleans only.
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, jsonError, writeAudit } from "../authz";
@@ -22,41 +22,70 @@ const json = (data: unknown, status = 200) =>
 
 export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
   new Elysia({ name: "admin-extra" })
-    .get("/api/admin/users", async ({ request }) => {
-      const g = await guard(db, auth, request);
-      if ("error" in g) return g.error;
-      const rows = db
-        .prepare(
-          `SELECT u.id, u.email, u.name, u.created_at,
+    .get(
+      "/api/v1/admin/users",
+      {
+        detail: {
+          tags: ["Admin"],
+          summary: "List users",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request }) => {
+        const g = await guard(db, auth, request);
+        if ("error" in g) return g.error;
+        const rows = db
+          .prepare(
+            `SELECT u.id, u.email, u.name, u.created_at,
                   EXISTS(SELECT 1 FROM instance_admins ia WHERE ia.user_id = u.id) AS is_instance_admin,
                   (SELECT COUNT(*) FROM workspace_members wm WHERE wm.user_id = u.id) AS workspace_count
            FROM users u ORDER BY u.created_at DESC`,
-        )
-        .all();
-      return json({ data: rows });
-    })
-    .get("/api/admin/payments", async ({ request }) => {
-      const g = await guard(db, auth, request);
-      if ("error" in g) return g.error;
-      // provider_order_code is the merchant-facing code, not a secret; raw
-      // payloads live in payment_events and are never joined here.
-      const rows = db
-        .prepare(
-          `SELECT p.id, p.workspace_id, w.name AS workspace_name, p.amount, p.status,
+          )
+          .all();
+        return json({ data: rows });
+      },
+    )
+    .get(
+      "/api/v1/admin/payments",
+      {
+        detail: {
+          tags: ["Billing"],
+          summary: "List payments",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request }) => {
+        const g = await guard(db, auth, request);
+        if ("error" in g) return g.error;
+        // provider_order_code is the merchant-facing code, not a secret; raw
+        // payloads live in payment_events and are never joined here.
+        const rows = db
+          .prepare(
+            `SELECT p.id, p.workspace_id, w.name AS workspace_name, p.amount, p.status,
                   p.provider, p.provider_order_code, p.created_at, p.expires_at
            FROM payments p JOIN workspaces w ON w.id = p.workspace_id
            ORDER BY p.created_at DESC LIMIT 200`,
-        )
-        .all();
-      return json({ data: rows });
-    })
-    .get("/api/admin/usage-logs", async ({ request }) => {
-      const g = await guard(db, auth, request);
-      if ("error" in g) return g.error;
-      // raw_payload excluded — may contain upstream response data.
-      const rows = db
-        .prepare(
-          `SELECT ul.id, ul.workspace_id, w.name AS workspace_name,
+          )
+          .all();
+        return json({ data: rows });
+      },
+    )
+    .get(
+      "/api/v1/admin/usage-logs",
+      {
+        detail: {
+          tags: ["Admin"],
+          summary: "List usage logs",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request }) => {
+        const g = await guard(db, auth, request);
+        if ("error" in g) return g.error;
+        // raw_payload excluded — may contain upstream response data.
+        const rows = db
+          .prepare(
+            `SELECT ul.id, ul.workspace_id, w.name AS workspace_name,
                   k.key_prefix, ul.provider, ul.public_model, ul.upstream_model,
                   ul.input_tokens, ul.output_tokens, ul.cached_input_tokens,
                   ul.reasoning_tokens, ul.status, ul.failure, ul.latency_ms,
@@ -65,118 +94,152 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
            JOIN workspaces w ON w.id = ul.workspace_id
            LEFT JOIN api_keys k ON k.id = ul.api_key_id
            ORDER BY ul.created_at DESC LIMIT 200`,
-        )
-        .all();
-      return json({ data: rows });
-    })
-    .get("/api/admin/cpa/models", async ({ request }) => {
-      const g = await guard(db, auth, request);
-      if ("error" in g) return g.error;
-      const key = process.env.CPA_ACCESS_KEY;
-      if (!key) return jsonError(502, "CPA_UNCONFIGURED", "CPA_ACCESS_KEY is not set");
-      let resp: Response;
-      try {
-        resp = await fetch(`${cpaBase()}/v1/models`, {
-          headers: { authorization: `Bearer ${key}` },
-          signal: AbortSignal.timeout(3000),
-        });
-      } catch {
-        return jsonError(502, "CPA_UNREACHABLE", "CPA did not respond");
-      }
-      if (!resp.ok) return jsonError(502, "CPA_UNHEALTHY", `/v1/models returned ${resp.status}`);
-      type Model = { id?: unknown; owned_by?: unknown };
-      let upstream: { data?: Model[] };
-      try {
-        upstream = (await resp.json()) as { data?: Model[] };
-      } catch {
-        return jsonError(502, "CPA_UNHEALTHY", "invalid /v1/models response");
-      }
-      const mapped = new Set(
-        (
-          db
-            .prepare("SELECT DISTINCT upstream_model FROM provider_model_mappings")
-            .all() as { upstream_model: string }[]
-        ).map((r) => r.upstream_model),
-      );
-      const data = (upstream.data ?? [])
-        .filter((m): m is { id: string; owned_by?: string } => typeof m.id === "string")
-        .map((m) => ({
-          id: m.id,
-          owned_by: typeof m.owned_by === "string" ? m.owned_by : null,
-          mapped: mapped.has(m.id),
-        }));
-      return json({ data });
-    })
-    .post("/api/admin/payments/:id/complete", async ({ request, params }) => {
-      // SECURITY: instance-admin-only in every environment. The owner confirms
-      // money received out-of-band; ordinary users can never credit
-      // themselves. Same idempotent credit path as dev-payments/webhooks.
-      const g = await guard(db, auth, request);
-      if ("error" in g) return g.error;
-      const userId = g.session.user.id;
-      const payment = db
-        .prepare(
-          "SELECT id, workspace_id, amount, status, provider, provider_order_code FROM payments WHERE id = ?",
-        )
-        .get(params.id) as
-        | {
-            id: string;
-            workspace_id: string;
-            amount: number;
-            status: string;
-            provider: string;
-            provider_order_code: string;
-          }
-        | undefined;
-      if (!payment) return jsonError(404, "NOT_FOUND", "Payment not found");
-      try {
-        const result = processMockPaymentEvent(db, {
-          provider: payment.provider,
-          orderCode: payment.provider_order_code,
-          // Fixed reference per payment: replays are idempotent (already_processed).
-          providerReference: `admin-complete-${payment.id}`,
-          amount: payment.amount,
-          rawPayload: JSON.stringify({ source: "admin-complete", paymentId: payment.id }),
-        });
-        writeAudit(db, {
-          actorUserId: userId,
-          workspaceId: payment.workspace_id,
-          action: "payment.admin_complete",
-          target: payment.id,
-          detail: { outcome: result.outcome },
-        });
-        return new Response(JSON.stringify({ success: true, outcome: result.outcome }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      } catch (err) {
-        if (err instanceof MockPaymentError && err.code === "not_found") {
-          return jsonError(404, "NOT_FOUND", err.message);
-        }
-        throw err;
-      }
-    })
-    .get("/api/admin/system", async ({ request }) => {
-      const g = await guard(db, auth, request);
-      if ("error" in g) return g.error;
-      const count = (t: string) =>
-        (db.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get() as { c: number }).c;
-      const wal = (db.prepare("PRAGMA journal_mode").get() as { journal_mode: string })
-        .journal_mode;
-      return json({
-        gateway_enabled: process.env.HBR_GATEWAY_ENABLED !== "0",
-        usd_vnd_rate: Number(process.env.HBR_USD_VND_RATE) || 26000,
-        payos_configured:
-          !!process.env.PAYOS_CLIENT_ID &&
-          !!process.env.PAYOS_API_KEY &&
-          !!process.env.PAYOS_CHECKSUM_KEY,
-        dev_payments: process.env.HBR_DEV_PAYMENTS === "1",
-        db: { wal },
-        counts: {
-          users: count("users"),
-          workspaces: count("workspaces"),
-          models: count("models"),
-          requests: count("requests"),
+          )
+          .all();
+        return json({ data: rows });
+      },
+    )
+    .get(
+      "/api/v1/admin/cpa/models",
+      {
+        detail: {
+          tags: ["System"],
+          summary: "List CPA models with mapping status",
+          security: [{ cookieAuth: [] }],
         },
-      });
-    });
+      },
+      async ({ request }) => {
+        const g = await guard(db, auth, request);
+        if ("error" in g) return g.error;
+        const key = process.env.CPA_ACCESS_KEY;
+        if (!key) return jsonError(502, "CPA_UNCONFIGURED", "CPA_ACCESS_KEY is not set");
+        let resp: Response;
+        try {
+          resp = await fetch(`${cpaBase()}/v1/models`, {
+            headers: { authorization: `Bearer ${key}` },
+            signal: AbortSignal.timeout(3000),
+          });
+        } catch {
+          return jsonError(502, "CPA_UNREACHABLE", "CPA did not respond");
+        }
+        if (!resp.ok) return jsonError(502, "CPA_UNHEALTHY", `/v1/models returned ${resp.status}`);
+        type Model = { id?: unknown; owned_by?: unknown };
+        let upstream: { data?: Model[] };
+        try {
+          upstream = (await resp.json()) as { data?: Model[] };
+        } catch {
+          return jsonError(502, "CPA_UNHEALTHY", "invalid /v1/models response");
+        }
+        const mapped = new Set(
+          (
+            db.prepare("SELECT DISTINCT upstream_model FROM provider_model_mappings").all() as {
+              upstream_model: string;
+            }[]
+          ).map((r) => r.upstream_model),
+        );
+        const data = (upstream.data ?? [])
+          .filter((m): m is { id: string; owned_by?: string } => typeof m.id === "string")
+          .map((m) => ({
+            id: m.id,
+            owned_by: typeof m.owned_by === "string" ? m.owned_by : null,
+            mapped: mapped.has(m.id),
+          }));
+        return json({ data });
+      },
+    )
+    .post(
+      "/api/v1/admin/payments/:id/complete",
+      {
+        params: t.Object({ id: t.String() }),
+        detail: {
+          tags: ["Billing"],
+          summary: "Mark payment as received (admin credit)",
+          description:
+            "Instance-admin-only idempotent credit for out-of-band payment confirmation.",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params }) => {
+        // SECURITY: instance-admin-only in every environment. The owner confirms
+        // money received out-of-band; ordinary users can never credit
+        // themselves. Same idempotent credit path as dev-payments/webhooks.
+        const g = await guard(db, auth, request);
+        if ("error" in g) return g.error;
+        const userId = g.session.user.id;
+        const payment = db
+          .prepare(
+            "SELECT id, workspace_id, amount, status, provider, provider_order_code FROM payments WHERE id = ?",
+          )
+          .get(params.id) as
+          | {
+              id: string;
+              workspace_id: string;
+              amount: number;
+              status: string;
+              provider: string;
+              provider_order_code: string;
+            }
+          | undefined;
+        if (!payment) return jsonError(404, "NOT_FOUND", "Payment not found");
+        try {
+          const result = processMockPaymentEvent(db, {
+            provider: payment.provider,
+            orderCode: payment.provider_order_code,
+            // Fixed reference per payment: replays are idempotent (already_processed).
+            providerReference: `admin-complete-${payment.id}`,
+            amount: payment.amount,
+            rawPayload: JSON.stringify({ source: "admin-complete", paymentId: payment.id }),
+          });
+          writeAudit(db, {
+            actorUserId: userId,
+            workspaceId: payment.workspace_id,
+            action: "payment.admin_complete",
+            target: payment.id,
+            detail: { outcome: result.outcome },
+          });
+          return new Response(JSON.stringify({ success: true, outcome: result.outcome }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        } catch (err) {
+          if (err instanceof MockPaymentError && err.code === "not_found") {
+            return jsonError(404, "NOT_FOUND", err.message);
+          }
+          throw err;
+        }
+      },
+    )
+    .get(
+      "/api/v1/admin/system",
+      {
+        detail: {
+          tags: ["System"],
+          summary: "System status",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request }) => {
+        const g = await guard(db, auth, request);
+        if ("error" in g) return g.error;
+        const count = (t: string) =>
+          (db.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get() as { c: number }).c;
+        const wal = (db.prepare("PRAGMA journal_mode").get() as { journal_mode: string })
+          .journal_mode;
+        return json({
+          gateway_enabled: process.env.HBR_GATEWAY_ENABLED !== "0",
+          usd_vnd_rate: Number(process.env.HBR_USD_VND_RATE) || 26000,
+          payos_configured:
+            !!process.env.PAYOS_CLIENT_ID &&
+            !!process.env.PAYOS_API_KEY &&
+            !!process.env.PAYOS_CHECKSUM_KEY,
+          dev_payments: process.env.HBR_DEV_PAYMENTS === "1",
+          db: { wal },
+          counts: {
+            users: count("users"),
+            workspaces: count("workspaces"),
+            models: count("models"),
+            requests: count("requests"),
+          },
+        });
+      },
+    );

@@ -6,7 +6,7 @@ import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, requireInstanceAdmin, isInstanceAdmin } from "../authz";
 
 export const auditRoutes = (db: Database, auth: BetterAuthInstance) =>
-  new Elysia({ name: "audit" }).get("/api/audit", async (ctx) => {
+  new Elysia({ name: "audit" }).get("/api/v1/audit", async (ctx) => {
     const request: Request = ctx.request;
     const wsId = new URL(request.url).searchParams.get("workspace_id");
     const gate = await requireSession(auth, request);
