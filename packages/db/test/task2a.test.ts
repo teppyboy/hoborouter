@@ -287,3 +287,51 @@ test("drizzle typed insert of MAX_SAFE money reads back exactly", () => {
     .all();
   expect(row[0]!.cap).toBe(9007199254740991);
 });
+
+test("api_keys accepts status active/enabled/disabled/revoked; bogus rejected; update enabled->disabled", () => {
+  const db = fixture();
+  db.exec(`
+    INSERT INTO users(id,name,email,created_at,updated_at) VALUES ('u','u','u@x',0,0);
+    INSERT INTO workspaces(id,name,created_at) VALUES ('w','w',0);
+  `);
+  const statuses = ["active", "enabled", "disabled", "revoked"];
+  statuses.forEach((s, i) => {
+    run(
+      db,
+      "INSERT INTO api_keys(id,workspace_id,key_hash,key_prefix,name,status,created_at) VALUES (?,'w',?,?,?, ?,0)",
+      `k${i}`,
+      `h${i}`,
+      `p${i}`,
+      `key${i}`,
+      s,
+    );
+  });
+  const got = (
+    db.prepare("SELECT status FROM api_keys ORDER BY id").all() as { status: string }[]
+  ).map((r) => r.status);
+  expect(got).toEqual(statuses);
+  expect(() => run(db, "UPDATE api_keys SET status='disabled' WHERE id='k1'")).not.toThrow();
+  expectThrow(
+    db,
+    "INSERT INTO api_keys(id,workspace_id,key_hash,key_prefix,name,status,created_at) VALUES ('kb','w','hb','pb','keyb','bogus',0)",
+  );
+});
+
+test("settlements typeof CHECKs enforced: text in charged_input rejected, positive integer accepted", () => {
+  const db = fixture();
+  canonicalFixture(db);
+  expectThrow(
+    db,
+    "INSERT INTO settlements(id,billing_reservation_id,charged_input,charged_output,charged_total,settled_at,charged_vnd) VALUES ('sbad','br','abc',0,0,0,1)",
+  );
+  expectThrow(
+    db,
+    "INSERT INTO settlements(id,billing_reservation_id,charged_input,charged_output,charged_total,settled_at,charged_vnd) VALUES ('sbad2','br',1,'abc',1,0,1)",
+  );
+  expect(() =>
+    run(
+      db,
+      "INSERT INTO settlements(id,billing_reservation_id,charged_input,charged_output,charged_total,settled_at,charged_vnd) VALUES ('sok','br',5,7,12,0,40)",
+    ),
+  ).not.toThrow();
+});

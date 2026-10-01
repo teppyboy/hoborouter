@@ -298,7 +298,7 @@ test("populated db already at 0002 (users have email) proceeds through pending m
   const userRows = rowsJson(db, "users");
   migrate(db);
   expect(rowsJson(db, "users")).toBe(userRows);
-  expect(journalRows(db)).toHaveLength(5);
+  expect(journalRows(db)).toHaveLength(6);
   expect(fkViolations(db)).toHaveLength(0);
 });
 
@@ -489,4 +489,139 @@ test("0004 requests rebuild: requests rows and billing_reservations/usage_logs c
   ).toThrow();
   expect(fkViolations(db)).toHaveLength(0);
   expect(fkOn(db)).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Test 8: 0005 api_keys rebuild preserves rows/children, new statuses legal
+// ---------------------------------------------------------------------------
+
+test("0005 api_keys rebuild: api_keys rows and children preserved, FK clean, triggers/index intact, enabled/disabled accepted", () => {
+  const db = fixture();
+  migrate(db, {
+    migrationsFolder: makeMigrationFolder([
+      "0000_common_zarda",
+      "0001_append_only_triggers",
+      "0002_foamy_luminals",
+      "0003_paid_gateway_task2a",
+      "0004_paid_gateway_fix",
+    ]),
+  });
+  db.exec(`
+    INSERT INTO users(id,name,email,created_at,updated_at) VALUES ('u','u','u@x',0,0);
+    INSERT INTO workspaces(id,name,created_at) VALUES ('w','w',0);
+    INSERT INTO api_keys(id,workspace_id,key_hash,key_prefix,name,status,created_at) VALUES ('k1','w','h1','p1','key1','active',1);
+    INSERT INTO key_rate_limits(api_key_id,window,max_requests) VALUES ('k1','minute',60);
+    INSERT INTO models(id,public_id,slug,display_name,provider,created_at,updated_at) VALUES ('m','m','m','m','p',0,0);
+    INSERT INTO model_prices(id,model_id,input_usd_micro_per_1m,output_usd_micro_per_1m,cached_input_usd_micro_per_1m,reasoning_usd_micro_per_1m,markup_ppm,effective_at) VALUES ('price','m',1,1,1,1,1000000,0);
+    INSERT INTO requests(id,workspace_id,api_key_id,model_id,endpoint,mode,status,created_at) VALUES ('r1','w','k1','m','/v1/responses','non-stream','ok',0);
+    INSERT INTO billing_reservations(id,wallet_id,request_id,api_key_id,model_id,model_price_id,usd_vnd_exchange_rate,markup_ppm,cap_vnd,status,created_at) VALUES ('br','w','r1','k1','m','price',26000,1000000,50,'held',0);
+    INSERT INTO usage_logs(id,idempotency_key,request_id,api_key_id,workspace_id,provider,public_model,upstream_model,input_tokens,output_tokens,cached_input_tokens,reasoning_tokens,status,created_at) VALUES ('ul','idem','r1','k1','w','p','m','up',1,0,0,0,'ok',0);
+    INSERT INTO api_key_model_permissions(api_key_id,model_id,created_at) VALUES ('k1','m',1);
+  `);
+  const tables = [
+    "api_keys",
+    "key_rate_limits",
+    "requests",
+    "billing_reservations",
+    "usage_logs",
+    "api_key_model_permissions",
+  ];
+  const before = new Map(tables.map((t) => [t, rowsJson(db, t)]));
+
+  migrate(db); // applies 0005
+
+  for (const t of tables) expect(rowsJson(db, t)).toEqual(before.get(t)!);
+  expect(fkViolations(db)).toHaveLength(0);
+  // Rebuilt table keeps 4-value status CHECK via triggers + CHECK.
+  for (const s of ["enabled", "disabled"]) {
+    expect(() =>
+      db.exec(
+        `INSERT INTO api_keys(id,workspace_id,key_hash,key_prefix,name,status,created_at) VALUES ('k-${s}','w','h-${s}','p','x','${s}',0)`,
+      ),
+    ).not.toThrow();
+  }
+  expect(() =>
+    db.exec(
+      "INSERT INTO api_keys(id,workspace_id,key_hash,key_prefix,name,status,created_at) VALUES ('kb','w','hb','p','x','bogus',0)",
+    ),
+  ).toThrow();
+  // Guard triggers and key index survive.
+  for (const name of ["api_keys_status_guard", "api_keys_status_update_guard"]) {
+    const n = db
+      .prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='trigger' AND name=?")
+      .get(name) as { n: number };
+    expect(n.n).toBe(1);
+  }
+  const idx = db
+    .prepare(
+      "SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name='api_keys_key_hash'",
+    )
+    .get() as { n: number };
+  expect(idx.n).toBe(1);
+  expect(fkOn(db)).toBe(true);
+  noTempRebuildTables(db);
+});
+
+// ---------------------------------------------------------------------------
+// Test: settlements typeof CHECKs restored by 0005 rebuild (constraint drift fix)
+// ---------------------------------------------------------------------------
+
+function migrateTo0004(db: Database): void {
+  migrate(db, {
+    migrationsFolder: makeMigrationFolder([
+      "0000_common_zarda",
+      "0001_append_only_triggers",
+      "0002_foamy_luminals",
+      "0003_paid_gateway_task2a",
+      "0004_paid_gateway_fix",
+    ]),
+  });
+}
+
+test("0005 rebuild preserves populated settlements + settlement_usage_events, restores typeof CHECKs and triggers", () => {
+  const db = fixture();
+  migrateTo0004(db);
+  // Legacy-shaped settlement (reservation_id only) and canonical one (billing_reservation_id + usage_log_id).
+  db.exec(`
+    INSERT INTO users(id,name,email,created_at,updated_at) VALUES ('u','u','u@x',0,0);
+    INSERT INTO workspaces(id,name,created_at) VALUES ('w','w',0);
+    INSERT INTO wallets(id,workspace_id,balance,reserved,created_at) VALUES ('wallet','w',1000000,0,0);
+    INSERT INTO models(id,public_id,slug,display_name,provider,created_at,updated_at) VALUES ('m','m','m','m','p',0,0);
+    INSERT INTO model_prices(id,model_id,input_usd_micro_per_1m,output_usd_micro_per_1m,cached_input_usd_micro_per_1m,reasoning_usd_micro_per_1m,markup_ppm,effective_at) VALUES ('price','m',1,1,1,1,1000000,0);
+    INSERT INTO requests(id,workspace_id,model_id,endpoint,mode,status,created_at) VALUES ('r','w','m','/v1/responses','non-stream','ok',0);
+    INSERT INTO reservations(id,wallet_id,gateway_request_id,api_key_id,price_snapshot_id,status,cap_amount,estimated_input_tokens,created_at)
+      VALUES ('res','wallet','r',NULL,NULL,'held',1000,10,1);
+    INSERT INTO billing_reservations(id,wallet_id,request_id,model_id,model_price_id,usd_vnd_exchange_rate,markup_ppm,cap_vnd,status,created_at) VALUES ('br','wallet','r','m','price',26000,1000000,50,'held',0);
+    INSERT INTO usage_logs(id,idempotency_key,request_id,workspace_id,provider,public_model,upstream_model,input_tokens,output_tokens,cached_input_tokens,reasoning_tokens,status,charged_vnd,created_at) VALUES ('ul','idem','r','w','p','m','up',1,0,0,0,'ok',40,0);
+    INSERT INTO usage_events(id,source_request_id,cpa_execution_uuid,gateway_request_id,tokens_input,tokens_output,tokens_reasoning,tokens_cached,tokens_total,failed,ingested_at)
+      VALUES ('ue','r',NULL,'r',1,0,0,0,1,0,0);
+    INSERT INTO settlements(id,reservation_id,charged_input,charged_output,charged_total,settled_at) VALUES ('sleg','res',10,5,1000,2);
+    INSERT INTO settlements(id,billing_reservation_id,charged_input,charged_output,charged_total,settled_at,charged_vnd,usage_log_id,reason,created_at) VALUES ('scan','br',5,7,12,3,40,'ul','final',3);
+    INSERT INTO settlement_usage_events(settlement_id,usage_event_id) VALUES ('sleg','ue');
+  `);
+  const before = new Map(
+    (["settlements", "settlement_usage_events"] as const).map((t) => [t, rowsJson(db, t)]),
+  );
+
+  migrate(db); // applies 0005 with the settlements rebuild
+
+  for (const [t, snap] of before) {
+    expect(rowsJson(db, t)).toEqual(snap);
+  }
+  expect(fkViolations(db)).toHaveLength(0);
+  expect(fkOn(db)).toBe(true);
+  noTempRebuildTables(db);
+
+  // typeof CHECKs restored: non-integer text rejected on charged_input/output/total.
+  for (const col of ["charged_input", "charged_output", "charged_total"]) {
+    const stmt = db.prepare(
+      `INSERT INTO settlements(id,reservation_id,${col},charged_input,charged_output,charged_total,settled_at) VALUES ('bad-${col}','res','abc',0,0,0,9)`,
+    );
+    expect(() => stmt.run()).toThrow();
+  }
+
+  // Triggers still fire: cap guard rejects UPDATE above cap on the canonical row.
+  expect(() => db.exec("UPDATE settlements SET charged_vnd = 51 WHERE id = 'scan'")).toThrow(
+    "charged_vnd exceeds cap",
+  );
 });

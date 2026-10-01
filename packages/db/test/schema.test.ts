@@ -796,3 +796,20 @@ test("zero accidental paid traffic: db package makes no network calls and serves
     expect(text).not.toContain("Bun.serve");
   }
 });
+
+test('every check("name") in schema.ts exists in the migrated database (constraint drift guard)', () => {
+  const source = readFileSync(join(import.meta.dir, "..", "src", "schema.ts"), "utf8");
+  const declared = [...source.matchAll(/\bcheck\(\s*"([^"]+)"/g)].map((m) => m[1]);
+  expect(declared.length).toBeGreaterThan(0);
+  const master = db
+    .prepare(
+      "SELECT coalesce(group_concat(sql, ' '), '') AS sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL",
+    )
+    .get() as { sql: string };
+  // sqlite_master quotes constraint names with backticks (drizzle-generated) or double quotes (0000-0002).
+  // sqlite_master quotes constraint names with backticks (drizzle-generated) or double quotes (0000-0002).
+  const missing = declared.filter(
+    (name) => !master.sql.includes(`"${name}"`) && !master.sql.includes("`" + name + "`"),
+  );
+  expect(missing).toEqual([]);
+});
