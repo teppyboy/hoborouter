@@ -62,7 +62,7 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
     .post(
       "/api/v1/admin/models",
       {
-        body: t.Optional(t.Object({})),
+        body: t.Optional(t.Record(t.String(), t.Any())),
         detail: {
           tags: ["Admin"],
           summary: "Create model binding",
@@ -124,7 +124,7 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
       "/api/v1/admin/models/:id",
       {
         params: t.Object({ id: t.String() }),
-        body: t.Optional(t.Object({})),
+        body: t.Optional(t.Record(t.String(), t.Any())),
         detail: {
           tags: ["Admin"],
           summary: "Update model binding",

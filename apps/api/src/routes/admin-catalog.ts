@@ -71,7 +71,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
     .post(
       "/api/v1/admin/catalog/models",
       {
-        body: t.Optional(t.Object({})),
+        body: t.Optional(t.Record(t.String(), t.Any())),
         detail: {
           tags: ["Catalog"],
           summary: "Create catalog model",
@@ -152,7 +152,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
       "/api/v1/admin/catalog/models/:id",
       {
         params: t.Object({ id: t.String() }),
-        body: t.Optional(t.Object({})),
+        body: t.Optional(t.Record(t.String(), t.Any())),
         detail: {
           tags: ["Catalog"],
           summary: "Update catalog model",
@@ -222,7 +222,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
       "/api/v1/admin/catalog/models/:id/mappings",
       {
         params: t.Object({ id: t.String() }),
-        body: t.Optional(t.Object({})),
+        body: t.Optional(t.Record(t.String(), t.Any())),
         detail: {
           tags: ["Catalog"],
           summary: "Create provider mapping",
@@ -277,7 +277,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
       "/api/v1/admin/catalog/models/:id/prices",
       {
         params: t.Object({ id: t.String() }),
-        body: t.Optional(t.Object({})),
+        body: t.Optional(t.Record(t.String(), t.Any())),
         detail: {
           tags: ["Catalog"],
           summary: "Create model price",
