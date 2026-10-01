@@ -1,114 +1,73 @@
-// Models catalog data.
-//
-// Endpoint choice (documented decision): the dashboard uses
-// GET /api/workspaces/:id/models — the only session-scoped endpoint returning
-// published canonical models WITH per-1M prices for any signed-in workspace
-// member (apps/api/src/routes/admin-models.ts:151). GET /api/admin/catalog/public
-// is instance-admin only; it is used opportunistically to enrich rows with
-// display_name/description/capabilities/context_window and is skipped on 403.
-// Note: the session endpoint exposes input/output prices only (VND integers
-// per 1M); cached/reasoning USD-micro prices have no session endpoint yet.
+// Models catalog data — public catalog endpoints (session-scoped).
+// GET /api/v1/catalog/models and /api/v1/catalog/models/:publicId.
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
-import { useWorkspaceStore } from "../../lib/workspace";
 
-export interface WorkspaceModel {
-  id: string;
-  public_model: string;
-  price_input_per_1m: number;
-  price_output_per_1m: number;
-  effective_at: number;
-  snapshot_id: string | null;
+export interface CatalogPrice {
+  input_usd_micro_per_1m: number;
+  output_usd_micro_per_1m: number;
+  cached_input_usd_micro_per_1m: number;
+  reasoning_usd_micro_per_1m: number;
 }
 
-interface CatalogExtra {
+export interface CatalogModelItem {
+  id: string;
   public_id: string;
   display_name: string | null;
+  provider: string;
   description: string | null;
-  capabilities: string[] | null;
+  capabilities: string[];
   context_window: number | null;
+  price: CatalogPrice;
 }
 
-/** A model row as shown in the dashboard (workspace prices + optional catalog enrichment). */
 export interface CatalogModel {
+  id: string;
   publicId: string;
   provider: string;
-  name: string;
-  priceInputPer1m: number;
-  priceOutputPer1m: number;
   displayName: string | null;
   description: string | null;
-  capabilities: string[] | null;
+  capabilities: string[];
   contextWindow: number | null;
+  price: CatalogPrice;
 }
 
-function parseCaps(v: unknown): string[] | null {
-  if (Array.isArray(v) && v.every((c) => typeof c === "string")) return v as string[];
-  if (typeof v === "string") {
-    try {
-      const p = JSON.parse(v);
-      return Array.isArray(p) && p.every((c) => typeof c === "string") ? (p as string[]) : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-/** Published models + per-1M prices for the selected workspace. */
-export function useWorkspaceModels() {
-  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
-  return useQuery({
-    queryKey: ["workspace-models", workspaceId],
-    queryFn: () => api<WorkspaceModel[]>(`/api/workspaces/${workspaceId}/models`),
-    enabled: !!workspaceId,
-  });
-}
-
-/** Optional admin-only enrichment; silently ignored for non-admins (403) or pre-merge (404). */
-function useCatalogExtras(enabled: boolean) {
-  return useQuery({
-    queryKey: ["catalog-extras"],
-    queryFn: () => api<CatalogExtra[]>("/api/admin/catalog/public"),
-    enabled,
-    retry: false,
-  });
-}
-
+/** Public model catalog for any signed-in user. */
 export function useCatalogModels(): {
   models: CatalogModel[];
   loading: boolean;
   error: string | null;
 } {
-  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
-  const modelsQ = useWorkspaceModels();
-  const extrasQ = useCatalogExtras(modelsQ.isSuccess);
-
-  if (modelsQ.isPending && workspaceId) return { models: [], loading: true, error: null };
-  if (modelsQ.isError)
-    return { models: [], loading: false, error: modelsQ.error.message ?? "Failed to load models." };
-
-  const extras = new Map(
-    (Array.isArray(extrasQ.data) ? extrasQ.data : []).map((e) => [e.public_id, e]),
-  );
-  const models = (modelsQ.data ?? []).map((m): CatalogModel => {
-    const [provider, ...rest] = m.public_model.split("/");
-    const extra = extras.get(m.public_model);
-    return {
-      publicId: m.public_model,
-      provider: rest.length
-        ? (provider ?? "—")
-        : (extra?.public_id.split("/")[0] ?? "") || "—",
-      name: rest.join("/") || m.public_model,
-      priceInputPer1m: m.price_input_per_1m,
-      priceOutputPer1m: m.price_output_per_1m,
-      displayName: extra?.display_name ?? null,
-      description: extra?.description ?? null,
-      capabilities: parseCaps(extra?.capabilities),
-      contextWindow: extra?.context_window ?? null,
-    };
+  const q = useQuery({
+    queryKey: ["catalog-models"],
+    queryFn: () => api<{ data: CatalogModelItem[] }>("/api/v1/catalog/models"),
   });
+
+  if (q.isPending) return { models: [], loading: true, error: null };
+  if (q.isError)
+    return { models: [], loading: false, error: q.error.message ?? "Failed to load models." };
+
+  const models = (q.data?.data ?? []).map((m): CatalogModel => ({
+    id: m.id,
+    publicId: m.public_id,
+    provider: m.provider,
+    displayName: m.display_name,
+    description: m.description,
+    capabilities: m.capabilities ?? [],
+    contextWindow: m.context_window,
+    price: m.price,
+  }));
   return { models, loading: false, error: null };
+}
+
+/** Single public model by public id (may contain '/'; encoded). */
+export function useCatalogModel(publicId: string) {
+  return useQuery({
+    queryKey: ["catalog-models", publicId],
+    queryFn: () =>
+      api<CatalogModelItem>(`/api/v1/catalog/models/${encodeURIComponent(publicId)}`),
+    enabled: !!publicId,
+  });
 }
 
 export function allProviders(models: CatalogModel[]): string[] {
@@ -116,5 +75,5 @@ export function allProviders(models: CatalogModel[]): string[] {
 }
 
 export function allCapabilities(models: CatalogModel[]): string[] {
-  return [...new Set(models.flatMap((m) => m.capabilities ?? []))].sort();
+  return [...new Set(models.flatMap((m) => m.capabilities))].sort();
 }

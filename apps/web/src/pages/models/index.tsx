@@ -9,19 +9,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../components/ui/select";
-import { formatVnd } from "../../lib/format";
+import { formatUsdMicroPer1m } from "../../lib/format";
+// Created by shell writer; route is splat "/models/$".
+import { modelHref } from "../../lib/models";
 import { allCapabilities, allProviders, useCatalogModels, type CatalogModel } from "./data";
 
 export default function ModelsPage() {
   const { models, loading, error } = useCatalogModels();
   const navigate = useNavigate();
   // Router types only register public routes (protectedRoute isn't generic), so navigate untyped.
-  // SAFETY: "/models/$modelId" is registered at runtime in router.tsx via protectedRoute;
+  // SAFETY: "/models/$" is registered at runtime in router.tsx via protectedRoute;
   // its generic route types are not exposed through the Register interface.
   const openModel = (publicId: string) =>
     navigate({
-      to: "/models/$modelId",
-      params: { modelId: encodeURIComponent(publicId) },
+      to: modelHref(publicId),
     } as unknown as Parameters<typeof navigate>[0]);
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("all");
@@ -35,7 +36,7 @@ export default function ModelsPage() {
       models.filter(
         (m) =>
           (provider === "all" || m.provider === provider) &&
-          (cap === "all" || (m.capabilities ?? []).includes(cap)) &&
+          (cap === "all" || m.capabilities.includes(cap)) &&
           (search === "" ||
             `${m.publicId} ${m.displayName ?? ""}`.toLowerCase().includes(search.toLowerCase())),
       ),
@@ -73,8 +74,6 @@ export default function ModelsPage() {
       enableSorting: false,
       cell: ({ row }: { row: { original: CatalogModel } }) => {
         const cs = row.original.capabilities;
-        if (cs == null)
-          return <span className="text-xs text-muted-foreground">Not available yet</span>;
         if (cs.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
         return (
           <div className="flex flex-wrap gap-1">
@@ -88,17 +87,21 @@ export default function ModelsPage() {
       },
     },
     {
-      accessorKey: "priceInputPer1m",
+      id: "price-input",
       header: "Input / 1M",
       cell: ({ row }: { row: { original: CatalogModel } }) => (
-        <span className="font-mono text-sm">{formatVnd(row.original.priceInputPer1m)}</span>
+        <span className="font-mono text-sm">
+          {formatUsdMicroPer1m(row.original.price.input_usd_micro_per_1m)}
+        </span>
       ),
     },
     {
-      accessorKey: "priceOutputPer1m",
+      id: "price-output",
       header: "Output / 1M",
       cell: ({ row }: { row: { original: CatalogModel } }) => (
-        <span className="font-mono text-sm">{formatVnd(row.original.priceOutputPer1m)}</span>
+        <span className="font-mono text-sm">
+          {formatUsdMicroPer1m(row.original.price.output_usd_micro_per_1m)}
+        </span>
       ),
     },
   ];
@@ -109,7 +112,7 @@ export default function ModelsPage() {
     <div className="space-y-4">
       <PageHeader
         title="Models"
-        description="Published models and per-1M token prices for this workspace."
+        description="Published models and per-1M token prices. Prices are in USD."
       />
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -158,7 +161,7 @@ export default function ModelsPage() {
           title="No models found"
           description={
             models.length === 0
-              ? "Not available yet — the catalog is empty for this workspace."
+              ? "Not available yet — the catalog is empty."
               : "Try a different search, provider, or capability filter."
           }
         />

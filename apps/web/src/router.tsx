@@ -103,7 +103,8 @@ const routes = [
   protectedRoute("/", overview),
   protectedLayout,
   protectedRoute("/models", models),
-  protectedRoute("/models/$modelId", modelDetail),
+  // Splat: public model ids may contain "/"; read via useParams().["*"] (decoded).
+  protectedRoute("/models/$", modelDetail),
   protectedRoute("/keys", keys),
   protectedRoute("/logs", logs),
   protectedRoute("/usage", usage),

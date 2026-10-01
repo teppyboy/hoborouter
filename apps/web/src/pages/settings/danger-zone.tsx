@@ -30,7 +30,7 @@ export default function DangerZone({
   const [typed, setTyped] = React.useState("");
 
   const remove = useMutation({
-    mutationFn: () => api(`/api/workspaces/${workspaceId}`, { method: "DELETE" }),
+    mutationFn: () => api(`/api/v1/workspaces/${workspaceId}`, { method: "DELETE" }),
     onSuccess: () => {
       toast("Workspace deleted");
       setWorkspaceId("");

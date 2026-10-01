@@ -47,9 +47,9 @@ interface ApiKey {
   revoked_at: number | null;
 }
 
-interface WorkspaceModel {
+interface CatalogModelItem {
   id: string;
-  public_model: string;
+  public_id: string;
 }
 
 const nameSchema = z.object({ name: z.string().min(1, "Name is required") });
@@ -68,7 +68,7 @@ export default function KeysPage() {
 
   const keysQuery = useQuery({
     queryKey: ["keys", workspaceId],
-    queryFn: () => api<ApiKey[]>(`/api/workspaces/${workspaceId}/keys`),
+    queryFn: () => api<ApiKey[]>(`/api/v1/workspaces/${workspaceId}/keys`),
     enabled: !!workspaceId,
   });
 
@@ -77,7 +77,7 @@ export default function KeysPage() {
 
   const createMutation = useMutation({
     mutationFn: (name: string) =>
-      api<{ plaintext: string }>(`/api/workspaces/${workspaceId}/keys`, {
+      api<{ plaintext: string }>(`/api/v1/workspaces/${workspaceId}/keys`, {
         method: "POST",
         body: JSON.stringify({ name }),
       }),
@@ -92,7 +92,7 @@ export default function KeysPage() {
 
   const statusMutation = useMutation({
     mutationFn: ({ keyId, status }: { keyId: string; status: "enabled" | "disabled" }) =>
-      api(`/api/workspaces/${workspaceId}/keys/${keyId}`, {
+      api(`/api/v1/workspaces/${workspaceId}/keys/${keyId}`, {
         method: "PATCH",
         body: JSON.stringify({ status }),
       }),
@@ -105,7 +105,7 @@ export default function KeysPage() {
 
   const revokeMutation = useMutation({
     mutationFn: (keyId: string) =>
-      api(`/api/workspaces/${workspaceId}/keys/${keyId}`, { method: "DELETE" }),
+      api(`/api/v1/workspaces/${workspaceId}/keys/${keyId}`, { method: "DELETE" }),
     onSuccess: () => {
       toast("Key revoked");
       setRevokeTarget(null);
@@ -387,7 +387,7 @@ function ModelRestrictionsDialog({
     queryKey: ["keys", workspaceId, apiKey.id, "models"],
     queryFn: async () => {
       const res = await api<{ modelIds: string[] }>(
-        `/api/workspaces/${workspaceId}/keys/${apiKey.id}/models`,
+        `/api/v1/workspaces/${workspaceId}/keys/${apiKey.id}/models`,
       );
       setSelected(res.modelIds);
       return res.modelIds;
@@ -395,13 +395,14 @@ function ModelRestrictionsDialog({
   });
 
   const modelsQuery = useQuery({
-    queryKey: ["workspace-models", workspaceId],
-    queryFn: () => api<WorkspaceModel[]>(`/api/workspaces/${workspaceId}/models`),
+    queryKey: ["catalog-models"],
+    queryFn: () =>
+      api<{ data: CatalogModelItem[] }>("/api/v1/catalog/models"),
   });
 
   const saveMutation = useMutation({
     mutationFn: (modelIds: string[]) =>
-      api(`/api/workspaces/${workspaceId}/keys/${apiKey.id}/models`, {
+      api(`/api/v1/workspaces/${workspaceId}/keys/${apiKey.id}/models`, {
         method: "PUT",
         body: JSON.stringify({ modelIds }),
       }),
@@ -412,7 +413,7 @@ function ModelRestrictionsDialog({
     onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
   });
 
-  const models = modelsQuery.data ?? [];
+  const models = modelsQuery.data?.data ?? [];
   const toggle = (id: string) => {
     if (!selected) return;
     setSelected(
@@ -449,7 +450,7 @@ function ModelRestrictionsDialog({
                   onChange={() => toggle(m.id)}
                   className="size-4 accent-current"
                 />
-                <span className="font-mono text-xs">{m.public_model}</span>
+                <span className="font-mono text-xs">{m.public_id}</span>
               </Label>
             ))}
           </div>

@@ -3,7 +3,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { EmptyState, ErrorState } from "../../components/page";
 import { ApiError, api } from "../../lib/api";
 
-/** Raw model row from GET /api/admin/catalog/models (bun:sqlite, capabilities is JSON string). */
+/** Raw model row from GET /api/v1/admin/catalog/models (bun:sqlite, capabilities is JSON string). */
 export interface AdminModel {
   id: string;
   public_id: string;

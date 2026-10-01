@@ -13,7 +13,7 @@ export default function SettingsPage() {
 
   const { data: ws } = useQuery({
     queryKey: ["workspace", workspaceId],
-    queryFn: () => api<{ name: string }>(`/api/workspaces/${workspaceId}`),
+    queryFn: () => api<{ name: string }>(`/api/v1/workspaces/${workspaceId}`),
     enabled: !!workspaceId,
   });
 

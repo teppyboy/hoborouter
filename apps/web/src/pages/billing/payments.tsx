@@ -35,7 +35,7 @@ export default function BillingPaymentsPage() {
 
   const payments = useQuery({
     queryKey: ["payments", workspaceId],
-    queryFn: () => api<{ data: Payment[] }>(`/api/workspaces/${workspaceId}/payments?limit=50`),
+    queryFn: () => api<{ data: Payment[] }>(`/api/v1/workspaces/${workspaceId}/payments?limit=50`),
     enabled: !!workspaceId,
   });
 
@@ -90,13 +90,13 @@ function PaymentStatus({ workspaceId, paymentId }: { workspaceId: string; paymen
 
   const payment = useQuery({
     queryKey: ["payment", workspaceId, paymentId],
-    queryFn: () => api<Payment>(`/api/workspaces/${workspaceId}/payments/${paymentId}`),
+    queryFn: () => api<Payment>(`/api/v1/workspaces/${workspaceId}/payments/${paymentId}`),
     refetchInterval: (q) => (q.state.data?.status === "pending" ? 3000 : false),
   });
 
   const devComplete = useMutation({
     mutationFn: () =>
-      api<{ success: boolean; outcome: string }>(`/api/dev/payments/${paymentId}/complete`, {
+      api<{ success: boolean; outcome: string }>(`/api/v1/dev/payments/${paymentId}/complete`, {
         method: "POST",
       }),
     onSuccess: () => {
@@ -136,7 +136,7 @@ function PaymentStatus({ workspaceId, paymentId }: { workspaceId: string; paymen
             <span className="font-mono">{p.provider_order_code}</span> · {formatDate(String(p.created_at))}
           </p>
           {p.status === "pending" && (
-            <p className="text-xs text-muted-foreground">Waiting for payment confirmation…</p>
+            <p className="text-xs text-muted-foreground">Waiting for admin confirmation…</p>
           )}
         </div>
         {p.status === "pending" && !devCompleteHidden && (

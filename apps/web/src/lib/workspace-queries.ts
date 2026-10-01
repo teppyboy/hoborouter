@@ -15,7 +15,7 @@ export function useWorkspaces() {
 
   const query = useQuery({
     queryKey: ["workspaces"],
-    queryFn: () => api<Workspace[]>("/api/workspaces"),
+    queryFn: () => api<Workspace[]>("/api/v1/workspaces"),
   });
 
   useEffect(() => {

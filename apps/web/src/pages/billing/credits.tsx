@@ -62,25 +62,25 @@ export default function BillingCreditsPage() {
 
   const wallet = useQuery({
     queryKey: ["wallet", workspaceId],
-    queryFn: () => api<Wallet>(`/api/workspaces/${workspaceId}/wallet`),
+    queryFn: () => api<Wallet>(`/api/v1/workspaces/${workspaceId}/wallet`),
     enabled: !!workspaceId,
   });
 
   const ledger = useQuery({
     queryKey: ["ledger", workspaceId],
     queryFn: () =>
-      api<{ data: LedgerEntry[] }>(`/api/workspaces/${workspaceId}/ledger?limit=50`),
+      api<{ data: LedgerEntry[] }>(`/api/v1/workspaces/${workspaceId}/ledger?limit=50`),
     enabled: !!workspaceId,
   });
 
   const topUp = useMutation({
     mutationFn: (values: Values) =>
       api<{ id: string; status: string; checkout_url: string }>(
-        `/api/workspaces/${workspaceId}/payments`,
+        `/api/v1/workspaces/${workspaceId}/payments`,
         { method: "POST", body: JSON.stringify({ amount: values.amount }) },
       ),
     onSuccess: async (payment) => {
-      toast("Payment created — awaiting payment");
+      toast("Payment created — waiting for admin confirmation");
       void queryClient.invalidateQueries({ queryKey: ["payments", workspaceId] });
       // Mock checkout_url is a webhook, not a page — show status view instead.
       void navigate({ href: `/billing/payments?payment=${payment.id}` });

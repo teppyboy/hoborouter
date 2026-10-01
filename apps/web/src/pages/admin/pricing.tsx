@@ -48,7 +48,7 @@ function AddPriceDialog({
       const ppm = Number(markupPpm);
       if (!Number.isSafeInteger(ppm) || ppm < 0) throw new Error("Markup must be a non-negative integer (ppm)");
       body.markup_ppm = ppm;
-      return api(`/api/admin/catalog/models/${model.id}/prices`, {
+      return api(`/api/v1/admin/catalog/models/${model.id}/prices`, {
         method: "POST",
         body: JSON.stringify(body),
       });
@@ -111,7 +111,7 @@ function AddPriceDialog({
 }
 
 export default function AdminPricingPage() {
-  const query = useAdminQuery<AdminModel[]>(["admin", "models"], "/api/admin/catalog/models");
+  const query = useAdminQuery<AdminModel[]>(["admin", "models"], "/api/v1/admin/catalog/models");
   const [selected, setSelected] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const model = (query.data ?? []).find((m) => m.id === selected);

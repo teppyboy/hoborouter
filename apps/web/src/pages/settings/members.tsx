@@ -55,7 +55,7 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
 
   const { data: members, error, isLoading } = useQuery({
     queryKey: ["members", workspaceId],
-    queryFn: () => api<Member[]>(`/api/workspaces/${workspaceId}/members`),
+    queryFn: () => api<Member[]>(`/api/v1/workspaces/${workspaceId}/members`),
   });
 
   const invalidate = () => {
@@ -65,7 +65,7 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
 
   const changeRole = useMutation({
     mutationFn: ({ userId, role }: { userId: string; role: Role }) =>
-      api(`/api/workspaces/${workspaceId}/members/${userId}`, {
+      api(`/api/v1/workspaces/${workspaceId}/members/${userId}`, {
         method: "PATCH",
         body: JSON.stringify({ role }),
       }),
@@ -78,7 +78,7 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
 
   const removeMember = useMutation({
     mutationFn: (userId: string) =>
-      api(`/api/workspaces/${workspaceId}/members/${userId}`, { method: "DELETE" }),
+      api(`/api/v1/workspaces/${workspaceId}/members/${userId}`, { method: "DELETE" }),
     onSuccess: () => {
       toast("Member removed");
       setRemoving(null);
@@ -204,7 +204,7 @@ function InviteForm({
 
   const invite = useMutation({
     mutationFn: (values: InviteValues) =>
-      api(`/api/workspaces/${workspaceId}/members`, {
+      api(`/api/v1/workspaces/${workspaceId}/members`, {
         method: "POST",
         body: JSON.stringify(values),
       }),

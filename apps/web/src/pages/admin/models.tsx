@@ -87,8 +87,8 @@ function ModelDialog({
         published: v.published,
       };
       return model
-        ? api(`/api/admin/catalog/models/${model.id}`, { method: "PUT", body: JSON.stringify(body) })
-        : api("/api/admin/catalog/models", { method: "POST", body: JSON.stringify(body) });
+        ? api(`/api/v1/admin/catalog/models/${model.id}`, { method: "PUT", body: JSON.stringify(body) })
+        : api("/api/v1/admin/catalog/models", { method: "POST", body: JSON.stringify(body) });
     },
     onSuccess: () => {
       toast(model ? "Model updated" : "Model created");
@@ -164,7 +164,7 @@ function ModelDialog({
 }
 
 export default function AdminModelsPage() {
-  const query = useAdminQuery<AdminModel[]>(["admin", "models"], "/api/admin/catalog/models");
+  const query = useAdminQuery<AdminModel[]>(["admin", "models"], "/api/v1/admin/catalog/models");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<AdminModel | null>(null);
 

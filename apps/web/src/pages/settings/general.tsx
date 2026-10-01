@@ -29,14 +29,14 @@ export default function GeneralTab({ workspaceId }: { workspaceId: string }) {
   const qc = useQueryClient();
   const { data: ws, error, isLoading } = useQuery({
     queryKey: ["workspace", workspaceId],
-    queryFn: () => api<Workspace>(`/api/workspaces/${workspaceId}`),
+    queryFn: () => api<Workspace>(`/api/v1/workspaces/${workspaceId}`),
   });
 
   const form = useForm<Values>({ resolver: zodResolver(schema) });
 
   const save = useMutation({
     mutationFn: (values: Values) =>
-      api<Workspace>(`/api/workspaces/${workspaceId}`, {
+      api<Workspace>(`/api/v1/workspaces/${workspaceId}`, {
         method: "PATCH",
         body: JSON.stringify(values),
       }),

@@ -19,7 +19,7 @@ function AddMappingForm({ model }: { model: AdminModel }) {
 
   const mutation = useMutation({
     mutationFn: () =>
-      api(`/api/admin/catalog/models/${model.id}/mappings`, {
+      api(`/api/v1/admin/catalog/models/${model.id}/mappings`, {
         method: "POST",
         body: JSON.stringify({ provider, upstream_model: upstreamModel, enabled }),
       }),
@@ -79,7 +79,7 @@ function AddMappingForm({ model }: { model: AdminModel }) {
 }
 
 export default function AdminProvidersPage() {
-  const query = useAdminQuery<AdminModel[]>(["admin", "models"], "/api/admin/catalog/models");
+  const query = useAdminQuery<AdminModel[]>(["admin", "models"], "/api/v1/admin/catalog/models");
   const [selected, setSelected] = useState<string>("");
 
   return (

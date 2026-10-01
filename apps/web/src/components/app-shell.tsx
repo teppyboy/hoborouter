@@ -61,12 +61,12 @@ const ADMIN_NAV: NavItem[] = [
   { label: "System", to: "/admin/system" },
 ];
 
-/** Detect instance-admin via admin catalog access, cached for the session. */
+/** Detect instance-admin via GET /api/v1/admin/system (200 = admin, 403 = not), cached for the session. */
 function useIsAdmin() {
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;
-    api<unknown>("/api/admin/catalog/models")
+    api<unknown>("/api/v1/admin/system")
       .then(() => !cancelled && setIsAdmin(true))
       .catch((err: { status?: number }) => {
         if (!cancelled && err?.status === 403) setIsAdmin(false);

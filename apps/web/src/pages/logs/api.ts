@@ -4,10 +4,10 @@ import { api } from "../../lib/api";
 /**
  * Endpoint contracts assumed (backend: apps/api/src/routes/dashboard.ts):
  *
- * GET /api/workspaces/:id/usage-logs?limit=50&before=<created_at_ms>
+ * GET /api/v1/workspaces/:id/usage-logs?limit=50&before=<created_at_ms>
  *   -> { data: UsageLogRow[] }   (created_at DESC, cursor pagination via `before`)
  *
- * GET /api/workspaces/:id/usage-summary?days=30
+ * GET /api/v1/workspaces/:id/usage-summary?days=30
  *   -> { totals: { requests, spend_vnd, input_tokens, output_tokens, errors },
  *        daily: [{ day: "YYYY-MM-DD", requests, spend_vnd, tokens }],
  *        by_model: [{ public_model, requests, spend_vnd, tokens }] }
@@ -52,7 +52,7 @@ export function useRequestLogs(workspaceId: string | null, limit = 100) {
     queryKey: ["usage-logs", workspaceId, limit],
     queryFn: () =>
       api<{ data: UsageLogRow[] }>(
-        `/api/workspaces/${workspaceId}/usage-logs?limit=${limit}`,
+        `/api/v1/workspaces/${workspaceId}/usage-logs?limit=${limit}`,
       ).then((r) => r.data),
     enabled: workspaceId != null,
     staleTime: 15_000,
@@ -68,7 +68,7 @@ export function useUsageSummary(workspaceId: string | null, days = 30) {
     queryKey: ["usage-summary", workspaceId, days],
     queryFn: () =>
       api<UsageSummary>(
-        `/api/workspaces/${workspaceId}/usage-summary?days=${days}`,
+        `/api/v1/workspaces/${workspaceId}/usage-summary?days=${days}`,
       ),
     enabled: workspaceId != null,
     staleTime: 15_000,
