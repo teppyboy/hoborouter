@@ -27,7 +27,7 @@ services:
       - ./.env
     environment:
       CPA_BASE_URL: http://cpa:8317
-      HBR_GATEWAY_ENABLED: ${HBR_GATEWAY_ENABLED:-0}
+      HBR_GATEWAY_ENABLED: ${HBR_GATEWAY_ENABLED:-1}
     volumes:
       - hoborouter-data:/data
 

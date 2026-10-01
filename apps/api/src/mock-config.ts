@@ -1,8 +1,14 @@
-// Task 9: mock payments feature-flag config. Enabled ONLY when
-// HBR_MOCK_PAYMENTS=on AND NODE_ENV !== 'production'. Webhook key must be
-// nonempty when enabled; it is read from env only, never stored in source.
+// Mock payments are the DEFAULT top-up provider (payOS stays implemented but
+// optional, only used when all PAYOS_* env vars are set). Creation of mock
+// top-ups is on unless HBR_MOCK_PAYMENTS='off'. The signed mock webhook is
+// OPTIONAL: enabled only when HBR_MOCK_PAYMENTS_WEBHOOK_KEY is set — startup
+// never crashes without it (unsigned completion goes through the admin
+// complete endpoint instead; /api/dev/... only outside production).
 export interface MockWebhookConfig {
+  /** Mock top-up creation enabled (default true; 'off' disables). */
   enabled: boolean;
+  /** Signed webhook enabled ONLY when its key is set. */
+  webhookEnabled: boolean;
   webhookKey: string;
 }
 
@@ -10,14 +16,11 @@ export function mockWebhookConfig(
   env: {
     HBR_MOCK_PAYMENTS?: string;
     HBR_MOCK_PAYMENTS_WEBHOOK_KEY?: string;
-    NODE_ENV?: string;
+    [k: string]: string | undefined;
   } = process.env,
 ): MockWebhookConfig {
-  const enabled = env.HBR_MOCK_PAYMENTS === "on" && env.NODE_ENV !== "production";
+  const enabled = env.HBR_MOCK_PAYMENTS !== "off";
   const key = env.HBR_MOCK_PAYMENTS_WEBHOOK_KEY;
-  if (enabled && !key) {
-    // Fail fast at app build: a per-request 500 would be too late.
-    throw new Error("HBR_MOCK_PAYMENTS_WEBHOOK_KEY must be set when mock payments are enabled");
-  }
-  return { enabled, webhookKey: enabled && key ? key : "" };
+  const webhookEnabled = enabled && !!key;
+  return { enabled, webhookEnabled, webhookKey: webhookEnabled ? (key as string) : "" };
 }

@@ -4,7 +4,8 @@
 import { Elysia } from "elysia";
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
-import { requireSession, requireInstanceAdmin, jsonError } from "../authz";
+import { requireSession, requireInstanceAdmin, jsonError, writeAudit } from "../authz";
+import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments";
 
 const cpaBase = () => process.env.CPA_BASE_URL || "http://cpa:8317";
 
@@ -106,6 +107,55 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         }));
       return json({ data });
     })
+    .post("/api/admin/payments/:id/complete", async ({ request, params }) => {
+      // SECURITY: instance-admin-only in every environment. The owner confirms
+      // money received out-of-band; ordinary users can never credit
+      // themselves. Same idempotent credit path as dev-payments/webhooks.
+      const g = await guard(db, auth, request);
+      if ("error" in g) return g.error;
+      const userId = g.session.user.id;
+      const payment = db
+        .prepare(
+          "SELECT id, workspace_id, amount, status, provider, provider_order_code FROM payments WHERE id = ?",
+        )
+        .get(params.id) as
+        | {
+            id: string;
+            workspace_id: string;
+            amount: number;
+            status: string;
+            provider: string;
+            provider_order_code: string;
+          }
+        | undefined;
+      if (!payment) return jsonError(404, "NOT_FOUND", "Payment not found");
+      try {
+        const result = processMockPaymentEvent(db, {
+          provider: payment.provider,
+          orderCode: payment.provider_order_code,
+          // Fixed reference per payment: replays are idempotent (already_processed).
+          providerReference: `admin-complete-${payment.id}`,
+          amount: payment.amount,
+          rawPayload: JSON.stringify({ source: "admin-complete", paymentId: payment.id }),
+        });
+        writeAudit(db, {
+          actorUserId: userId,
+          workspaceId: payment.workspace_id,
+          action: "payment.admin_complete",
+          target: payment.id,
+          detail: { outcome: result.outcome },
+        });
+        return new Response(JSON.stringify({ success: true, outcome: result.outcome }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      } catch (err) {
+        if (err instanceof MockPaymentError && err.code === "not_found") {
+          return jsonError(404, "NOT_FOUND", err.message);
+        }
+        throw err;
+      }
+    })
     .get("/api/admin/system", async ({ request }) => {
       const g = await guard(db, auth, request);
       if ("error" in g) return g.error;
@@ -114,7 +164,7 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
       const wal = (db.prepare("PRAGMA journal_mode").get() as { journal_mode: string })
         .journal_mode;
       return json({
-        gateway_enabled: process.env.HBR_GATEWAY_ENABLED === "1",
+        gateway_enabled: process.env.HBR_GATEWAY_ENABLED !== "0",
         usd_vnd_rate: Number(process.env.HBR_USD_VND_RATE) || 26000,
         payos_configured:
           !!process.env.PAYOS_CLIENT_ID &&

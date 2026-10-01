@@ -1,7 +1,7 @@
-// Task 9: guarded mock payment webhook. payOS-shaped, HMAC-verified,
-// idempotent top-up. Feature-gated: enabled ONLY when HBR_MOCK_PAYMENTS=on AND
-// NODE_ENV !== 'production' — otherwise the route 404s, even with the flag on
-// in production. No real provider calls anywhere; dev/demo only.
+// Guarded mock payment webhook. payOS-shaped, HMAC-verified, idempotent
+// top-up. OPTIONAL: enabled only when HBR_MOCK_PAYMENTS_WEBHOOK_KEY is set —
+// otherwise the route 404s. Unsigned completion goes through the admin
+// complete endpoint (production) or /api/dev/... (dev only).
 import { Elysia } from "elysia";
 import type { Database } from "bun:sqlite";
 import {
@@ -13,14 +13,14 @@ import { jsonError } from "../authz";
 import { mockWebhookConfig, type MockWebhookConfig } from "../mock-config";
 
 export const mockWebhookRoutes = (db: Database, cfg: MockWebhookConfig) => {
-  const enabled = cfg.enabled;
+  const enabled = cfg.webhookEnabled;
   return new Elysia({ name: "webhooks-mock" }).post(
     "/webhooks/payments/mock",
     async ({ request }) => {
       if (!enabled) {
         return jsonError(404, "NOT_FOUND", "Not found");
       }
-      // Nonempty-key invariant is enforced by mockWebhookConfig at app build.
+      // Key-presence invariant is enforced by mockWebhookConfig.
       const raw = await request.text();
       const signatureValid = await verifyMockSignature(raw, cfg.webhookKey);
       if (!signatureValid) {

@@ -1,5 +1,5 @@
 // Paid gateway routes: POST /v1/chat/completions and /v1/responses.
-// Disabled by default (HBR_GATEWAY_ENABLED=1 to enable). Auth via sk-hbr-
+// Enabled by default (HBR_GATEWAY_ENABLED=0 to disable). Auth via sk-hbr-
 // keys, bounded cap reservation in the wallet, markDispatching committed
 // before exactly one CPA fetch, settlement exactly once via the billing
 // service. Input token bound: 1 token per JSON body byte (a conservative
@@ -91,7 +91,7 @@ function settleFromTap(
 function gatewayHandler(db: Database, path: string, protocol: "chat" | "responses") {
   return async ({ request }: { request: Request }): Promise<Response> => {
     // 1. Disabled gate before any DB write.
-    if (process.env.HBR_GATEWAY_ENABLED !== "1") {
+    if (process.env.HBR_GATEWAY_ENABLED === "0") {
       return jsonError(503, "gateway_disabled", "Paid gateway is disabled");
     }
 

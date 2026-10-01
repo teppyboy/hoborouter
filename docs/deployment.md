@@ -26,14 +26,17 @@ Alternative from a host with sqlite3 against a stopped container's volume: `sqli
 
 Point the payOS dashboard webhook at `https://<your-domain>/api/webhooks/payos` (confirm the exact path in `apps/api/src/routes/payments.ts` before going live). The URL must be publicly reachable over HTTPS.
 
-## Enabling the gateway
+## Paid gateway
 
-`HBR_GATEWAY_ENABLED` defaults to `0` (paid traffic off). Before setting it to `1`:
+`HBR_GATEWAY_ENABLED` defaults to ON. Set `HBR_GATEWAY_ENABLED=0` in `deploy/.env` and `docker compose up -d` to disable paid traffic. Before relying on it in production:
 
-1. Billing audit: verify wallet debit, USD→VND rate (`HBR_USD_VND_RATE`), and per-request max-output-token cap (`HBR_DEFAULT_MAX_OUTPUT_TOKENS`) behave correctly against a staging instance.
-2. Confirm CPA credentials rotate cleanly and `CPA_BASE_URL` resolves inside the compose network.
-3. QA gates: key auth, insufficient-credit path, and audit log entries all verified end to end.
-4. Set `HBR_GATEWAY_ENABLED=1` in `deploy/.env` and `docker compose up -d` to recreate.
+4. Billing audit: verify wallet debit, USD→VND rate (`HBR_USD_VND_RATE`), and per-request max-output-token cap (`HBR_DEFAULT_MAX_OUTPUT_TOKENS`) behave correctly against a staging instance.
+5. Confirm CPA credentials rotate cleanly and `CPA_BASE_URL` resolves inside the compose network.
+6. QA gates: key auth, insufficient-credit path, and audit log entries all verified end to end.
+
+## Payments: mock provider is the default
+
+Top-ups use the built-in mock provider by default: users create a mock payment via `POST /api/workspaces/:id/payments`; an INSTANCE ADMIN (only) completes it with `POST /api/admin/payments/:id/complete` after confirming the money out-of-band. payOS stays optional — set all of `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY` to use it instead. The signed mock webhook (`HBR_MOCK_PAYMENTS_WEBHOOK_KEY`) is optional; without it the route 404s and startup is unaffected. Set `HBR_MOCK_PAYMENTS=off` to disable mock top-up creation. `/api/dev/payments/:id/complete` self-completion exists ONLY when `NODE_ENV !== 'production'` and `HBR_DEV_PAYMENTS=1`.
 
 ## Upgrade / migration policy
 

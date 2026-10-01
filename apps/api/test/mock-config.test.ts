@@ -1,41 +1,28 @@
-// Task 9 hardening: mockWebhookConfig fail-fast + gating unit tests.
+// mockWebhookConfig unit tests: mock top-ups ON by default, signed webhook
+// optional (enabled only when its key is set), startup never throws.
 import { describe, test, expect } from "bun:test";
 import { mockWebhookConfig } from "../src/mock-config";
 
 describe("mockWebhookConfig", () => {
-  test("enabled with key", () => {
-    expect(
-      mockWebhookConfig({
-        HBR_MOCK_PAYMENTS: "on",
-        HBR_MOCK_PAYMENTS_WEBHOOK_KEY: "k",
-        NODE_ENV: "development",
-      }),
-    ).toEqual({ enabled: true, webhookKey: "k" });
+  test("enabled by default (no env at all), webhook optional", () => {
+    expect(mockWebhookConfig({})).toEqual({
+      enabled: true,
+      webhookEnabled: false,
+      webhookKey: "",
+    });
   });
 
-  test("enabled with EMPTY key throws at build time (fail-fast)", () => {
-    expect(() => mockWebhookConfig({ HBR_MOCK_PAYMENTS: "on", NODE_ENV: "development" })).toThrow(
-      /HBR_MOCK_PAYMENTS_WEBHOOK_KEY/,
-    );
+  test("webhook enabled only when its key is set", () => {
+    expect(mockWebhookConfig({ HBR_MOCK_PAYMENTS_WEBHOOK_KEY: "k" })).toEqual({
+      enabled: true,
+      webhookEnabled: true,
+      webhookKey: "k",
+    });
   });
 
-  test("flag values other than 'on' -> disabled", () => {
-    for (const v of ["off", "1", "", "ON", "true"]) {
-      expect(mockWebhookConfig({ HBR_MOCK_PAYMENTS: v, NODE_ENV: "development" }).enabled).toBe(
-        false,
-      );
-    }
-  });
-
-  test("production disables even with flag on (no throw despite empty key)", () => {
-    expect(mockWebhookConfig({ HBR_MOCK_PAYMENTS: "on", NODE_ENV: "production" }).enabled).toBe(
-      false,
-    );
-  });
-
-  test("disabled returns empty key", () => {
+  test("'off' disables creation and the webhook", () => {
     expect(
       mockWebhookConfig({ HBR_MOCK_PAYMENTS: "off", HBR_MOCK_PAYMENTS_WEBHOOK_KEY: "k" }),
-    ).toEqual({ enabled: false, webhookKey: "" });
+    ).toEqual({ enabled: false, webhookEnabled: false, webhookKey: "" });
   });
 });
