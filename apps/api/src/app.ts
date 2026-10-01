@@ -11,6 +11,7 @@ import { auditRoutes } from "./routes/audit";
 import { keysRoutes } from "./routes/keys";
 import { cpaHealthRoutes } from "./routes/cpahealth";
 import { adminModelsRoutes } from "./routes/admin-models";
+import { adminCatalogRoutes } from "./routes/admin-catalog";
 import { v1ModelsRoutes } from "./routes/v1-models";
 import { paymentsRoutes } from "./routes/payments";
 import { mockWebhookRoutes } from "./routes/webhooks-mock";
@@ -48,6 +49,7 @@ export const buildApp = (deps: AppDeps = {}) => {
     .use(mockWebhookRoutes(db, mockPayments))
     .use(cpaHealthRoutes(db, auth))
     .use(adminModelsRoutes(db, auth))
+    .use(adminCatalogRoutes(db, auth))
     .use(v1ModelsRoutes(db))
     .get(
       "/api/*",

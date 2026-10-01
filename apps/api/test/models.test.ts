@@ -225,7 +225,7 @@ describe("PUT /api/admin/models/:id (price change → NEW snapshot)", () => {
   });
 });
 
-describe("GET /v1/models + /v1/models/:id (Bearer sk-hbr- key auth)", () => {
+describe("GET /v1/models + /v1/models/:id (canonical catalog, Bearer sk-hbr- key auth)", () => {
   test("missing/invalid bearer → 401", async () => {
     expect((await req(app, "/v1/models")).status).toBe(401);
     expect((await req(app, "/v1/models", bearer("sk-hbr-deadbeef"))).status).toBe(401);
@@ -241,35 +241,63 @@ describe("GET /v1/models + /v1/models/:id (Bearer sk-hbr- key auth)", () => {
     expect((await req(app, "/v1/models", bearer(plaintext))).status).toBe(401);
   });
 
-  test("lists published global ∪ own-workspace bindings; no cpa_alias anywhere", async () => {
-    const res = await req(app, "/v1/models", bearer(keyA));
-    expect(res.status).toBe(200);
-    const text = JSON.stringify(await res.json());
-    expect(text).not.toContain("cpa_alias");
-    expect(text).not.toContain("secret-alias");
-    expect(text).not.toContain("wsb-alias");
-    expect(text).not.toContain("off-alias");
-    expect(text).toContain("global-model");
-    expect(text).toContain("wsa-model");
-  });
+  test("lists canonical models only (legacy bindings absent) in OpenAI shape", async () => {
+    const res = await req(app, "/api/admin/catalog/models", {
+      method: "POST",
+      cookie: iadmin,
+      body: {
+        public_id: "openai/gpt-canon",
+        slug: "gpt-canon",
+        display_name: "GPT Canon",
+        provider: "openai",
+        capabilities: ["chat"],
+        context_window: null,
+        enabled: true,
+        published: true,
+      },
+    });
+    expect(res.status).toBe(201);
+    const { id } = (await res.json()) as { id: string };
+    expect(
+      (
+        await req(app, `/api/admin/catalog/models/${id}/mappings`, {
+          method: "POST",
+          cookie: iadmin,
+          body: { provider: "openai", upstream_model: "gpt-4o-mini", enabled: true },
+        })
+      ).status,
+    ).toBe(201);
+    expect(
+      (
+        await req(app, `/api/admin/catalog/models/${id}/prices`, {
+          method: "POST",
+          cookie: iadmin,
+          body: {
+            input_usd_micro_per_1m: 150,
+            output_usd_micro_per_1m: 600,
+            cached_input_usd_micro_per_1m: 75,
+            reasoning_usd_micro_per_1m: 0,
+            markup_ppm: 100000,
+          },
+        })
+      ).status,
+    ).toBe(201);
 
-  test("workspace B binding not visible to ws-a key", async () => {
-    const res = await req(app, "/v1/models", bearer(keyA));
-    const text = JSON.stringify(await res.json());
-    expect(text).not.toContain("wsb-model");
-  });
-
-  test("GET /v1/models/:id returns one binding; disabled/foreign → 404", async () => {
-    expect((await req(app, "/v1/models/mb-global", bearer(keyA))).status).toBe(200);
-    expect((await req(app, "/v1/models/mb-b", bearer(keyA))).status).toBe(404);
-    expect((await req(app, "/v1/models/mb-off", bearer(keyA))).status).toBe(404);
-  });
-
-  test("disabled binding absent from /v1/models on the NEXT request (no caching)", async () => {
-    const res1 = await req(app, "/v1/models", bearer(keyA));
-    expect(JSON.stringify(await res1.json())).toContain("wsa-model");
-    db.prepare("UPDATE model_bindings SET status = 'disabled' WHERE id = 'mb-a'").run();
-    const res2 = await req(app, "/v1/models", bearer(keyA));
-    expect(JSON.stringify(await res2.json())).not.toContain("wsa-model");
+    const listed = await req(app, "/v1/models", bearer(keyA));
+    expect(listed.status).toBe(200);
+    const json = (await listed.json()) as {
+      object: string;
+      data: { id: string; object: string; created: number; owned_by: string }[];
+    };
+    expect(json.object).toBe("list");
+    const entry = json.data.find((m) => m.id === "openai/gpt-canon");
+    expect(entry).toBeDefined();
+    expect(entry!.object).toBe("model");
+    expect(entry!.owned_by).toBe("openai");
+    expect(typeof entry!.created).toBe("number");
+    // legacy model_bindings never appear
+    expect(JSON.stringify(json)).not.toContain("global-model");
+    expect(JSON.stringify(json)).not.toContain("wsa-model");
+    expect(JSON.stringify(json)).not.toContain("cpa_alias");
   });
 });
