@@ -35,7 +35,9 @@ Type-check only: `bunx tsc -p apps/api/tsconfig.json --noEmit`.
 
 ## Gateway flag
 
-Paid gateway routes are disabled by default. Enable locally with `HBR_GATEWAY_ENABLED=1` in the environment. Never enable mock payments (`HBR_MOCK_PAYMENTS=on` + `HBR_MOCK_PAYMENTS_WEBHOOK_KEY`, non-production `NODE_ENV`) outside dev/demo.
+Paid gateway routes are disabled by default. Enable locally with `HBR_GATEWAY_ENABLED=1` in the environment. Never enable mock payments (`HBR_MOCK_PAYMENTS=on` + `HBR_MOCK_PAYMENTS_WEBHOOK_KEY`) outside dev/demo.
+
+Run the API with `NODE_ENV=development` locally — the dev payment self-completion endpoint requires it (along with `HBR_DEV_PAYMENTS=1`).
 
 ## Mock / dev payments
 

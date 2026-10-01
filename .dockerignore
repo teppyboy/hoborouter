@@ -2,8 +2,15 @@ node_modules
 **/node_modules
 **/dist
 .git
-deploy/.env
+deploy/
 *.log
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+.pi/
+**/.env
+**/.env.*
 docs
 tests
 !tests/package.json

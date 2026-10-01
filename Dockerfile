@@ -33,6 +33,8 @@ COPY packages ./packages
 COPY apps/api/package.json apps/api/
 COPY apps/api/src ./apps/api/src
 COPY --from=build /app/apps/web/dist ./apps/web/dist
+RUN mkdir -p /data && chown bun:bun /data
 VOLUME /data
+USER bun
 EXPOSE 3000
 CMD ["bun", "apps/api/src/index.ts"]

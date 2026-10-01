@@ -22,6 +22,18 @@ new Database("/data/hoborouter.db").exec("VACUUM INTO \"/tmp/backup.db\"");
 
 Alternative from a host with sqlite3 against a stopped container's volume: `sqlite3 /path/hoborouter.db ".backup '/path/backup.db'"`. Schedule daily; verify restore into a scratch volume quarterly.
 
+### Volume ownership
+
+The container runs as the non-root `bun` user (uid 1000). If the `hoborouter-data` volume was first created by an older root-running image, fix ownership once:
+
+```sh
+docker compose run --rm --user root hoborouter chown -R bun:bun /data
+```
+
+### Hardening
+
+The `hoborouter` service drops all Linux capabilities (`cap_drop: [ALL]`), sets `no-new-privileges`, and caps processes (`pids_limit: 512`) and memory (`mem_limit: 1g`).
+
 ## payOS webhook URL
 
 Point the payOS dashboard webhook at `https://<your-domain>/webhooks/payments/payos` (confirm the exact path in `apps/api/src/routes/webhooks-payos.ts` before going live). The URL must be publicly reachable over HTTPS.

@@ -202,8 +202,10 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
             headers: { "content-type": "application/json" },
           });
         } catch (err) {
-          if (err instanceof MockPaymentError && err.code === "not_found") {
-            return jsonError(404, "NOT_FOUND", err.message);
+          if (err instanceof MockPaymentError) {
+            if (err.code === "not_found") return jsonError(404, "NOT_FOUND", err.message);
+            // e.g. cancelled/failed payment — invalid state, not a server error.
+            return json({ error: { code: "INVALID_STATE", message: err.message } }, 409);
           }
           throw err;
         }

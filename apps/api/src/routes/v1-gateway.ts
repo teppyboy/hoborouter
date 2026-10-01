@@ -102,11 +102,27 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     if (!key) return openAiError(401, "Invalid API key provided.", "invalid_api_key");
     db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").run(Date.now(), key.api_key_id);
 
-    // 3. Body validation.
-    const raw = await request.text();
-    if (Buffer.byteLength(raw) > MAX_BODY_BYTES) {
+    // 3. Body validation — size-limited BEFORE buffering (memory DoS guard).
+    const declaredLength = Number(request.headers.get("content-length"));
+    if (Number.isSafeInteger(declaredLength) && declaredLength > MAX_BODY_BYTES) {
       return jsonError(413, "payload_too_large", "Request body exceeds 1 MiB");
     }
+    const bodyReader = request.body?.getReader();
+    if (!bodyReader) return jsonError(400, "INVALID", "Body must be a JSON object");
+    let bodyBytes = 0;
+    const chunks: Uint8Array[] = [];
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { done, value } = await bodyReader.read();
+      if (done) break;
+      bodyBytes += value.byteLength;
+      if (bodyBytes > MAX_BODY_BYTES) {
+        await bodyReader.cancel().catch(() => {});
+        return jsonError(413, "payload_too_large", "Request body exceeds 1 MiB");
+      }
+      chunks.push(value);
+    }
+    const raw = decoder.decode(Buffer.concat(chunks));
     let body: Record<string, unknown>;
     try {
       const parsed = JSON.parse(raw) as unknown;
@@ -232,6 +248,11 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
       authorization: `Bearer ${accessKey}`,
     };
     let upstream: Response;
+    // Timeout only for receiving upstream response HEADERS; not streaming.
+    const headerTimeout = setTimeout(
+      () => controller.abort(),
+      intEnv("HBR_UPSTREAM_HEADERS_TIMEOUT_MS", 120000),
+    );
     try {
       upstream = await fetch(base + path, {
         method: "POST",
@@ -239,14 +260,16 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
         body: JSON.stringify(outbound),
         signal: controller.signal,
       });
-    } catch {
+    } catch (err) {
+      clearTimeout(headerTimeout);
       if (request.signal.aborted) {
         settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done);
         return jsonError(499, "client_abort", "Client aborted the request");
       }
-      settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
+      settle(db, requestId, { kind: "full_hold", reason: "upstream_error", metadata: err }, done);
       return jsonError(502, "upstream_error", "Upstream dispatch failed");
     }
+    clearTimeout(headerTimeout);
 
     const traceId = upstream.headers.get("x-cpa-trace-id");
     if (traceId)

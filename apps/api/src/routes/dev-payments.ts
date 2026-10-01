@@ -1,5 +1,7 @@
 // Task 4: POST /api/dev/payments/:id/complete — dev/demo-only completion.
-// Gated: NODE_ENV !== 'production' AND HBR_DEV_PAYMENTS === '1'; otherwise 404.
+// Gated by explicit allowlist: HBR_DEV_PAYMENTS === '1' AND NODE_ENV is
+// 'development' or 'test'; otherwise 404. NODE_ENV unset (e.g. non-Docker
+// prod deploy) must NOT enable this.
 // Instance admin or workspace owner. Credits through the same idempotent
 // payment_events path used by webhooks (one top-up per payment).
 import { Elysia, t } from "elysia";
@@ -18,12 +20,13 @@ export const devPaymentsRoutes = (db: Database, auth: BetterAuthInstance) =>
         tags: ["Payments"],
         summary: "Complete mock payment (dev only)",
         description:
-          "Dev/demo-only completion; requires NODE_ENV != production and HBR_DEV_PAYMENTS=1, instance admin or workspace owner.",
+          "Dev/demo-only completion; requires NODE_ENV=development (or test) and HBR_DEV_PAYMENTS=1, instance admin or workspace owner.",
         security: [{ cookieAuth: [] }],
       },
     },
     async ({ request, params }) => {
-      if (process.env.NODE_ENV === "production" || process.env.HBR_DEV_PAYMENTS !== "1") {
+      const env = process.env.NODE_ENV;
+      if (process.env.HBR_DEV_PAYMENTS !== "1" || (env !== "development" && env !== "test")) {
         return jsonError(404, "NOT_FOUND", "Not found");
       }
       const gate = await requireSession(auth, request);

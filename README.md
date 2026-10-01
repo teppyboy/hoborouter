@@ -25,9 +25,9 @@ CPA runs on `127.0.0.1:8317` with a generated 256-bit management key. Add provid
 
 - `HBR_DB_PATH` — SQLite database path; defaults to `:memory:`.
 - `HBR_WEB_DIST` — web build directory override.
-- `HBR_MOCK_PAYMENTS` — set to `on` for development/demo only; disabled in production.
+- `HBR_MOCK_PAYMENTS` — mock top-ups are the default provider; set to `off` to disable mock creation.
 - `HBR_MOCK_PAYMENTS_WEBHOOK_KEY` — non-empty mock webhook key when mock payments are enabled.
 - `CPA_MANAGEMENT_KEY` — CPA management API key.
 - `CPA_ACCESS_KEY` — CPA access key.
 - `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL` — bootstrap instance-admin email, when configured.
-- `NODE_ENV` — set to `production` to disable mock payments.
+- `NODE_ENV` — mock payments are not disabled by production mode; payments complete only via the instance admin (`POST /api/v1/admin/payments/:id/complete`), or self-complete on dev endpoints only when `NODE_ENV=development` (or `test`) and `HBR_DEV_PAYMENTS=1`.

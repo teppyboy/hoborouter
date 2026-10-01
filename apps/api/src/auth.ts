@@ -19,6 +19,12 @@ export function createAuth(db: Database) {
   ) {
     throw new Error("BETTER_AUTH_URL (or HBR_BASE_URL) is required when NODE_ENV=production");
   }
+  const secret = process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET;
+  if (process.env.NODE_ENV === "production" && (!secret || secret.length < 32)) {
+    throw new Error(
+      "BETTER_AUTH_SECRET (or AUTH_SECRET) of at least 32 characters is required when NODE_ENV=production",
+    );
+  }
   return betterAuth({
     baseURL,
     database: drizzleAdapter(drizzle(db, { schema }), {
