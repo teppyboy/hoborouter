@@ -38,7 +38,8 @@ export interface AuditEntry {
   workspace_id: string | null;
   action: string;
   target: string | null;
-  detail: string | null;
+  /** jsonb object from Postgres; legacy rows may still be a JSON string. */
+  detail: unknown;
   created_at: number;
   actor: { id: string; name: string | null; email: string | null } | null;
   workspace: { id: string; name: string } | null;
@@ -109,24 +110,36 @@ function Hover({
 /** One-line, truncating cell content. The table row is whitespace-nowrap. */
 const truncate = "block max-w-full truncate";
 
-/** Detail JSON -> compact one-line summary (first key: value pair, else raw). */
-function detailSummary(detail: string | null): string {
-  if (!detail) return "—";
-  try {
-    const parsed: unknown = JSON.parse(detail);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const entries = Object.entries(parsed as Record<string, unknown>);
-      if (entries.length > 0 && entries[0]) {
-        const [k, v] = entries[0];
-        const text =
-          typeof v === "object" && v !== null ? JSON.stringify(v) : String(v);
-        return entries.length > 1 ? `${k}: ${text} (+${entries.length - 1})` : `${k}: ${text}`;
-      }
+type DetailView = { kind: "object"; value: Record<string, unknown> } | { kind: "text"; value: string };
+
+/** jsonb object (Postgres) or legacy JSON string -> object view, else plain text. */
+function readDetail(detail: unknown): DetailView {
+  let v = detail;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return { kind: "text", value: v as string };
     }
-  } catch {
-    // not JSON, fall through
   }
-  return detail;
+  if (v && typeof v === "object" && !Array.isArray(v))
+    return { kind: "object", value: v as Record<string, unknown> };
+  return { kind: "text", value: typeof v === "string" ? v : JSON.stringify(v) };
+}
+
+const isEmptyDetail = (d: unknown) => d == null || d === "";
+
+/** Detail -> compact one-line summary (first key: value pair, else raw). */
+function detailSummary(detail: unknown): string {
+  if (isEmptyDetail(detail)) return "—";
+  const view = readDetail(detail);
+  if (view.kind === "text") return view.value;
+  const entries = Object.entries(view.value);
+  const first = entries[0];
+  if (!first) return "—";
+  const [k, v] = first;
+  const text = typeof v === "object" && v !== null ? JSON.stringify(v) : String(v);
+  return entries.length > 1 ? `${k}: ${text} (+${entries.length - 1})` : `${k}: ${text}`;
 }
 
 /** Key/value line for the detail sheet. */
@@ -247,7 +260,7 @@ export default function AdminAuditPage() {
     return rows.filter((r) => {
       if (actionFilter !== "all" && !r.action.startsWith(actionFilter)) return false;
       if (!s) return true;
-      return [r.action, r.actor?.name, r.actor?.email, r.target_label, r.target, r.workspace?.name, r.detail]
+      return [r.action, r.actor?.name, r.actor?.email, r.target_label, r.target, r.workspace?.name, detailSummary(r.detail)]
         .filter(Boolean)
         .some((v) => (v as string).toLowerCase().includes(s));
     });
@@ -417,15 +430,12 @@ export default function AdminAuditPage() {
                   )}
                 </Field>
                 <Field label="Detail">
-                  {selected.detail
-                    ? (() => {
-                        try {
-                          return JSON.stringify(JSON.parse(selected.detail), null, 2);
-                        } catch {
-                          return selected.detail;
-                        }
-                      })()
-                    : "—"}
+                  {isEmptyDetail(selected.detail)
+                    ? "—"
+                    : (() => {
+                        const view = readDetail(selected.detail);
+                        return view.kind === "text" ? view.value : JSON.stringify(view.value, null, 2);
+                      })()}
                 </Field>
               </div>
             </div>
