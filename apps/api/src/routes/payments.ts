@@ -5,6 +5,8 @@ import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, writeAudit, jsonError } from "../authz";
 import { requirePositiveSafeInteger } from "@hoborouter/wallet";
 import type { MockWebhookConfig } from "../mock-config";
+import { eq } from "drizzle-orm";
+import { workspaces, payments, orm } from "@hoborouter/db";
 
 export const paymentsRoutes = (
   db: Database,
@@ -42,7 +44,11 @@ export const paymentsRoutes = (
         const userId = gate.session.user.id;
         const denied = requireWsRole(db, params.id, userId, "member");
         if (denied) return denied;
-        const ws = db.prepare("SELECT id FROM workspaces WHERE id = ?").get(params.id);
+        const ws = orm(db)
+          .select({ id: workspaces.id })
+          .from(workspaces)
+          .where(eq(workspaces.id, params.id))
+          .get();
         if (!ws) return jsonError(404, "NOT_FOUND", "Workspace not found");
         const raw = (body as { amount?: unknown } | null)?.amount;
         let amount: number;
@@ -55,9 +61,18 @@ export const paymentsRoutes = (
         const orderCode = `MOCK-${id}`;
         const now = Date.now();
         db.transaction(() => {
-          db.prepare(
-            "INSERT INTO payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) VALUES (?,?,?,'pending','mock',?,?)",
-          ).run(id, params.id, amount, orderCode, now);
+          orm(db)
+            .insert(payments)
+            .values({
+              id,
+              workspace_id: params.id,
+              amount,
+              status: "pending",
+              provider: "mock",
+              provider_order_code: orderCode,
+              created_at: now,
+            })
+            .run();
           writeAudit(db, {
             actorUserId: userId,
             workspaceId: params.id,
@@ -96,17 +111,27 @@ export const paymentsRoutes = (
         const userId = gate.session.user.id;
         const denied = requireWsRole(db, params.id, userId, "member");
         if (denied) return denied;
-        const row = db
-          .prepare("SELECT workspace_id FROM payments WHERE id = ?")
-          .get(params.paymentId) as { workspace_id: string } | undefined;
+        const row = orm(db)
+          .select({ workspace_id: payments.workspace_id })
+          .from(payments)
+          .where(eq(payments.id, params.paymentId))
+          .get();
         if (!row) return jsonError(404, "NOT_FOUND", "Payment not found");
         if (row.workspace_id !== params.id)
           return jsonError(403, "FORBIDDEN", "Payment belongs to another workspace");
-        const payment = db
-          .prepare(
-            "SELECT id, workspace_id, amount, status, provider, provider_order_code, created_at FROM payments WHERE id = ?",
-          )
-          .get(params.paymentId);
+        const payment = orm(db)
+          .select({
+            id: payments.id,
+            workspace_id: payments.workspace_id,
+            amount: payments.amount,
+            status: payments.status,
+            provider: payments.provider,
+            provider_order_code: payments.provider_order_code,
+            created_at: payments.created_at,
+          })
+          .from(payments)
+          .where(eq(payments.id, params.paymentId))
+          .get();
         return new Response(JSON.stringify(payment), {
           headers: { "content-type": "application/json" },
         });
