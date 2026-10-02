@@ -2,6 +2,7 @@
 // Env: CDP_URL (default http://127.0.0.1:9399), BASE (default http://127.0.0.1:5199),
 // HBR_DEV_ADMIN_EMAIL (default admin@e2e.test). Exits with #failures.
 // Writes JSON report to /tmp/hbr-e2e/report.json.
+import { mkdirSync } from "node:fs";
 const CDP_URL = process.env.CDP_URL ?? "http://127.0.0.1:9399";
 const BASE = process.env.BASE ?? "http://127.0.0.1:5199";
 const ADMIN_EMAIL = (process.env.HBR_DEV_ADMIN_EMAIL ?? "admin@e2e.test").toLowerCase();
@@ -9,6 +10,8 @@ const USER2_EMAIL = "user2@e2e.test";
 const PASSWORD = "correct horse battery staple";
 const MODEL_ID = "fake/test-model";
 const REPORT = "/tmp/hbr-e2e/report.json";
+const SHOTS = process.env.E2E_SHOTS === "1";
+const SHOT_DIR = "/tmp/hbr-e2e/shots";
 
 // ---------- CDP plumbing ----------
 let ws: WebSocket;
@@ -326,6 +329,28 @@ async function selectOption(triggerSelector: string, optionText: string) {
   await sleep(100);
 }
 
+// ---------- screenshots (E2E_SHOTS=1) ----------
+async function shot(name: string) {
+  if (!SHOTS) return;
+  const r = await send("Page.captureScreenshot", { format: "png" });
+  if (!r?.data) throw new Error(`no screenshot data for ${name}`);
+  await Bun.write(`${SHOT_DIR}/${name}`, Buffer.from(r.data, "base64"));
+  console.log(`shot: ${name}`);
+}
+
+/** Toggle theme until the button's aria-label includes the wanted theme. */
+async function setTheme(theme: "dark" | "light") {
+  for (let i = 0; i < 3; i++) {
+    const label =
+      (await evaluate<string>(`window.__hbr.attr('button[aria-label^="Theme:"]','aria-label')`)) ??
+      "";
+    if (label.includes(theme)) return;
+    await evaluate(`document.querySelector('button[aria-label^="Theme:"]').click()`);
+    await page.waitForText("Overview");
+  }
+  throw new Error(`could not set theme ${theme}`);
+}
+
 // ---------- step runner ----------
 const results: { name: string; pass: boolean; expected?: string; actual?: string }[] = [];
 
@@ -546,7 +571,9 @@ async function main() {
     await goto("/models");
     await page.waitForText(MODEL_ID);
     await page.click(MODEL_ID, false);
-    await page.waitForText("Input / 1M");
+    // "Input / 1M" also appears in the models LIST table header, so it can
+    // pass before the detail route renders. Wait for detail-only content.
+    await page.waitForText("Quickstart");
     const body = await page.body();
     assert(body.includes(MODEL_ID), "detail shows public id with '/'");
     assert(body.includes("$1"), "detail shows input price");
@@ -766,6 +793,44 @@ async function main() {
       "back to a workspace view",
     );
   });
+
+  // ---------- screenshots (after sweep: admin logged in, seeded data) ----------
+  if (SHOTS) {
+    mkdirSync(SHOT_DIR, { recursive: true });
+    // dark, sidebar expanded
+    await goto("/");
+    await page.waitForText("Requests");
+    await shot("overview-dark-expanded.png");
+    // collapse sidebar, then restore
+    await page.clickAria('[aria-label="Collapse sidebar"]');
+    await page.waitForText("Overview");
+    await shot("overview-dark-collapsed.png");
+    await page.clickAria('[aria-label="Expand sidebar"]');
+    await page.waitForText("Requests");
+    // light theme
+    await setTheme("light");
+    await shot("overview-light-expanded.png");
+    await goto("/models");
+    await page.waitForText(MODEL_ID);
+    await shot("models-light.png");
+    // back to dark
+    await setTheme("dark");
+    // keys page: the sweep revoked its key, so create one for the table row
+    await goto("/keys");
+    await page.waitForText("Create key");
+    await page.click("Create key");
+    await page.setInputById("key-name", "shot-key");
+    await page.click("Create");
+    await page.waitForText("Copy your API key");
+    await page.click("Done");
+    await page.waitForText("shot-key");
+    await shot("keys-dark.png");
+    // account menu open
+    await page.clickAria('[aria-label="Account menu"]');
+    await page.waitForText("Sign out");
+    await shot("usermenu-open.png");
+    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
+  }
 
   // ---------- report ----------
   const failed = results.filter((r) => !r.pass);
