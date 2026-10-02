@@ -6,6 +6,7 @@ import {
   Boxes,
   CreditCard,
   Cpu,
+  Settings2,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -81,6 +82,7 @@ const ADMIN_NAV: NavItem[] = [
   { label: "Payments", to: "/admin/payments", icon: CreditCard },
   { label: "Audit log", to: "/admin/audit", icon: ScrollText },
   { label: "System", to: "/admin/system", icon: Cpu },
+  { label: "Settings", to: "/admin/settings", icon: Settings2 },
 ];
 
 /** Detect instance-admin via GET /api/v1/me (200 = session, flag on the payload). */

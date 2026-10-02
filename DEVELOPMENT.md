@@ -88,6 +88,12 @@ Clients send your public ID; the gateway translates it to the upstream CPA model
 
    The upstream request carries `z-ai/glm-5.3-flash`; responses, streams, and `/v1/models` all show `hoborouter/auto`.
 
+## Prompt caching
+
+Global toggle: instance admin, Admin → Settings (`prompt_caching_enabled` in `instance_settings`, default on). Per-model override: model Details → Prompt caching (`inherit`/`on`/`off`, default `inherit`; effective = override, else global).
+
+Requests are sent to the provider identically either way (`cache_control` markers are never stripped). Only billing differs: ON bills cached tokens at the model's `cached_input` rate; OFF bills all input at the full input rate — the usage log keeps the provider-reported cached token count and records `caching: "off"` in `raw_payload`.
+
 ## Payments in dev
 
 Mock top-ups are on by default. As owner, self-mark paid: add `HBR_DEV_PAYMENTS=1` (only works with `NODE_ENV=development` or `test`).

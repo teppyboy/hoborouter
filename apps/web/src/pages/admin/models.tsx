@@ -23,6 +23,13 @@ import {
   SheetContent,
 } from "../../components/ui/sheet";
 import { Switch } from "../../components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
 import { api } from "../../lib/api";
 import { formatDate, formatUsdMicroPer1m } from "../../lib/format";
@@ -46,6 +53,7 @@ const schema = z.object({
   context_window: z.string().optional(), // empty = null
   enabled: z.boolean(),
   published: z.boolean(),
+  prompt_caching: z.enum(["inherit", "on", "off"]),
 });
 type Values = z.infer<typeof schema>;
 
@@ -415,6 +423,10 @@ function DetailsSection({
       context_window: model.context_window == null ? "" : String(model.context_window),
       enabled: model.enabled === 1,
       published: model.published === 1,
+      prompt_caching:
+        model.prompt_caching === "on" || model.prompt_caching === "off"
+          ? model.prompt_caching
+          : "inherit",
     },
   });
 
@@ -434,6 +446,7 @@ function DetailsSection({
           context_window: ctx_window,
           enabled: v.enabled,
           published: v.published,
+          prompt_caching: v.prompt_caching,
         }),
       });
     },
@@ -494,6 +507,22 @@ function DetailsSection({
           checked={form.watch("published")}
           onCheckedChange={(c) => form.setValue("published", c)}
         />
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="prompt_caching">Prompt caching</Label>
+        <Select
+          value={form.watch("prompt_caching")}
+          onValueChange={(v) => form.setValue("prompt_caching", v as Values["prompt_caching"])}
+        >
+          <SelectTrigger id="prompt_caching">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="inherit">Inherit (global)</SelectItem>
+            <SelectItem value="on">On</SelectItem>
+            <SelectItem value="off">Off</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       {form.formState.errors.root && (
         <p className="text-xs text-destructive">{form.formState.errors.root.message}</p>
@@ -588,6 +617,7 @@ function CreateModelDialog({
           context_window: ctx_window,
           enabled: v.enabled,
           published: v.published,
+          prompt_caching: v.prompt_caching,
         }),
       });
     },
@@ -760,7 +790,12 @@ export default function AdminModelsPage() {
             ? (hiddenText[m.hidden_reason] ?? `Hidden: ${m.hidden_reason}`)
             : "Hidden";
         return (
-          <Badge variant={hidden ? "secondary" : "default"}>{hidden ?? "Listed"}</Badge>
+          <>
+            <Badge variant={hidden ? "secondary" : "default"}>{hidden ?? "Listed"}</Badge>
+            {(m.prompt_caching ?? "inherit") !== "inherit" && (
+              <Badge variant="outline">cache: {m.prompt_caching}</Badge>
+            )}
+          </>
         );
       },
     },

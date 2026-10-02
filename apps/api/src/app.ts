@@ -21,6 +21,7 @@ import { payosWebhookRoutes } from "./routes/webhooks-payos";
 import { devPaymentsRoutes } from "./routes/dev-payments";
 import { dashboardRoutes } from "./routes/dashboard";
 import { adminExtraRoutes } from "./routes/admin-extra";
+import { adminSettingsRoutes } from "./routes/admin-settings";
 import { catalogPublicRoutes } from "./routes/catalog-public";
 import { payosConfigFromEnv } from "@hoborouter/payments";
 import { mockWebhookConfig } from "./mock-config";
@@ -110,6 +111,7 @@ export const buildApp = (deps: AppDeps = {}) => {
     .use(adminCatalogRoutes(db, auth))
     .use(dashboardRoutes(db, auth))
     .use(adminExtraRoutes(db, auth))
+    .use(adminSettingsRoutes(db, auth))
     .use(catalogPublicRoutes(db, auth))
     .use(v1ModelsRoutes(db))
     .use(gatewayRoutes(db))

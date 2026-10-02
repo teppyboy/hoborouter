@@ -15,6 +15,8 @@ export interface AdminModel {
   context_window: number | null;
   enabled: number;
   published: number;
+  /** 'inherit' (follows global flag) | 'on' | 'off'. */
+  prompt_caching?: string;
   has_price: number;
   has_mapping: number;
   created_at: number;

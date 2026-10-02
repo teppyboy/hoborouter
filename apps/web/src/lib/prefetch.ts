@@ -27,6 +27,7 @@ export const adminProviders = lazyRoute(() => import("../pages/admin/providers")
 export const adminPricing = lazyRoute(() => import("../pages/admin/pricing"));
 export const adminPayments = lazyRoute(() => import("../pages/admin/payments"));
 export const adminSystem = lazyRoute(() => import("../pages/admin/system"));
+export const adminSettings = lazyRoute(() => import("../pages/admin/settings"));
 
 /** Nav-path -> route chunk, used for hover preload and idle prefetch. */
 export const chunkByPath: Record<string, { preload: () => Promise<unknown> }> = {

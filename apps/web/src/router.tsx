@@ -17,6 +17,7 @@ import {
   adminProviders,
   adminSystem,
   adminUsers,
+  adminSettings,
   credits,
   keys,
   logs,
@@ -148,6 +149,7 @@ const protectedRoutes = [
   protectedRoute("/settings", settings),
   // Admin
   protectedRoute("/admin/users", adminUsers),
+  protectedRoute("/admin/settings", adminSettings),
   protectedRoute("/admin/models", adminModels),
   protectedRoute("/admin/providers", adminProviders),
   protectedRoute("/admin/pricing", adminPricing),

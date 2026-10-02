@@ -63,6 +63,14 @@ function validateModelBody(b: Record<string, unknown>): string | null {
       b.context_window <= 0)
   )
     return "context_window must be a positive integer or null";
+  if (
+    b.prompt_caching !== undefined &&
+    b.prompt_caching !== null &&
+    b.prompt_caching !== "inherit" &&
+    b.prompt_caching !== "on" &&
+    b.prompt_caching !== "off"
+  )
+    return "prompt_caching must be 'inherit', 'on', or 'off'";
   return null;
 }
 
@@ -145,7 +153,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         const now = Date.now();
         db.transaction(() => {
           db.prepare(
-            "INSERT INTO models (id, public_id, slug, display_name, provider, description, capabilities, context_window, enabled, published, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO models (id, public_id, slug, display_name, provider, description, capabilities, context_window, enabled, published, prompt_caching, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
           ).run(
             id,
             m.public_id,
@@ -157,6 +165,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
             m.context_window ?? null,
             b.enabled === false ? 0 : 1,
             b.published === true ? 1 : 0,
+            (b.prompt_caching as string | undefined) ?? "inherit",
             now,
             now,
           );
@@ -275,12 +284,13 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
           provider: b.provider ?? (existing.provider as string),
           capabilities: b.capabilities ?? parseCaps(existing.capabilities),
           context_window: b.context_window ?? existing.context_window,
+          prompt_caching: b.prompt_caching ?? existing.prompt_caching,
         };
         const invalid = validateModelBody(merged as Record<string, unknown>);
         if (invalid) return jsonError(400, "INVALID", invalid);
         db.transaction(() => {
           db.prepare(
-            "UPDATE models SET slug = ?, display_name = ?, provider = ?, description = ?, capabilities = ?, context_window = ?, enabled = ?, published = ?, updated_at = ? WHERE id = ?",
+            "UPDATE models SET slug = ?, display_name = ?, provider = ?, description = ?, capabilities = ?, context_window = ?, enabled = ?, published = ?, prompt_caching = ?, updated_at = ? WHERE id = ?",
           ).run(
             merged.slug as string,
             merged.display_name as string,
@@ -296,6 +306,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
               : (existing.context_window as number | null),
             b.enabled !== undefined ? (b.enabled ? 1 : 0) : (existing.enabled as number),
             b.published !== undefined ? (b.published ? 1 : 0) : (existing.published as number),
+            (b.prompt_caching as string | undefined) ?? (existing.prompt_caching as string),
             Date.now(),
             params.id,
           );

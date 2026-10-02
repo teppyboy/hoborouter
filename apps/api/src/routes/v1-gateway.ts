@@ -33,6 +33,21 @@ const intEnv = (name: string, fallback: number) => {
   return Number.isSafeInteger(n) && n > 0 ? n : fallback;
 };
 
+/**
+ * Effective prompt caching for a model: explicit per-model override wins,
+ * otherwise the global instance_settings.prompt_caching_enabled flag
+ * (default true when unset). Requests are IDENTICAL either way — this only
+ * affects billing (OFF bills cached tokens at the full input rate).
+ */
+function effectiveCachingOn(db: Database, promptCaching: string): boolean {
+  if (promptCaching === "on") return true;
+  if (promptCaching === "off") return false;
+  const row = db
+    .prepare("SELECT value FROM instance_settings WHERE key = 'prompt_caching_enabled'")
+    .get() as { value: string } | undefined;
+  return row ? row.value === "true" : true;
+}
+
 /** Settle exactly once per request; wraps the billing service. */
 function settle(
   db: Database,
@@ -62,20 +77,31 @@ function settleFromTap(
   result: ReturnType<ReturnType<typeof createUsageTap>["end"]>,
   rates: { input: bigint; output: bigint; cachedInput: bigint; reasoning: bigint },
   meta: { upstreamModel: string; provider: string; publicModel: string },
+  cachingOn: boolean,
   done: { settled: boolean },
 ) {
   const billable = resolveBillableUsage(result, rates);
   if (billable.billable) {
+    // Caching OFF: charge all input at the full rate (cachedInputTokens = 0
+    // for calculateCharge) but still STORE the provider-reported cached count.
+    const chargeUsage = cachingOn
+      ? billable.usage
+      : { ...billable.usage, cachedInputTokens: 0n };
+    const metadata: Record<string, unknown> = {
+      ...(billable.assumed ? { assumed_splits: billable.assumed } : {}),
+      ...(cachingOn ? {} : { caching: "off" }),
+    };
     settle(
       db,
       requestId,
       {
         kind: "usage",
-        usage: billable.usage,
+        usage: chargeUsage,
         upstreamModel: meta.upstreamModel,
         provider: meta.provider,
         publicModel: meta.publicModel,
-        ...(billable.assumed ? { metadata: { assumed_splits: billable.assumed } } : {}),
+        ...(cachingOn ? {} : { storedCachedInputTokens: billable.usage.cachedInputTokens }),
+        ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
       } as never,
       done,
     );
@@ -272,6 +298,7 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     const resolved = resolveModel(db, body.model);
     if (!resolved) return jsonError(404, "model_not_found", `Model '${body.model}' not found`);
     const { model, mapping, price } = resolved;
+    const cachingOn = effectiveCachingOn(db, model.prompt_caching);
     if (!isModelAllowed(db, key.api_key_id, model.id)) {
       return jsonError(403, "FORBIDDEN", "Model not allowed for this API key");
     }
@@ -455,7 +482,7 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
       const buf = new Uint8Array(ab);
       tap.push(buf);
       const result = tap.end();
-      settleFromTap(db, requestId, result, rates, meta, done);
+      settleFromTap(db, requestId, result, rates, meta, cachingOn, done);
       const body = rewriteJsonModel(ab, mapping.upstream_model, model.public_id);
       return new Response(body, {
         status: upstream.status,
@@ -478,7 +505,7 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     const settleStreamEnd = () => {
       if (streamedSettle) return;
       streamedSettle = true;
-      settleFromTap(db, requestId, tap.end(), rates, meta, done);
+      settleFromTap(db, requestId, tap.end(), rates, meta, cachingOn, done);
     };
     const passthrough = new ReadableStream<Uint8Array>({
       async pull(controller) {
