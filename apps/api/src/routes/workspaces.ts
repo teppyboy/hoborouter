@@ -4,6 +4,9 @@ import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, writeAudit, jsonError } from "../authz";
+import { eq } from "drizzle-orm";
+import { workspaces, workspaceMembers, wallets, auditLog } from "@hoborouter/db";
+import { orm } from "@hoborouter/db";
 
 export const workspacesRoutes = (db: Database, auth: BetterAuthInstance) =>
   new Elysia({ name: "workspaces" })
@@ -26,17 +29,25 @@ export const workspacesRoutes = (db: Database, auth: BetterAuthInstance) =>
         const name = typeof raw === "string" ? raw.trim() : "";
         if (!name) return jsonError(400, "INVALID", "name is required");
         db.transaction(() => {
-          db.prepare(
-            "INSERT INTO workspaces (id, name, status, created_at) VALUES (?,?,'active',?)",
-          ).run(id, name, Date.now());
-          db.prepare(
-            "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?,?,'owner')",
-          ).run(id, userId);
+          orm(db).insert(workspaces).values({ id, name, status: "active", created_at: Date.now() }).run();
+          orm(db)
+            .insert(workspaceMembers)
+            .values({ workspace_id: id, user_id: userId, role: "owner" })
+            .run();
           // Every workspace needs a wallet: payments, gateway billing and the
           // ledger all assume one exists (they 404 without it).
-          db.prepare(
-            "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
-          ).run(crypto.randomUUID(), id, Date.now());
+          orm(db)
+            .insert(wallets)
+            .values({
+              id: crypto.randomUUID(),
+              workspace_id: id,
+              currency: "VND",
+              balance: 0,
+              reserved: 0,
+              version: 0,
+              created_at: Date.now(),
+            })
+            .run();
           writeAudit(db, {
             actorUserId: userId,
             workspaceId: id,
@@ -63,11 +74,18 @@ export const workspacesRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const rows = db
-          .prepare(
-            "SELECT w.id, w.name, w.status, wm.role FROM workspaces w JOIN workspace_members wm ON wm.workspace_id = w.id WHERE wm.user_id = ? ORDER BY w.created_at",
-          )
-          .all(gate.session.user.id);
+        const rows = orm(db)
+          .select({
+            id: workspaces.id,
+            name: workspaces.name,
+            status: workspaces.status,
+            role: workspaceMembers.role,
+          })
+          .from(workspaces)
+          .innerJoin(workspaceMembers, eq(workspaceMembers.workspace_id, workspaces.id))
+          .where(eq(workspaceMembers.user_id, gate.session.user.id))
+          .orderBy(workspaces.created_at)
+          .all();
         return rows;
       },
     )
@@ -86,9 +104,16 @@ export const workspacesRoutes = (db: Database, auth: BetterAuthInstance) =>
         if ("error" in gate) return gate.error;
         const denied = requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
-        const ws = db
-          .prepare("SELECT id, name, status, created_at FROM workspaces WHERE id = ?")
-          .get(params.id);
+        const ws = orm(db)
+          .select({
+            id: workspaces.id,
+            name: workspaces.name,
+            status: workspaces.status,
+            created_at: workspaces.created_at,
+          })
+          .from(workspaces)
+          .where(eq(workspaces.id, params.id))
+          .get();
         if (!ws) return jsonError(404, "NOT_FOUND", "Workspace not found");
         return ws;
       },
@@ -112,11 +137,13 @@ export const workspacesRoutes = (db: Database, auth: BetterAuthInstance) =>
         const raw = (body as { name?: unknown } | null)?.name;
         const name = typeof raw === "string" ? raw.trim() : "";
         if (!name) return jsonError(400, "INVALID", "name is required");
-        const ws = db.prepare("SELECT id, status FROM workspaces WHERE id = ?").get(params.id) as
-          | { id: string; status: string }
-          | undefined;
+        const ws = orm(db)
+          .select({ id: workspaces.id, status: workspaces.status })
+          .from(workspaces)
+          .where(eq(workspaces.id, params.id))
+          .get();
         if (!ws) return jsonError(404, "NOT_FOUND", "Workspace not found");
-        db.prepare("UPDATE workspaces SET name = ? WHERE id = ?").run(name, params.id);
+        orm(db).update(workspaces).set({ name }).where(eq(workspaces.id, params.id)).run();
         writeAudit(db, {
           actorUserId: gate.session.user.id,
           workspaceId: params.id,
@@ -142,24 +169,35 @@ export const workspacesRoutes = (db: Database, auth: BetterAuthInstance) =>
         if ("error" in gate) return gate.error;
         const denied = requireWsRole(db, params.id, gate.session.user.id, "owner");
         if (denied) return denied;
-        const ws = db.prepare("SELECT id FROM workspaces WHERE id = ?").get(params.id);
+        const ws = orm(db)
+          .select({ id: workspaces.id })
+          .from(workspaces)
+          .where(eq(workspaces.id, params.id))
+          .get();
         if (!ws) return jsonError(404, "NOT_FOUND", "Workspace not found");
         try {
           db.transaction(() => {
             // Detach audit history (audit_log.workspace_id is a live FK) before delete.
-            db.prepare("UPDATE audit_log SET workspace_id = NULL WHERE workspace_id = ?").run(
-              params.id,
-            );
+            orm(db)
+              .update(auditLog)
+              .set({ workspace_id: null })
+              .where(eq(auditLog.workspace_id, params.id))
+              .run();
             // Empty wallet (no money ever held) is safe to remove with the
             // workspace; a funded or reserved wallet keeps the 409 guard.
-            const wallet = db
-              .prepare("SELECT id, balance, reserved FROM wallets WHERE workspace_id = ?")
-              .get(params.id) as { id: string; balance: number; reserved: number } | undefined;
+            const wallet = orm(db)
+              .select({ id: wallets.id, balance: wallets.balance, reserved: wallets.reserved })
+              .from(wallets)
+              .where(eq(wallets.workspace_id, params.id))
+              .get();
             if (wallet && wallet.balance === 0 && wallet.reserved === 0) {
-              db.prepare("DELETE FROM wallets WHERE id = ?").run(wallet.id);
+              orm(db).delete(wallets).where(eq(wallets.id, wallet.id)).run();
             }
-            db.prepare("DELETE FROM workspace_members WHERE workspace_id = ?").run(params.id);
-            db.prepare("DELETE FROM workspaces WHERE id = ?").run(params.id);
+            orm(db)
+              .delete(workspaceMembers)
+              .where(eq(workspaceMembers.workspace_id, params.id))
+              .run();
+            orm(db).delete(workspaces).where(eq(workspaces.id, params.id)).run();
           })();
         } catch {
           // Remaining FK children (keys/wallets) — refuse rather than cascade-delete money data.
