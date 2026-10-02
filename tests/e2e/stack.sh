@@ -15,7 +15,9 @@ CDP_PORT=9399
 
 CPA_ACCESS_KEY="${CPA_ACCESS_KEY:-e2e-access-key}"
 CPA_MANAGEMENT_KEY="${CPA_MANAGEMENT_KEY:-e2e-mgmt-key}"
-export CPA_ACCESS_KEY CPA_MANAGEMENT_KEY
+# Inter-chunk delay so the E2E can measure real incremental delivery.
+HBR_FAKE_CPA_CHUNK_DELAY_MS="${HBR_FAKE_CPA_CHUNK_DELAY_MS:-300}"
+export CPA_ACCESS_KEY CPA_MANAGEMENT_KEY HBR_FAKE_CPA_CHUNK_DELAY_MS
 export HBR_DEV_ADMIN_EMAIL=admin@e2e.test
 export NODE_ENV=development
 export BETTER_AUTH_URL="http://127.0.0.1:$WEB_PORT"

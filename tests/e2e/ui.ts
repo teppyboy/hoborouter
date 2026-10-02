@@ -5,6 +5,9 @@
 import { mkdirSync } from "node:fs";
 const CDP_URL = process.env.CDP_URL ?? "http://127.0.0.1:9399";
 const BASE = process.env.BASE ?? "http://127.0.0.1:5199";
+// Gateway steps hit the API directly (stack.sh fixes it at :3099); vite's
+// proxy adds its own buffering behaviour we don't want to measure.
+const API_BASE = process.env.HBR_API_URL ?? "http://127.0.0.1:3099";
 const ADMIN_EMAIL = (process.env.HBR_DEV_ADMIN_EMAIL ?? "admin@e2e.test").toLowerCase();
 const USER2_EMAIL = "user2@e2e.test";
 const PASSWORD = "correct horse battery staple";
@@ -740,6 +743,43 @@ async function main() {
     assert(raw.includes('"finish_reason":"stop"'), "finish_reason stop");
     assert(raw.includes("prompt_tokens"), "final usage chunk");
     assert(raw.trimEnd().endsWith("[DONE]"), "[DONE] terminator");
+  });
+
+  await step("gateway streams incrementally over HTTP", async () => {
+    const res = await fetch(`${API_BASE}/v1/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL_ID,
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+      }),
+    });
+    assert(res.ok, `status ${res.status}`);
+    // Record an arrival time per complete SSE event (separated by a blank line)
+    // so coalesced TCP reads can't fake incremental delivery: a buffered
+    // response delivers every event in one read with identical timestamps.
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    const arrivals: { at: number; text: string }[] = [];
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        arrivals.push({ at: Date.now(), text: buf.slice(0, idx) });
+        buf = buf.slice(idx + 2);
+      }
+    }
+    if (buf.trim()) arrivals.push({ at: Date.now(), text: buf });
+    assert(arrivals.length >= 2, `>=2 SSE events, got ${arrivals.length}`);
+    const content = arrivals.find((a) => a.text.includes('"content"'));
+    assert(content, "a content chunk exists");
+    const last = arrivals[arrivals.length - 1]!;
+    const gap = last.at - content!.at;
+    assert(gap >= 200, `first content chunk ${gap}ms before last, need >=200ms`);
   });
 
   await step("gateway responses", async () => {
