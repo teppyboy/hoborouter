@@ -19,6 +19,25 @@ export interface AdminModel {
   has_mapping: number;
   created_at: number;
   updated_at: number;
+  /** First enabled mapping (backend may not populate yet — treat as optional). */
+  mapping?: {
+    id: string;
+    provider: string;
+    upstream_model: string;
+    enabled: number;
+  } | null;
+  /** Active price row (optional for the same reason). */
+  current_price?: {
+    input_usd_micro_per_1m: number;
+    output_usd_micro_per_1m: number;
+    cached_input_usd_micro_per_1m: number;
+    reasoning_usd_micro_per_1m: number;
+    markup_ppm: number;
+    effective_at: number;
+  } | null;
+  /** 1 when the model is listed on public /models; hidden_reason explains why not. */
+  listed?: number;
+  hidden_reason?: string | null;
 }
 
 export interface AuditRow {

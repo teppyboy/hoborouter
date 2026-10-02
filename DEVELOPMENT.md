@@ -77,8 +77,8 @@ If either key is wrong, admin pages show `CPA_AUTH_FAILED` with e.g. "CPA reject
 Clients send your public ID; the gateway translates it to the upstream CPA model.
 
 1. Admin → **Models**: create a model with Public ID `hoborouter/auto` (what clients send), tick **published**.
-2. Admin → **Providers**: add mapping for that model — Upstream model (sent to CPA) `z-ai/glm-5.3-flash`.
-3. Admin → **Pricing**: add a price for the model.
+2. Admin → **Models**: open the model → **Routing**: add a mapping with Upstream model `z-ai/glm-5.3-flash` (pick from CPA's model list). The provider label is cosmetic — requests always go to the single CPA.
+3. Admin → **Models**: open the model → **Pricing** (or Admin → **Pricing**): add a price for the model.
 4. Call it:
 
    ```sh

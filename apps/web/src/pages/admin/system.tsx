@@ -23,6 +23,8 @@ interface CpaModel {
   id: string;
   owned_by: string | null;
   mapped: boolean;
+  /** Public model ids routed here (backend may not populate yet). */
+  mapped_public_ids?: string[];
 }
 
 interface AdminUsageLog {
@@ -155,12 +157,14 @@ function CpaModelsTable() {
     {
       accessorKey: "mapped",
       header: "Mapped",
-      cell: (c) =>
-        c.getValue() ? (
-          <Badge variant="default">mapped</Badge>
+      cell: ({ row }) => {
+        const ids = row.original.mapped_public_ids;
+        return ids && ids.length > 0 ? (
+          <span className="font-mono text-xs">{ids.join(", ")}</span>
         ) : (
           <Badge variant="outline">unmapped</Badge>
-        ),
+        );
+      },
     },
   ];
   return (
