@@ -9,6 +9,19 @@ import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { createDb, schema } from "@hoborouter/db";
 
+/** Swap localhost<->127.0.0.1 host of an origin string; null if not one of them. */
+const swappedLoopback = (origin: string): string | null => {
+  try {
+    const u = new URL(origin);
+    if (u.hostname === "localhost") u.hostname = "127.0.0.1";
+    else if (u.hostname === "127.0.0.1") u.hostname = "localhost";
+    else return null;
+    return u.origin;
+  } catch {
+    return null;
+  }
+};
+
 /** Build a Better Auth instance over an existing bun:sqlite Database. */
 export function createAuth(db: Database) {
   const baseURL =
@@ -25,8 +38,23 @@ export function createAuth(db: Database) {
       "BETTER_AUTH_SECRET (or AUTH_SECRET) of at least 32 characters is required when NODE_ENV=production",
     );
   }
+  // Dev/test: browsers treat 127.0.0.1 and localhost as different origins, so
+  // trust the loopback-swapped baseURL too; prod trusts only the baseURL origin.
+  const env = process.env.NODE_ENV;
+  const trustedOrigins: string[] =
+    env === "development" || env === "test"
+      ? [swappedLoopback(baseURL)].filter((o): o is string => o !== null)
+      : [];
+  if (process.env.HBR_TRUSTED_ORIGINS) {
+    trustedOrigins.push(
+      ...process.env.HBR_TRUSTED_ORIGINS.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+  }
   return betterAuth({
     baseURL,
+    trustedOrigins,
     database: drizzleAdapter(drizzle(db, { schema }), {
       provider: "sqlite",
       schema: { ...schema, user: schema.users },

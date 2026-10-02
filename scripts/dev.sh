@@ -54,12 +54,12 @@ cleanup() {
   [ -n "$WEB_PID" ] && { pkill -P "$WEB_PID" 2>/dev/null; kill "$WEB_PID" 2>/dev/null; }
   [ -n "$CPA_PID" ] && kill "$CPA_PID" 2>/dev/null
   # `bun run` wraps vite one level deeper; catch it directly.
-  pkill -f "vite/node/cli.js dev --host 127.0.0.1 --port 5173" 2>/dev/null
+  pkill -f "vite/node/cli.js dev --host localhost --port 5173" 2>/dev/null
   wait 2>/dev/null
 }
 trap cleanup EXIT INT TERM
 
-echo "Dashboard:  http://localhost:5173"
+echo "Dashboard:  http://localhost:5173 (open this URL — sign-in breaks from http://127.0.0.1:5173)"
 echo "API docs:   http://localhost:3000/docs"
 echo "DB:         $HBR_DB_PATH"
 echo "Admin tip:  HBR_DEV_ADMIN_EMAIL=you@example.com bun run dev — sign up with that email to become admin."
@@ -67,7 +67,7 @@ echo "Admin tip:  HBR_DEV_ADMIN_EMAIL=you@example.com bun run dev — sign up wi
 NODE_ENV=development PORT=3000 bun --watch apps/api/src/index.ts > >(sed -u 's/^/[api] /') 2>&1 &
 API_PID=$!
 
-bun run --cwd apps/web dev --host 127.0.0.1 --port 5173 --strictPort > >(sed -u 's/^/[web] /') 2>&1 &
+bun run --cwd apps/web dev --host localhost --port 5173 --strictPort > >(sed -u 's/^/[web] /') 2>&1 &
 WEB_PID=$!
 
 wait
