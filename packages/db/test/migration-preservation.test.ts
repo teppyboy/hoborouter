@@ -298,7 +298,7 @@ test("populated db already at 0002 (users have email) proceeds through pending m
   const userRows = rowsJson(db, "users");
   migrate(db);
   expect(rowsJson(db, "users")).toBe(userRows);
-  expect(journalRows(db)).toHaveLength(6);
+  expect(journalRows(db)).toHaveLength(7);
   expect(fkViolations(db)).toHaveLength(0);
 });
 

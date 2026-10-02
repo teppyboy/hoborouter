@@ -223,10 +223,18 @@ export const models = sqliteTable(
     context_window: integer("context_window"),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
     published: integer("published", { mode: "boolean" }).notNull().default(false),
+    // Per-model prompt-caching override; 'inherit' follows the global
+    // instance_settings.prompt_caching_enabled flag.
+    prompt_caching: text("prompt_caching", { enum: ["inherit", "on", "off"] })
+      .notNull()
+      .default("inherit"),
     created_at: integer("created_at").notNull(),
     updated_at: integer("updated_at").notNull(),
   },
-  (t) => [uniqueIndex("models_public_id").on(t.public_id)],
+  (t) => [
+    uniqueIndex("models_public_id").on(t.public_id),
+    check("models_prompt_caching", sql`${t.prompt_caching} IN ('inherit', 'on', 'off')`),
+  ],
 );
 
 export const providerModelMappings = sqliteTable("provider_model_mappings", {
@@ -497,6 +505,13 @@ export const usageLogs = sqliteTable(
     ),
   ],
 );
+
+/** Instance-level key/value settings (e.g. prompt_caching_enabled). Values are the string 'true'/'false' for booleans. */
+export const instanceSettings = sqliteTable("instance_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updated_at: integer("updated_at").notNull(),
+});
 
 // --- Phase 2 settlement tables (schema preserved per spec; no app code touches them) ---
 export const settlements = sqliteTable(
