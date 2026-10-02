@@ -173,9 +173,9 @@ const server = Bun.serve({
 
     if (path === "/healthz") return json({ status: "ok" });
 
-    if (path === "/v0/management/credentials/status") {
+    if (path === "/v0/management/config") {
       if (bearerOf(req) !== MGMT_KEY) return json({ error: "unauthorized" }, 401);
-      return json({ status: "ok", credentials: [{ provider: "fake", connected: true }] });
+      return json({});
     }
 
     if (path === "/v1/models") {

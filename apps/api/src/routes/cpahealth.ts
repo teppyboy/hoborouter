@@ -34,8 +34,10 @@ export const cpaHealthRoutes = (db: Database, auth: BetterAuthInstance) =>
       try {
         const health = await fetchOnce(`${cpaBase()}/healthz`);
         if (!health.ok) return jsonError(502, "CPA_UNHEALTHY", `healthz returned ${health.status}`);
-        // single attempt, no retry loop
-        const mgmt = await fetchOnce(`${cpaBase()}/v0/management/credentials/status`, {
+        // single attempt, no retry loop. GET /v0/management/config exists on
+        // CPA v8.x (GET /credentials/status does not — it is PATCH-only) and
+        // proves management auth works; its body (secrets) is never returned.
+        const mgmt = await fetchOnce(`${cpaBase()}/v0/management/config`, {
           headers: { authorization: `Bearer ${key}` },
         });
         if (mgmt.status === 401 || mgmt.status === 403)

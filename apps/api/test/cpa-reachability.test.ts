@@ -24,7 +24,7 @@ test("cpa health: instance admin makes each upstream request once", async () => 
         healthzHits++;
         return Response.json({ status: "ok" });
       }
-      if (path === "/v0/management/credentials/status") {
+      if (path === "/v0/management/config") {
         mgmtHits++;
         return new Response("unauthorized", { status: 401 });
       }
