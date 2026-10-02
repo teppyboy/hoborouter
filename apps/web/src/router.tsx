@@ -34,6 +34,9 @@ const AdminAudit = lazy(() => import("./pages/admin/audit"));
 // Public auth pages (not part of nav prefetching).
 const Login = lazy(() => import("./pages/auth/login"));
 const Signup = lazy(() => import("./pages/auth/signup"));
+// Public legal pages.
+const Terms = lazy(() => import("./pages/legal/terms"));
+const Privacy = lazy(() => import("./pages/legal/privacy"));
 
 function Page({ children }: { children: React.ReactNode }) {
   return <div className="p-6">{children}</div>;
@@ -118,6 +121,16 @@ const publicRoutes = [
         <Signup />
       </Page>
     ),
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/terms",
+    component: () => <Terms />,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/privacy",
+    component: () => <Privacy />,
   }),
 ];
 

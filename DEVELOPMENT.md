@@ -141,3 +141,7 @@ Bot protection for `/sign-in/email` and `/sign-up/email`, enabled only when both
 - `TURNSTILE_SECRET_KEY` — API env (Better Auth `captcha` plugin, provider `cloudflare-turnstile`, reads the `x-captcha-response` header)
 
 When either is unset, auth behaves exactly as before. The frontend widget is skipped on localhost/127.0.0.1/::1, so local dev never needs it. For staging, Cloudflare's test keys work: site `1x00000000000000000000AA`, secret `1x0000000000000000000000000000000AA` (always passes).
+
+## Legal pages
+
+Terms of Service (`/terms`) and Privacy Policy (`/privacy`) are public pages rendered from the markdown source of truth at `apps/web/src/pages/legal/content/`. Operator-specific facts (`{{OPERATOR_NAME}}`, `{{CONTACT_EMAIL}}`, `{{EFFECTIVE_DATE}}`) come from `VITE_LEGAL_OPERATOR_NAME`, `VITE_LEGAL_CONTACT_EMAIL`, and `VITE_LEGAL_EFFECTIVE_DATE` (visible `[operator name]`-style placeholders when unset).
