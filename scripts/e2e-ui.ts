@@ -149,6 +149,60 @@ const HELPERS = `
     },
     clickButtonWithText(text) { return this.clickableText(text, true); },
     clickIncludesText(text) { return this.clickableText(text, false); },
+    // Dropdown/other triggers matched by aria-label (icon buttons have no text).
+    clickAria(selector) {
+      const el = document.querySelector(selector);
+      if (!el || !this.visible(el)) throw new Error('selector not visible: ' + selector);
+      this.press(el);
+      return true;
+    },
+    // Radix Select items commit selection on a plain click; the synthetic
+    // pointer sequence does not register with their pointer tracking.
+    clickOption(text) {
+      const els = [...document.querySelectorAll('[role="option"]')].filter(
+        (el) => this.visible(el) && el.textContent.trim().includes(text));
+      if (els.length === 0) throw new Error('option not found: "' + text + '"');
+      const el = els[els.length - 1];
+      if (!el.isConnected) throw new Error('option not found: "' + text + '"');
+      el.click();
+      return els.length;
+    },
+    // Click a button by text inside an open Radix dialog (avoids matching
+    // identically-labeled rows/menus behind the overlay).
+    // Click a button by exact text inside the table row containing rowText.
+    clickRowAction(rowText, buttonText) {
+      const row = [...document.querySelectorAll("tr")]
+        .filter((r) => this.visible(r) && r.textContent.includes(rowText))
+        .at(-1);
+      if (!row) throw new Error('row not found: "' + rowText + '"');
+      const btn = [...row.querySelectorAll("button")]
+        .filter((b) => this.visible(b) && b.textContent.trim() === buttonText)
+        .at(-1);
+      if (!btn) throw new Error('button "' + buttonText + '" not found in row "' + rowText + '"');
+      this.press(btn);
+      return true;
+    },
+    // Toggle a checkbox inside the visible label containing text.
+    clickLabel(text) {
+      const label = [...document.querySelectorAll("label")]
+        .filter((l) => this.visible(l) && l.textContent.includes(text))
+        .at(-1);
+      if (!label) throw new Error('label not found: "' + text + '"');
+      label.click();
+      return true;
+    },
+    clickDialog(text) {
+      const root = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')]
+        .filter((el) => this.visible(el))
+        .at(-1);
+      if (!root) throw new Error('no open dialog');
+      const btn = [...root.querySelectorAll("button")]
+        .filter((b) => this.visible(b) && b.textContent.trim() === text)
+        .at(-1);
+      if (!btn) throw new Error('dialog button not found: "' + text + '"');
+      btn.click();
+      return true;
+    },
     labeled(labelText) {
       const labels = [...document.querySelectorAll('label')].filter(
         (l) => this.visible(l) && l.textContent.trim() === labelText);
@@ -231,6 +285,16 @@ const page = {
     evaluateWhenPresent(
       `window.__hbr.${exact ? "clickButtonWithText" : "clickIncludesText"}(${JSON.stringify(text)})`,
     ),
+  clickAria: (selector: string) =>
+    evaluateWhenPresent(`window.__hbr.clickAria(${JSON.stringify(selector)})`),
+  clickDialog: (text: string) =>
+    evaluateWhenPresent(`window.__hbr.clickDialog(${JSON.stringify(text)})`),
+  clickRowAction: (rowText: string, buttonText: string) =>
+    evaluateWhenPresent(
+      `window.__hbr.clickRowAction(${JSON.stringify(rowText)}, ${JSON.stringify(buttonText)})`,
+    ),
+  clickLabel: (text: string) =>
+    evaluateWhenPresent(`window.__hbr.clickLabel(${JSON.stringify(text)})`),
   setInput: (label: string, value: string) =>
     evaluateWhenPresent(`window.__hbr.setInput(${JSON.stringify(label)}, ${JSON.stringify(value)})`),
   setInputById: (id: string, value: string) =>
@@ -247,12 +311,14 @@ const page = {
     evaluate<string | null>(`window.__hbr.text(${JSON.stringify(selector)})`),
 };
 
-/** Radix Select: click trigger (by id or label), then the option with the text. */
+/** Radix Select: click trigger (by selector), then the option with the text. */
 async function selectOption(triggerSelector: string, optionText: string) {
   await evaluateWhenPresent(
     `window.__hbr.press(document.querySelector(${JSON.stringify(triggerSelector)}) ?? (()=>{throw new Error('trigger not found: ${triggerSelector}')})())`,
   );
-  await page.click(optionText);
+  // Let a possible onOpenChange refetch re-render options before clicking.
+  await sleep(150);
+  await evaluateWhenPresent(`window.__hbr.clickOption(${JSON.stringify(optionText)})`);
   await sleep(100);
 }
 
@@ -411,7 +477,7 @@ async function main() {
     await page.click("Members", false);
     await page.waitForText("Invite by email");
     await page.setInput("Invite by email", USER2_EMAIL);
-    await page.click("Invite", true);
+    await page.click("Add", true);
     await page.waitForText(USER2_EMAIL);
   });
 
@@ -421,9 +487,9 @@ async function main() {
   });
 
   await step("members remove", async () => {
-    await page.click("Remove");
+    await page.clickRowAction(USER2_EMAIL, "Remove");
     await page.waitForText("Remove member");
-    await page.click("Remove");
+    await page.clickDialog("Remove");
     await page.waitForGone(USER2_EMAIL);
   });
 
@@ -493,13 +559,46 @@ async function main() {
 
   await step("api keys restrict models", async () => {
     await page.waitForText("e2e-key");
-    await page.click('[aria-label="Key actions"]', false);
+    await page.clickAria('[aria-label="Key actions"]');
     await page.waitForText("Model restrictions");
     await page.click("Model restrictions");
     await page.waitForText("Model restrictions — e2e-key");
-    await page.click(MODEL_ID, false);
+    await page.clickLabel(MODEL_ID);
     await page.click("Save");
     await page.waitForText("Model restrictions saved");
+  });
+
+  // --- billing: credits top-up, admin mark paid, balance + ledger ---
+  await step("billing credits mock top-up create", async () => {
+    await goto("/billing/credits");
+    await page.waitForText("Top up");
+    await page.click("Create payment");
+    await page.waitForText("pending");
+    assert((await page.has("Complete (dev)")) || true, "payment status view shown");
+  });
+
+  await step("admin payments mark paid", async () => {
+    await goto("/admin/payments");
+    await page.waitForText("Mark paid");
+    await page.click("Mark paid");
+    await page.waitForText("Mark payment as paid?");
+    await page.clickDialog("Confirm");
+    await page.waitForText("succeeded");
+  });
+
+  await step("credits balance + ledger updated", async () => {
+    await goto("/billing/credits");
+    await page.waitForText("Ledger");
+    const body = await page.body();
+    assert(/100\.000\s*₫/.test(body), "balance shows 100.000 ₫");
+    assert(!body.includes("No ledger entries yet"), "ledger has entries");
+    assert(body.includes("payment"), "ledger shows payment entry");
+  });
+
+  await step("billing payments list", async () => {
+    await goto("/billing/payments");
+    await page.waitForText("Payments");
+    await page.waitForText("succeeded");
   });
 
   // --- gateway calls (Bun fetch, not UI) ---
@@ -544,39 +643,6 @@ async function main() {
     assert(json.usage?.input_tokens > 0, "usage present");
   });
 
-  // --- billing: credits top-up, admin mark paid, balance + ledger ---
-  await step("billing credits mock top-up create", async () => {
-    await goto("/billing/credits");
-    await page.waitForText("Top up");
-    await page.click("Create payment");
-    await page.waitForText("pending");
-    assert((await page.has("Complete (dev)")) || true, "payment status view shown");
-  });
-
-  await step("admin payments mark paid", async () => {
-    await goto("/admin/payments");
-    await page.waitForText("Mark paid");
-    await page.click("Mark paid");
-    await page.waitForText("Mark payment as paid?");
-    await page.click("Confirm");
-    await page.waitForText("paid");
-  });
-
-  await step("credits balance + ledger updated", async () => {
-    await goto("/billing/credits");
-    await page.waitForText("Ledger");
-    const body = await page.body();
-    assert(/100\.000\s*₫/.test(body), "balance shows 100.000 ₫");
-    assert(!body.includes("No ledger entries yet"), "ledger has entries");
-    assert(body.includes("payment"), "ledger shows payment entry");
-  });
-
-  await step("billing payments list", async () => {
-    await goto("/billing/payments");
-    await page.waitForText("Payments");
-    await page.waitForText("paid");
-  });
-
   // --- logs, usage, overview show requests/spend ---
   await step("logs show gateway requests", async () => {
     await goto("/logs");
@@ -604,23 +670,23 @@ async function main() {
   await step("api keys disable + enable", async () => {
     await goto("/keys");
     await page.waitForText("e2e-key");
-    await page.click('[aria-label="Key actions"]', false);
+    await page.clickAria('[aria-label="Key actions"]');
     await page.waitForText("Disable");
     await page.click("Disable");
     await page.waitForText("Key disabled");
     await page.waitForText("disabled");
-    await page.click('[aria-label="Key actions"]', false);
+    await page.clickAria('[aria-label="Key actions"]');
     await page.waitForText("Enable");
     await page.click("Enable");
     await page.waitForText("Key enabled");
   });
 
   await step("api keys revoke", async () => {
-    await page.click('[aria-label="Key actions"]', false);
+    await page.clickAria('[aria-label="Key actions"]');
     await page.waitForText("Revoke");
     await page.click("Revoke");
     await page.waitForText("Revoke key");
-    await page.click("Revoke");
+    await page.clickDialog("Revoke");
     await page.waitForText("Key revoked");
   });
 
@@ -682,7 +748,7 @@ async function main() {
       })()`,
     );
     void wsNameNow;
-    await page.click("Delete");
+    await page.clickDialog("Delete");
     await page.waitForText("Workspace deleted");
     await sleep(400);
     assert(
