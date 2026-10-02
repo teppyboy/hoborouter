@@ -4,13 +4,18 @@ Prereqs: [Bun](https://bun.sh) 1.4+, `openssl`. No Docker needed for development
 
 ## Run it
 
-1. Install deps (repo root):
+One command (backend + frontend + fake CPA, persistent dev data in `.dev/`):
 
-   ```sh
-   bun install
-   ```
+```sh
+bun install
+HBR_DEV_ADMIN_EMAIL=you@example.com bun run dev
+```
 
-2. Terminal 1 — backend (API on http://localhost:3000, auto-restarts on file changes):
+Then sign up at http://localhost:5173 with that exact email — you're instance admin. Ctrl-C stops everything (backend, vite, fake CPA). Sessions survive restarts (fixed secret + `./.dev/hoborouter.sqlite`). Set `CPA_BASE_URL` (e.g. in `.env`) to use a real CPA instead of the fake.
+
+### Manual
+
+1. Terminal 1 — backend (API on http://localhost:3000, auto-restarts on file changes):
 
    ```sh
    NODE_ENV=development \
@@ -19,13 +24,13 @@ Prereqs: [Bun](https://bun.sh) 1.4+, `openssl`. No Docker needed for development
    bun --watch apps/api/src/index.ts
    ```
 
-3. Terminal 2 — frontend (Vite dev server; proxies `/api`, `/v1`, `/webhooks` to :3000):
+2. Terminal 2 — frontend (Vite dev server; proxies `/api`, `/v1`, `/webhooks` to :3000):
 
    ```sh
    bun run --cwd apps/web dev --host 127.0.0.1 --port 5173 --strictPort
    ```
 
-4. Open http://localhost:5173 and sign up.
+3. Open http://localhost:5173 and sign up.
    - API docs: http://localhost:3000/docs · spec: `/openapi.json` · health: `/healthz`
 
 Why `BETTER_AUTH_URL=http://localhost:5173`: the browser talks to the frontend origin; Better Auth checks the request origin against it.
@@ -67,10 +72,10 @@ Start the backend with `HBR_DEV_ADMIN_EMAIL=you@example.com` and `NODE_ENV=devel
 
 ## Fake CPA for local AI calls
 
-Run a fake CPA instead of the real one:
+`bun run dev` starts it automatically on http://127.0.0.1:8399 when `CPA_BASE_URL` is unset. To run it standalone:
 
 ```sh
-bun scripts/dev-fake-cpa.ts   # listens on http://127.0.0.1:8399
+bun tests/fake-cpa.ts   # listens on http://127.0.0.1:8399
 ```
 
 Start the backend with `CPA_BASE_URL=http://127.0.0.1:8399 CPA_ACCESS_KEY=<any>` so gateway calls route to it.
@@ -80,12 +85,14 @@ Start the backend with `CPA_BASE_URL=http://127.0.0.1:8399 CPA_ACCESS_KEY=<any>`
 Isolated stack (fake CPA :8399, API :3099, vite :5199, fresh SQLite each up):
 
 ```sh
-scripts/e2e-stack.sh up
-bun scripts/e2e-ui.ts          # full sweep, ~7 min
-scripts/e2e-stack.sh down
+bun run e2e                   # up, full sweep, down (one command)
+# or manually:
+bun run e2e:up
+bun tests/e2e/ui.ts           # full sweep, ~1 min
+bun run e2e:down
 ```
 
-Iterate on one area only: `E2E_ONLY='gateway|overview' bun scripts/e2e-ui.ts` (regex over step names).
+Iterate on one area only: `E2E_ONLY='gateway|overview' bun tests/e2e/ui.ts` (regex over step names).
 
 ## Tests & type check
 

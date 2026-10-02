@@ -15,3 +15,5 @@ dist/
 deploy/.env
 deploy/cpa/config.yaml
 deploy/cpa/auths/
+
+.dev/

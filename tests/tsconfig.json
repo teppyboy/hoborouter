@@ -1,7 +1,12 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node"]
+    "types": ["node", "bun-types"],
+    "typeRoots": ["../node_modules/@types", "../apps/api/node_modules"],
+    "paths": {
+      "bun:sqlite": ["../apps/api/node_modules/bun-types/sqlite.d.ts"],
+      "bun": ["../apps/api/node_modules/bun-types/bun.d.ts"]
+    }
   },
   "include": ["."]
 }

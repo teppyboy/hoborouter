@@ -422,7 +422,7 @@ async function main() {
 
   // --- second user signup (logout via UI first) ---
   await step("logout", async () => {
-    await page.click(ADMIN_EMAIL); // user menu trigger shows email
+    await page.clickAria('[aria-label="Account menu"]'); // trigger now shows name
     await page.waitForText("Sign out");
     await page.click("Sign out");
     await page.waitForText("Sign in");
@@ -442,7 +442,7 @@ async function main() {
   });
 
   await step("login admin", async () => {
-    await page.click(USER2_EMAIL);
+    await page.clickAria('[aria-label="Account menu"]'); // trigger now shows name
     await page.waitForText("Sign out");
     await page.click("Sign out");
     await page.waitForText("Sign in");

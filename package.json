@@ -12,7 +12,10 @@
     "check": "vp check",
     "lint": "vp lint",
     "fmt": "vp fmt",
-    "dev": "vp dev",
+    "dev": "bash scripts/dev.sh",
+    "e2e": "bash tests/e2e/stack.sh up && bun tests/e2e/ui.ts; s=$?; bash tests/e2e/stack.sh down; exit $s",
+    "e2e:up": "bash tests/e2e/stack.sh up",
+    "e2e:down": "bash tests/e2e/stack.sh down",
     "build": "vp build"
   },
   "devDependencies": {
