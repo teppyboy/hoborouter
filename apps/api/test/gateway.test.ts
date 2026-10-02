@@ -243,7 +243,7 @@ describe("gateway core", () => {
     expect(lastCharge().amount).toBe(29);
   });
 
-  test("stream: SSE passthrough byte-identical + settled, usage option injected", async () => {
+  test("stream: SSE passthrough with model rewritten to public id + settled, usage option injected", async () => {
     const sse = chatSse();
     startFakeCpa(() => new Response(sse, { headers: { "content-type": "text/event-stream" } }));
     const res = await gwr(CHAT_PATH, {
@@ -252,7 +252,10 @@ describe("gateway core", () => {
       stream: true,
     });
     expect(res.status).toBe(200);
-    expect(await res.text()).toBe(sse);
+    // chunks pass through with only the model field rewritten to the public id
+    expect(await res.text()).toBe(
+      sse.replaceAll('"model":"gpt-4o-upstream"', '"model":"openai/gw-test"'),
+    );
     expect(JSON.parse(captured[0]!.body).stream_options.include_usage).toBe(true);
     expect(lastCharge().status).toBe("settled");
     expect(lastCharge().amount).toBe(38);

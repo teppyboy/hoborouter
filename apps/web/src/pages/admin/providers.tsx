@@ -18,6 +18,11 @@ import { AdminGate, type AdminModel, useAdminQuery } from "./shared";
 
 function AddMappingForm({ model }: { model: AdminModel }) {
   const qc = useQueryClient();
+  const cpaModels = useAdminQuery<{ data: { id: string }[] }>(
+    ["admin", "cpa-models"],
+    "/api/v1/admin/cpa/models",
+  );
+  const cpaIds = (cpaModels.data?.data ?? []).map((m) => m.id);
   const [provider, setProvider] = useState("");
   const [upstreamModel, setUpstreamModel] = useState("");
   const [enabled, setEnabled] = useState(true);
@@ -60,14 +65,21 @@ function AddMappingForm({ model }: { model: AdminModel }) {
           />
         </div>
         <div className="grid gap-1.5">
-          <Label htmlFor={`upstream-${model.id}`}>Upstream model</Label>
+          <Label htmlFor={`upstream-${model.id}`}>Upstream model (sent to CPA)</Label>
           <Input
             id={`upstream-${model.id}`}
             className="font-mono"
+            list={`cpa-models-${model.id}`}
+            placeholder="z-ai/glm-5.3-flash"
             value={upstreamModel}
             onChange={(e) => setUpstreamModel(e.target.value)}
             required
           />
+          <datalist id={`cpa-models-${model.id}`}>
+            {cpaIds.map((id) => (
+              <option key={id} value={id} />
+            ))}
+          </datalist>
         </div>
       </div>
       <div className="flex items-center justify-between">

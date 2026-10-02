@@ -88,6 +88,66 @@ function settleFromTap(
   }
 }
 
+/** Replace upstream model id with the public id in chat JSON responses. */
+function rewriteJsonModel(ab: ArrayBuffer, publicModel: string): ArrayBuffer {
+  try {
+    const o = JSON.parse(new TextDecoder().decode(ab)) as Record<string, unknown>;
+    if (typeof o.model === "string") {
+      o.model = publicModel;
+      return new TextEncoder().encode(JSON.stringify(o)).buffer as ArrayBuffer;
+    }
+  } catch {
+    // not JSON — passthrough
+  }
+  return ab;
+}
+
+/**
+ * Line-buffered SSE rewriter: swaps the upstream model id for the public id
+ * in every parseable `data: {…}` chunk. Non-JSON lines pass through verbatim.
+ */
+function sseModelRewriteStream(source: ReadableStream<Uint8Array>, publicModel: string) {
+  const dec = new TextDecoder();
+  const enc = new TextEncoder();
+  const reader = source.getReader();
+  let buf = "";
+  const rewriteLine = (line: string): string => {
+    if (!line.startsWith("data: ")) return line;
+    try {
+      const o = JSON.parse(line.slice(6)) as Record<string, unknown>;
+      if (typeof o.model === "string") {
+        o.model = publicModel;
+        return `data: ${JSON.stringify(o)}`;
+      }
+    } catch {
+      // not JSON — passthrough
+    }
+    return line;
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          buf += dec.decode();
+          if (buf) controller.enqueue(enc.encode(rewriteLine(buf)));
+          controller.close();
+          return;
+        }
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        if (lines.length) controller.enqueue(enc.encode(lines.map(rewriteLine).join("\n") + "\n"));
+      } catch (err) {
+        controller.error(err instanceof Error ? err : new Error("stream error"));
+      }
+    },
+    cancel() {
+      void reader.cancel().catch(() => {});
+    },
+  });
+}
+
 function gatewayHandler(db: Database, path: string, protocol: "chat" | "responses") {
   return async ({ request }: { request: Request }): Promise<Response> => {
     // 1. Disabled gate before any DB write.
@@ -319,7 +379,8 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
       tap.push(buf);
       const result = tap.end();
       settleFromTap(db, requestId, result, rates, meta, done);
-      return new Response(ab, {
+      const body = rewriteJsonModel(ab, model.public_id);
+      return new Response(body, {
         status: upstream.status,
         headers: {
           "content-type": upstream.headers.get("content-type") ?? "application/json",
@@ -377,7 +438,7 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
       },
     });
     request.signal.addEventListener("abort", () => controller.abort(), { once: true });
-    return new Response(passthrough, {
+    return new Response(sseModelRewriteStream(passthrough, model.public_id), {
       status: upstream.status,
       headers: {
         "content-type": upstream.headers.get("content-type") ?? "text/event-stream",

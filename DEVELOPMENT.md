@@ -72,6 +72,22 @@ Set in `.env` (dev.sh warns at startup if `CPA_BASE_URL` is set but a key is mis
 
 If either key is wrong, admin pages show `CPA_AUTH_FAILED` with e.g. "CPA rejected CPA_MANAGEMENT_KEY (401)" — fix the variable, not the code.
 
+### Expose a model under your own ID
+
+Clients send your public ID; the gateway translates it to the upstream CPA model.
+
+1. Admin → **Models**: create a model with Public ID `hoborouter/auto` (what clients send), tick **published**.
+2. Admin → **Providers**: add mapping for that model — Upstream model (sent to CPA) `z-ai/glm-5.3-flash`.
+3. Admin → **Pricing**: add a price for the model.
+4. Call it:
+
+   ```sh
+   curl -H "Authorization: Bearer sk-hbr-..." localhost:3000/v1/chat/completions \
+     -d '{"model":"hoborouter/auto","messages":[{"role":"user","content":"hi"}]}'
+   ```
+
+   The upstream request carries `z-ai/glm-5.3-flash`; responses, streams, and `/v1/models` all show `hoborouter/auto`.
+
 ## Payments in dev
 
 Mock top-ups are on by default. As owner, self-mark paid: add `HBR_DEV_PAYMENTS=1` (only works with `NODE_ENV=development` or `test`).

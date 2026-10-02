@@ -113,10 +113,11 @@ function ModelDialog({
         </DialogHeader>
         <form onSubmit={form.handleSubmit((v) => mutation.mutate(v))} className="grid gap-3">
           <div className="grid gap-1.5">
-            <Label htmlFor="public_id">Public ID</Label>
+            <Label htmlFor="public_id">Public ID (what clients send)</Label>
             <Input
               id="public_id"
               className="font-mono"
+              placeholder="hoborouter/auto"
               disabled={!!model}
               {...form.register("public_id")}
             />

@@ -563,7 +563,7 @@ async function main() {
     await selectOption("#model-select", MODEL_ID);
     await page.waitForText("Add mapping to");
     await page.setInput("Provider", "fake");
-    await page.setInput("Upstream model", "fake-model");
+    await page.setInput("Upstream model (sent to CPA)", "fake-model");
     await page.click("Add mapping");
     await page.waitForText("Mapping added");
   });
