@@ -5,7 +5,13 @@ import { DataTable, EmptyState, PageHeader } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { api } from "../../lib/api";
 import { AdminGate, type AdminModel, useAdminQuery } from "./shared";
@@ -84,10 +90,7 @@ export default function AdminProvidersPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Providers"
-        description="Map public models to upstream provider models."
-      />
+      <PageHeader title="Providers" description="Map public models to upstream provider models." />
       <AdminGate query={query}>
         <div className="grid gap-1.5">
           <Label htmlFor="model-select">Model</Label>
@@ -110,7 +113,10 @@ export default function AdminProvidersPage() {
             return model ? <AddMappingForm model={model} /> : null;
           })()
         ) : (
-          <EmptyState title="Select a model" description="Choose a model above to add a provider mapping." />
+          <EmptyState
+            title="Select a model"
+            description="Choose a model above to add a provider mapping."
+          />
         )}
         <section>
           <h2 className="mb-2 text-sm font-medium">Existing mappings</h2>

@@ -4,8 +4,5 @@
  */
 export function modelHref(publicId: string): string {
   // Encode each segment (never the "/" separators) so splat matching still works.
-  return `/models/view/${publicId
-    .split("/")
-    .map(encodeURIComponent)
-    .join("/")}`;
+  return `/models/view/${publicId.split("/").map(encodeURIComponent).join("/")}`;
 }

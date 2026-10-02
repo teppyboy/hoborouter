@@ -8,19 +8,12 @@ import {
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, Check, Copy } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "./ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 
 export function PageHeader({
   title,
@@ -35,20 +28,30 @@ export function PageHeader({
     <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
       <div>
         <h1 className="text-lg font-semibold">{title}</h1>
-        {description && (
-          <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
-        )}
+        {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
     </div>
   );
 }
 
-export function EmptyState({ title, description }: { title: string; description?: string }) {
+export function EmptyState({
+  icon: Icon,
+  title,
+  description,
+  children,
+}: {
+  icon?: LucideIcon;
+  title: string;
+  description?: string;
+  children?: React.ReactNode;
+}) {
   return (
-    <div className="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border py-12 text-center">
+    <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border py-12 text-center">
+      {Icon && <Icon className="size-6 text-muted-foreground/60" aria-hidden />}
       <p className="text-sm font-medium">{title}</p>
-      {description && <p className="text-sm text-muted-foreground">{description}</p>}
+      {description && <p className="max-w-sm text-sm text-muted-foreground">{description}</p>}
+      {children}
     </div>
   );
 }
@@ -103,9 +106,7 @@ export function DataTable<TData>({
     onSortingChange: setSorting,
     onGlobalFilterChange: (updater) => {
       if (onGlobalFilterChange)
-        onGlobalFilterChange(
-          typeof updater === "function" ? updater(globalFilter ?? "") : updater,
-        );
+        onGlobalFilterChange(typeof updater === "function" ? updater(globalFilter ?? "") : updater);
     },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -134,12 +135,8 @@ export function DataTable<TData>({
                       onClick={header.column.getToggleSortingHandler()}
                     >
                       {flexRender(header.column.columnDef.header, header.getContext())}
-                      {header.column.getIsSorted() === "asc" && (
-                        <ArrowUp className="size-3" />
-                      )}
-                      {header.column.getIsSorted() === "desc" && (
-                        <ArrowDown className="size-3" />
-                      )}
+                      {header.column.getIsSorted() === "asc" && <ArrowUp className="size-3" />}
+                      {header.column.getIsSorted() === "desc" && <ArrowDown className="size-3" />}
                     </button>
                   ) : (
                     flexRender(header.column.columnDef.header, header.getContext())
@@ -152,7 +149,10 @@ export function DataTable<TData>({
         <TableBody>
           {table.getRowModel().rows.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={columns.length} className="py-8 text-center text-muted-foreground">
+              <TableCell
+                colSpan={columns.length}
+                className="py-8 text-center text-muted-foreground"
+              >
                 {empty ?? "No data"}
               </TableCell>
             </TableRow>

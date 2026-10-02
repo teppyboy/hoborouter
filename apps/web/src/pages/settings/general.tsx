@@ -28,7 +28,11 @@ interface Workspace {
 
 export default function GeneralTab({ workspaceId }: { workspaceId: string }) {
   const qc = useQueryClient();
-  const { data: ws, error, isLoading } = useQuery({
+  const {
+    data: ws,
+    error,
+    isLoading,
+  } = useQuery({
     queryKey: ["workspace", workspaceId],
     queryFn: () => api<Workspace>(`/api/v1/workspaces/${workspaceId}`),
   });
@@ -93,7 +97,6 @@ export default function GeneralTab({ workspaceId }: { workspaceId: string }) {
 }
 
 function Error({ message }: { message: unknown }) {
-  const text =
-    message instanceof ApiError ? message.message : "Failed to load workspace.";
+  const text = message instanceof ApiError ? message.message : "Failed to load workspace.";
   return <p className="text-sm text-destructive">{text}</p>;
 }

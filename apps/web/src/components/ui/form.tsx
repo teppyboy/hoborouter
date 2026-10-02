@@ -56,10 +56,7 @@ function FormItem({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
-function FormLabel({
-  className,
-  ...props
-}: React.ComponentProps<typeof LabelPrimitive.Root>) {
+function FormLabel({ className, ...props }: React.ComponentProps<typeof LabelPrimitive.Root>) {
   const { error, formItemId } = useFormField();
   return (
     <Label
@@ -99,14 +96,19 @@ function FormMessage({ className, children, ...props }: React.ComponentProps<"p"
   const body = error ? String(error.message ?? "") : children;
   if (!body) return null;
   return (
-    <p
-      id={formMessageId}
-      className={cn("text-xs text-destructive", className)}
-      {...props}
-    >
+    <p id={formMessageId} className={cn("text-xs text-destructive", className)} {...props}>
       {body}
     </p>
   );
 }
 
-export { Form, FormField, FormItem, FormLabel, FormControl, FormDescription, FormMessage, useFormField };
+export {
+  Form,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormControl,
+  FormDescription,
+  FormMessage,
+  useFormField,
+};

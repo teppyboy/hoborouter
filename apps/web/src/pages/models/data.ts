@@ -64,8 +64,7 @@ export function useCatalogModels(): {
 export function useCatalogModel(publicId: string) {
   return useQuery({
     queryKey: ["catalog-models", publicId],
-    queryFn: () =>
-      api<CatalogModelItem>(`/api/v1/catalog/models/${encodeURIComponent(publicId)}`),
+    queryFn: () => api<CatalogModelItem>(`/api/v1/catalog/models/${encodeURIComponent(publicId)}`),
     enabled: !!publicId,
   });
 }

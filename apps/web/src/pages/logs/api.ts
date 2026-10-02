@@ -44,7 +44,12 @@ export interface UsageSummary {
     errors: number;
   };
   daily: { day: string; requests: number; spend_vnd: number; tokens: number }[];
-  by_model: { public_model: number | string; requests: number; spend_vnd: number; tokens: number }[];
+  by_model: {
+    public_model: number | string;
+    requests: number;
+    spend_vnd: number;
+    tokens: number;
+  }[];
 }
 
 export function useRequestLogs(workspaceId: string | null, limit = 100) {
@@ -67,9 +72,7 @@ export function useUsageSummary(workspaceId: string | null, days = 30) {
   return useQuery({
     queryKey: ["usage-summary", workspaceId, days],
     queryFn: () =>
-      api<UsageSummary>(
-        `/api/v1/workspaces/${workspaceId}/usage-summary?days=${days}`,
-      ),
+      api<UsageSummary>(`/api/v1/workspaces/${workspaceId}/usage-summary?days=${days}`),
     enabled: workspaceId != null,
     staleTime: 15_000,
     retry: (count, err) => {

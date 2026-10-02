@@ -38,7 +38,10 @@ interface AdminPayment {
 }
 
 export default function AdminPaymentsPage() {
-  const query = useAdminQuery<{ data: AdminPayment[] }>(["admin", "payments"], "/api/v1/admin/payments");
+  const query = useAdminQuery<{ data: AdminPayment[] }>(
+    ["admin", "payments"],
+    "/api/v1/admin/payments",
+  );
   return (
     <div className="space-y-4">
       <PageHeader title="Payments" description="Top-up payments across workspaces." />
@@ -67,7 +70,9 @@ function PaymentsTable({ payments }: { payments: AdminPayment[] }) {
     {
       accessorKey: "created_at",
       header: "Time",
-      cell: (c) => <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>,
+      cell: (c) => (
+        <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>
+      ),
     },
     { accessorKey: "workspace_name", header: "Workspace" },
     {
@@ -75,7 +80,11 @@ function PaymentsTable({ payments }: { payments: AdminPayment[] }) {
       header: "Amount",
       cell: (c) => <span className="font-mono text-xs">{formatVnd(c.getValue<number>())}</span>,
     },
-    { accessorKey: "provider", header: "Provider", cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span> },
+    {
+      accessorKey: "provider",
+      header: "Provider",
+      cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
+    },
     {
       accessorKey: "status",
       header: "Status",

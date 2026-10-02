@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { MoreHorizontal, Plus } from "lucide-react";
+import { KeyRound, MoreHorizontal, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
@@ -28,13 +28,7 @@ import {
 import { Input } from "../../components/ui/input";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Label } from "../../components/ui/label";
-import {
-  DataTable,
-  EmptyState,
-  ErrorState,
-  CopyButton,
-  PageHeader,
-} from "../../components/page";
+import { DataTable, EmptyState, ErrorState, CopyButton, PageHeader } from "../../components/page";
 import type { ColumnDef } from "@tanstack/react-table";
 
 interface ApiKey {
@@ -72,8 +66,7 @@ export default function KeysPage() {
     enabled: !!workspaceId,
   });
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ["keys", workspaceId] });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["keys", workspaceId] });
 
   const createMutation = useMutation({
     mutationFn: (name: string) =>
@@ -120,9 +113,7 @@ export default function KeysPage() {
       accessorKey: "key_prefix",
       header: "Key",
       enableSorting: false,
-      cell: ({ row }) => (
-        <span className="font-mono text-xs">{row.original.key_prefix}…</span>
-      ),
+      cell: ({ row }) => <span className="font-mono text-xs">{row.original.key_prefix}…</span>,
     },
     {
       accessorKey: "created_at",
@@ -133,9 +124,7 @@ export default function KeysPage() {
       accessorKey: "last_used_at",
       header: "Last used",
       cell: ({ row }) =>
-        row.original.last_used_at
-          ? formatDate(new Date(row.original.last_used_at))
-          : "—",
+        row.original.last_used_at ? formatDate(new Date(row.original.last_used_at)) : "—",
     },
     {
       accessorKey: "status",
@@ -143,9 +132,7 @@ export default function KeysPage() {
       cell: ({ row }) => {
         const s = row.original.status;
         return (
-          <Badge
-            variant={s === "enabled" ? "default" : s === "disabled" ? "outline" : "secondary"}
-          >
+          <Badge variant={s === "enabled" ? "default" : s === "disabled" ? "outline" : "secondary"}>
             {s}
           </Badge>
         );
@@ -180,10 +167,7 @@ export default function KeysPage() {
                 Model restrictions
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive"
-                onClick={() => setRevokeTarget(key)}
-              >
+              <DropdownMenuItem className="text-destructive" onClick={() => setRevokeTarget(key)}>
                 Revoke
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -222,6 +206,7 @@ export default function KeysPage() {
         )
       ) : (keysQuery.data?.length ?? 0) === 0 ? (
         <EmptyState
+          icon={KeyRound}
           title="No API keys"
           description="Create a key to start routing requests."
         />
@@ -252,8 +237,8 @@ export default function KeysPage() {
           <DialogHeader>
             <DialogTitle>Copy your API key</DialogTitle>
             <DialogDescription>
-              This is the only time the full key for “{created?.name}” is shown. Store it
-              somewhere safe — it cannot be retrieved again.
+              This is the only time the full key for “{created?.name}” is shown. Store it somewhere
+              safe — it cannot be retrieved again.
             </DialogDescription>
           </DialogHeader>
           <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
@@ -292,8 +277,8 @@ export default function KeysPage() {
           <DialogHeader>
             <DialogTitle>Revoke key</DialogTitle>
             <DialogDescription>
-              Revoke “{revokeTarget?.name}”? Requests using this key will immediately fail.
-              This cannot be undone.
+              Revoke “{revokeTarget?.name}”? Requests using this key will immediately fail. This
+              cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -342,21 +327,14 @@ function CreateKeyDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Create API key</DialogTitle>
-          <DialogDescription>
-            Give the key a name so you can recognize it later.
-          </DialogDescription>
+          <DialogDescription>Give the key a name so you can recognize it later.</DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={form.handleSubmit((v) => onSubmit(v.name))}
-          className="grid gap-4"
-        >
+        <form onSubmit={form.handleSubmit((v) => onSubmit(v.name))} className="grid gap-4">
           <div className="grid gap-2">
             <Label htmlFor="key-name">Name</Label>
             <Input id="key-name" autoFocus {...form.register("name")} />
             {form.formState.errors.name && (
-              <p className="text-sm text-destructive">
-                {form.formState.errors.name.message}
-              </p>
+              <p className="text-sm text-destructive">{form.formState.errors.name.message}</p>
             )}
           </div>
           <DialogFooter>
@@ -396,8 +374,7 @@ function ModelRestrictionsDialog({
 
   const modelsQuery = useQuery({
     queryKey: ["catalog-models"],
-    queryFn: () =>
-      api<{ data: CatalogModelItem[] }>("/api/v1/catalog/models"),
+    queryFn: () => api<{ data: CatalogModelItem[] }>("/api/v1/catalog/models"),
   });
 
   const saveMutation = useMutation({
@@ -416,9 +393,7 @@ function ModelRestrictionsDialog({
   const models = modelsQuery.data?.data ?? [];
   const toggle = (id: string) => {
     if (!selected) return;
-    setSelected(
-      selected.includes(id) ? selected.filter((m) => m !== id) : [...selected, id],
-    );
+    setSelected(selected.includes(id) ? selected.filter((m) => m !== id) : [...selected, id]);
   };
 
   return (

@@ -3,6 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { Wallet as WalletIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
@@ -93,13 +94,19 @@ export default function BillingCreditsPage() {
 
   const columns: ColumnDef<LedgerEntry>[] = [
     { accessorKey: "created_at", header: "Time", cell: (c) => formatDate(c.getValue<string>()) },
-    { accessorKey: "kind", header: "Kind", cell: (c) => <span className="font-mono text-xs">{c.getValue<string>()}</span> },
+    {
+      accessorKey: "kind",
+      header: "Kind",
+      cell: (c) => <span className="font-mono text-xs">{c.getValue<string>()}</span>,
+    },
     {
       accessorKey: "amount",
       header: "Amount",
       cell: (c) => {
         const v = c.getValue<number>();
-        return <span className="font-mono text-xs">{v < 0 ? `-${formatVnd(-v)}` : formatVnd(v)}</span>;
+        return (
+          <span className="font-mono text-xs">{v < 0 ? `-${formatVnd(-v)}` : formatVnd(v)}</span>
+        );
       },
     },
     {
@@ -141,7 +148,11 @@ export default function BillingCreditsPage() {
           ) : ledger.isError ? (
             <ErrorState message={ledger.error.message} />
           ) : ledger.data.data.length === 0 ? (
-            <EmptyState title="No ledger entries yet" description="Not available yet — entries appear after the first top-up or usage." />
+            <EmptyState
+              icon={WalletIcon}
+              title="No ledger entries yet"
+              description="Not available yet — entries appear after the first top-up or usage."
+            />
           ) : (
             <DataTable columns={columns} data={ledger.data.data} empty="No ledger entries" />
           )}

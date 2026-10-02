@@ -6,12 +6,7 @@ import { z } from "zod";
 import { toast } from "sonner";
 import { Plus } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
-import {
-  DataTable,
-  EmptyState,
-  CopyButton,
-  PageHeader,
-} from "../../components/page";
+import { DataTable, EmptyState, CopyButton, PageHeader } from "../../components/page";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -67,7 +62,16 @@ function ModelDialog({
           enabled: model.enabled === 1,
           published: model.published === 1,
         }
-      : { public_id: "", display_name: "", provider: "", description: "", capabilities: "", context_window: "", enabled: true, published: false },
+      : {
+          public_id: "",
+          display_name: "",
+          provider: "",
+          description: "",
+          capabilities: "",
+          context_window: "",
+          enabled: true,
+          published: false,
+        },
   });
 
   const mutation = useMutation({
@@ -87,7 +91,10 @@ function ModelDialog({
         published: v.published,
       };
       return model
-        ? api(`/api/v1/admin/catalog/models/${model.id}`, { method: "PUT", body: JSON.stringify(body) })
+        ? api(`/api/v1/admin/catalog/models/${model.id}`, {
+            method: "PUT",
+            body: JSON.stringify(body),
+          })
         : api("/api/v1/admin/catalog/models", { method: "POST", body: JSON.stringify(body) });
     },
     onSuccess: () => {
@@ -104,13 +111,15 @@ function ModelDialog({
         <DialogHeader>
           <DialogTitle>{model ? `Edit ${model.public_id}` : "Create model"}</DialogTitle>
         </DialogHeader>
-        <form
-          onSubmit={form.handleSubmit((v) => mutation.mutate(v))}
-          className="grid gap-3"
-        >
+        <form onSubmit={form.handleSubmit((v) => mutation.mutate(v))} className="grid gap-3">
           <div className="grid gap-1.5">
             <Label htmlFor="public_id">Public ID</Label>
-            <Input id="public_id" className="font-mono" disabled={!!model} {...form.register("public_id")} />
+            <Input
+              id="public_id"
+              className="font-mono"
+              disabled={!!model}
+              {...form.register("public_id")}
+            />
             {form.formState.errors.public_id && (
               <p className="text-xs text-destructive">{form.formState.errors.public_id.message}</p>
             )}
@@ -119,7 +128,9 @@ function ModelDialog({
             <Label htmlFor="display_name">Display name</Label>
             <Input id="display_name" {...form.register("display_name")} />
             {form.formState.errors.display_name && (
-              <p className="text-xs text-destructive">{form.formState.errors.display_name.message}</p>
+              <p className="text-xs text-destructive">
+                {form.formState.errors.display_name.message}
+              </p>
             )}
           </div>
           <div className="grid gap-1.5">
@@ -135,7 +146,11 @@ function ModelDialog({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="capabilities">Capabilities (comma-separated)</Label>
-            <Input id="capabilities" placeholder="chat, tools, vision" {...form.register("capabilities")} />
+            <Input
+              id="capabilities"
+              placeholder="chat, tools, vision"
+              {...form.register("capabilities")}
+            />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="context_window">Context window</Label>
@@ -143,11 +158,19 @@ function ModelDialog({
           </div>
           <div className="flex items-center justify-between">
             <Label htmlFor="enabled">Enabled</Label>
-            <Switch id="enabled" checked={form.watch("enabled")} onCheckedChange={(c) => form.setValue("enabled", c)} />
+            <Switch
+              id="enabled"
+              checked={form.watch("enabled")}
+              onCheckedChange={(c) => form.setValue("enabled", c)}
+            />
           </div>
           <div className="flex items-center justify-between">
             <Label htmlFor="published">Published</Label>
-            <Switch id="published" checked={form.watch("published")} onCheckedChange={(c) => form.setValue("published", c)} />
+            <Switch
+              id="published"
+              checked={form.watch("published")}
+              onCheckedChange={(c) => form.setValue("published", c)}
+            />
           </div>
           {form.formState.errors.root && (
             <p className="text-xs text-destructive">{form.formState.errors.root.message}</p>
@@ -180,18 +203,30 @@ export default function AdminModelsPage() {
       ),
     },
     { accessorKey: "display_name", header: "Name" },
-    { accessorKey: "provider", header: "Provider", cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span> },
+    {
+      accessorKey: "provider",
+      header: "Provider",
+      cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
+    },
     {
       accessorKey: "context_window",
       header: "Context",
-      cell: (c) => <span className="font-mono text-xs">{c.getValue() == null ? "—" : formatTokens(c.getValue() as number)}</span>,
+      cell: (c) => (
+        <span className="font-mono text-xs">
+          {c.getValue() == null ? "—" : formatTokens(c.getValue() as number)}
+        </span>
+      ),
     },
     {
       id: "status",
       header: "Status",
       cell: ({ row }) => (
         <span className="flex gap-1">
-          {row.original.enabled === 1 ? <Badge variant="outline">enabled</Badge> : <Badge variant="secondary">disabled</Badge>}
+          {row.original.enabled === 1 ? (
+            <Badge variant="outline">enabled</Badge>
+          ) : (
+            <Badge variant="secondary">disabled</Badge>
+          )}
           {row.original.published === 1 && <Badge variant="outline">published</Badge>}
         </span>
       ),

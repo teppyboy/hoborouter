@@ -13,7 +13,10 @@ export function formatVnd(amount: number | null | undefined): string {
 export function formatUsdMicroPer1m(micro: number | null | undefined): string {
   if (micro == null) return "—";
   const usd = micro / 1_000_000;
-  const s = usd.toPrecision(6).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  const s = usd
+    .toPrecision(6)
+    .replace(/(\.\d*?)0+$/, "$1")
+    .replace(/\.$/, "");
   return `$${s}`;
 }
 

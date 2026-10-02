@@ -34,10 +34,7 @@ export default function SettingsPage() {
           <TabsContent value="general" className="mt-4">
             <GeneralTab workspaceId={workspaceId} />
             <div className="mt-8">
-              <DangerZone
-                workspaceId={workspaceId}
-                workspaceName={ws?.name ?? workspaceId}
-              />
+              <DangerZone workspaceId={workspaceId} workspaceName={ws?.name ?? workspaceId} />
             </div>
           </TabsContent>
           <TabsContent value="members" className="mt-4">

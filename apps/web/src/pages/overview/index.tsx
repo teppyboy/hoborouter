@@ -5,13 +5,7 @@ import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useUsageSummary } from "../logs/api";
 
-function StatTile({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
+function StatTile({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-border px-4 py-3">
       <p className="text-xs text-muted-foreground">{label}</p>
@@ -21,11 +15,7 @@ function StatTile({
 }
 
 /** Simple inline CSS bar chart: one bar per day, height scaled to max. */
-function BarChart({
-  data,
-}: {
-  data: { label: string; value: number }[];
-}) {
+function BarChart({ data }: { data: { label: string; value: number }[] }) {
   const max = Math.max(...data.map((d) => d.value), 1);
   return (
     <div className="flex h-32 items-end gap-1">
@@ -90,9 +80,7 @@ export default function OverviewPage() {
         {summary.data.daily.length === 0 ? (
           <EmptyState title="No requests yet" />
         ) : (
-          <BarChart
-            data={summary.data.daily.map((d) => ({ label: d.day, value: d.spend_vnd }))}
-          />
+          <BarChart data={summary.data.daily.map((d) => ({ label: d.day, value: d.spend_vnd }))} />
         )}
       </div>
       <RecentRequests workspaceId={workspaceId} />

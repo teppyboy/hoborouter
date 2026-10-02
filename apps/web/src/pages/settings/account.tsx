@@ -20,12 +20,7 @@ export default function AccountTab() {
           <dd>{session?.user?.name ?? "—"}</dd>
         </div>
       </dl>
-      <Button
-        variant="outline"
-        size="sm"
-        className="mt-6"
-        onClick={() => signOut()}
-      >
+      <Button variant="outline" size="sm" className="mt-6" onClick={() => signOut()}>
         Sign out
       </Button>
     </div>

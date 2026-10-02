@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "@tanstack/react-router";
+import { CreditCard } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
@@ -30,6 +32,7 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
 export default function BillingPaymentsPage() {
   const workspaceId = useCurrentWorkspaceId();
   const location = useLocation();
+  const navigate = useNavigate();
   // Router has no validateSearch on this route — read the param from the URL.
   const [selectedId] = useState(() => new URLSearchParams(location.search).get("payment"));
 
@@ -41,8 +44,16 @@ export default function BillingPaymentsPage() {
 
   const columns: ColumnDef<Payment>[] = [
     { accessorKey: "created_at", header: "Time", cell: (c) => formatDate(c.getValue<string>()) },
-    { accessorKey: "amount", header: "Amount", cell: (c) => <span className="font-mono text-xs">{formatVnd(c.getValue<number>())}</span> },
-    { accessorKey: "provider", header: "Provider", cell: (c) => <span className="font-mono text-xs">{c.getValue<string>()}</span> },
+    {
+      accessorKey: "amount",
+      header: "Amount",
+      cell: (c) => <span className="font-mono text-xs">{formatVnd(c.getValue<number>())}</span>,
+    },
+    {
+      accessorKey: "provider",
+      header: "Provider",
+      cell: (c) => <span className="font-mono text-xs">{c.getValue<string>()}</span>,
+    },
     {
       accessorKey: "status",
       header: "Status",
@@ -65,18 +76,25 @@ export default function BillingPaymentsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Payments"
-        description="Top-up payment history and status."
-      />
-      {selectedId && workspaceId ? <PaymentStatus workspaceId={workspaceId} paymentId={selectedId} /> : null}
+      <PageHeader title="Payments" description="Top-up payment history and status." />
+      {selectedId && workspaceId ? (
+        <PaymentStatus workspaceId={workspaceId} paymentId={selectedId} />
+      ) : null}
 
       {payments.isPending ? (
         <Skeleton className="h-40 w-full" />
       ) : payments.isError ? (
         <ErrorState message={payments.error.message} />
       ) : payments.data.data.length === 0 ? (
-        <EmptyState title="No payments yet" description="Create a top-up on the Credits page." />
+        <EmptyState
+          icon={CreditCard}
+          title="No payments yet"
+          description="Create a top-up on the Credits page."
+        >
+          <Button size="sm" onClick={() => void navigate({ href: "/billing/credits" })}>
+            Go to Credits
+          </Button>
+        </EmptyState>
       ) : (
         <DataTable columns={columns} data={payments.data.data} empty="No payments" />
       )}

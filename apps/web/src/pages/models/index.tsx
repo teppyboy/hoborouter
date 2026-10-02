@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { PageHeader, DataTable, EmptyState, ErrorState } from "../../components/page";
+import { Boxes } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import {
   Select,
@@ -158,6 +159,7 @@ export default function ModelsPage() {
         </div>
       ) : filtered.length === 0 ? (
         <EmptyState
+          icon={Boxes}
           title="No models found"
           description={
             models.length === 0
@@ -167,10 +169,7 @@ export default function ModelsPage() {
         />
       ) : (
         <div className="rounded-lg border border-border">
-          <DataTable
-            columns={columns}
-            data={filtered}
-          />
+          <DataTable columns={columns} data={filtered} />
         </div>
       )}
     </div>

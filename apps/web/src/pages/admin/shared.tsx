@@ -58,7 +58,9 @@ export function AdminGate({
     );
   if (query.error) {
     if (query.error instanceof ApiError && query.error.status === 403)
-      return <EmptyState title="Admin only" description="This page requires instance admin access." />;
+      return (
+        <EmptyState title="Admin only" description="This page requires instance admin access." />
+      );
     return <ErrorState message={query.error instanceof Error ? query.error.message : undefined} />;
   }
   return <>{children}</>;

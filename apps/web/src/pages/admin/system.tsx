@@ -70,7 +70,9 @@ function SystemCard() {
             </div>
             <div>
               <dt className="text-muted-foreground">USD/VND rate</dt>
-              <dd className="font-mono text-xs">{query.data.usd_vnd_rate.toLocaleString("vi-VN")}</dd>
+              <dd className="font-mono text-xs">
+                {query.data.usd_vnd_rate.toLocaleString("vi-VN")}
+              </dd>
             </div>
             <div>
               <dt className="text-muted-foreground">PayOS</dt>
@@ -133,15 +135,32 @@ function CpaHealthCard() {
 }
 
 function CpaModelsTable() {
-  const query = useAdminQuery<{ data: CpaModel[] }>(["admin", "cpa-models"], "/api/v1/admin/cpa/models");
+  const query = useAdminQuery<{ data: CpaModel[] }>(
+    ["admin", "cpa-models"],
+    "/api/v1/admin/cpa/models",
+  );
   const columns: ColumnDef<CpaModel, unknown>[] = [
-    { accessorKey: "id", header: "Model", cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span> },
-    { accessorKey: "owned_by", header: "Owned by", cell: (c) => <span className="font-mono text-xs">{(c.getValue() as string | null) ?? "—"}</span> },
+    {
+      accessorKey: "id",
+      header: "Model",
+      cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
+    },
+    {
+      accessorKey: "owned_by",
+      header: "Owned by",
+      cell: (c) => (
+        <span className="font-mono text-xs">{(c.getValue() as string | null) ?? "—"}</span>
+      ),
+    },
     {
       accessorKey: "mapped",
       header: "Mapped",
       cell: (c) =>
-        c.getValue() ? <Badge variant="default">mapped</Badge> : <Badge variant="outline">unmapped</Badge>,
+        c.getValue() ? (
+          <Badge variant="default">mapped</Badge>
+        ) : (
+          <Badge variant="outline">unmapped</Badge>
+        ),
     },
   ];
   return (
@@ -165,15 +184,33 @@ const auditColumns: ColumnDef<AuditRow, unknown>[] = [
   {
     accessorKey: "created_at",
     header: "Time",
-    cell: (c) => <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>,
+    cell: (c) => (
+      <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>
+    ),
   },
-  { accessorKey: "action", header: "Action", cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span> },
+  {
+    accessorKey: "action",
+    header: "Action",
+    cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
+  },
   {
     accessorKey: "actor_user_id",
     header: "Actor",
-    cell: (c) => <span className="font-mono text-xs">{(c.getValue() as string | null)?.slice(0, 8) ?? "—"}</span>,
+    cell: (c) => (
+      <span className="font-mono text-xs">
+        {(c.getValue() as string | null)?.slice(0, 8) ?? "—"}
+      </span>
+    ),
   },
-  { accessorKey: "target", header: "Target", cell: (c) => <span className="font-mono text-xs">{(c.getValue() as string | null)?.slice(0, 8) ?? "—"}</span> },
+  {
+    accessorKey: "target",
+    header: "Target",
+    cell: (c) => (
+      <span className="font-mono text-xs">
+        {(c.getValue() as string | null)?.slice(0, 8) ?? "—"}
+      </span>
+    ),
+  },
   {
     accessorKey: "detail",
     header: "Detail",
@@ -196,17 +233,28 @@ const usageColumns: ColumnDef<AdminUsageLog, unknown>[] = [
   {
     accessorKey: "created_at",
     header: "Time",
-    cell: (c) => <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>,
+    cell: (c) => (
+      <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>
+    ),
   },
   { accessorKey: "workspace_name", header: "Workspace" },
-  { accessorKey: "provider", header: "Provider", cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span> },
-  { accessorKey: "public_model", header: "Model", cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span> },
+  {
+    accessorKey: "provider",
+    header: "Provider",
+    cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
+  },
+  {
+    accessorKey: "public_model",
+    header: "Model",
+    cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
+  },
   {
     accessorKey: "input_tokens",
     header: "Tokens in/out",
     cell: (c) => (
       <span className="font-mono text-xs">
-        {c.row.original.input_tokens.toLocaleString()} / {c.row.original.output_tokens.toLocaleString()}
+        {c.row.original.input_tokens.toLocaleString()} /{" "}
+        {c.row.original.output_tokens.toLocaleString()}
       </span>
     ),
   },
@@ -219,7 +267,10 @@ const usageColumns: ColumnDef<AdminUsageLog, unknown>[] = [
 ];
 
 function UsageLogsTable() {
-  const query = useAdminQuery<{ data: AdminUsageLog[] }>(["admin", "usage-logs"], "/api/v1/admin/usage-logs");
+  const query = useAdminQuery<{ data: AdminUsageLog[] }>(
+    ["admin", "usage-logs"],
+    "/api/v1/admin/usage-logs",
+  );
   return (
     <div className="space-y-2">
       <h2 className="text-sm font-medium">Usage logs</h2>

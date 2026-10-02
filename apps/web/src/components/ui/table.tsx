@@ -14,15 +14,33 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
 }
 
 function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
-  return <thead data-slot="table-header" className={cn("[&_tr]:border-b [&_tr]:border-border", className)} {...props} />;
+  return (
+    <thead
+      data-slot="table-header"
+      className={cn("[&_tr]:border-b [&_tr]:border-border", className)}
+      {...props}
+    />
+  );
 }
 
 function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
-  return <tbody data-slot="table-body" className={cn("[&_tr:last-child]:border-0", className)} {...props} />;
+  return (
+    <tbody
+      data-slot="table-body"
+      className={cn("[&_tr:last-child]:border-0", className)}
+      {...props}
+    />
+  );
 }
 
 function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
-  return <tfoot data-slot="table-footer" className={cn("border-t border-border font-medium", className)} {...props} />;
+  return (
+    <tfoot
+      data-slot="table-footer"
+      className={cn("border-t border-border font-medium", className)}
+      {...props}
+    />
+  );
 }
 
 function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
@@ -39,7 +57,10 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
   return (
     <th
       data-slot="table-head"
-      className={cn("h-9 px-3 text-left align-middle text-xs font-medium text-muted-foreground whitespace-nowrap", className)}
+      className={cn(
+        "h-9 px-3 text-left align-middle text-xs font-medium text-muted-foreground whitespace-nowrap sticky top-12 z-10 bg-background",
+        className,
+      )}
       {...props}
     />
   );
@@ -49,7 +70,7 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
   return (
     <td
       data-slot="table-cell"
-      className={cn("px-3 py-2 align-middle", className)}
+      className={cn("px-3 py-2 align-middle tabular-nums", className)}
       {...props}
     />
   );

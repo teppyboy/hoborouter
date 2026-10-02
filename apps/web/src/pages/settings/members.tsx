@@ -53,7 +53,11 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
   const qc = useQueryClient();
   const [removing, setRemoving] = React.useState<Member | null>(null);
 
-  const { data: members, error, isLoading } = useQuery({
+  const {
+    data: members,
+    error,
+    isLoading,
+  } = useQuery({
     queryKey: ["members", workspaceId],
     queryFn: () => api<Member[]>(`/api/v1/workspaces/${workspaceId}/members`),
   });
@@ -115,9 +119,9 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
           <Select
             value={row.original.role}
             onValueChange={(role) =>
-              void changeRole.mutateAsync({ userId: row.original.user_id, role: role as Role }).catch(
-                () => undefined,
-              )
+              void changeRole
+                .mutateAsync({ userId: row.original.user_id, role: role as Role })
+                .catch(() => undefined)
             }
           >
             <SelectTrigger className="h-8 w-28" aria-label={`Role for ${row.original.email}`}>
@@ -156,9 +160,7 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
           columns={columns}
           data={members ?? []}
           empty={
-            members?.length
-              ? undefined
-              : "No members. Invited users must already have an account."
+            members?.length ? undefined : "No members. Invited users must already have an account."
           }
         />
       </div>
@@ -167,9 +169,7 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Remove member</DialogTitle>
-            <DialogDescription>
-              Remove {removing?.email} from this workspace?
-            </DialogDescription>
+            <DialogDescription>Remove {removing?.email} from this workspace?</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setRemoving(null)}>
@@ -179,7 +179,9 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
               variant="destructive"
               size="sm"
               disabled={removeMember.isPending}
-              onClick={() => removing && removeMember.mutateAsync(removing.user_id).catch(() => undefined)}
+              onClick={() =>
+                removing && removeMember.mutateAsync(removing.user_id).catch(() => undefined)
+              }
             >
               Remove
             </Button>
@@ -190,13 +192,7 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
   );
 }
 
-function InviteForm({
-  workspaceId,
-  onInvited,
-}: {
-  workspaceId: string;
-  onInvited: () => void;
-}) {
+function InviteForm({ workspaceId, onInvited }: { workspaceId: string; onInvited: () => void }) {
   const form = useForm<InviteValues>({
     resolver: zodResolver(inviteSchema),
     defaultValues: { email: "", role: "member" },

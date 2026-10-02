@@ -19,7 +19,9 @@ const columns: ColumnDef<AdminUser, unknown>[] = [
   {
     accessorKey: "created_at",
     header: "Joined",
-    cell: (c) => <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>,
+    cell: (c) => (
+      <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>
+    ),
   },
   {
     accessorKey: "is_instance_admin",

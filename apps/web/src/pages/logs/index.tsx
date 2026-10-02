@@ -10,10 +10,7 @@ import {
   TableRow,
 } from "../../components/ui/table";
 import { Skeleton } from "../../components/ui/skeleton";
-import {
-  Sheet,
-  SheetContent,
-} from "../../components/ui/sheet";
+import { Sheet, SheetContent } from "../../components/ui/sheet";
 import { formatDate, formatTokens, formatVnd } from "../../lib/format";
 import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
@@ -25,9 +22,7 @@ function StatusBadge({ status }: { status: string }) {
     <span
       className={
         "inline-flex items-center rounded-sm border px-1.5 py-0.5 font-mono text-xs " +
-        (isError
-          ? "border-destructive/50 text-destructive"
-          : "border-border text-muted-foreground")
+        (isError ? "border-destructive/50 text-destructive" : "border-border text-muted-foreground")
       }
     >
       {status}
@@ -82,10 +77,7 @@ export default function LogsPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Logs"
-        description="Request logs for the selected workspace."
-      />
+      <PageHeader title="Logs" description="Request logs for the selected workspace." />
       {query.data.length === 0 ? (
         <EmptyState
           title="No requests yet"
@@ -120,16 +112,14 @@ export default function LogsPage() {
                   </TableRow>
                 )}
                 {rows.map((r) => (
-                  <TableRow
-                    key={r.id}
-                    className="cursor-pointer"
-                    onClick={() => setSelected(r)}
-                  >
+                  <TableRow key={r.id} className="cursor-pointer" onClick={() => setSelected(r)}>
                     <TableCell className="font-mono text-xs">
                       {formatDate(new Date(r.created_at))}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{r.public_model}</TableCell>
-                    <TableCell><StatusBadge status={r.status} /></TableCell>
+                    <TableCell>
+                      <StatusBadge status={r.status} />
+                    </TableCell>
                     <TableCell className="text-right font-mono text-xs">
                       {formatTokens(r.input_tokens + r.output_tokens)}
                     </TableCell>
@@ -154,7 +144,9 @@ export default function LogsPage() {
           </div>
           {selected && (
             <div className="pt-2">
-              <DetailField label="Status"><StatusBadge status={selected.status} /></DetailField>
+              <DetailField label="Status">
+                <StatusBadge status={selected.status} />
+              </DetailField>
               {selected.failure && <DetailField label="Failure">{selected.failure}</DetailField>}
               <DetailField label="Model">{selected.public_model}</DetailField>
               {selected.upstream_model && (

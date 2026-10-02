@@ -82,17 +82,16 @@ export default function ModelDetailPage() {
     );
   }
   if (modelQ.isError)
-    return modelQ.error instanceof Error && "status" in modelQ.error
-      ? ((
-          <div className="space-y-4">
-            <PageHeader title="Model" />
-            <EmptyState
-              title="Model not found"
-              description={`No published model "${publicId}".`}
-            />
-          </div>
-        ) as React.ReactNode)
-      : <ErrorState message={modelQ.error.message} />;
+    return modelQ.error instanceof Error && "status" in modelQ.error ? (
+      ((
+        <div className="space-y-4">
+          <PageHeader title="Model" />
+          <EmptyState title="Model not found" description={`No published model "${publicId}".`} />
+        </div>
+      ) as React.ReactNode)
+    ) : (
+      <ErrorState message={modelQ.error.message} />
+    );
 
   const model = modelQ.data;
   const { curl, js, py } = codeSamples(origin, publicId);
@@ -191,7 +190,10 @@ export default function ModelDetailPage() {
       </div>
 
       <p className="flex items-center gap-1 text-xs text-muted-foreground">
-        Replace <Badge variant="secondary" className="font-mono text-xs">{PLACEHOLDER_KEY}</Badge>
+        Replace{" "}
+        <Badge variant="secondary" className="font-mono text-xs">
+          {PLACEHOLDER_KEY}
+        </Badge>
         with a key from API Keys.
       </p>
     </div>
