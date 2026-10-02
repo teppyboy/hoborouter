@@ -147,7 +147,9 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
           .from(usageLogs)
           .where(and(eq(usageLogs.workspace_id, params.id), gte(usageLogs.created_at, since)))
           .groupBy(usageLogs.public_model)
-          .orderBy(sql`spend_vnd desc`)
+          // ORDER BY must reference the aliased select column (SQLite has no
+          // bare "spend_vnd" — unaliased expression ordering was a 500).
+          .orderBy(sql`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0) desc`)
           .all();
         return { totals, daily, by_model };
       },

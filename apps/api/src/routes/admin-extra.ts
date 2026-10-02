@@ -6,7 +6,8 @@ import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, isInstanceAdmin, jsonError, writeAudit } from "../authz";
 import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments";
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq, sql, count } from "drizzle-orm";
+import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 import {
   requests as requestsTable,
   users,
@@ -303,9 +304,15 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
-        const o = orm(db);
         const wal = (db.prepare("PRAGMA journal_mode").get() as { journal_mode: string })
           .journal_mode;
+        // o.$count(...) returns a cyclic SQL builder object that cannot be
+        // JSON.stringify-ed (500). Count synchronously instead.
+        const countOf = (t: SQLiteTable) =>
+          orm(db)
+            .select({ n: count() })
+            .from(t)
+            .get()?.n ?? 0;
         return json({
           gateway_enabled: process.env.HBR_GATEWAY_ENABLED !== "0",
           usd_vnd_rate: Number(process.env.HBR_USD_VND_RATE) || 26000,
@@ -316,10 +323,10 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
           dev_payments: process.env.HBR_DEV_PAYMENTS === "1",
           db: { wal },
           counts: {
-            users: o.$count(users),
-            workspaces: o.$count(workspaces),
-            models: o.$count(models),
-            requests: o.$count(requestsTable),
+            users: countOf(users),
+            workspaces: countOf(workspaces),
+            models: countOf(models),
+            requests: countOf(requestsTable),
           },
         });
       },
