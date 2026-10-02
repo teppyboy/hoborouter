@@ -13,7 +13,13 @@ import {
 } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
 import { api } from "../../lib/api";
 import { AdminGate, type AdminModel, usdPer1mToMicro, useAdminQuery } from "./shared";
 
@@ -34,7 +40,9 @@ function AddPriceDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const [usd, setUsd] = useState<Record<string, string>>({});
-  const [markupPpm, setMarkupPpm] = useState("0");
+  // 1,000,000 ppm = 1x. Billing requires a positive charge cap, so 0 markup
+  // would make every gateway request fail; default to sell-at-cost plus none.
+  const [markupPpm, setMarkupPpm] = useState("1000000");
   const [error, setError] = useState<string | null>(null);
 
   const mutation = useMutation({
@@ -46,7 +54,8 @@ function AddPriceDialog({
         body[f.key] = micro;
       }
       const ppm = Number(markupPpm);
-      if (!Number.isSafeInteger(ppm) || ppm < 0) throw new Error("Markup must be a non-negative integer (ppm)");
+      if (!Number.isSafeInteger(ppm) || ppm < 0)
+        throw new Error("Markup must be a non-negative integer (ppm)");
       body.markup_ppm = ppm;
       return api(`/api/v1/admin/catalog/models/${model.id}/prices`, {
         method: "POST",
@@ -118,7 +127,10 @@ export default function AdminPricingPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Pricing" description="USD prices per 1M tokens. Price rows are immutable — changes append a new row." />
+      <PageHeader
+        title="Pricing"
+        description="USD prices per 1M tokens. Price rows are immutable — changes append a new row."
+      />
       <AdminGate query={query}>
         <div className="flex items-end gap-3">
           <div className="grid flex-1 gap-1.5">
@@ -152,7 +164,12 @@ export default function AdminPricingPage() {
             empty="Price history is not available yet — the API has no GET endpoint for model prices."
           />
         </section>
-        {!model && <EmptyState title="Select a model" description="Choose a model above to add a price row." />}
+        {!model && (
+          <EmptyState
+            title="Select a model"
+            description="Choose a model above to add a price row."
+          />
+        )}
       </AdminGate>
       {model && <AddPriceDialog model={model} open={dialogOpen} onOpenChange={setDialogOpen} />}
     </div>
