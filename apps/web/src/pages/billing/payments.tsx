@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "@tanstack/react-router";
 import { CreditCard } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
-import { toast } from "sonner";
-import { api, ApiError } from "../../lib/api";
+import { api } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatVnd, formatUsdFromVnd, useUsdVndRate, formatDate } from "../../lib/format";
+import { formatProviderLabel, formatStatusLabel } from "../../lib/display";
 import { PageHeader, EmptyState, ErrorState, DataTable, CopyButton } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
@@ -65,14 +65,14 @@ export default function BillingPaymentsPage() {
     {
       accessorKey: "provider",
       header: "Provider",
-      cell: (c) => <span className="font-mono text-xs">{c.getValue<string>()}</span>,
+      cell: (c) => <span className="font-mono text-xs">{formatProviderLabel(c.getValue<string>())}</span>,
     },
     {
       accessorKey: "status",
       header: "Status",
       cell: (c) => {
         const s = c.getValue<string>();
-        return <Badge variant={STATUS_VARIANT[s] ?? "outline"}>{s}</Badge>;
+        return <Badge variant={STATUS_VARIANT[s] ?? "outline"}>{formatStatusLabel(s)}</Badge>;
       },
     },
     {
@@ -116,34 +116,10 @@ export default function BillingPaymentsPage() {
 }
 
 function PaymentStatus({ workspaceId, paymentId }: { workspaceId: string; paymentId: string }) {
-  const queryClient = useQueryClient();
-  const [devCompleteHidden, setDevCompleteHidden] = useState(false);
-
   const payment = useQuery({
     queryKey: ["payment", workspaceId, paymentId],
     queryFn: () => api<Payment>(`/api/v1/workspaces/${workspaceId}/payments/${paymentId}`),
     refetchInterval: (q) => (q.state.data?.status === "pending" ? 3000 : false),
-  });
-
-  const devComplete = useMutation({
-    mutationFn: () =>
-      api<{ success: boolean; outcome: string }>(`/api/v1/dev/payments/${paymentId}/complete`, {
-        method: "POST",
-      }),
-    onSuccess: () => {
-      toast("Payment marked complete");
-      void queryClient.invalidateQueries({ queryKey: ["payment", workspaceId, paymentId] });
-      void queryClient.invalidateQueries({ queryKey: ["payments", workspaceId] });
-      void queryClient.invalidateQueries({ queryKey: ["wallet", workspaceId] });
-      void queryClient.invalidateQueries({ queryKey: ["ledger", workspaceId] });
-    },
-    onError: (err) => {
-      if (err instanceof ApiError && err.status === 404) {
-        setDevCompleteHidden(true); // dev endpoint disabled
-      } else {
-        toast(err instanceof ApiError ? err.message : "Failed to complete payment");
-      }
-    },
   });
 
   const rate = useUsdVndRate(workspaceId).data;
@@ -157,7 +133,7 @@ function PaymentStatus({ workspaceId, paymentId }: { workspaceId: string; paymen
       <div className="flex items-center justify-between gap-4">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <Badge variant={STATUS_VARIANT[p.status] ?? "outline"}>{p.status}</Badge>
+            <Badge variant={STATUS_VARIANT[p.status] ?? "outline"}>{formatStatusLabel(p.status)}</Badge>
             <span className="font-mono text-sm font-semibold">
               {formatUsdFromVnd(p.amount, rate) ?? formatVnd(p.amount)}
             </span>
@@ -168,23 +144,13 @@ function PaymentStatus({ workspaceId, paymentId }: { workspaceId: string; paymen
             <CopyButton value={p.id} label="Copy payment ID" />
           </p>
           <p className="text-xs text-muted-foreground">
-            Provider <span className="font-mono">{p.provider}</span> · order{" "}
+            Provider <span className="font-mono">{formatProviderLabel(p.provider)}</span> · order{" "}
             <span className="font-mono">{p.provider_order_code}</span> · {formatDate(p.created_at)}
           </p>
           {p.status === "pending" && (
             <p className="text-xs text-muted-foreground">Waiting for admin confirmation…</p>
           )}
         </div>
-        {p.status === "pending" && !devCompleteHidden && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => devComplete.mutate()}
-            disabled={devComplete.isPending}
-          >
-            {devComplete.isPending ? "Completing…" : "Complete (dev)"}
-          </Button>
-        )}
       </div>
     </div>
   );

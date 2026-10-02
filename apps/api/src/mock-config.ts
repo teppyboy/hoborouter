@@ -1,11 +1,11 @@
-// Mock payments are the DEFAULT top-up provider (payOS stays implemented but
-// optional, only used when all PAYOS_* env vars are set). Creation of mock
-// top-ups is on unless HBR_MOCK_PAYMENTS='off'. The signed mock webhook is
-// OPTIONAL: enabled only when HBR_MOCK_PAYMENTS_WEBHOOK_KEY is set — startup
-// never crashes without it (unsigned completion goes through the admin
-// complete endpoint instead; /api/dev/... only outside production).
+// Compatibility config for the LEGACY signed mock webhook only. New top-ups
+// are provider='manual' (admin-approved, no env gate) and never use this
+// webhook. 'enabled' keeps gating the legacy /webhooks/payments/mock route;
+// the signed webhook is enabled only when HBR_MOCK_PAYMENTS_WEBHOOK_KEY is
+// set — startup never crashes without it (unsigned completion goes through
+// the admin complete endpoint).
 export interface MockWebhookConfig {
-  /** Mock top-up creation enabled (default true; 'off' disables). */
+  /** Legacy mock webhook route enabled (default true; 'off' disables). */
   enabled: boolean;
   /** Signed webhook enabled ONLY when its key is set. */
   webhookEnabled: boolean;

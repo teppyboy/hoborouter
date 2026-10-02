@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "../../components/ui/dialog";
 import { formatDate, formatVnd } from "../../lib/format";
+import { formatProviderLabel, formatStatusLabel } from "../../lib/display";
 import { ApiError, api } from "../../lib/api";
 import { AdminGate, useAdminQuery } from "./shared";
 
@@ -83,14 +84,16 @@ function PaymentsTable({ payments }: { payments: AdminPayment[] }) {
     {
       accessorKey: "provider",
       header: "Provider",
-      cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
+      cell: (c) => (
+        <span className="font-mono text-xs">{formatProviderLabel(c.getValue() as string)}</span>
+      ),
     },
     {
       accessorKey: "status",
       header: "Status",
       cell: (c) => {
         const s = c.getValue<string>();
-        return <Badge variant={STATUS_VARIANT[s] ?? "outline"}>{s}</Badge>;
+        return <Badge variant={STATUS_VARIANT[s] ?? "outline"}>{formatStatusLabel(s)}</Badge>;
       },
     },
     {

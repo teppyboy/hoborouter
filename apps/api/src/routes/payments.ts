@@ -1,18 +1,17 @@
-// Task 9: payments routes (member+, workspace-scoped) + mock checkout link.
+// Task 9: payments routes (member+, workspace-scoped) + manual top-up creation.
+// Manual payments are admin-approved: creation is always available (no env
+// gate); completion happens via the instance-admin complete endpoint. The
+// legacy signed mock webhook stays for pre-existing 'mock' provider rows and
+// is never routed for new 'manual' rows.
 import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, writeAudit, jsonError } from "../authz";
 import { requirePositiveSafeInteger } from "@hoborouter/wallet";
-import type { MockWebhookConfig } from "../mock-config";
 import { eq } from "drizzle-orm";
 import { workspaces, payments, orm } from "@hoborouter/db";
 
-export const paymentsRoutes = (
-  db: Database,
-  auth: BetterAuthInstance,
-  mockCfg: MockWebhookConfig,
-) =>
+export const paymentsRoutes = (db: Database, auth: BetterAuthInstance) =>
   new Elysia({ name: "payments" })
     .post(
       "/api/v1/workspaces/:id/payments",
@@ -29,16 +28,13 @@ export const paymentsRoutes = (
         }),
         detail: {
           tags: ["Payments"],
-          summary: "Create mock payment",
-          description: "Dev/demo-only mock checkout creation; 404 when mock payments are disabled.",
+          summary: "Create manual payment",
+          description:
+            "Create a pending manual top-up; completed only by an instance admin (out-of-band payment confirmation).",
           security: [{ cookieAuth: [] }],
         },
       },
       async ({ request, params, body }) => {
-        if (!mockCfg.enabled) {
-          // Dev/demo only — no mock payment creation in production or when off.
-          return jsonError(404, "NOT_FOUND", "Not found");
-        }
         const gate = await requireSession(auth, request);
         if (gate.error) return gate.error;
         const userId = gate.session.user.id;
@@ -58,7 +54,7 @@ export const paymentsRoutes = (
           return jsonError(400, "INVALID", "amount must be a positive integer VND amount");
         }
         const id = crypto.randomUUID();
-        const orderCode = `MOCK-${id}`;
+        const orderCode = `MANUAL-${id}`;
         const now = Date.now();
         db.transaction(() => {
           orm(db)
@@ -68,7 +64,7 @@ export const paymentsRoutes = (
               workspace_id: params.id,
               amount,
               status: "pending",
-              provider: "mock",
+              provider: "manual",
               provider_order_code: orderCode,
               created_at: now,
             })
@@ -78,18 +74,19 @@ export const paymentsRoutes = (
             workspaceId: params.id,
             action: "payment.create",
             target: id,
-            detail: { amount, provider: "mock" },
+            detail: { amount, provider: "manual" },
           });
         })();
-        // Dev/demo only — never a real provider checkout.
+        // No provider checkout: admin approval happens out-of-band; the
+        // member tracks status in the billing UI.
         return new Response(
           JSON.stringify({
             id,
             amount,
             status: "pending",
-            provider: "mock",
+            provider: "manual",
             provider_order_code: orderCode,
-            checkout_url: `/webhooks/payments/mock?order=${orderCode}`,
+            checkout_url: `/billing/payments?payment=${id}`,
           }),
           { status: 201, headers: { "content-type": "application/json" } },
         );
