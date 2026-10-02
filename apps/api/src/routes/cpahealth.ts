@@ -38,6 +38,12 @@ export const cpaHealthRoutes = (db: Database, auth: BetterAuthInstance) =>
         const mgmt = await fetchOnce(`${cpaBase()}/v0/management/credentials/status`, {
           headers: { authorization: `Bearer ${key}` },
         });
+        if (mgmt.status === 401 || mgmt.status === 403)
+          return jsonError(
+            502,
+            "CPA_AUTH_FAILED",
+            `CPA rejected CPA_MANAGEMENT_KEY (${mgmt.status})`,
+          );
         if (!mgmt.ok)
           return jsonError(502, "CPA_MANAGEMENT_UNAVAILABLE", `management returned ${mgmt.status}`);
         return { status: "ok" };

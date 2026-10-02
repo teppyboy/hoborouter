@@ -149,6 +149,8 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         } catch {
           return jsonError(502, "CPA_UNREACHABLE", "CPA did not respond");
         }
+        if (resp.status === 401 || resp.status === 403)
+          return jsonError(502, "CPA_AUTH_FAILED", `CPA rejected CPA_ACCESS_KEY (${resp.status})`);
         if (!resp.ok) return jsonError(502, "CPA_UNHEALTHY", `/v1/models returned ${resp.status}`);
         type Model = { id?: unknown; owned_by?: unknown };
         let upstream: { data?: Model[] };

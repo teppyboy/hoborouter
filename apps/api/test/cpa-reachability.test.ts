@@ -41,12 +41,27 @@ test("cpa health: instance admin makes each upstream request once", async () => 
     expect(res.status).toBe(502);
     expect(healthzHits).toBe(1);
     expect(mgmtHits).toBe(1);
-    expect((await res.json()).error?.code).toBe("INTERNAL_ERROR");
+    const body = await res.json();
+    expect(body.error?.code).toBe("CPA_AUTH_FAILED");
+    expect(body.error?.message).toBe("CPA rejected CPA_MANAGEMENT_KEY (401)");
   } finally {
     server.stop(true);
     delete process.env.CPA_BASE_URL;
     delete process.env.CPA_MANAGEMENT_KEY;
   }
+});
+
+test("generic thrown error still masks as 500 INTERNAL_ERROR", async () => {
+  const { app } = await makeApp();
+  app.get("/test/boom", () => {
+    throw new Error("secret-detail");
+  });
+  const res = await req(app, "/test/boom");
+  const body = await res.json();
+  expect(res.status).toBe(500);
+  expect(body.error?.code).toBe("INTERNAL_ERROR");
+  expect(body.error?.message).toBe("Internal server error");
+  expect(JSON.stringify(body)).not.toContain("secret-detail");
 });
 
 test("cpa health: unreachable CPA → 502", async () => {

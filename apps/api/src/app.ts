@@ -176,6 +176,18 @@ export const buildApp = (deps: AppDeps = {}) => {
             true,
           );
         }
+        // Server-generated 502/503/504 JSON errors (e.g. CPA_* codes) carry
+        // actionable detail for the instance admin; 500 stays masked.
+        if (status === 502 || status === 503 || status === 504) {
+          try {
+            const body = await response.clone().json();
+            const error = body?.error ?? body;
+            if (typeof error?.code === "string") code = error.code;
+            if (typeof error?.message === "string") message = error.message;
+          } catch {
+            // Keep the generic safe response.
+          }
+        }
         if (status < 500) {
           try {
             const body = await response.clone().json();

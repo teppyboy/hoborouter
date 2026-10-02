@@ -62,6 +62,16 @@ Dashboard works without this. The gateway routes (`/v1/chat/completions`, `/v1/r
 
 - Or run a local CPA container (Docker, CPA only): `scripts/cpa-dev.sh up` (also: `status`, `down`; `key` copies the management key to the clipboard). It generates `deploy/.env` secrets and `deploy/cpa/config.yaml` if missing, then waits for http://127.0.0.1:8317/healthz.
 
+### Real CPA
+
+Set in `.env` (dev.sh warns at startup if `CPA_BASE_URL` is set but a key is missing):
+
+- `CPA_BASE_URL` — your CPA base URL (e.g. `http://127.0.0.1:8317`).
+- `CPA_ACCESS_KEY` — one of the `api-keys` entries in `deploy/cpa/config.yaml`.
+- `CPA_MANAGEMENT_KEY` — the plaintext management key. `config.yaml` stores only its bcrypt hash; use the original plaintext you set (or `scripts/cpa-dev.sh key`).
+
+If either key is wrong, admin pages show `CPA_AUTH_FAILED` with e.g. "CPA rejected CPA_MANAGEMENT_KEY (401)" — fix the variable, not the code.
+
 ## Payments in dev
 
 Mock top-ups are on by default. As owner, self-mark paid: add `HBR_DEV_PAYMENTS=1` (only works with `NODE_ENV=development` or `test`).

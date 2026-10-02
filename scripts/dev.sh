@@ -36,6 +36,11 @@ done
 CPA_PID=""
 if [ -n "${CPA_BASE_URL:-}" ] || [ "$NO_FAKE_CPA" = 1 ]; then
   : # user-provided CPA; nothing to start
+  for var in CPA_ACCESS_KEY CPA_MANAGEMENT_KEY; do
+    if [ -z "${!var:-}" ]; then
+      echo "WARNING: CPA_BASE_URL points at a real CPA but $var is empty; CPA calls will fail with auth errors. Set it in .env."
+    fi
+  done
 else
   if port_busy 8399; then
     echo "ERROR: port 8399 is already in use; needed for the fake CPA. Set CPA_BASE_URL or free the port." >&2
