@@ -3,6 +3,9 @@
 // workspace roles and never granting any workspace role.
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "./auth-types";
+import { and, eq } from "drizzle-orm";
+import { workspaceMembers, instanceAdmins, auditLog } from "@hoborouter/db";
+import { orm } from "@hoborouter/db";
 
 export type WsRole = "owner" | "admin" | "member";
 
@@ -28,14 +31,25 @@ export async function requireSession(auth: BetterAuthInstance, request: Request)
 }
 
 export function wsRole(db: Database, workspaceId: string, userId: string): WsRole | null {
-  const row = db
-    .prepare("SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?")
-    .get(workspaceId, userId) as { role: WsRole } | undefined;
+  const row = orm(db)
+    .select({ role: workspaceMembers.role })
+    .from(workspaceMembers)
+    .where(
+      and(
+        eq(workspaceMembers.workspace_id, workspaceId),
+        eq(workspaceMembers.user_id, userId),
+      ),
+    )
+    .get();
   return row?.role ?? null;
 }
 
 export function isInstanceAdmin(db: Database, userId: string): boolean {
-  return !!db.prepare("SELECT 1 FROM instance_admins WHERE user_id = ?").get(userId);
+  return !!orm(db)
+    .select({ one: instanceAdmins.user_id })
+    .from(instanceAdmins)
+    .where(eq(instanceAdmins.user_id, userId))
+    .get();
 }
 
 const ROLE_RANK: Record<WsRole, number> = { member: 1, admin: 2, owner: 3 };
@@ -66,15 +80,18 @@ export function writeAudit(
     detail?: unknown;
   },
 ) {
-  db.prepare(
-    "INSERT INTO audit_log (id, actor_user_id, workspace_id, action, target, detail, created_at) VALUES (?,?,?,?,?,?,?)",
-  ).run(
-    crypto.randomUUID(),
-    opts.actorUserId,
-    opts.workspaceId,
-    opts.action,
-    opts.target,
-    opts.detail === undefined ? null : JSON.stringify(opts.detail),
-    Date.now(),
-  );
+  orm(db)
+    .insert(auditLog)
+    .values({
+      id: crypto.randomUUID(),
+      actor_user_id: opts.actorUserId,
+      workspace_id: opts.workspaceId,
+      action: opts.action,
+      target: opts.target,
+      // drizzle json mode stringifies; passing the value directly matches the
+      // previous JSON.stringify(opts.detail) bytes.
+      detail: opts.detail === undefined ? null : opts.detail,
+      created_at: Date.now(),
+    })
+    .run();
 }
