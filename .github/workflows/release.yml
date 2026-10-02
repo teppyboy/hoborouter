@@ -15,19 +15,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # sqlite-to-pg test runs `git show 3af6325:...`,
+          # which needs full history.
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - name: Build web app
+        run: cd apps/web && bun run build
+      - name: Start Postgres
+        run: |
+          docker run -d --name hbr-ci-pg -e POSTGRES_PASSWORD=postgres \
+            -p 55432:5432 postgres:17-alpine -c max_connections=400
+          for i in $(seq 1 30); do
+            docker exec hbr-ci-pg pg_isready -U postgres && break
+            sleep 1
+          done
+          docker exec hbr-ci-pg pg_isready -U postgres
       - run: PORT=3998 bun test --parallel=4
         env:
           HBR_TEST_DATABASE_URL:
-            postgres://postgres:postgres@127.0.0.1:55432/hoborouter_test
-    services:
-      postgres:
-        image: postgres:17-alpine
-        ports:
-          - 55432:5432
-        env:
-          POSTGRES_PASSWORD: postgres
+            postgres://postgres:postgres@127.0.0.1:55432/postgres
 
   build:
     needs: test
