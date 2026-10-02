@@ -4,15 +4,20 @@ import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, writeAudit, jsonError, type WsRole } from "../authz";
+import { and, asc, eq, sql } from "drizzle-orm";
+import { users, workspaces, workspaceMembers } from "@hoborouter/db";
+import { orm } from "@hoborouter/db";
 
 const ROLES: WsRole[] = ["owner", "admin", "member"];
 
 function ownerCount(db: Database, wsId: string): number {
   return (
-    db
-      .prepare("SELECT count(*) c FROM workspace_members WHERE workspace_id=? AND role='owner'")
-      .get(wsId) as any
-  ).c;
+    orm(db)
+      .select({ c: sql<number>`count(*)` })
+      .from(workspaceMembers)
+      .where(and(eq(workspaceMembers.workspace_id, wsId), eq(workspaceMembers.role, "owner")))
+      .get()?.c ?? 0
+  );
 }
 
 export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
@@ -32,11 +37,21 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
         if ("error" in gate) return gate.error;
         const denied = requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
-        return db
-          .prepare(
-            "SELECT wm.user_id, wm.role, u.email, u.name FROM workspace_members wm JOIN users u ON u.id = wm.user_id WHERE wm.workspace_id = ? ORDER BY CASE wm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, u.created_at",
+        return orm(db)
+          .select({
+            user_id: workspaceMembers.user_id,
+            role: workspaceMembers.role,
+            email: users.email,
+            name: users.name,
+          })
+          .from(workspaceMembers)
+          .innerJoin(users, eq(users.id, workspaceMembers.user_id))
+          .where(eq(workspaceMembers.workspace_id, params.id))
+          .orderBy(
+            sql`case ${workspaceMembers.role} when 'owner' then 0 when 'admin' then 1 else 2 end`,
+            asc(users.createdAt),
           )
-          .all(params.id);
+          .all();
       },
     )
     .post(
@@ -56,7 +71,14 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
         const userId = gate.session.user.id;
         const denied = requireWsRole(db, params.id, userId, "owner");
         if (denied) return denied;
-        if (!wsExists(db, params.id)) return jsonError(404, "NOT_FOUND", "Workspace not found");
+        if (
+          !orm(db)
+            .select({ one: workspaces.id })
+            .from(workspaces)
+            .where(eq(workspaces.id, params.id))
+            .get()
+        )
+          return jsonError(404, "NOT_FOUND", "Workspace not found");
         const emailRaw = (body as { email?: unknown } | null)?.email;
         const email = typeof emailRaw === "string" ? emailRaw : "";
         const role =
@@ -65,14 +87,17 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
             : null;
         if (!email) return jsonError(400, "INVALID", "email is required");
         if (!ROLES.includes(role as WsRole)) return jsonError(400, "INVALID", "Invalid role");
-        const target = db.prepare("SELECT id FROM users WHERE email = ?").get(email) as
-          | { id: string }
-          | undefined;
+        const target = orm(db)
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.email, email))
+          .get();
         if (!target) return jsonError(404, "NOT_FOUND", "User not found");
         try {
-          db.prepare(
-            "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?,?,?)",
-          ).run(params.id, target.id, role);
+          orm(db)
+            .insert(workspaceMembers)
+            .values({ workspace_id: params.id, user_id: target.id, role: role as WsRole })
+            .run();
         } catch (e) {
           // 409 only for UNIQUE(workspace_id,user_id) violation (composite PK); other DB errors → 500.
           if (
@@ -116,19 +141,31 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
         const rawRole = (body as { role?: unknown } | null)?.role;
         if (!ROLES.includes(rawRole as WsRole)) return jsonError(400, "INVALID", "Invalid role");
         const role = rawRole as WsRole;
-        const member = db
-          .prepare("SELECT role FROM workspace_members WHERE workspace_id=? AND user_id=?")
-          .get(params.id, params.userId) as { role: WsRole } | undefined;
+        const member = orm(db)
+          .select({ role: workspaceMembers.role })
+          .from(workspaceMembers)
+          .where(
+            and(
+              eq(workspaceMembers.workspace_id, params.id),
+              eq(workspaceMembers.user_id, params.userId),
+            ),
+          )
+          .get();
         if (!member) return jsonError(403, "FORBIDDEN", "Not a member of this workspace");
         // Owner lockout guard: last owner cannot lose the owner role.
         if (member.role === "owner" && role !== "owner" && ownerCount(db, params.id) === 1) {
           return jsonError(409, "LAST_OWNER", "Cannot demote the last owner");
         }
-        db.prepare("UPDATE workspace_members SET role=? WHERE workspace_id=? AND user_id=?").run(
-          role,
-          params.id,
-          params.userId,
-        );
+        orm(db)
+          .update(workspaceMembers)
+          .set({ role })
+          .where(
+            and(
+              eq(workspaceMembers.workspace_id, params.id),
+              eq(workspaceMembers.user_id, params.userId),
+            ),
+          )
+          .run();
         writeAudit(db, {
           actorUserId: userId,
           workspaceId: params.id,
@@ -157,18 +194,30 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
         const userId = gate.session.user.id;
         const denied = requireWsRole(db, params.id, userId, "owner");
         if (denied) return denied;
-        const member = db
-          .prepare("SELECT role FROM workspace_members WHERE workspace_id=? AND user_id=?")
-          .get(params.id, params.userId) as { role: WsRole } | undefined;
+        const member = orm(db)
+          .select({ role: workspaceMembers.role })
+          .from(workspaceMembers)
+          .where(
+            and(
+              eq(workspaceMembers.workspace_id, params.id),
+              eq(workspaceMembers.user_id, params.userId),
+            ),
+          )
+          .get();
         if (!member) return jsonError(403, "FORBIDDEN", "Not a member of this workspace");
         // Owner lockout guard: last owner cannot be removed either.
         if (member.role === "owner" && ownerCount(db, params.id) === 1) {
           return jsonError(409, "LAST_OWNER", "Cannot remove the last owner");
         }
-        db.prepare("DELETE FROM workspace_members WHERE workspace_id=? AND user_id=?").run(
-          params.id,
-          params.userId,
-        );
+        orm(db)
+          .delete(workspaceMembers)
+          .where(
+            and(
+              eq(workspaceMembers.workspace_id, params.id),
+              eq(workspaceMembers.user_id, params.userId),
+            ),
+          )
+          .run();
         writeAudit(db, {
           actorUserId: userId,
           workspaceId: params.id,
@@ -179,7 +228,3 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
         return new Response(null, { status: 200 });
       },
     );
-
-function wsExists(db: Database, id: string): boolean {
-  return !!db.prepare("SELECT 1 FROM workspaces WHERE id = ?").get(id);
-}
