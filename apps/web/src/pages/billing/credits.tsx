@@ -7,7 +7,7 @@ import { Wallet as WalletIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
-import { formatVnd, formatDate } from "../../lib/format";
+import { formatVnd, formatUsdFromVnd, formatDate } from "../../lib/format";
 import { PageHeader, EmptyState, ErrorState, DataTable } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -28,6 +28,7 @@ interface Wallet {
   balance: number;
   reserved: number;
   available: number;
+  usd_vnd_rate?: number;
 }
 
 interface LedgerEntry {
@@ -67,12 +68,18 @@ export default function BillingCreditsPage() {
     enabled: !!workspaceId,
   });
 
+  // FX rate for USD display; undefined (older backend) -> VND fallback.
+  const rate = wallet.data?.usd_vnd_rate;
+
   const ledger = useQuery({
     queryKey: ["ledger", workspaceId],
     queryFn: () =>
       api<{ data: LedgerEntry[] }>(`/api/v1/workspaces/${workspaceId}/ledger?limit=50`),
     enabled: !!workspaceId,
   });
+
+  const amount = Number(form.watch("amount")) || 0;
+  const usdEquiv = amount > 0 ? formatUsdFromVnd(amount, rate) : null;
 
   const topUp = useMutation({
     mutationFn: (values: Values) =>
@@ -104,15 +111,32 @@ export default function BillingCreditsPage() {
       header: "Amount",
       cell: (c) => {
         const v = c.getValue<number>();
+        const usd = formatUsdFromVnd(v, rate);
         return (
-          <span className="font-mono text-xs">{v < 0 ? `-${formatVnd(-v)}` : formatVnd(v)}</span>
+          <span className="font-mono text-xs">
+            {v < 0 ? `-${usd ?? formatVnd(-v)}` : (usd ?? formatVnd(v))}
+            {usd != null && v !== 0 && (
+              <span className="ml-1 text-muted-foreground">{formatVnd(v)}</span>
+            )}
+          </span>
         );
       },
     },
     {
       accessorKey: "balance_after",
       header: "Balance after",
-      cell: (c) => <span className="font-mono text-xs">{formatVnd(c.getValue<number>())}</span>,
+      cell: (c) => {
+        const v = c.getValue<number>();
+        const usd = formatUsdFromVnd(v, rate);
+        return (
+          <span className="font-mono text-xs">
+            {usd ?? formatVnd(v)}
+            {usd != null && v !== 0 && (
+              <span className="ml-1 text-muted-foreground">{formatVnd(v)}</span>
+            )}
+          </span>
+        );
+      },
     },
     {
       accessorKey: "request_id",
@@ -136,9 +160,9 @@ export default function BillingCreditsPage() {
             <ErrorState message={wallet.error.message} />
           ) : (
             <div className="grid gap-4 sm:grid-cols-3">
-              <StatCard label="Balance" value={formatVnd(wallet.data.balance)} />
-              <StatCard label="Reserved" value={formatVnd(wallet.data.reserved)} />
-              <StatCard label="Available" value={formatVnd(wallet.data.available)} />
+              <StatCard label="Balance" value={wallet.data.balance} rate={rate} big />
+              <StatCard label="Reserved" value={wallet.data.reserved} rate={rate} />
+              <StatCard label="Available" value={wallet.data.available} rate={rate} />
             </div>
           )}
 
@@ -185,6 +209,9 @@ export default function BillingCreditsPage() {
                         />
                       </FormControl>
                       <FormMessage />
+                      <p className="font-mono text-xs text-muted-foreground">
+                        {usdEquiv ? `≈ ${usdEquiv}` : ""}
+                      </p>
                     </FormItem>
                   )}
                 />
@@ -217,11 +244,25 @@ export default function BillingCreditsPage() {
   );
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
+function StatCard({
+  label,
+  value,
+  rate,
+  big,
+}: {
+  label: string;
+  value: number;
+  rate: number | undefined;
+  big?: boolean;
+}) {
+  const usd = formatUsdFromVnd(value, rate);
   return (
     <div className="rounded-lg border border-border p-4">
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 font-mono text-lg font-semibold">{value}</p>
+      <p className={`mt-1 font-mono font-semibold ${big ? "text-2xl" : "text-lg"}`}>
+        {usd ?? formatVnd(value)}
+      </p>
+      {usd != null && <p className="text-xs text-muted-foreground">≈ {formatVnd(value)}</p>}
     </div>
   );
 }

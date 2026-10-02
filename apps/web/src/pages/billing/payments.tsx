@@ -6,7 +6,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
-import { formatVnd, formatDate } from "../../lib/format";
+import { formatVnd, formatUsdFromVnd, useUsdVndRate, formatDate } from "../../lib/format";
 import { PageHeader, EmptyState, ErrorState, DataTable, CopyButton } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
@@ -42,12 +42,25 @@ export default function BillingPaymentsPage() {
     enabled: !!workspaceId,
   });
 
+  const rate = useUsdVndRate(workspaceId).data;
+
   const columns: ColumnDef<Payment>[] = [
     { accessorKey: "created_at", header: "Time", cell: (c) => formatDate(c.getValue<string>()) },
     {
       accessorKey: "amount",
       header: "Amount",
-      cell: (c) => <span className="font-mono text-xs">{formatVnd(c.getValue<number>())}</span>,
+      cell: (c) => {
+        const v = c.getValue<number>();
+        const usd = formatUsdFromVnd(v, rate);
+        return (
+          <span className="font-mono text-xs">
+            {usd ?? formatVnd(v)}
+            {usd != null && v !== 0 && (
+              <span className="ml-1 text-muted-foreground">{formatVnd(v)}</span>
+            )}
+          </span>
+        );
+      },
     },
     {
       accessorKey: "provider",
@@ -133,6 +146,8 @@ function PaymentStatus({ workspaceId, paymentId }: { workspaceId: string; paymen
     },
   });
 
+  const rate = useUsdVndRate(workspaceId).data;
+
   if (payment.isPending) return <Skeleton className="h-32 w-full" />;
   if (payment.isError) return <ErrorState message={payment.error.message} />;
 
@@ -143,7 +158,10 @@ function PaymentStatus({ workspaceId, paymentId }: { workspaceId: string; paymen
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <Badge variant={STATUS_VARIANT[p.status] ?? "outline"}>{p.status}</Badge>
-            <span className="font-mono text-sm font-semibold">{formatVnd(p.amount)}</span>
+            <span className="font-mono text-sm font-semibold">
+              {formatUsdFromVnd(p.amount, rate) ?? formatVnd(p.amount)}
+            </span>
+            <span className="font-mono text-xs text-muted-foreground">{formatVnd(p.amount)}</span>
           </div>
           <p className="flex items-center gap-1 text-xs text-muted-foreground">
             <span className="font-mono">{p.id}</span>

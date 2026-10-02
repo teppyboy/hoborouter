@@ -9,7 +9,7 @@ import {
   TableRow,
 } from "../../components/ui/table";
 import { Skeleton } from "../../components/ui/skeleton";
-import { formatTokens, formatVnd } from "../../lib/format";
+import { formatTokens, formatVnd, formatUsdFromVnd, useUsdVndRate } from "../../lib/format";
 import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useUsageSummary } from "../logs/api";
@@ -18,6 +18,7 @@ export default function UsagePage() {
   const workspaceId = useCurrentWorkspaceId();
   const [days, setDays] = useState(30);
   const query = useUsageSummary(workspaceId, days);
+  const rate = useUsdVndRate(workspaceId).data;
 
   if (query.isPending) {
     return (
@@ -92,7 +93,7 @@ export default function UsagePage() {
                       {formatTokens(d.tokens)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {formatVnd(d.spend_vnd)}
+                      {formatUsdFromVnd(d.spend_vnd, rate) ?? formatVnd(d.spend_vnd)}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -126,7 +127,7 @@ export default function UsagePage() {
                       {formatTokens(m.tokens)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {formatVnd(m.spend_vnd)}
+                      {formatUsdFromVnd(m.spend_vnd, rate) ?? formatVnd(m.spend_vnd)}
                     </TableCell>
                   </TableRow>
                 ))}

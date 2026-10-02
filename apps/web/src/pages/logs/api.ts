@@ -21,7 +21,6 @@ export interface UsageLogRow {
   /** Epoch milliseconds */
   created_at: number;
   public_model: string;
-  upstream_model: string | null;
   provider: string;
   status: string;
   failure: string | null;

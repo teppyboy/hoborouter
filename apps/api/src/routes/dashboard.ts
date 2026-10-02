@@ -7,6 +7,12 @@ import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole } from "../authz";
 
+// Same FX source billing uses: HBR_USD_VND_RATE, default 26000 (see v1-gateway/admin-extra).
+const usdVndRate = () => {
+  const n = Number(process.env.HBR_USD_VND_RATE);
+  return Number.isSafeInteger(n) && n > 0 ? n : 26000;
+};
+
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
@@ -44,7 +50,7 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
           ? db
               .prepare(
                 `SELECT ul.id, ul.request_id, ul.created_at, ul.public_model, ul.provider,
-                      ul.upstream_model, ul.status, ul.failure, ul.input_tokens, ul.output_tokens,
+                      ul.status, ul.failure, ul.input_tokens, ul.output_tokens,
                       ul.cached_input_tokens, ul.reasoning_tokens, ul.charged_vnd, ul.latency_ms,
                       ul.ttft_ms, k.key_prefix
                FROM usage_logs ul LEFT JOIN api_keys k ON k.id = ul.api_key_id
@@ -55,7 +61,7 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
           : db
               .prepare(
                 `SELECT ul.id, ul.request_id, ul.created_at, ul.public_model, ul.provider,
-                      ul.upstream_model, ul.status, ul.failure, ul.input_tokens, ul.output_tokens,
+                      ul.status, ul.failure, ul.input_tokens, ul.output_tokens,
                       ul.cached_input_tokens, ul.reasoning_tokens, ul.charged_vnd, ul.latency_ms,
                       ul.ttft_ms, k.key_prefix
                FROM usage_logs ul LEFT JOIN api_keys k ON k.id = ul.api_key_id
@@ -155,12 +161,14 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
         const w = db
           .prepare("SELECT currency, balance, reserved FROM wallets WHERE workspace_id = ?")
           .get(params.id) as { currency: string; balance: number; reserved: number } | undefined;
-        if (!w) return { currency: "VND", balance: 0, reserved: 0, available: 0 };
+        const rate = usdVndRate();
+        if (!w) return { currency: "VND", balance: 0, reserved: 0, available: 0, usd_vnd_rate: rate };
         return {
           currency: w.currency,
           balance: w.balance,
           reserved: w.reserved,
           available: w.balance - w.reserved,
+          usd_vnd_rate: rate,
         };
       },
     )

@@ -1,6 +1,6 @@
 import { PageHeader, EmptyState, ErrorState } from "../../components/page";
 import { Skeleton } from "../../components/ui/skeleton";
-import { formatTokens, formatVnd } from "../../lib/format";
+import { formatTokens, formatVnd, formatUsdFromVnd, useUsdVndRate } from "../../lib/format";
 import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useUsageSummary } from "../logs/api";
@@ -28,7 +28,7 @@ function fillDaily30(daily: { day: string; spend_vnd: number }[]) {
 }
 
 /** Simple inline CSS bar chart: one bar per day, height scaled to max. */
-function BarChart({ data }: { data: { label: string; value: number }[] }) {
+function BarChart({ data, rate }: { data: { label: string; value: number }[]; rate?: number }) {
   const max = Math.max(...data.map((d) => d.value), 1);
   const maxValue = Math.max(...data.map((d) => d.value));
   return (
@@ -52,7 +52,7 @@ function BarChart({ data }: { data: { label: string; value: number }[] }) {
       </div>
       <div className="mt-2 flex justify-between text-xs text-muted-foreground">
         <span>{data[0]?.label}</span>
-        <span>max {formatVnd(maxValue)}/day</span>
+        <span>max {formatUsdFromVnd(maxValue, rate) ?? formatVnd(maxValue)}/day</span>
         <span>{data.at(-1)?.label}</span>
       </div>
     </div>
@@ -62,6 +62,7 @@ function BarChart({ data }: { data: { label: string; value: number }[] }) {
 export default function OverviewPage() {
   const workspaceId = useCurrentWorkspaceId();
   const summary = useUsageSummary(workspaceId);
+  const rate = useUsdVndRate(workspaceId).data;
 
   if (summary.isPending) {
     return (
@@ -96,16 +97,16 @@ export default function OverviewPage() {
       />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile label="Requests" value={String(t.requests)} />
-        <StatTile label="Spend" value={formatVnd(t.spend_vnd)} />
+        <StatTile label="Spend" value={formatUsdFromVnd(t.spend_vnd, rate) ?? formatVnd(t.spend_vnd)} />
         <StatTile label="Tokens" value={formatTokens(t.input_tokens + t.output_tokens)} />
         <StatTile label="Error rate" value={errorRate} />
       </div>
       <div className="rounded-md border border-border p-4">
-        <p className="mb-3 text-xs text-muted-foreground">Spend per day (VND)</p>
+        <p className="mb-3 text-xs text-muted-foreground">Spend per day (USD)</p>
         {summary.data.daily.length === 0 ? (
           <EmptyState title="No requests yet" />
         ) : (
-          <BarChart data={fillDaily30(summary.data.daily)} />
+          <BarChart data={fillDaily30(summary.data.daily)} rate={rate} />
         )}
       </div>
       <RecentRequests workspaceId={workspaceId} />
@@ -126,6 +127,7 @@ import { formatDate } from "../../lib/format";
 
 function RecentRequests({ workspaceId }: { workspaceId: string | null }) {
   const logs = useRequestLogs(workspaceId, 10);
+  const rate = useUsdVndRate(workspaceId).data;
   return (
     <div>
       <p className="mb-2 text-xs text-muted-foreground">Recent requests</p>
@@ -163,7 +165,7 @@ function RecentRequests({ workspaceId }: { workspaceId: string | null }) {
                     {formatTokens(r.input_tokens + r.output_tokens)}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
-                    {formatVnd(r.charged_vnd)}
+                    {formatUsdFromVnd(r.charged_vnd, rate) ?? formatVnd(r.charged_vnd)}
                   </TableCell>
                 </TableRow>
               ))}

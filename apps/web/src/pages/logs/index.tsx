@@ -11,7 +11,7 @@ import {
 } from "../../components/ui/table";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Sheet, SheetContent } from "../../components/ui/sheet";
-import { formatDate, formatTokens, formatVnd } from "../../lib/format";
+import { formatDate, formatTokens, formatVnd, formatUsdFromVnd, useUsdVndRate } from "../../lib/format";
 import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useRequestLogs, type UsageLogRow } from "./api";
@@ -42,6 +42,7 @@ function DetailField({ label, children }: { label: string; children: React.React
 export default function LogsPage() {
   const workspaceId = useCurrentWorkspaceId();
   const query = useRequestLogs(workspaceId);
+  const rate = useUsdVndRate(workspaceId).data;
   const [selected, setSelected] = useState<UsageLogRow | null>(null);
   const [filter, setFilter] = useState("");
 
@@ -124,7 +125,7 @@ export default function LogsPage() {
                       {formatTokens(r.input_tokens + r.output_tokens)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
-                      {formatVnd(r.charged_vnd)}
+                      {formatUsdFromVnd(r.charged_vnd, rate) ?? formatVnd(r.charged_vnd)}
                     </TableCell>
                     <TableCell className="text-right font-mono text-xs">
                       {r.latency_ms} ms
@@ -149,16 +150,15 @@ export default function LogsPage() {
               </DetailField>
               {selected.failure && <DetailField label="Failure">{selected.failure}</DetailField>}
               <DetailField label="Model">{selected.public_model}</DetailField>
-              {selected.upstream_model && (
-                <DetailField label="Upstream model">{selected.upstream_model}</DetailField>
-              )}
               <DetailField label="Provider">{selected.provider}</DetailField>
               <DetailField label="Key prefix">{selected.key_prefix ?? "—"}</DetailField>
               <DetailField label="Input tokens">{selected.input_tokens}</DetailField>
               <DetailField label="Cached input tokens">{selected.cached_input_tokens}</DetailField>
               <DetailField label="Reasoning tokens">{selected.reasoning_tokens}</DetailField>
               <DetailField label="Output tokens">{selected.output_tokens}</DetailField>
-              <DetailField label="Cost">{formatVnd(selected.charged_vnd)}</DetailField>
+              <DetailField label="Cost">
+                {formatUsdFromVnd(selected.charged_vnd, rate) ?? formatVnd(selected.charged_vnd)}
+              </DetailField>
               <DetailField label="Duration">{selected.latency_ms} ms</DetailField>
               <DetailField label="Time to first token">
                 {selected.ttft_ms != null ? `${selected.ttft_ms} ms` : "—"}
