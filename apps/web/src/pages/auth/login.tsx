@@ -51,8 +51,8 @@ export default function LoginPage() {
 
   return (
     <AuthLayout>
-      <h1 className="text-lg font-semibold">Sign in</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
+      <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
         Welcome back. No account?{" "}
         <Link to="/signup" className="underline">
           Sign up

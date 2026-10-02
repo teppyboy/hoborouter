@@ -55,8 +55,8 @@ export default function SignupPage() {
 
   return (
     <AuthLayout>
-      <h1 className="text-lg font-semibold">Create account</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
+      <h1 className="text-2xl font-semibold tracking-tight">Create account</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
         Already have an account?{" "}
         <Link to="/login" className="underline">
           Sign in

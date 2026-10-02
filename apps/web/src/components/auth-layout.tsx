@@ -5,15 +5,13 @@ import { Shuffle } from "lucide-react";
 
 export function AuthLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="fixed inset-0 z-10 flex flex-col overflow-y-auto bg-background auth-bg">
+    <div className="fixed inset-0 z-10 flex flex-col overflow-y-auto bg-background">
       <div className="flex items-center gap-2 p-6">
         <Shuffle className="size-5 shrink-0" aria-hidden />
         <span className="font-semibold tracking-tight">Hoborouter</span>
       </div>
       <div className="flex flex-1 items-center justify-center p-6">
-        <div className="auth-card animate-in fade-in slide-in-from-bottom-4 w-full max-w-sm rounded-xl border bg-card p-6 shadow-lg backdrop-blur-sm duration-300 ease-out">
-          {children}
-        </div>
+        <div className="w-full max-w-[360px] rounded-lg border bg-card p-6">{children}</div>
       </div>
     </div>
   );
