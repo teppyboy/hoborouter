@@ -7,9 +7,8 @@
 // never updated — a price change inserts a new row. DB triggers
 // model_prices_no_update / model_prices_no_delete (migration 0003) enforce
 // immutability at the storage layer.
-import type { Database } from "bun:sqlite";
 import { and, desc, eq, exists, isNull, lte, sql } from "drizzle-orm";
-import { modelPrices, models, orm, providerModelMappings } from "@hoborouter/db";
+import { modelPrices, models, providerModelMappings, type Db, type Tx } from "@hoborouter/db";
 
 export type ModelRow = {
   id: string;
@@ -67,22 +66,19 @@ const modelRowFields = {
   updated_at: models.updated_at,
 };
 
-export function getCurrentPrice(db: Database, modelId: string, now = Date.now()): PriceRow | null {
-  return (
-    orm(db)
-      .select()
-      .from(modelPrices)
-      .where(and(eq(modelPrices.model_id, modelId), lte(modelPrices.effective_at, now), isNull(modelPrices.retired_at)))
-      .orderBy(desc(modelPrices.effective_at), desc(modelPrices.id))
-      .limit(1)
-      .get() ?? null
-  );
+export async function getCurrentPrice(db: Db | Tx, modelId: string, now = Date.now()): Promise<PriceRow | null> {
+  const rows = await db
+    .select()
+    .from(modelPrices)
+    .where(and(eq(modelPrices.model_id, modelId), lte(modelPrices.effective_at, now), isNull(modelPrices.retired_at)))
+    .orderBy(desc(modelPrices.effective_at), desc(modelPrices.id))
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 /** Enabled AND published models having >=1 enabled mapping and a current price. */
-export function listPublicModels(db: Database, now = Date.now()): ModelRow[] {
-  const db0 = orm(db);
-  return db0
+export async function listPublicModels(db: Db | Tx, now = Date.now()): Promise<ModelRow[]> {
+  return db
     .select(modelRowFields)
     .from(models)
     .where(
@@ -90,13 +86,13 @@ export function listPublicModels(db: Database, now = Date.now()): ModelRow[] {
         eq(models.enabled, true),
         eq(models.published, true),
         exists(
-          db0
+          db
             .select({ x: providerModelMappings.model_id })
             .from(providerModelMappings)
             .where(and(eq(providerModelMappings.model_id, models.id), eq(providerModelMappings.enabled, true))),
         ),
         exists(
-          db0
+          db
             .select({ x: modelPrices.model_id })
             .from(modelPrices)
             .where(
@@ -109,31 +105,31 @@ export function listPublicModels(db: Database, now = Date.now()): ModelRow[] {
         ),
       ),
     )
-    .orderBy(models.public_id)
-    .all();
+    .orderBy(models.public_id);
 }
 
 /** Resolve a public model id to its model, first enabled mapping, and current price. Requires enabled+published model. */
-export function resolveModel(
-  db: Database,
+export async function resolveModel(
+  db: Db | Tx,
   publicId: string,
   now = Date.now(),
-): { model: ModelRow; mapping: MappingRow; price: PriceRow } | null {
-  const model = orm(db)
+): Promise<{ model: ModelRow; mapping: MappingRow; price: PriceRow } | null> {
+  const modelRows = await db
     .select(modelRowFields)
     .from(models)
     .where(and(eq(models.public_id, publicId), eq(models.enabled, true), eq(models.published, true)))
-    .get();
+    .limit(1);
+  const model = modelRows[0];
   if (!model) return null;
-  const mapping = orm(db)
+  const mappingRows = await db
     .select()
     .from(providerModelMappings)
     .where(and(eq(providerModelMappings.model_id, model.id), eq(providerModelMappings.enabled, true)))
     .orderBy(providerModelMappings.created_at, providerModelMappings.id)
-    .limit(1)
-    .get();
+    .limit(1);
+  const mapping = mappingRows[0];
   if (!mapping) return null;
-  const price = getCurrentPrice(db, model.id, now);
+  const price = await getCurrentPrice(db, model.id, now);
   if (!price) return null;
   return { model, mapping, price };
 }

@@ -95,11 +95,11 @@ describe("calculateCharge", () => {
         {
           ...prices,
           inputUsdMicroPer1m: 1_000_000n,
-          usdVndRate: 1n,
+          usdVndRate: 1_000_000_000_000n,
           markupPpm: 1n,
         },
       ),
-    ).toEqual({ upstreamCostUsdMicro: maxStoredMoney, chargedVnd: 9_223_373n });
+    ).toEqual({ upstreamCostUsdMicro: maxStoredMoney, chargedVnd: maxStoredMoney });
     expect(() =>
       charged(
         { ...usage, inputTokens: maxStoredMoney },
@@ -118,4 +118,35 @@ describe("calculateCharge", () => {
   });
 
   test("is publicly exported", () => expect(typeof calculateCharge).toBe("function"));
+
+  test("accepts a charge exactly at the schema-safe money bound", () => {
+    const p = {
+      ...prices,
+      inputUsdMicroPer1m: 1_000_000n,
+      usdVndRate: 1_000_000_000_000n,
+      markupPpm: 1n,
+    };
+    expect(charged({ ...usage, inputTokens: maxStoredMoney }, p)).toEqual({
+      upstreamCostUsdMicro: maxStoredMoney,
+      chargedVnd: maxStoredMoney,
+    });
+  });
+
+  test("throws the typed overflow error above the schema-safe money bound", () => {
+    const p = {
+      ...prices,
+      inputUsdMicroPer1m: 1_000_000n,
+      usdVndRate: 1n,
+      markupPpm: 1n,
+    };
+    expect(() => charged({ ...usage, inputTokens: maxStoredMoney + 1n }, p)).toThrow(
+      new RangeError("upstreamCostUsdMicro exceeds maxStoredMoney"),
+    );
+    expect(() =>
+      charged(
+        { ...usage, inputTokens: maxStoredMoney },
+        { ...p, usdVndRate: 2_000_000_000_000n },
+      ),
+    ).toThrow(new RangeError("chargedVnd exceeds maxStoredMoney"));
+  });
 });

@@ -1,9 +1,8 @@
 // sk-hbr- API key generation/verification.
 // Plaintext format: `sk-hbr-` + 43 base64url chars (32 CSPRNG bytes, no padding).
 // Only SHA-256 hex is stored. Status: 'active' is legacy and treated as enabled.
-import type { Database } from "bun:sqlite";
 import { and, eq, inArray } from "drizzle-orm";
-import { apiKeys, apiKeyModelPermissions, orm } from "@hoborouter/db";
+import { apiKeys, apiKeyModelPermissions, type Db, type Tx } from "@hoborouter/db";
 
 const PREFIX = "sk-hbr-";
 
@@ -29,36 +28,35 @@ export interface ApiKeyRecord {
 }
 
 /** Hash + lookup. Returns null for unknown/disabled/revoked keys. Used by /v1 auth. */
-export function verifyApiKey(db: Database, plaintext: string): ApiKeyRecord | null {
+export async function verifyApiKey(db: Db | Tx, plaintext: string): Promise<ApiKeyRecord | null> {
   if (typeof plaintext !== "string" || !plaintext.startsWith(PREFIX)) return null;
-  const row = orm(db)
+  const rows = await db
     .select({ api_key_id: apiKeys.id, workspace_id: apiKeys.workspace_id, status: apiKeys.status })
     .from(apiKeys)
     .where(
       and(eq(apiKeys.key_hash, hashApiKey(plaintext)), inArray(apiKeys.status, ["active", "enabled"])),
     )
-    .get();
-  return row ?? null;
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 /** Zero permission rows = unrestricted (true); otherwise model must be in the set. */
-export function isModelAllowed(db: Database, apiKeyId: string, modelId: string): boolean {
-  const hasAny = orm(db)
+export async function isModelAllowed(db: Db | Tx, apiKeyId: string, modelId: string): Promise<boolean> {
+  const hasAny = await db
     .select({ x: apiKeyModelPermissions.api_key_id })
     .from(apiKeyModelPermissions)
     .where(eq(apiKeyModelPermissions.api_key_id, apiKeyId))
-    .get();
-  if (!hasAny) return true;
-  return (
-    orm(db)
-      .select({ x: apiKeyModelPermissions.model_id })
-      .from(apiKeyModelPermissions)
-      .where(
-        and(
-          eq(apiKeyModelPermissions.api_key_id, apiKeyId),
-          eq(apiKeyModelPermissions.model_id, modelId),
-        ),
-      )
-      .get() != null
-  );
+    .limit(1);
+  if (hasAny.length === 0) return true;
+  const hit = await db
+    .select({ x: apiKeyModelPermissions.model_id })
+    .from(apiKeyModelPermissions)
+    .where(
+      and(
+        eq(apiKeyModelPermissions.api_key_id, apiKeyId),
+        eq(apiKeyModelPermissions.model_id, modelId),
+      ),
+    )
+    .limit(1);
+  return hit.length > 0;
 }

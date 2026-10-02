@@ -1,10 +1,29 @@
 // Task 3: canonical billing service over the canonical catalog tables.
-// Pure DB, no HTTP, no provider calls. One BEGIN IMMEDIATE transaction per
-// mutation via runInImmediate. Money is integer VND; prices are immutable
-// model_prices rows; fx/markup are snapshotted on billing_reservations at
-// reserve time and reused verbatim at settle time.
-import type { Database } from "bun:sqlite";
-import { WalletError, requirePositiveSafeInteger, runInImmediate } from "./wallet";
+// Pure DB, no HTTP, no provider calls. One Postgres transaction per mutation
+// via runInImmediate (wallet row locked FOR UPDATE). Money is integer VND;
+// prices are immutable model_prices rows; fx/markup are snapshotted on
+// billing_reservations at reserve time and reused verbatim at settle time.
+import { and, asc, eq, gte, isNull, lte, ne, sql } from "drizzle-orm";
+import type { Db, Tx } from "@hoborouter/db";
+import {
+  auditLog,
+  billingReservations,
+  apiKeys,
+  ledgerEntries,
+  models as modelsTable,
+  modelPrices,
+  providerModelMappings,
+  requests,
+  settlements,
+  usageLogs,
+  wallets,
+} from "@hoborouter/db";
+import {
+  WalletError,
+  lockWallet,
+  requirePositiveSafeInteger,
+  runInImmediate,
+} from "./wallet";
 import { calculateCharge, maxStoredMoney, type PriceSnapshot, type UsageTokens } from "./money";
 
 type UnitPrice = {
@@ -83,120 +102,161 @@ export type ReserveRequestArgs = {
 };
 
 /**
- * One IMMEDIATE txn: insert requests(status 'pending', dispatch_state
- * 'reserved', model_binding_id NULL) + billing_reservations(status 'held',
- * fx from args, markup from the immutable price row) + wallet reserved += cap
- * with an available-balance CAS. Insufficient balance -> typed
- * WalletError("insufficient"), nothing written.
+ * One txn: insert requests(status 'pending', dispatch_state 'reserved',
+ * model_binding_id NULL) + billing_reservations(status 'held', fx from args,
+ * markup from the immutable price row) + wallet reserved += cap with an
+ * available-balance CAS. Insufficient balance -> typed WalletError("insufficient"),
+ * nothing written.
  */
-export function reserveRequest(
-  db: Database,
+export async function reserveRequest(
+  db: Db | Tx,
   args: ReserveRequestArgs,
-): { requestId: string; reservationId: string } {
+): Promise<{ requestId: string; reservationId: string }> {
   const capVnd = requirePositiveSafeInteger("capVnd", args.capVnd);
   const fxRate = requirePositiveSafeInteger("fxRate", args.fxRate);
   if (typeof args.requestId !== "string" || args.requestId === "") {
     throw new WalletError("invalid", "requestId must be a non-empty string");
   }
-  return runInImmediate(db, () => {
-    const key = db
-      .prepare("SELECT workspace_id, status FROM api_keys WHERE id = ?")
-      .get(args.apiKeyId) as { workspace_id: string; status: string } | undefined;
-    if (!key || key.workspace_id !== args.workspaceId || key.status === "revoked") {
-      throw new WalletError(
-        "ownership",
-        `api key ${args.apiKeyId} not usable for workspace ${args.workspaceId}`,
-      );
-    }
-    const wallet = db
-      .prepare("SELECT id FROM wallets WHERE workspace_id = ?")
-      .get(args.workspaceId) as { id: string } | undefined;
-    if (!wallet)
-      throw new WalletError("not_found", `wallet not found for workspace ${args.workspaceId}`);
-    const model = db
-      .prepare("SELECT id FROM models WHERE id = ? AND enabled = 1 AND published = 1")
-      .get(args.modelId);
-    if (!model) throw new WalletError("ownership", `model ${args.modelId} not enabled+published`);
-    const mapping = db
-      .prepare("SELECT model_id FROM provider_model_mappings WHERE id = ? AND enabled = 1")
-      .get(args.mappingId) as { model_id: string } | undefined;
-    if (!mapping || mapping.model_id !== args.modelId) {
-      throw new WalletError(
-        "ownership",
-        `mapping ${args.mappingId} not enabled for model ${args.modelId}`,
-      );
-    }
-    const price = db
-      .prepare(
-        "SELECT markup_ppm FROM model_prices WHERE id = ? AND model_id = ? AND effective_at <= ? AND retired_at IS NULL",
-      )
-      .get(args.modelPriceId, args.modelId, args.now) as { markup_ppm: number } | undefined;
-    if (!price) {
-      throw new WalletError(
-        "ownership",
-        `price ${args.modelPriceId} not current for model ${args.modelId}`,
-      );
-    }
-    if (db.prepare("SELECT 1 FROM requests WHERE id = ?").get(args.requestId)) {
-      throw new WalletError("conflict", `request id ${args.requestId} already exists`);
-    }
+  return runInImmediate(
+    db,
+    async (tx) => {
+      const keys = await tx
+        .select({ workspace_id: apiKeys.workspace_id, status: apiKeys.status })
+        .from(apiKeys)
+        .where(eq(apiKeys.id, args.apiKeyId));
+      const key = keys[0];
+      if (!key || key.workspace_id !== args.workspaceId || key.status === "revoked") {
+        throw new WalletError(
+          "ownership",
+          `api key ${args.apiKeyId} not usable for workspace ${args.workspaceId}`,
+        );
+      }
+      const ws = await tx
+        .select({ id: wallets.id })
+        .from(wallets)
+        .where(eq(wallets.workspace_id, args.workspaceId));
+      const wallet = ws[0];
+      if (!wallet)
+        throw new WalletError("not_found", `wallet not found for workspace ${args.workspaceId}`);
+      // Wallet row locked by runInImmediate: concurrent reserves serialize here.
+      const modelRows = await tx
+        .select({ id: modelsTable.id })
+        .from(modelsTable)
+        .where(
+          and(
+            eq(modelsTable.id, args.modelId),
+            eq(modelsTable.enabled, true),
+            eq(modelsTable.published, true),
+          ),
+        );
+      if (modelRows.length === 0)
+        throw new WalletError("ownership", `model ${args.modelId} not enabled+published`);
+      const mappings = await tx
+        .select({ model_id: providerModelMappings.model_id })
+        .from(providerModelMappings)
+        .where(and(eq(providerModelMappings.id, args.mappingId), eq(providerModelMappings.enabled, true)));
+      const mapping = mappings[0];
+      if (!mapping || mapping.model_id !== args.modelId) {
+        throw new WalletError(
+          "ownership",
+          `mapping ${args.mappingId} not enabled for model ${args.modelId}`,
+        );
+      }
+      const prices = await tx
+        .select({ markup_ppm: modelPrices.markup_ppm })
+        .from(modelPrices)
+        .where(
+          and(
+            eq(modelPrices.id, args.modelPriceId),
+            eq(modelPrices.model_id, args.modelId),
+            lte(modelPrices.effective_at, args.now),
+            isNull(modelPrices.retired_at),
+          ),
+        );
+      const price = prices[0];
+      if (!price) {
+        throw new WalletError(
+          "ownership",
+          `price ${args.modelPriceId} not current for model ${args.modelId}`,
+        );
+      }
+      const dup = await tx
+        .select({ x: requests.id })
+        .from(requests)
+        .where(eq(requests.id, args.requestId));
+      if (dup.length > 0) {
+        throw new WalletError("conflict", `request id ${args.requestId} already exists`);
+      }
 
-    db.prepare(
-      "INSERT INTO requests (id, workspace_id, api_key_id, model_binding_id, model_id, provider_model_mapping_id, endpoint, mode, status, dispatch_state, created_at) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'pending', 'reserved', ?)",
-    ).run(
-      args.requestId,
-      args.workspaceId,
-      args.apiKeyId,
-      args.modelId,
-      args.mappingId,
-      args.endpoint,
-      args.mode,
-      args.now,
-    );
+      await tx.insert(requests).values({
+        id: args.requestId,
+        workspace_id: args.workspaceId,
+        api_key_id: args.apiKeyId,
+        model_binding_id: null,
+        model_id: args.modelId,
+        provider_model_mapping_id: args.mappingId,
+        endpoint: args.endpoint,
+        mode: args.mode,
+        status: "pending",
+        dispatch_state: "reserved",
+        created_at: args.now,
+      });
 
-    const reservationId = crypto.randomUUID();
-    db.prepare(
-      "INSERT INTO billing_reservations (id, wallet_id, request_id, api_key_id, model_id, model_price_id, usd_vnd_exchange_rate, markup_ppm, cap_vnd, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'held', ?)",
-    ).run(
-      reservationId,
-      wallet.id,
-      args.requestId,
-      args.apiKeyId,
-      args.modelId,
-      args.modelPriceId,
-      fxRate,
-      price.markup_ppm,
-      capVnd,
-      args.now,
-    );
+      const reservationId = crypto.randomUUID();
+      await tx.insert(billingReservations).values({
+        id: reservationId,
+        wallet_id: wallet.id,
+        request_id: args.requestId,
+        api_key_id: args.apiKeyId,
+        model_id: args.modelId,
+        model_price_id: args.modelPriceId,
+        usd_vnd_exchange_rate: fxRate,
+        markup_ppm: price.markup_ppm,
+        cap_vnd: capVnd,
+        status: "held",
+        created_at: args.now,
+      });
 
-    const updated = db
-      .prepare(
-        "UPDATE wallets SET reserved = reserved + ?, version = version + 1 WHERE id = ? AND balance - reserved >= ?",
-      )
-      .run(capVnd, wallet.id, capVnd);
-    if (updated.changes !== 1) {
-      throw new WalletError("insufficient", "insufficient: available balance below cap");
-    }
-    return { requestId: args.requestId, reservationId };
-  });
+      // CAS: available balance must cover the cap; 0 rows = insufficient.
+      const updated = await tx
+        .update(wallets)
+        .set({
+          reserved: sql`${wallets.reserved} + ${capVnd}`,
+          version: sql`${wallets.version} + 1`,
+        })
+        .where(
+          and(
+            eq(wallets.id, wallet.id),
+            gte(sql`${wallets.balance} - ${wallets.reserved}`, capVnd),
+          ),
+        )
+        .returning({ id: wallets.id });
+      if (updated.length !== 1) {
+        throw new WalletError("insufficient", "insufficient: available balance below cap");
+      }
+      return { requestId: args.requestId, reservationId };
+    },
+    // walletId unknown before the lookup; the CAS above is the concurrency gate.
+  );
 }
 
 /**
  * CAS reserved->dispatching + dispatched_at. Must COMMIT before any network
  * I/O (caller contract). Any other prior state -> typed error.
  */
-export function markDispatching(db: Database, requestId: string, now: number): void {
-  runInImmediate(db, () => {
-    const updated = db
-      .prepare(
-        "UPDATE requests SET dispatch_state = 'dispatching', dispatched_at = ? WHERE id = ? AND dispatch_state = 'reserved'",
-      )
-      .run(now, requestId);
-    if (updated.changes !== 1) {
-      const row = db.prepare("SELECT dispatch_state FROM requests WHERE id = ?").get(requestId) as
-        | { dispatch_state: string }
-        | undefined;
+export async function markDispatching(db: Db | Tx, requestId: string, now: number): Promise<void> {
+  await runInImmediate(db, async (tx) => {
+    const updated = await tx
+      .update(requests)
+      .set({ dispatch_state: "dispatching", dispatched_at: now })
+      .where(and(eq(requests.id, requestId), eq(requests.dispatch_state, "reserved")))
+      .returning({ id: requests.id });
+    if (updated.length !== 1) {
+      const rows = await tx
+        .select({ dispatch_state: requests.dispatch_state })
+        .from(requests)
+        .where(eq(requests.id, requestId));
+      const row = rows[0];
       throw new WalletError(
         row ? "terminal" : "not_found",
         row
@@ -212,22 +272,24 @@ export function markDispatching(db: Database, requestId: string, now: number): v
  * reservation 'released', wallet reserved -= cap, request terminal, no ledger.
  * Idempotent: a second call on an already-released request is a no-op.
  */
-export function releaseRequest(db: Database, requestId: string, now: number): void {
-  runInImmediate(db, () => {
-    const row = db
-      .prepare(
-        `SELECT rq.dispatch_state, br.id AS br_id, br.status AS br_status, br.cap_vnd, br.wallet_id
-         FROM requests rq JOIN billing_reservations br ON br.request_id = rq.id WHERE rq.id = ?`,
-      )
-      .get(requestId) as
-      | {
-          dispatch_state: string;
-          br_id: string;
-          br_status: string;
-          cap_vnd: number;
-          wallet_id: string;
-        }
-      | undefined;
+export async function releaseRequest(
+  db: Db | Tx,
+  requestId: string,
+  now: number,
+): Promise<void> {
+  await runInImmediate(db, async (tx) => {
+    const rows = await tx
+      .select({
+        dispatch_state: requests.dispatch_state,
+        br_id: billingReservations.id,
+        br_status: billingReservations.status,
+        cap_vnd: billingReservations.cap_vnd,
+        wallet_id: billingReservations.wallet_id,
+      })
+      .from(requests)
+      .innerJoin(billingReservations, eq(billingReservations.request_id, requests.id))
+      .where(eq(requests.id, requestId));
+    const row = rows[0];
     if (!row) throw new WalletError("not_found", `request ${requestId} not found`);
     if (row.dispatch_state === "terminal" && row.br_status === "released") return; // idempotent
     if (row.dispatch_state !== "reserved") {
@@ -236,28 +298,32 @@ export function releaseRequest(db: Database, requestId: string, now: number): vo
         `request ${requestId} in state ${row.dispatch_state}; release only allowed pre-dispatch ('reserved')`,
       );
     }
-    const casRes = db
-      .prepare(
-        "UPDATE billing_reservations SET status = 'released', resolved_at = ? WHERE id = ? AND status = 'held'",
-      )
-      .run(now, row.br_id);
-    if (casRes.changes !== 1) {
+    await lockWallet(tx, row.wallet_id);
+    const casRes = await tx
+      .update(billingReservations)
+      .set({ status: "released", resolved_at: now })
+      .where(and(eq(billingReservations.id, row.br_id), eq(billingReservations.status, "held")))
+      .returning({ id: billingReservations.id });
+    if (casRes.length !== 1) {
       throw new WalletError("conflict", `billing reservation ${row.br_id} not held`);
     }
-    const casReq = db
-      .prepare(
-        "UPDATE requests SET dispatch_state = 'terminal', status = 'unknown' WHERE id = ? AND dispatch_state = 'reserved'",
-      )
-      .run(requestId);
-    if (casReq.changes !== 1) {
+    const casReq = await tx
+      .update(requests)
+      .set({ dispatch_state: "terminal", status: "unknown" })
+      .where(and(eq(requests.id, requestId), eq(requests.dispatch_state, "reserved")))
+      .returning({ id: requests.id });
+    if (casReq.length !== 1) {
       throw new WalletError("conflict", `request ${requestId} dispatch state changed concurrently`);
     }
-    const casWallet = db
-      .prepare(
-        "UPDATE wallets SET reserved = reserved - ?, version = version + 1 WHERE id = ? AND reserved >= ?",
-      )
-      .run(row.cap_vnd, row.wallet_id, row.cap_vnd);
-    if (casWallet.changes !== 1) {
+    const casWallet = await tx
+      .update(wallets)
+      .set({
+        reserved: sql`${wallets.reserved} - ${row.cap_vnd}`,
+        version: sql`${wallets.version} + 1`,
+      })
+      .where(and(eq(wallets.id, row.wallet_id), gte(wallets.reserved, row.cap_vnd)))
+      .returning({ id: wallets.id });
+    if (casWallet.length !== 1) {
       throw new WalletError(
         "conflict",
         `wallet ${row.wallet_id} reserved invariant violated on release`,
@@ -306,48 +372,51 @@ function requestStatusForReason(reason: string): "client_abort" | "upstream_erro
  * Settle from 'dispatching' only. Usage outcome charges via calculateCharge
  * with the reservation's immutable price row and the snapshotted fx/markup;
  * charge above cap is clamped to the cap (full-hold: audit + disable the
- * provider_model_mapping). full_hold debits the whole cap. One IMMEDIATE txn;
- * a repeat call returns the stored result and never double-debits.
+ * provider_model_mapping). full_hold debits the whole cap. One txn; the
+ * settlements row is the idempotency gate — a repeat call returns the stored
+ * result and never double-debits.
  */
-export function settleRequest(
-  db: Database,
+export async function settleRequest(
+  db: Db | Tx,
   requestId: string,
   outcome: SettleOutcome,
   now: number,
-): SettleResult {
-  return runInImmediate(db, () => {
-    const row = db
-      .prepare(
-        `SELECT br.id AS br_id, br.status AS br_status, br.wallet_id, br.cap_vnd,
-                br.usd_vnd_exchange_rate, br.markup_ppm, br.model_price_id, br.api_key_id,
-                br.model_id, rq.workspace_id, rq.dispatch_state,
-                rq.provider_model_mapping_id
-         FROM billing_reservations br JOIN requests rq ON rq.id = br.request_id
-         WHERE br.request_id = ?`,
-      )
-      .get(requestId) as
-      | {
-          br_id: string;
-          br_status: string;
-          wallet_id: string;
-          cap_vnd: number;
-          usd_vnd_exchange_rate: number;
-          markup_ppm: number;
-          model_price_id: string;
-          api_key_id: string | null;
-          model_id: string;
-          workspace_id: string;
-          dispatch_state: string;
-          provider_model_mapping_id: string | null;
-        }
-      | undefined;
+): Promise<SettleResult> {
+  return runInImmediate(db, async (tx) => {
+    const rows = await tx
+      .select({
+        br_id: billingReservations.id,
+        br_status: billingReservations.status,
+        wallet_id: billingReservations.wallet_id,
+        cap_vnd: billingReservations.cap_vnd,
+        usd_vnd_exchange_rate: billingReservations.usd_vnd_exchange_rate,
+        markup_ppm: billingReservations.markup_ppm,
+        model_price_id: billingReservations.model_price_id,
+        api_key_id: billingReservations.api_key_id,
+        model_id: billingReservations.model_id,
+        workspace_id: requests.workspace_id,
+        dispatch_state: requests.dispatch_state,
+        provider_model_mapping_id: requests.provider_model_mapping_id,
+      })
+      .from(billingReservations)
+      .innerJoin(requests, eq(requests.id, billingReservations.request_id))
+      .where(eq(billingReservations.request_id, requestId));
+    const row = rows[0];
     if (!row)
       throw new WalletError("not_found", `billing reservation for request ${requestId} not found`);
 
+    // Serialize money movement on this wallet BEFORE the idempotency check:
+    // a concurrent settle of the same request commits its settlement row
+    // while we wait on the lock, so the re-check below sees it (no double
+    // charge, no unique-violation crash).
+    await lockWallet(tx, row.wallet_id);
+
     // Idempotency: a stored settlement is the single source of truth.
-    const existing = db
-      .prepare("SELECT id, charged_vnd FROM settlements WHERE billing_reservation_id = ?")
-      .get(row.br_id) as { id: string; charged_vnd: number | null } | undefined;
+    const existingRows = await tx
+      .select({ id: settlements.id, charged_vnd: settlements.charged_vnd })
+      .from(settlements)
+      .where(eq(settlements.billing_reservation_id, row.br_id));
+    const existing = existingRows[0];
     if (existing) {
       return {
         status: row.br_status as SettleResult["status"],
@@ -362,11 +431,16 @@ export function settleRequest(
       );
     }
 
-    const price = db
-      .prepare(
-        "SELECT input_usd_micro_per_1m AS inputUsdMicroPer1m, output_usd_micro_per_1m AS outputUsdMicroPer1m, cached_input_usd_micro_per_1m AS cachedInputUsdMicroPer1m, reasoning_usd_micro_per_1m AS reasoningUsdMicroPer1m FROM model_prices WHERE id = ?",
-      )
-      .get(row.model_price_id) as UnitPrice | undefined;
+    const priceRows = await tx
+      .select({
+        inputUsdMicroPer1m: modelPrices.input_usd_micro_per_1m,
+        outputUsdMicroPer1m: modelPrices.output_usd_micro_per_1m,
+        cachedInputUsdMicroPer1m: modelPrices.cached_input_usd_micro_per_1m,
+        reasoningUsdMicroPer1m: modelPrices.reasoning_usd_micro_per_1m,
+      })
+      .from(modelPrices)
+      .where(eq(modelPrices.id, row.model_price_id));
+    const price = priceRows[0];
     if (!price) throw new WalletError("not_found", `price row ${row.model_price_id} missing`);
     // SAFETY: price row columns are schema-bounded integers; fixed shape.
     const snapshot: PriceSnapshot = {
@@ -404,138 +478,165 @@ export function settleRequest(
 
     const usageLogId = crypto.randomUUID();
     if (outcome.kind === "usage") {
-      db.prepare(
-        `INSERT INTO usage_logs (id, idempotency_key, request_id, api_key_id, workspace_id, provider, public_model, upstream_model,
-          input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, status, failure, latency_ms, ttft_ms,
-          upstream_cost_usd_micro, usd_vnd_exchange_rate, markup_ppm, charged_vnd, raw_payload, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ok', NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        usageLogId,
-        requestId,
-        requestId,
-        row.api_key_id,
-        row.workspace_id,
-        outcome.provider,
-        outcome.publicModel,
-        outcome.upstreamModel,
-        outcome.usage.inputTokens,
-        outcome.usage.outputTokens,
-        outcome.storedCachedInputTokens ?? outcome.usage.cachedInputTokens,
-        outcome.usage.reasoningTokens,
-        outcome.latencyMs ?? null,
-        outcome.ttftMs ?? null,
-        upstreamCostUsdMicro, // P1: real USD micro cost, NOT the VND charge
-        row.usd_vnd_exchange_rate,
-        row.markup_ppm,
-        charge,
-        outcome.rawPayload ??
+      await tx.insert(usageLogs).values({
+        id: usageLogId,
+        idempotency_key: requestId,
+        request_id: requestId,
+        api_key_id: row.api_key_id,
+        workspace_id: row.workspace_id,
+        provider: outcome.provider,
+        public_model: outcome.publicModel,
+        upstream_model: outcome.upstreamModel,
+        input_tokens: Number(outcome.usage.inputTokens),
+        output_tokens: Number(outcome.usage.outputTokens),
+        cached_input_tokens: Number(
+          outcome.storedCachedInputTokens ?? outcome.usage.cachedInputTokens,
+        ),
+        reasoning_tokens: Number(outcome.usage.reasoningTokens),
+        status: "ok",
+        failure: null,
+        latency_ms: outcome.latencyMs ?? null,
+        ttft_ms: outcome.ttftMs ?? null,
+        upstream_cost_usd_micro: upstreamCostUsdMicro, // P1: real USD micro cost, NOT the VND charge
+        usd_vnd_exchange_rate: row.usd_vnd_exchange_rate,
+        markup_ppm: row.markup_ppm,
+        charged_vnd: charge,
+        raw_payload:
+          outcome.rawPayload ??
           (outcome.metadata === undefined ? null : JSON.stringify(outcome.metadata)),
-        now,
-      );
+        created_at: now,
+      });
     } else {
-      db.prepare(
-        `INSERT INTO usage_logs (id, idempotency_key, request_id, api_key_id, workspace_id, provider, public_model, upstream_model,
-          input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, status, failure, latency_ms, ttft_ms,
-          upstream_cost_usd_micro, usd_vnd_exchange_rate, markup_ppm, charged_vnd, raw_payload, created_at)
-         VALUES (?, ?, ?, ?, ?, '', ?, '', 0, 0, 0, 0, 'full_hold', ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
-      ).run(
-        usageLogId,
-        requestId,
-        requestId,
-        row.api_key_id,
-        row.workspace_id,
-        outcome.publicModel ?? "",
-        reason,
-        outcome.metadata === undefined ? null : JSON.stringify(outcome.metadata),
-        now,
-      );
+      await tx.insert(usageLogs).values({
+        id: usageLogId,
+        idempotency_key: requestId,
+        request_id: requestId,
+        api_key_id: row.api_key_id,
+        workspace_id: row.workspace_id,
+        provider: "",
+        public_model: outcome.publicModel ?? "",
+        upstream_model: "",
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_input_tokens: 0,
+        reasoning_tokens: 0,
+        status: "full_hold",
+        failure: reason,
+        latency_ms: null,
+        ttft_ms: null,
+        upstream_cost_usd_micro: null,
+        usd_vnd_exchange_rate: null,
+        markup_ppm: null,
+        charged_vnd: null,
+        raw_payload: outcome.metadata === undefined ? null : JSON.stringify(outcome.metadata),
+        created_at: now,
+      });
     }
 
     const settlementId = crypto.randomUUID();
     const usage = outcome.kind === "usage" ? outcome.usage : null;
     const chargedInput = usage ? Number(usage.inputTokens) : 0;
     const chargedOutput = usage ? Number(usage.outputTokens) : 0;
-    db.prepare(
-      "INSERT INTO settlements (id, reservation_id, billing_reservation_id, charged_input, charged_output, charged_total, settled_at, charged_vnd, usage_log_id, reason, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(
-      settlementId,
-      row.br_id,
-      chargedInput,
-      chargedOutput,
-      chargedInput + chargedOutput,
-      now,
-      charge,
-      usageLogId,
+    await tx.insert(settlements).values({
+      id: settlementId,
+      reservation_id: null,
+      billing_reservation_id: row.br_id,
+      charged_input: chargedInput,
+      charged_output: chargedOutput,
+      charged_total: chargedInput + chargedOutput,
+      settled_at: now,
+      charged_vnd: charge,
+      usage_log_id: usageLogId,
       reason,
-      now,
-    );
+      created_at: now,
+    });
 
     if (resStatus === "settled_full_hold" && outcome.kind === "usage") {
       // Above-cap usage: audit then fail closed on the mapping that allowed it.
-      db.prepare(
-        "INSERT INTO audit_log (id, workspace_id, action, target, detail, created_at) VALUES (?, ?, 'billing.cap_exceeded', ?, ?, ?)",
-      ).run(
-        crypto.randomUUID(),
-        row.workspace_id,
-        row.br_id,
-        JSON.stringify({ requestId, capVnd: row.cap_vnd }),
-        now,
-      );
+      await tx.insert(auditLog).values({
+        id: crypto.randomUUID(),
+        workspace_id: row.workspace_id,
+        action: "billing.cap_exceeded",
+        target: row.br_id,
+        detail: { requestId, capVnd: row.cap_vnd },
+        created_at: now,
+      });
       if (row.provider_model_mapping_id) {
-        db.prepare(
-          "UPDATE provider_model_mappings SET enabled = 0, updated_at = ? WHERE id = ?",
-        ).run(now, row.provider_model_mapping_id);
-        db.prepare(
-          "INSERT INTO audit_log (id, workspace_id, action, target, detail, created_at) VALUES (?, ?, 'billing.mapping_disabled', ?, ?, ?)",
-        ).run(
-          crypto.randomUUID(),
-          row.workspace_id,
-          row.provider_model_mapping_id,
-          JSON.stringify({ requestId, reason: "cap_exceeded" }),
-          now,
-        );
+        await tx
+          .update(providerModelMappings)
+          .set({ enabled: false, updated_at: now })
+          .where(eq(providerModelMappings.id, row.provider_model_mapping_id));
+        await tx.insert(auditLog).values({
+          id: crypto.randomUUID(),
+          workspace_id: row.workspace_id,
+          action: "billing.mapping_disabled",
+          target: row.provider_model_mapping_id,
+          detail: { requestId, reason: "cap_exceeded" },
+          created_at: now,
+        });
       }
     }
 
-    db.prepare(
-      "UPDATE billing_reservations SET status = ?, resolved_at = ? WHERE id = ? AND status = 'held'",
-    ).run(resStatus, now, row.br_id);
+    await tx
+      .update(billingReservations)
+      .set({ status: resStatus, resolved_at: now })
+      .where(and(eq(billingReservations.id, row.br_id), eq(billingReservations.status, "held")));
 
-    let balanceAfter = 0;
     if (charge > 0) {
-      const wallet = db
-        .prepare("SELECT balance, reserved, version FROM wallets WHERE id = ?")
-        .get(row.wallet_id) as { balance: number; reserved: number; version: number };
-      balanceAfter = wallet.balance - charge;
-      const casWallet = db
-        .prepare(
-          "UPDATE wallets SET balance = ?, reserved = ?, version = version + 1 WHERE id = ? AND balance = ? AND reserved = ? AND version = ?",
+      const walletRows = await tx
+        .select({
+          balance: wallets.balance,
+          reserved: wallets.reserved,
+          version: wallets.version,
+        })
+        .from(wallets)
+        .where(eq(wallets.id, row.wallet_id));
+      const wallet = walletRows[0];
+      if (!wallet) {
+        throw new WalletError("not_found", `wallet ${row.wallet_id} vanished during settle`);
+      }
+      const balanceAfter = wallet.balance - charge;
+      // CAS on full (balance, reserved, version); wallet row already locked.
+      const casWallet = await tx
+        .update(wallets)
+        .set({ balance: balanceAfter, reserved: wallet.reserved - row.cap_vnd, version: sql`${wallets.version} + 1` })
+        .where(
+          and(
+            eq(wallets.id, row.wallet_id),
+            eq(wallets.balance, wallet.balance),
+            eq(wallets.reserved, wallet.reserved),
+            eq(wallets.version, wallet.version),
+          ),
         )
-        .run(
-          balanceAfter,
-          wallet.reserved - row.cap_vnd,
-          row.wallet_id,
-          wallet.balance,
-          wallet.reserved,
-          wallet.version,
-        );
-      if (casWallet.changes !== 1) {
+        .returning({ id: wallets.id });
+      if (casWallet.length !== 1) {
         throw new WalletError(
           "conflict",
           `wallet ${row.wallet_id} concurrent modification during settle`,
         );
       }
-      db.prepare(
-        "INSERT INTO ledger_entries (id, wallet_id, direction, billing_reservation_id, amount, kind, balance_after, memo, created_at) VALUES (?, ?, 'debit', ?, ?, 'settle', ?, NULL, ?)",
-      ).run(crypto.randomUUID(), row.wallet_id, row.br_id, charge, balanceAfter, now);
+      await tx.insert(ledgerEntries).values({
+        id: crypto.randomUUID(),
+        wallet_id: row.wallet_id,
+        direction: "debit",
+        billing_reservation_id: row.br_id,
+        amount: charge,
+        kind: "settle",
+        balance_after: balanceAfter,
+        memo: null,
+        created_at: now,
+      });
     } else {
       // Zero charge: amount > 0 CHECK forbids a ledger row; still clear the hold.
-      const casZero = db
-        .prepare(
-          "UPDATE wallets SET reserved = reserved - ?, version = version + 1 WHERE id = ? AND reserved >= ?",
-        )
-        .run(row.cap_vnd, row.wallet_id, row.cap_vnd);
-      if (casZero.changes !== 1) {
+      const casZero = await tx
+        .update(wallets)
+        .set({
+          reserved: sql`${wallets.reserved} - ${row.cap_vnd}`,
+          version: sql`${wallets.version} + 1`,
+        })
+        .where(and(eq(wallets.id, row.wallet_id), gte(wallets.reserved, row.cap_vnd)))
+        .returning({ id: wallets.id });
+      if (casZero.length !== 1) {
         throw new WalletError(
           "conflict",
           `wallet ${row.wallet_id} concurrent modification during zero-charge settle`,
@@ -544,19 +645,21 @@ export function settleRequest(
     }
 
     if (outcome.kind === "usage") {
-      db.prepare(
-        "UPDATE requests SET dispatch_state = 'terminal', status = 'ok', http_status = ?, ttft_ms = ?, duration_ms = ? WHERE id = ?",
-      ).run(
-        outcome.httpStatus ?? null,
-        outcome.ttftMs ?? null,
-        outcome.latencyMs ?? null,
-        requestId,
-      );
+      await tx
+        .update(requests)
+        .set({
+          dispatch_state: "terminal",
+          status: "ok",
+          http_status: outcome.httpStatus ?? null,
+          ttft_ms: outcome.ttftMs ?? null,
+          duration_ms: outcome.latencyMs ?? null,
+        })
+        .where(eq(requests.id, requestId));
     } else {
-      db.prepare("UPDATE requests SET dispatch_state = 'terminal', status = ? WHERE id = ?").run(
-        requestStatus,
-        requestId,
-      );
+      await tx
+        .update(requests)
+        .set({ dispatch_state: "terminal", status: requestStatus })
+        .where(eq(requests.id, requestId));
     }
 
     return { status: resStatus, chargedVnd: charge, alreadySettled: false };
@@ -570,28 +673,29 @@ export type RecoverCounts = { released: number; fullHeld: number };
  * dispatching -> full_hold 'recovered_ambiguous' (we cannot know what the
  * upstream did), terminal -> untouched. Idempotent; returns counts.
  */
-export function recoverPending(db: Database, now: number): RecoverCounts {
-  return runInImmediate(db, () => {
-    const rows = db
-      .prepare("SELECT id, dispatch_state FROM requests WHERE dispatch_state != 'terminal'")
-      .all() as { id: string; dispatch_state: string }[];
+export async function recoverPending(db: Db | Tx, now: number): Promise<RecoverCounts> {
+  return runInImmediate(db, async (tx) => {
+    const rows = await tx
+      .select({ id: requests.id, dispatch_state: requests.dispatch_state })
+      .from(requests)
+      .where(ne(requests.dispatch_state, "terminal"))
+      .orderBy(asc(requests.created_at));
     let released = 0;
     let fullHeld = 0;
     for (const row of rows) {
       try {
         if (row.dispatch_state === "reserved") {
-          releaseRequest(db, row.id, now);
+          await releaseRequest(tx, row.id, now);
           released++;
         } else {
-          settleRequest(db, row.id, { kind: "full_hold", reason: "unknown" }, now);
-          db.prepare(
-            "INSERT INTO audit_log (id, action, target, detail, created_at) VALUES (?, 'billing.recovered_ambiguous', ?, ?, ?)",
-          ).run(
-            crypto.randomUUID(),
-            row.id,
-            JSON.stringify({ reason: "recovered_ambiguous" }),
-            now,
-          );
+          await settleRequest(tx, row.id, { kind: "full_hold", reason: "unknown" }, now);
+          await tx.insert(auditLog).values({
+            id: crypto.randomUUID(),
+            action: "billing.recovered_ambiguous",
+            target: row.id,
+            detail: { reason: "recovered_ambiguous" },
+            created_at: now,
+          });
           fullHeld++;
         }
       } catch (err) {
@@ -614,8 +718,8 @@ export type RefundResult = { ledgerEntryId: string; alreadyRefunded: boolean };
  * typed conflict. Note: refund_operations requires a legacy reservations row
  * and is intentionally NOT used for canonical billing.
  */
-export function refundCharge(
-  db: Database,
+export async function refundCharge(
+  db: Db | Tx,
   args: {
     originalLedgerEntryId: string;
     amount: number;
@@ -623,14 +727,19 @@ export function refundCharge(
     reason: string;
     now: number;
   },
-): RefundResult {
+): Promise<RefundResult> {
   const amount = requirePositiveSafeInteger("amount", args.amount);
-  return runInImmediate(db, () => {
-    const existing = db
-      .prepare(
-        "SELECT id, amount FROM ledger_entries WHERE original_ledger_entry_id = ? AND kind = 'refund'",
-      )
-      .get(args.originalLedgerEntryId) as { id: string; amount: number } | undefined;
+  return runInImmediate(db, async (tx) => {
+    const existingRows = await tx
+      .select({ id: ledgerEntries.id, amount: ledgerEntries.amount })
+      .from(ledgerEntries)
+      .where(
+        and(
+          eq(ledgerEntries.original_ledger_entry_id, args.originalLedgerEntryId),
+          eq(ledgerEntries.kind, "refund"),
+        ),
+      );
+    const existing = existingRows[0];
     if (existing) {
       if (existing.amount !== amount) {
         throw new WalletError(
@@ -640,11 +749,17 @@ export function refundCharge(
       }
       return { ledgerEntryId: existing.id, alreadyRefunded: true };
     }
-    const original = db
-      .prepare("SELECT wallet_id, amount, direction, kind FROM ledger_entries WHERE id = ?")
-      .get(args.originalLedgerEntryId) as
-      | { wallet_id: string; amount: number; direction: string; kind: string }
-      | undefined;
+    const originalRows = await tx
+      .select({
+        id: ledgerEntries.id,
+        wallet_id: ledgerEntries.wallet_id,
+        amount: ledgerEntries.amount,
+        direction: ledgerEntries.direction,
+        kind: ledgerEntries.kind,
+      })
+      .from(ledgerEntries)
+      .where(eq(ledgerEntries.id, args.originalLedgerEntryId));
+    const original = originalRows[0];
     if (!original)
       throw new WalletError(
         "not_found",
@@ -662,42 +777,54 @@ export function refundCharge(
         `refund amount ${amount} exceeds original debit ${original.amount}`,
       );
     }
-    const wallet = db
-      .prepare("SELECT balance, version FROM wallets WHERE id = ?")
-      .get(original.wallet_id) as { balance: number; version: number };
+    await lockWallet(tx, original.wallet_id);
+    const walletRows = await tx
+      .select({ balance: wallets.balance, version: wallets.version })
+      .from(wallets)
+      .where(eq(wallets.id, original.wallet_id));
+    const wallet = walletRows[0];
+    if (!wallet) {
+      throw new WalletError("not_found", `wallet ${original.wallet_id} not found`);
+    }
     const balanceAfter = wallet.balance + amount;
-    const casWallet = db
-      .prepare(
-        "UPDATE wallets SET balance = ?, version = version + 1 WHERE id = ? AND balance = ? AND version = ?",
+    const casWallet = await tx
+      .update(wallets)
+      .set({ balance: balanceAfter, version: sql`${wallets.version} + 1` })
+      .where(
+        and(
+          eq(wallets.id, original.wallet_id),
+          eq(wallets.balance, wallet.balance),
+          eq(wallets.version, wallet.version),
+        ),
       )
-      .run(balanceAfter, original.wallet_id, wallet.balance, wallet.version);
-    if (casWallet.changes !== 1) {
+      .returning({ id: wallets.id });
+    if (casWallet.length !== 1) {
       throw new WalletError(
         "conflict",
         `wallet ${original.wallet_id} concurrent modification during refund`,
       );
     }
     const ledgerEntryId = crypto.randomUUID();
-    db.prepare(
-      "INSERT INTO ledger_entries (id, wallet_id, direction, amount, kind, original_ledger_entry_id, balance_after, memo, created_at) VALUES (?, ?, 'credit', ?, 'refund', ?, ?, ?, ?)",
-    ).run(
-      ledgerEntryId,
-      original.wallet_id,
+    await tx.insert(ledgerEntries).values({
+      id: ledgerEntryId,
+      wallet_id: original.wallet_id,
+      direction: "credit",
       amount,
-      args.originalLedgerEntryId,
-      balanceAfter,
-      args.reason,
-      args.now,
-    );
-    db.prepare(
-      "INSERT INTO audit_log (id, actor_user_id, action, target, detail, created_at) VALUES (?, ?, 'billing.refund', ?, ?, ?)",
-    ).run(
-      crypto.randomUUID(),
-      args.actorUserId,
-      args.originalLedgerEntryId,
-      JSON.stringify({ amount, reason: args.reason }),
-      args.now,
-    );
+      kind: "refund",
+      original_ledger_entry_id: args.originalLedgerEntryId,
+      balance_after: balanceAfter,
+      memo: args.reason,
+      created_at: args.now,
+    });
+    await tx.insert(auditLog).values({
+      id: crypto.randomUUID(),
+      actor_user_id: args.actorUserId,
+      action: "billing.refund",
+      target: args.originalLedgerEntryId,
+      detail: { amount, reason: args.reason },
+      created_at: args.now,
+    });
     return { ledgerEntryId, alreadyRefunded: false };
   });
 }
+export { createReservation, releaseHold } from "./reservation";

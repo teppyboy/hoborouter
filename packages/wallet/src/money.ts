@@ -1,3 +1,5 @@
+import { MAX_SAFE_INTEGER_MONEY } from "@hoborouter/db";
+
 export type PriceSnapshot = {
   inputUsdMicroPer1m: bigint;
   outputUsdMicroPer1m: bigint;
@@ -14,7 +16,9 @@ export type UsageTokens = {
   reasoningTokens: bigint;
 };
 
-export const maxStoredMoney = 9223372036854775807n;
+// Must match the Postgres schema CHECK bound (0..MAX_SAFE_INTEGER_MONEY) so
+// overflows surface as this typed error, not a raw constraint violation.
+export const maxStoredMoney = BigInt(MAX_SAFE_INTEGER_MONEY);
 const tokensPerMillion = 1_000_000n;
 const markupDenominator = 1_000_000_000_000n;
 

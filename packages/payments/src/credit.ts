@@ -1,13 +1,13 @@
 // Task 9: transaction composition for the mock payment webhook.
-// creditWallet opens its own BEGIN IMMEDIATE, so this module never nests a
-// second transaction: runInImmediate (from wallet) no-ops the inner BEGIN
-// when already inside one. The whole handler runs as ONE BEGIN IMMEDIATE:
-// event insert (UNIQUE provider+provider_reference) -> creditWallet ->
-// payments.status=succeeded -> COMMIT. Replay hits the UNIQUE constraint and
-// is answered 2xx with no second credit; any failure rolls back everything.
-import type { Database } from "bun:sqlite";
-import { and, eq, sql } from "drizzle-orm";
-import { orm, paymentEvents, payments, wallets } from "@hoborouter/db";
+// creditWallet opens its own transaction, so this module never nests a second
+// transaction: runInImmediate runs inline when already inside one. The whole
+// handler runs as ONE transaction: event insert (UNIQUE provider+
+// provider_reference) -> creditWallet -> payments.status=succeeded -> COMMIT.
+// Replay hits the UNIQUE constraint and is answered 2xx with no second credit;
+// any failure rolls back everything.
+import { and, eq } from "drizzle-orm";
+import type { Db, Tx } from "@hoborouter/db";
+import { paymentEvents, payments, wallets } from "@hoborouter/db";
 import { creditWallet, runInImmediate, WalletError } from "@hoborouter/wallet";
 
 export type MockPaymentErrorCode =
@@ -37,15 +37,24 @@ export type ProcessMockEventResult =
   | { outcome: "credited"; paymentId: string; balanceAfter: number }
   | { outcome: "already_processed"; paymentId: string };
 
-/** Process one verified mock webhook event atomically; idempotent on replay. */
-export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs) {
+export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEventArgs) {
   const provider = args.provider ?? "mock";
-  return runInImmediate(db, () => {
-    const payment = orm(db)
-      .select({ id: payments.id, amount: payments.amount, status: payments.status, workspace_id: payments.workspace_id })
+  return runInImmediate(db, async (tx) => {
+    const paymentRows = await tx
+      .select({
+        id: payments.id,
+        amount: payments.amount,
+        status: payments.status,
+        workspace_id: payments.workspace_id,
+      })
       .from(payments)
-      .where(and(sql`${payments.provider} = ${provider}`, eq(payments.provider_order_code, args.orderCode)))
-      .get();
+      .where(
+        and(
+          eq(payments.provider, provider as "mock"),
+          eq(payments.provider_order_code, args.orderCode),
+        ),
+      );
+    const payment = paymentRows[0];
     if (!payment) throw new MockPaymentError("not_found", `unknown order ${args.orderCode}`);
     if (payment.status !== "pending" && payment.status !== "succeeded") {
       throw new MockPaymentError("invalid", `payment ${payment.id} is ${payment.status}`);
@@ -65,41 +74,50 @@ export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs
     }
 
     // Insert-first: UNIQUE(provider, provider_reference) is the replay gate
-    // under BEGIN IMMEDIATE serialization. ONLY the UNIQUE constraint resolves
-    // to already_processed / cross-payment 400 — every other insert failure
-    // propagates so the txn rolls back and the provider retries.
-    try {
-      orm(db)
-        .insert(paymentEvents)
-        .values({
-          id: crypto.randomUUID(),
-          payment_id: payment.id,
-          provider,
-          provider_reference: args.providerReference,
-          raw_payload: args.rawPayload,
-          signature_valid: true,
-          processed_at: Date.now(),
-        })
-        .run();
-    } catch (err) {
-      if ((err as { code?: string })?.code !== "SQLITE_CONSTRAINT_UNIQUE") throw err;
-      const existing = orm(db)
+    // under transaction serialization. ON CONFLICT DO NOTHING (no error, so
+    // the tx stays usable) + empty returning = replay; the follow-up lookup
+    // disambiguates replay vs cross-payment reuse. Every other insert
+    // failure propagates so the txn rolls back and the provider retries.
+    const inserted = await tx
+      .insert(paymentEvents)
+      .values({
+        id: crypto.randomUUID(),
+        payment_id: payment.id,
+        provider,
+        provider_reference: args.providerReference,
+        raw_payload: args.rawPayload,
+        signature_valid: true,
+        processed_at: Date.now(),
+      })
+      .onConflictDoNothing({
+        target: [paymentEvents.provider, paymentEvents.provider_reference],
+      })
+      .returning({ id: paymentEvents.id });
+    if (inserted.length === 0) {
+      // Re-read the payment AFTER the conflict: a concurrent txn may have
+      // committed the credit since this txn's snapshot was taken.
+      const freshRows = await tx
+        .select({ status: payments.status })
+        .from(payments)
+        .where(eq(payments.id, payment.id));
+      const freshStatus = freshRows[0]?.status ?? payment.status;
+      const existingRows = await tx
         .select({ payment_id: paymentEvents.payment_id })
         .from(paymentEvents)
         .where(
           and(
-            sql`${paymentEvents.provider} = ${provider}`,
+            eq(paymentEvents.provider, provider),
             eq(paymentEvents.provider_reference, args.providerReference),
           ),
-        )
-        .get();
+        );
+      const existing = existingRows[0];
       if (existing && existing.payment_id !== payment.id) {
         throw new MockPaymentError(
           "invalid",
           `provider_reference ${args.providerReference} already used by payment ${existing.payment_id}`,
         );
       }
-      if (existing && payment.status === "succeeded") {
+      if (existing && freshStatus === "succeeded") {
         return { outcome: "already_processed", paymentId: payment.id } as const;
       }
       if (existing) {
@@ -108,7 +126,9 @@ export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs
           `payment ${payment.id} has an event but is still pending`,
         );
       }
-      throw err; // UNIQUE hit with no matching row: propagate, don't mask.
+      // Conflict on (provider, provider_reference) must always have a row —
+      // unreachable, but fail closed rather than double-crediting.
+      throw new MockPaymentError("invalid", "event conflict without existing row");
     }
 
     if (payment.status === "succeeded") {
@@ -121,15 +141,15 @@ export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs
     }
 
     // Wallet for the payment's workspace (workspace_id UNIQUE on wallets).
-    const wallet = orm(db)
+    const walletRows = await tx
       .select({ id: wallets.id })
       .from(wallets)
-      .where(eq(wallets.workspace_id, payment.workspace_id))
-      .get();
+      .where(eq(wallets.workspace_id, payment.workspace_id));
+    const wallet = walletRows[0];
     if (!wallet)
       throw new MockPaymentError("not_found", `no wallet for workspace ${payment.workspace_id}`);
 
-    const credit = creditWallet(db, {
+    const credit = await creditWallet(tx, {
       walletId: wallet.id,
       amount: payment.amount,
       kind: "topup",
@@ -137,7 +157,7 @@ export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs
       memo: `${provider} topup ${args.providerReference}`,
     });
 
-    orm(db).update(payments).set({ status: "succeeded" }).where(eq(payments.id, payment.id)).run();
+    await tx.update(payments).set({ status: "succeeded" }).where(eq(payments.id, payment.id));
     return {
       outcome: "credited",
       paymentId: payment.id,
