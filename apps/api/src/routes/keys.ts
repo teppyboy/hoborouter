@@ -8,6 +8,15 @@ import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, writeAudit, jsonError } from "../authz";
 import { generateApiKey } from "@hoborouter/keys";
+import { and, asc, eq, inArray } from "drizzle-orm";
+import {
+  workspaces,
+  apiKeys,
+  models,
+  apiKeyModelPermissions,
+  orm,
+  runChanges,
+} from "@hoborouter/db";
 
 export const keysRoutes = (db: Database, auth: BetterAuthInstance) =>
   new Elysia({ name: "keys" })
@@ -28,7 +37,11 @@ export const keysRoutes = (db: Database, auth: BetterAuthInstance) =>
         const userId = gate.session.user.id;
         const denied = requireWsRole(db, params.id, userId, "admin");
         if (denied) return denied;
-        const ws = db.prepare("SELECT id FROM workspaces WHERE id = ?").get(params.id);
+        const ws = orm(db)
+          .select({ id: workspaces.id })
+          .from(workspaces)
+          .where(eq(workspaces.id, params.id))
+          .get();
         if (!ws) return jsonError(404, "NOT_FOUND", "Workspace not found");
         const raw = (body as { name?: unknown } | null)?.name;
         const name = typeof raw === "string" ? raw.trim() : "";
@@ -38,9 +51,18 @@ export const keysRoutes = (db: Database, auth: BetterAuthInstance) =>
         const id = crypto.randomUUID();
         const now = Date.now();
         db.transaction(() => {
-          db.prepare(
-            "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES (?,?,?,?,?,'enabled',?)",
-          ).run(id, params.id, hash, prefix, name, now);
+          orm(db)
+            .insert(apiKeys)
+            .values({
+              id,
+              workspace_id: params.id,
+              key_hash: hash,
+              key_prefix: prefix,
+              name,
+              status: "enabled",
+              created_at: now,
+            })
+            .run();
           // audit detail carries only non-secret metadata — never plaintext or full hash
           writeAudit(db, {
             actorUserId: userId,
@@ -75,11 +97,20 @@ export const keysRoutes = (db: Database, auth: BetterAuthInstance) =>
         if ("error" in gate) return gate.error;
         const denied = requireWsRole(db, params.id, gate.session.user.id, "admin");
         if (denied) return denied;
-        const rows = db
-          .prepare(
-            "SELECT id, key_prefix, name, status, created_at, last_used_at, revoked_at FROM api_keys WHERE workspace_id = ? ORDER BY created_at",
-          )
-          .all(params.id) as { status: string }[];
+        const rows = orm(db)
+          .select({
+            id: apiKeys.id,
+            key_prefix: apiKeys.key_prefix,
+            name: apiKeys.name,
+            status: apiKeys.status,
+            created_at: apiKeys.created_at,
+            last_used_at: apiKeys.last_used_at,
+            revoked_at: apiKeys.revoked_at,
+          })
+          .from(apiKeys)
+          .where(eq(apiKeys.workspace_id, params.id))
+          .orderBy(asc(apiKeys.created_at))
+          .all();
         // legacy 'active' ≡ enabled — normalize for display
         for (const r of rows) if (r.status === "active") r.status = "enabled";
         return rows;
@@ -108,17 +139,22 @@ export const keysRoutes = (db: Database, auth: BetterAuthInstance) =>
         let updated = 0;
         let terminal = false;
         db.transaction(() => {
-          const key = db
-            .prepare("SELECT status FROM api_keys WHERE id = ? AND workspace_id = ?")
-            .get(params.keyId, params.id) as { status: string } | undefined;
+          const key = orm(db)
+            .select({ status: apiKeys.status })
+            .from(apiKeys)
+            .where(and(eq(apiKeys.id, params.keyId), eq(apiKeys.workspace_id, params.id)))
+            .get();
           if (!key) return;
           if (key.status === "revoked") {
             terminal = true;
             return;
           }
-          updated = db
-            .prepare(`UPDATE api_keys SET status = ? WHERE id = ? AND workspace_id = ?`)
-            .run(requested, params.keyId, params.id).changes;
+          updated = runChanges(
+            orm(db)
+              .update(apiKeys)
+              .set({ status: requested })
+              .where(and(eq(apiKeys.id, params.keyId), eq(apiKeys.workspace_id, params.id))),
+          ).changes;
           writeAudit(db, {
             actorUserId: userId,
             workspaceId: params.id,
@@ -151,15 +187,18 @@ export const keysRoutes = (db: Database, auth: BetterAuthInstance) =>
         if ("error" in gate) return gate.error;
         const denied = requireWsRole(db, params.id, gate.session.user.id, "admin");
         if (denied) return denied;
-        const key = db
-          .prepare("SELECT id FROM api_keys WHERE id = ? AND workspace_id = ?")
-          .get(params.keyId, params.id);
+        const key = orm(db)
+          .select({ id: apiKeys.id })
+          .from(apiKeys)
+          .where(and(eq(apiKeys.id, params.keyId), eq(apiKeys.workspace_id, params.id)))
+          .get();
         if (!key) return jsonError(404, "NOT_FOUND", "Key not found");
-        const rows = db
-          .prepare(
-            "SELECT model_id FROM api_key_model_permissions WHERE api_key_id = ? ORDER BY model_id",
-          )
-          .all(params.keyId) as { model_id: string }[];
+        const rows = orm(db)
+          .select({ model_id: apiKeyModelPermissions.model_id })
+          .from(apiKeyModelPermissions)
+          .where(eq(apiKeyModelPermissions.api_key_id, params.keyId))
+          .orderBy(asc(apiKeyModelPermissions.model_id))
+          .all();
         return { modelIds: rows.map((r) => r.model_id) }; // [] = unrestricted
       },
     )
@@ -180,26 +219,43 @@ export const keysRoutes = (db: Database, auth: BetterAuthInstance) =>
         const userId = gate.session.user.id;
         const denied = requireWsRole(db, params.id, userId, "admin");
         if (denied) return denied;
-        const key = db
-          .prepare("SELECT id FROM api_keys WHERE id = ? AND workspace_id = ?")
-          .get(params.keyId, params.id);
+        const key = orm(db)
+          .select({ id: apiKeys.id })
+          .from(apiKeys)
+          .where(and(eq(apiKeys.id, params.keyId), eq(apiKeys.workspace_id, params.id)))
+          .get();
         if (!key) return jsonError(404, "NOT_FOUND", "Key not found");
         const raw = (body as { modelIds?: unknown } | null)?.modelIds;
         if (!Array.isArray(raw) || raw.some((m) => typeof m !== "string"))
           return jsonError(400, "INVALID", "modelIds must be an array of strings");
         const modelIds = [...new Set(raw as string[])];
+        const knownIds = new Set(
+          modelIds.length
+            ? orm(db)
+                .select({ id: models.id })
+                .from(models)
+                .where(inArray(models.id, modelIds))
+                .all()
+                .map((k) => k.id)
+            : [],
+        );
         for (const m of modelIds) {
-          if (!db.prepare("SELECT 1 FROM models WHERE id = ?").get(m))
-            return jsonError(400, "INVALID", `Unknown model: ${m}`);
+          if (!knownIds.has(m)) return jsonError(400, "INVALID", `Unknown model: ${m}`);
         }
         db.transaction(() => {
-          db.prepare("DELETE FROM api_key_model_permissions WHERE api_key_id = ?").run(
-            params.keyId,
-          );
-          const ins = db.prepare(
-            "INSERT INTO api_key_model_permissions (api_key_id, model_id, created_at) VALUES (?,?,?)",
-          );
-          for (const m of modelIds) ins.run(params.keyId, m, Date.now());
+          orm(db)
+            .delete(apiKeyModelPermissions)
+            .where(eq(apiKeyModelPermissions.api_key_id, params.keyId))
+            .run();
+          const now = Date.now();
+          if (modelIds.length) {
+            orm(db)
+              .insert(apiKeyModelPermissions)
+              .values(
+                modelIds.map((m) => ({ api_key_id: params.keyId, model_id: m, created_at: now })),
+              )
+              .run();
+          }
           writeAudit(db, {
             actorUserId: userId,
             workspaceId: params.id,
@@ -234,12 +290,19 @@ export const keysRoutes = (db: Database, auth: BetterAuthInstance) =>
         let revoked = 0;
         db.transaction(() => {
           // Key must belong to :wsId — cross-workspace key ids 404 here.
-          revoked = db
-            // status list is a fixed allowlist literal, not user input
-            .prepare(
-              "UPDATE api_keys SET status = 'revoked', revoked_at = ? WHERE id = ? AND workspace_id = ? AND status IN ('active','enabled','disabled')",
-            )
-            .run(now, params.keyId, params.id).changes;
+          // status list is a fixed allowlist literal, not user input
+          revoked = runChanges(
+            orm(db)
+              .update(apiKeys)
+              .set({ status: "revoked", revoked_at: now })
+              .where(
+                and(
+                  eq(apiKeys.id, params.keyId),
+                  eq(apiKeys.workspace_id, params.id),
+                  inArray(apiKeys.status, ["active", "enabled", "disabled"]),
+                ),
+              ),
+          ).changes;
           if (revoked === 1) {
             writeAudit(db, {
               actorUserId: userId,
