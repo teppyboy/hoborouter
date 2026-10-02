@@ -7,7 +7,8 @@
     ".": "./src/keys.ts"
   },
   "dependencies": {
-    "@hoborouter/db": "workspace:"
+    "@hoborouter/db": "workspace:",
+    "drizzle-orm": "0.45.3"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",

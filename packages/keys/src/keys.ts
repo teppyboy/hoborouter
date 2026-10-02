@@ -2,6 +2,8 @@
 // Plaintext format: `sk-hbr-` + 43 base64url chars (32 CSPRNG bytes, no padding).
 // Only SHA-256 hex is stored. Status: 'active' is legacy and treated as enabled.
 import type { Database } from "bun:sqlite";
+import { and, eq, inArray } from "drizzle-orm";
+import { apiKeys, apiKeyModelPermissions, orm } from "@hoborouter/db";
 
 const PREFIX = "sk-hbr-";
 
@@ -29,25 +31,34 @@ export interface ApiKeyRecord {
 /** Hash + lookup. Returns null for unknown/disabled/revoked keys. Used by /v1 auth. */
 export function verifyApiKey(db: Database, plaintext: string): ApiKeyRecord | null {
   if (typeof plaintext !== "string" || !plaintext.startsWith(PREFIX)) return null;
-  const row = db
-    .prepare(
-      "SELECT id AS api_key_id, workspace_id, status FROM api_keys WHERE key_hash = ? AND status IN ('active','enabled')",
+  const row = orm(db)
+    .select({ api_key_id: apiKeys.id, workspace_id: apiKeys.workspace_id, status: apiKeys.status })
+    .from(apiKeys)
+    .where(
+      and(eq(apiKeys.key_hash, hashApiKey(plaintext)), inArray(apiKeys.status, ["active", "enabled"])),
     )
-    .get(hashApiKey(plaintext)) as ApiKeyRecord | undefined;
+    .get();
   return row ?? null;
 }
 
 /** Zero permission rows = unrestricted (true); otherwise model must be in the set. */
 export function isModelAllowed(db: Database, apiKeyId: string, modelId: string): boolean {
-  const hasAny = db
-    .prepare("SELECT 1 FROM api_key_model_permissions WHERE api_key_id = ? LIMIT 1")
-    .get(apiKeyId);
+  const hasAny = orm(db)
+    .select({ x: apiKeyModelPermissions.api_key_id })
+    .from(apiKeyModelPermissions)
+    .where(eq(apiKeyModelPermissions.api_key_id, apiKeyId))
+    .get();
   if (!hasAny) return true;
   return (
-    db
-      .prepare(
-        "SELECT 1 FROM api_key_model_permissions WHERE api_key_id = ? AND model_id = ? LIMIT 1",
+    orm(db)
+      .select({ x: apiKeyModelPermissions.model_id })
+      .from(apiKeyModelPermissions)
+      .where(
+        and(
+          eq(apiKeyModelPermissions.api_key_id, apiKeyId),
+          eq(apiKeyModelPermissions.model_id, modelId),
+        ),
       )
-      .get(apiKeyId, modelId) != null
+      .get() != null
   );
 }
