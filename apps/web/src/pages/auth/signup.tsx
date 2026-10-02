@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -7,6 +8,8 @@ import { queryClient } from "../../lib/query-client";
 import { authClient } from "../../lib/auth";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { AuthLayout } from "../../components/auth-layout";
+import { Turnstile, turnstileEnabled } from "../../components/turnstile";
 import {
   Form,
   FormControl,
@@ -23,15 +26,24 @@ const schema = z.object({
 });
 type Values = z.infer<typeof schema>;
 
+const fields = [
+  { name: "name", label: "Name", type: "text", autoComplete: "name" },
+  { name: "email", label: "Email", type: "email", autoComplete: "email" },
+  { name: "password", label: "Password", type: "password", autoComplete: "new-password" },
+] as const;
+
 export default function SignupPage() {
   const navigate = useNavigate();
+  const [token, setToken] = useState<string | null>(null);
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: { name: "", email: "", password: "" },
   });
 
   const handleValid = async (values: Values) => {
-    const { error } = await authClient.signUp.email(values);
+    const { error } = await authClient.signUp.email(values, {
+      headers: turnstileEnabled && token ? { "x-captcha-response": token } : undefined,
+    });
     if (error) {
       form.setError("email", { message: error.message ?? "Sign up failed" });
       return;
@@ -42,7 +54,7 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="mx-auto mt-16 w-full max-w-sm">
+    <AuthLayout>
       <h1 className="text-lg font-semibold">Create account</h1>
       <p className="mt-1 text-sm text-muted-foreground">
         Already have an account?{" "}
@@ -52,50 +64,34 @@ export default function SignupPage() {
       </p>
       <Form {...form}>
         <form onSubmit={form.handleSubmit(handleValid)} className="mt-6 grid gap-4">
-          <FormField
-            control={form.control}
-            name="name"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Name</FormLabel>
-                <FormControl>
-                  <Input autoComplete="name" {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={form.control}
-            name="email"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Email</FormLabel>
-                <FormControl>
-                  <Input type="email" autoComplete="email" {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={form.control}
-            name="password"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Password</FormLabel>
-                <FormControl>
-                  <Input type="password" autoComplete="new-password" {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <Button type="submit" disabled={form.formState.isSubmitting}>
+          {fields.map((f, i) => (
+            <FormField
+              key={f.name}
+              control={form.control}
+              name={f.name}
+              render={({ field }) => (
+                <FormItem
+                  className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both"
+                  style={{ animationDelay: `${120 + i * 80}ms` }}
+                >
+                  <FormLabel>{f.label}</FormLabel>
+                  <FormControl>
+                    <Input type={f.type} autoComplete={f.autoComplete} {...field} />
+                  </FormControl>
+                  <FormMessage className="animate-in fade-in slide-in-from-top-1" />
+                </FormItem>
+              )}
+            />
+          ))}
+          {turnstileEnabled && <Turnstile onToken={setToken} />}
+          <Button
+            type="submit"
+            disabled={form.formState.isSubmitting || (turnstileEnabled && !token)}
+          >
             Sign up
           </Button>
         </form>
       </Form>
-    </div>
+    </AuthLayout>
   );
 }

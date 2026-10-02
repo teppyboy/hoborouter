@@ -126,3 +126,49 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* --- Auth pages (/login, /signup): subtle monochrome backdrop + accents --- */
+
+/* Dot grid + faint radial glow, fading out toward the edges. Tokens only. */
+.auth-bg {
+  background-image:
+    radial-gradient(
+      circle at 50% 40%,
+      color-mix(in oklch, var(--foreground) 6%, transparent) 0%,
+      transparent 55%
+    ),
+    radial-gradient(
+      color-mix(in oklch, var(--foreground) 12%, transparent) 1px,
+      transparent 1px
+    );
+  background-size:
+    100% 100%,
+    24px 24px;
+  -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 85%);
+  mask-image: radial-gradient(ellipse at center, black 40%, transparent 85%);
+}
+
+/* Card border gets a slow, low-contrast shine sweep. */
+.auth-card {
+  position: relative;
+  animation: auth-shine 8s linear infinite;
+}
+@keyframes auth-shine {
+  0%,
+  100% {
+    box-shadow:
+      0 1px 2px color-mix(in oklch, var(--foreground) 8%, transparent),
+      0 8px 30px color-mix(in oklch, var(--foreground) 6%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 1px 2px color-mix(in oklch, var(--foreground) 8%, transparent),
+      0 8px 30px color-mix(in oklch, var(--foreground) 12%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-card {
+    animation: none !important;
+  }
+}

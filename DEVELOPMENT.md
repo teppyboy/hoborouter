@@ -132,3 +132,12 @@ cd apps/web && bunx tsc -b                    # web type check
 
 - Port 3000 in use: `lsof -nP -iTCP:3000 -sTCP:LISTEN`
 - 403 "invalid origin" on signup: `BETTER_AUTH_URL` must equal the URL in the browser bar.
+
+## Cloudflare Turnstile (optional, off by default)
+
+Bot protection for `/sign-in/email` and `/sign-up/email`, enabled only when both sides are configured:
+
+- `VITE_TURNSTILE_SITE_KEY` — build-time env for the web image (frontend widget)
+- `TURNSTILE_SECRET_KEY` — API env (Better Auth `captcha` plugin, provider `cloudflare-turnstile`, reads the `x-captcha-response` header)
+
+When either is unset, auth behaves exactly as before. The frontend widget is skipped on localhost/127.0.0.1/::1, so local dev never needs it. For staging, Cloudflare's test keys work: site `1x00000000000000000000AA`, secret `1x0000000000000000000000000000000AA` (always passes).

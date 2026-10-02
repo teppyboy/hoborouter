@@ -5,6 +5,7 @@
 // drizzleAdapter looks up schema["user"], canonical export key is `users`).
 import { Database } from "bun:sqlite";
 import { betterAuth } from "better-auth";
+import { captcha } from "better-auth/plugins";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { createDb, schema } from "@hoborouter/db";
@@ -83,6 +84,16 @@ export function createAuth(db: Database) {
       },
     },
     emailAndPassword: { enabled: true },
+    // Turnstile protection for /sign-in/email + /sign-up/email: only when a
+    // secret key is configured; reads the `x-captcha-response` request header.
+    plugins: process.env.TURNSTILE_SECRET_KEY
+      ? [
+          captcha({
+            provider: "cloudflare-turnstile",
+            secretKey: process.env.TURNSTILE_SECRET_KEY,
+          }),
+        ]
+      : [],
   });
 }
 
