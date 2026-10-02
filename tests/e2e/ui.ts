@@ -777,6 +777,8 @@ async function main() {
   await step("admin audit log renders", async () => {
     await goto("/admin/audit");
     await page.waitForText("Audit log");
+    // Rows load async; wait for a humanized action so body() doesn't race the query.
+    await page.waitForText("Workspace created");
     const body = await page.body();
     assert(body.includes("E2E Admin"), "admin actor name shown");
     assert(body.includes("Workspace created"), "humanized action shown");

@@ -8,7 +8,7 @@ mkdir -p "$DIR"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PIDFILE="$DIR/pids"
 
-CPA_PORT=8399
+CPA_PORT="${E2E_CPA_PORT:-8399}"
 API_PORT=3099
 WEB_PORT=5199
 CDP_PORT=9399
@@ -56,7 +56,7 @@ up() {
   : >"$PIDFILE"
   rm -f "$DIR/e2e.sqlite" "$DIR/e2e.sqlite-wal" "$DIR/e2e.sqlite-shm" # fresh DB
 
-  start_one cpa "$DIR/cpa.log" bun "$ROOT/tests/fake-cpa.ts"
+  start_one cpa "$DIR/cpa.log" env PORT=$CPA_PORT bun "$ROOT/tests/fake-cpa.ts"
   start_one api "$DIR/api.log" env \
     NODE_ENV=development \
     PORT=$API_PORT \

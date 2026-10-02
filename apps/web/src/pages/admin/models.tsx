@@ -597,6 +597,7 @@ function CreateModelDialog({
       context_window: "",
       enabled: true,
       published: false,
+      prompt_caching: "inherit",
     },
   });
 
