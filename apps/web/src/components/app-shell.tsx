@@ -79,6 +79,7 @@ const ADMIN_NAV: NavItem[] = [
   { label: "Providers", to: "/admin/providers", icon: Plug },
   { label: "Pricing", to: "/admin/pricing", icon: Tags },
   { label: "Payments", to: "/admin/payments", icon: CreditCard },
+  { label: "Audit log", to: "/admin/audit", icon: ScrollText },
   { label: "System", to: "/admin/system", icon: Cpu },
 ];
 

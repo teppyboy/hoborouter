@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Badge } from "../../components/ui/badge";
 import { DataTable, PageHeader } from "../../components/page";
 import { formatDate, formatVnd } from "../../lib/format";
-import { AdminGate, type AuditRow, useAdminQuery } from "./shared";
+import { AdminGate, useAdminQuery } from "./shared";
 
 interface CpaHealth {
   status: string;
@@ -184,55 +184,6 @@ function CpaModelsTable() {
   );
 }
 
-const auditColumns: ColumnDef<AuditRow, unknown>[] = [
-  {
-    accessorKey: "created_at",
-    header: "Time",
-    cell: (c) => (
-      <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>
-    ),
-  },
-  {
-    accessorKey: "action",
-    header: "Action",
-    cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
-  },
-  {
-    accessorKey: "actor_user_id",
-    header: "Actor",
-    cell: (c) => (
-      <span className="font-mono text-xs">
-        {(c.getValue() as string | null)?.slice(0, 8) ?? "—"}
-      </span>
-    ),
-  },
-  {
-    accessorKey: "target",
-    header: "Target",
-    cell: (c) => (
-      <span className="font-mono text-xs">
-        {(c.getValue() as string | null)?.slice(0, 8) ?? "—"}
-      </span>
-    ),
-  },
-  {
-    accessorKey: "detail",
-    header: "Detail",
-    enableSorting: false,
-    cell: (c) => {
-      const raw = c.getValue() as string | null;
-      if (!raw) return <span className="font-mono text-xs text-muted-foreground">—</span>;
-      let text = raw;
-      try {
-        text = JSON.stringify(JSON.parse(raw));
-      } catch {
-        // P2: detail may not be valid JSON — render raw string
-      }
-      return <span className="font-mono text-xs text-muted-foreground">{text}</span>;
-    },
-  },
-];
-
 const usageColumns: ColumnDef<AdminUsageLog, unknown>[] = [
   {
     accessorKey: "created_at",
@@ -293,17 +244,14 @@ function UsageLogsTable() {
 }
 
 export default function AdminSystemPage() {
-  const query = useAdminQuery<AuditRow[]>(["admin", "audit"], "/api/v1/audit");
   return (
     <div className="space-y-4">
-      <PageHeader title="System" description="Instance health and audit log." />
-      <AdminGate query={query}>
+      <PageHeader title="System" description="Instance health and status." />
+      <AdminGate query={useAdminQuery<unknown>(["admin", "system"], "/api/v1/admin/system")}>
         <SystemCard />
         <CpaHealthCard />
         <CpaModelsTable />
         <UsageLogsTable />
-        <h2 className="text-sm font-medium">Audit log</h2>
-        <DataTable columns={auditColumns} data={query.data ?? []} empty="No audit entries" />
       </AdminGate>
     </div>
   );

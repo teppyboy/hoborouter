@@ -29,6 +29,8 @@ import {
 } from "./lib/prefetch";
 import { queryClient } from "./lib/query-client";
 
+const AdminAudit = lazy(() => import("./pages/admin/audit"));
+
 // Public auth pages (not part of nav prefetching).
 const Login = lazy(() => import("./pages/auth/login"));
 const Signup = lazy(() => import("./pages/auth/signup"));
@@ -138,6 +140,7 @@ const protectedRoutes = [
   protectedRoute("/admin/pricing", adminPricing),
   protectedRoute("/admin/payments", adminPayments),
   protectedRoute("/admin/system", adminSystem),
+  protectedRoute("/admin/audit", AdminAudit),
 ];
 
 export const routeTree = rootRoute.addChildren([
