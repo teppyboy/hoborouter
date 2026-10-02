@@ -35,7 +35,7 @@ function BarChart({ data }: { data: { label: string; value: number }[] }) {
     <div>
       <div className="flex h-32 items-end gap-1">
         {data.map((d) => (
-          <div key={d.label} className="group relative h-full min-w-0 flex-1">
+          <div key={d.label} className="group relative flex h-full min-w-0 flex-1 items-end">
             <div
               className={`mx-auto w-full max-w-3 rounded-sm ${
                 d.value > 0 ? "bg-foreground/70 group-hover:bg-foreground" : "bg-foreground/10"
