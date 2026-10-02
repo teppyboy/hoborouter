@@ -9,6 +9,8 @@ import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, isInstanceAdmin, wsRole, writeAudit, jsonError } from "../authz";
 import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments";
+import { eq } from "drizzle-orm";
+import { payments, orm } from "@hoborouter/db";
 
 export const devPaymentsRoutes = (db: Database, auth: BetterAuthInstance) =>
   new Elysia({ name: "dev-payments" }).post(
@@ -32,20 +34,18 @@ export const devPaymentsRoutes = (db: Database, auth: BetterAuthInstance) =>
       const gate = await requireSession(auth, request);
       if (gate.error) return gate.error;
       const userId = gate.session.user.id;
-      const payment = db
-        .prepare(
-          "SELECT id, workspace_id, amount, status, provider, provider_order_code FROM payments WHERE id = ?",
-        )
-        .get(params.id) as
-        | {
-            id: string;
-            workspace_id: string;
-            amount: number;
-            status: string;
-            provider: string;
-            provider_order_code: string;
-          }
-        | undefined;
+      const payment = orm(db)
+        .select({
+          id: payments.id,
+          workspace_id: payments.workspace_id,
+          amount: payments.amount,
+          status: payments.status,
+          provider: payments.provider,
+          provider_order_code: payments.provider_order_code,
+        })
+        .from(payments)
+        .where(eq(payments.id, params.id))
+        .get();
       if (!payment) return jsonError(404, "NOT_FOUND", "Payment not found");
       const isAdmin = isInstanceAdmin(db, userId);
       if (!isAdmin && wsRole(db, payment.workspace_id, userId) !== "owner") {
