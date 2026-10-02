@@ -43,7 +43,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger } from "./ui/select";
 import { Separator } from "./ui/separator";
 import { Badge } from "./ui/badge";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
 interface NavItem {
   label: string;
@@ -264,96 +264,100 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const ToggleIcon = collapsed ? PanelLeft : PanelLeftClose;
 
   return (
-    <div className="flex min-h-screen">
-      <aside
-        className={cn(
-          "flex shrink-0 flex-col border-r border-border transition-[width] duration-200",
-          collapsed ? "w-14" : "w-52",
-        )}
-      >
-        <div
+    <TooltipProvider>
+      <div className="flex min-h-screen">
+        <aside
           className={cn(
-            "flex h-12 items-center gap-2 border-b border-border px-3",
-            collapsed && "justify-center px-0",
+            "flex shrink-0 flex-col border-r border-border transition-[width] duration-200",
+            collapsed ? "w-14" : "w-52",
           )}
         >
-          <Shuffle className="size-4 shrink-0" aria-hidden />
-          {!collapsed && <span className="text-sm font-semibold">Hoborouter</span>}
-          {!collapsed && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="ml-auto size-7"
-              aria-label="Collapse sidebar"
-              onClick={toggleCollapsed}
-            >
-              <ToggleIcon className="size-4" />
-            </Button>
+          <div
+            className={cn(
+              "flex h-12 items-center gap-2 border-b border-border px-3",
+              collapsed && "justify-center px-0",
+            )}
+          >
+            <Shuffle className="size-4 shrink-0" aria-hidden />
+            {!collapsed && <span className="text-sm font-semibold">Hoborouter</span>}
+            {!collapsed && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="ml-auto size-7"
+                aria-label="Collapse sidebar"
+                onClick={toggleCollapsed}
+              >
+                <ToggleIcon className="size-4" />
+              </Button>
+            )}
+          </div>
+          <nav className="flex-1 overflow-y-auto p-2 text-sm">
+            {NAV_GROUPS.map((group, gi) => (
+              <div key={gi} className={cn(gi > 0 && "mt-4")}>
+                {group.label && !collapsed && (
+                  <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">
+                    {group.label}
+                  </p>
+                )}
+                {group.items.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    item={item}
+                    active={pathname === item.to}
+                    collapsed={collapsed}
+                  />
+                ))}
+              </div>
+            ))}
+            {isAdmin === true && (
+              <div className="mt-4">
+                {!collapsed && (
+                  <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">Admin</p>
+                )}
+                {ADMIN_NAV.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    item={item}
+                    active={pathname === item.to}
+                    collapsed={collapsed}
+                  />
+                ))}
+              </div>
+            )}
+            {isAdmin === null && !collapsed && (
+              <div className="mt-4 px-2">
+                <Badge variant="secondary">Checking admin…</Badge>
+              </div>
+            )}
+          </nav>
+          {collapsed && (
+            <div className="flex justify-center border-t border-border p-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label="Expand sidebar"
+                onClick={toggleCollapsed}
+              >
+                <ToggleIcon className="size-4" />
+              </Button>
+            </div>
           )}
+        </aside>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <header className="sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur">
+            <div className="w-44">
+              <WorkspaceSwitcher />
+            </div>
+            <div className="flex-1" />
+            <ThemeToggle />
+            <Separator orientation="vertical" className="h-4" />
+            <UserMenu />
+          </header>
+          <main className="min-w-0 flex-1">{emptyWorkspaces ? <CreateWorkspace /> : children}</main>
         </div>
-        <nav className="flex-1 overflow-y-auto p-2 text-sm">
-          {NAV_GROUPS.map((group, gi) => (
-            <div key={gi} className={cn(gi > 0 && "mt-4")}>
-              {group.label && !collapsed && (
-                <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">{group.label}</p>
-              )}
-              {group.items.map((item) => (
-                <NavLink
-                  key={item.to}
-                  item={item}
-                  active={pathname === item.to}
-                  collapsed={collapsed}
-                />
-              ))}
-            </div>
-          ))}
-          {isAdmin === true && (
-            <div className="mt-4">
-              {!collapsed && (
-                <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">Admin</p>
-              )}
-              {ADMIN_NAV.map((item) => (
-                <NavLink
-                  key={item.to}
-                  item={item}
-                  active={pathname === item.to}
-                  collapsed={collapsed}
-                />
-              ))}
-            </div>
-          )}
-          {isAdmin === null && !collapsed && (
-            <div className="mt-4 px-2">
-              <Badge variant="secondary">Checking admin…</Badge>
-            </div>
-          )}
-        </nav>
-        {collapsed && (
-          <div className="flex justify-center border-t border-border p-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-7"
-              aria-label="Expand sidebar"
-              onClick={toggleCollapsed}
-            >
-              <ToggleIcon className="size-4" />
-            </Button>
-          </div>
-        )}
-      </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur">
-          <div className="w-44">
-            <WorkspaceSwitcher />
-          </div>
-          <div className="flex-1" />
-          <ThemeToggle />
-          <Separator orientation="vertical" className="h-4" />
-          <UserMenu />
-        </header>
-        <main className="min-w-0 flex-1">{emptyWorkspaces ? <CreateWorkspace /> : children}</main>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
