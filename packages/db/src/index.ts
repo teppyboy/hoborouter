@@ -1,4 +1,5 @@
 export { createDb } from "./client";
+export { orm } from "./orm";
 export { migrate } from "./migrate";
 import * as schema from "./schema";
 export * from "./schema";
