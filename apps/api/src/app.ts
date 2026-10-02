@@ -18,11 +18,12 @@ import { recoverPending } from "@hoborouter/wallet";
 import { paymentsRoutes } from "./routes/payments";
 import { mockWebhookRoutes } from "./routes/webhooks-mock";
 import { payosWebhookRoutes } from "./routes/webhooks-payos";
-import { devPaymentsRoutes } from "./routes/dev-payments";
 import { dashboardRoutes } from "./routes/dashboard";
 import { adminExtraRoutes } from "./routes/admin-extra";
 import { adminSettingsRoutes } from "./routes/admin-settings";
+import { adminRequestsRoutes } from "./routes/admin-requests";
 import { catalogPublicRoutes } from "./routes/catalog-public";
+import { accountRoutes } from "./routes/account";
 import { payosConfigFromEnv } from "@hoborouter/payments";
 import { mockWebhookConfig } from "./mock-config";
 import { createAuth } from "./auth";
@@ -102,17 +103,18 @@ export const buildApp = (deps: AppDeps = {}) => {
     .use(membersRoutes(db, auth))
     .use(auditRoutes(db, auth))
     .use(keysRoutes(db, auth))
-    .use(paymentsRoutes(db, auth, mockPayments))
+    .use(paymentsRoutes(db, auth))
     .use(mockWebhookRoutes(db, mockPayments))
     .use(payosWebhookRoutes(db, payosConfigFromEnv()))
-    .use(devPaymentsRoutes(db, auth))
     .use(cpaHealthRoutes(db, auth))
     .use(adminModelsRoutes(db, auth))
     .use(adminCatalogRoutes(db, auth))
     .use(dashboardRoutes(db, auth))
     .use(adminExtraRoutes(db, auth))
     .use(adminSettingsRoutes(db, auth))
+    .use(adminRequestsRoutes(db, auth))
     .use(catalogPublicRoutes(db, auth))
+    .use(accountRoutes(db, auth))
     .use(v1ModelsRoutes(db))
     .use(gatewayRoutes(db))
     .get(
@@ -164,6 +166,7 @@ export const buildApp = (deps: AppDeps = {}) => {
       if (status >= 400) {
         let code = status >= 500 ? "INTERNAL_ERROR" : status === 404 ? "NOT_FOUND" : "ERROR";
         let message = status >= 500 ? "Internal server error" : "Request failed";
+        let extras: Record<string, unknown> = {};
         // Elysia 2.0.0-exp.64 emits validation failures as 422
         // application/problem+json { type: 'validation', title, status } —
         // no 'VALIDATION' code field. Normalize to the API's 400 contract
@@ -196,6 +199,18 @@ export const buildApp = (deps: AppDeps = {}) => {
             const error = body?.error ?? body;
             if (typeof error?.code === "string") code = error.code;
             if (typeof error?.message === "string") message = error.message;
+            // Preserve the contract-defined extra error field `workspaces`
+            // (SOLE_OWNER workspace list, 4xx client routes only); never
+            // forward arbitrary route fields through the boundary.
+            if (
+              status >= 400 &&
+              status <= 499 &&
+              error &&
+              typeof error === "object" &&
+              Array.isArray((error as Record<string, unknown>).workspaces)
+            ) {
+              extras = { workspaces: (error as Record<string, unknown>).workspaces };
+            }
           } catch {
             // Keep the generic safe response.
           }
@@ -203,7 +218,7 @@ export const buildApp = (deps: AppDeps = {}) => {
         return await boundaryResponse(
           request,
           status,
-          JSON.stringify({ error: { code, message, request_id: requestId } }),
+          JSON.stringify({ error: { code, message, ...extras, request_id: requestId } }),
           response,
           requestId,
           true,

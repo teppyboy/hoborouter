@@ -64,6 +64,44 @@ test("generic thrown error still masks as 500 INTERNAL_ERROR", async () => {
   expect(JSON.stringify(body)).not.toContain("secret-detail");
 });
 
+test("cpa health: healthy CPA returns labeled fields", async () => {
+  const server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const path = new URL(req.url).pathname;
+      if (path === "/healthz") return Response.json({ status: "ok" });
+      if (path === "/v0/management/config") {
+        if (req.headers.get("authorization") !== "Bearer test-only-not-a-real-secret")
+          return new Response("unauthorized", { status: 401 });
+        return Response.json({ config: "body-contents-never-proxied" });
+      }
+      return new Response("nf", { status: 404 });
+    },
+  });
+  process.env.CPA_BASE_URL = `http://127.0.0.1:${server.port}`;
+  process.env.CPA_MANAGEMENT_KEY = "test-only-not-a-real-secret";
+  try {
+    const { db, app } = await makeApp();
+    const cookie = await signUp(app, "healthy-admin@example.com");
+    makeInstanceAdmin(db, userIdByEmail(db, "healthy-admin@example.com"));
+    const res = await req(app, "/api/v1/admin/cpa/health", { cookie });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("ok");
+    expect(body.proxy_endpoint).toEqual({ healthy: true, http_status: 200 });
+    expect(body.management_api).toEqual({ healthy: true, http_status: 200 });
+    expect(typeof body.latency_ms).toBe("number");
+    expect(body.cpa_host).toBe(`127.0.0.1:${server.port}`);
+    expect(Number.isNaN(Date.parse(body.checked_at))).toBe(false);
+    expect(JSON.stringify(body)).not.toContain("test-only-not-a-real-secret");
+    expect(JSON.stringify(body)).not.toContain("body-contents-never-proxied");
+  } finally {
+    server.stop(true);
+    delete process.env.CPA_BASE_URL;
+    delete process.env.CPA_MANAGEMENT_KEY;
+  }
+});
+
 test("cpa health: unreachable CPA → 502", async () => {
   process.env.CPA_BASE_URL = "http://127.0.0.1:1";
   process.env.CPA_MANAGEMENT_KEY = "test-only-not-a-real-secret";

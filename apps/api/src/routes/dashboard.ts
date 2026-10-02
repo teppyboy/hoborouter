@@ -6,7 +6,7 @@ import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole } from "../authz";
-import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import {
   usageLogs,
   apiKeys,
@@ -14,6 +14,7 @@ import {
   ledgerEntries,
   billingReservations,
   payments,
+  requests as requestsTable,
   orm,
 } from "@hoborouter/db";
 
@@ -73,12 +74,21 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
           ttft_ms: usageLogs.ttft_ms,
           key_prefix: apiKeys.key_prefix,
         };
+        // Admin-soft-deleted requests are hidden from the customer log list.
+        const notDeleted = () => isNull(requestsTable.deleted_at);
         const rows = Number.isFinite(before)
           ? orm(db)
               .select(rowShape)
               .from(usageLogs)
               .leftJoin(apiKeys, eq(apiKeys.id, usageLogs.api_key_id))
-              .where(and(eq(usageLogs.workspace_id, params.id), lt(usageLogs.created_at, before)))
+              .leftJoin(requestsTable, eq(requestsTable.id, usageLogs.request_id))
+              .where(
+                and(
+                  eq(usageLogs.workspace_id, params.id),
+                  lt(usageLogs.created_at, before),
+                  notDeleted(),
+                ),
+              )
               .orderBy(desc(usageLogs.created_at))
               .limit(limit)
               .all()
@@ -86,7 +96,8 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
               .select(rowShape)
               .from(usageLogs)
               .leftJoin(apiKeys, eq(apiKeys.id, usageLogs.api_key_id))
-              .where(eq(usageLogs.workspace_id, params.id))
+              .leftJoin(requestsTable, eq(requestsTable.id, usageLogs.request_id))
+              .where(and(eq(usageLogs.workspace_id, params.id), notDeleted()))
               .orderBy(desc(usageLogs.created_at))
               .limit(limit)
               .all();
@@ -97,7 +108,10 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
       "/api/v1/workspaces/:id/usage-summary",
       {
         params: t.Object({ id: t.String() }),
-        query: t.Object({ days: t.Optional(t.String()) }),
+        query: t.Object({
+          days: t.Optional(t.String()),
+          model: t.Optional(t.String()),
+        }),
         detail: {
           tags: ["Dashboard"],
           summary: "Usage summary",
@@ -112,8 +126,29 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
         if (denied) return denied;
         const daysRaw = typeof query?.days === "string" ? parseInt(query.days, 10) : NaN;
         const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(daysRaw, 365) : 30;
-        const since = Date.now() - days * 24 * 60 * 60 * 1000;
+        // Exact window: days UTC calendar days ending today. Rolling now-based
+        // windows can spill into days+1 daily buckets (today + yesterday + ...).
+        const now = new Date();
+        const since =
+          Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) -
+          (days - 1) * 24 * 60 * 60 * 1000;
+        // Optional public_model filter — applied identically to totals, daily, by_model.
+        const model = typeof query?.model === "string" && query.model !== "" ? query.model : null;
+        const scope = () =>
+          and(
+            eq(usageLogs.workspace_id, params.id),
+            gte(usageLogs.created_at, since),
+            ...(model ? [eq(usageLogs.public_model, model)] : []),
+          );
         const errExpr = sql<number>`case when ${usageLogs.status} != 'ok' then 1 else 0 end`;
+        // Visibility gate — mirrors web/src/pages/logs/filters.ts visibleRows:
+        // hide rows with missing/blank public_model, or with both token counts 0.
+        // Soft-deleted requests are excluded from visibility-gated counts only.
+        // Financial totals (spend/tokens/requests) deliberately include them:
+        // removing a log never moves money or rewrites spend history.
+        const notDeletedSql = sql`not exists (select 1 from requests r where r.id = ${usageLogs.request_id} and r.deleted_at is not null)`;
+        const visibleExpr = sql<number>`case when ${usageLogs.public_model} is not null and trim(${usageLogs.public_model}) != '' and not (${usageLogs.input_tokens} = 0 and ${usageLogs.output_tokens} = 0) and ${notDeletedSql} then 1 else 0 end`;
+        const visibleErrExpr = sql<number>`case when ${usageLogs.status} != 'ok' and ${usageLogs.public_model} is not null and trim(${usageLogs.public_model}) != '' and not (${usageLogs.input_tokens} = 0 and ${usageLogs.output_tokens} = 0) and ${notDeletedSql} then 1 else 0 end`;
         const totals = orm(db)
           .select({
             requests: sql<number>`count(*)`,
@@ -121,9 +156,11 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
             input_tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens}), 0)`,
             output_tokens: sql<number>`coalesce(sum(${usageLogs.output_tokens}), 0)`,
             errors: sql<number>`coalesce(sum(${errExpr}), 0)`,
+            visible_requests: sql<number>`coalesce(sum(${visibleExpr}), 0)`,
+            visible_errors: sql<number>`coalesce(sum(${visibleErrExpr}), 0)`,
           })
           .from(usageLogs)
-          .where(and(eq(usageLogs.workspace_id, params.id), gte(usageLogs.created_at, since)))
+          .where(scope())
           .get();
         const daily = orm(db)
           .select({
@@ -131,9 +168,10 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
             requests: sql<number>`count(*)`,
             spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`,
             tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`,
+            errors: sql<number>`coalesce(sum(${errExpr}), 0)`,
           })
           .from(usageLogs)
-          .where(and(eq(usageLogs.workspace_id, params.id), gte(usageLogs.created_at, since)))
+          .where(scope())
           .groupBy(sql`date(${usageLogs.created_at} / 1000, 'unixepoch')`)
           .orderBy(sql`day`)
           .all();
@@ -145,7 +183,7 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
             tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`,
           })
           .from(usageLogs)
-          .where(and(eq(usageLogs.workspace_id, params.id), gte(usageLogs.created_at, since)))
+          .where(scope())
           .groupBy(usageLogs.public_model)
           // ORDER BY must reference the aliased select column (SQLite has no
           // bare "spend_vnd" — unaliased expression ordering was a 500).

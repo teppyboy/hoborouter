@@ -2,6 +2,7 @@
 // usage-logs, CPA model discovery, system status). No secrets ever emitted:
 // no key hashes, no raw provider payloads, no env values — booleans only.
 import { Elysia, t } from "elysia";
+import { APIError } from "better-auth";
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, isInstanceAdmin, jsonError, writeAudit } from "../authz";
@@ -21,6 +22,51 @@ import {
 } from "@hoborouter/db";
 
 const cpaBase = () => process.env.CPA_BASE_URL || "http://cpa:8317";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Sole-owner workspaces for a user: workspaces where the user is an owner and
+ * no OTHER owner exists. Used to block user removal that would orphan a
+ * workspace (409 SOLE_OWNER).
+ */
+function soleOwnedWorkspaces(db: Database, userId: string) {
+  return db
+    .prepare(
+      `select w.id, w.name from workspaces w
+       join workspace_members wm on wm.workspace_id = w.id and wm.user_id = ? and wm.role = 'owner'
+       where not exists (
+         select 1 from workspace_members wm2
+         where wm2.workspace_id = w.id and wm2.user_id != ? and wm2.role = 'owner'
+       )`,
+    )
+    .all(userId, userId) as { id: string; name: string }[];
+}
+
+/**
+ * Remove a user's live identity (sessions, accounts, memberships, admin flag)
+ * and try to delete the users row. workspace_members/audit_log have no ON
+ * DELETE CASCADE, and audit rows are history that must never be deleted, so a
+ * FK-blocked delete falls back to anonymizing the user row (no login: the
+ * credential account row is already gone). Money/history tables untouched.
+ */
+function removeUserIdentity(db: Database, userId: string) {
+  db.transaction(() => {
+    db.prepare("delete from session where user_id = ?").run(userId);
+    db.prepare("delete from account where user_id = ?").run(userId);
+    db.prepare("delete from workspace_members where user_id = ?").run(userId);
+    db.prepare("delete from instance_admins where user_id = ?").run(userId);
+    try {
+      db.prepare("delete from users where id = ?").run(userId);
+    } catch {
+      // ponytail: FK check via exception; swap to a pre-count of referencing
+      // rows if delete-failure logging ever becomes noisy.
+      db.prepare(
+        "update users set email = ?, name = 'Deleted user', image = null where id = ?",
+      ).run(`deleted+${userId}@invalid`, userId);
+    }
+  })();
+}
 
 async function guard(db: Database, auth: BetterAuthInstance, request: Request) {
   const gate = await requireSession(auth, request);
@@ -231,6 +277,136 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
       },
     )
     .post(
+      "/api/v1/admin/users",
+      {
+        detail: {
+          tags: ["Admin"],
+          summary: "Create user",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request }) => {
+        const g = await guard(db, auth, request);
+        if ("error" in g) return g.error;
+        let body: Record<string, unknown>;
+        try {
+          body = (await request.json()) as Record<string, unknown>;
+        } catch {
+          return jsonError(400, "INVALID", "Invalid JSON body");
+        }
+        const name = typeof body.name === "string" ? body.name.trim() : "";
+        const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+        const password = typeof body.password === "string" ? body.password : "";
+        const instanceAdmin = body.instance_admin === true;
+        if (!name || name.length > 80 || !EMAIL_RE.test(email) || password.length < 8 ||
+          password.length > 200 || email.length > 254) {
+          return jsonError(400, "INVALID", "name (1..80), valid email, and password (min 8) required");
+        }
+        let created: { user: { id: string; email: string; name: string } };
+        try {
+          // Through Better Auth so password hashing matches signup/login.
+          // Non-null: real Better Auth always exposes this (mock test auths don't).
+          created = await auth.api.signUpEmail!({ body: { email, password, name } });
+        } catch (err) {
+          // Better Auth 1.7 reports status as the string 'UNPROCESSABLE_ENTITY'.
+          if (
+            err instanceof APIError &&
+            (err.status === 422 || err.status === "UNPROCESSABLE_ENTITY")
+          ) {
+            return jsonError(409, "EMAIL_TAKEN", "Email already registered");
+          }
+          throw err;
+        }
+        if (instanceAdmin) {
+          db.prepare(
+            "insert or ignore into instance_admins (user_id, created_at, added_by) values (?, ?, ?)",
+          ).run(created.user.id, Date.now(), g.session.user.id);
+        }
+        writeAudit(db, {
+          actorUserId: g.session.user.id,
+          workspaceId: null,
+          action: "user.create",
+          target: created.user.id,
+          detail: { email: created.user.email, instance_admin: instanceAdmin },
+        });
+        return json(
+          {
+            id: created.user.id,
+            name: created.user.name,
+            email: created.user.email,
+            instance_admin: instanceAdmin,
+          },
+          201,
+        );
+      },
+    )
+    .delete(
+      "/api/v1/admin/users/:id",
+      {
+        params: t.Object({ id: t.String() }),
+        detail: {
+          tags: ["Admin"],
+          summary: "Remove user",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params }) => {
+        const g = await guard(db, auth, request);
+        if ("error" in g) return g.error;
+        const actorId = g.session.user.id;
+        const target = orm(db)
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.id, params.id))
+          .get();
+        if (!target) return jsonError(404, "NOT_FOUND", "User not found");
+        // Guards re-read inside the same transaction as the removal:
+        // check-then-act between separate statements could otherwise remove
+        // the last admin or self after a concurrent change. LAST_ADMIN before
+        // self: removing the final instance admin is blocked even when the
+        // remover is that admin (add another admin first).
+        let violation: Response | undefined;
+        db.transaction(() => {
+          if (isInstanceAdmin(db, params.id)) {
+            const adminCount = db
+              .prepare("select count(*) as n from instance_admins")
+              .get() as { n: number };
+            if (adminCount.n <= 1) {
+              violation = jsonError(409, "LAST_ADMIN", "Cannot remove the last instance admin");
+              return;
+            }
+          }
+          if (params.id === actorId) {
+            violation = jsonError(400, "CANNOT_REMOVE_SELF", "You cannot remove your own account");
+            return;
+          }
+          const sole = soleOwnedWorkspaces(db, params.id);
+          if (sole.length > 0) {
+            violation = new Response(
+              JSON.stringify({
+                error: {
+                  code: "SOLE_OWNER",
+                  message: "User is the sole owner of workspaces",
+                  workspaces: sole,
+                },
+              }),
+              { status: 409, headers: { "content-type": "application/json" } },
+            );
+            return;
+          }
+          removeUserIdentity(db, params.id);
+        })();
+        if (violation) return violation;
+        writeAudit(db, {
+          actorUserId: actorId,
+          workspaceId: null,
+          action: "user.remove",
+          target: params.id,
+        });
+        return json({ removed: true });
+      },
+    )
+    .post(
       "/api/v1/admin/payments/:id/complete",
       {
         params: t.Object({ id: t.String() }),
@@ -245,7 +421,8 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request, params }) => {
         // SECURITY: instance-admin-only in every environment. The owner confirms
         // money received out-of-band; ordinary users can never credit
-        // themselves. Same idempotent credit path as dev-payments/webhooks.
+        // themselves. Same idempotent credit path as webhooks; this is the
+        // only completion route for manual payments.
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
         const userId = g.session.user.id;
@@ -320,7 +497,7 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
             !!process.env.PAYOS_CLIENT_ID &&
             !!process.env.PAYOS_API_KEY &&
             !!process.env.PAYOS_CHECKSUM_KEY,
-          dev_payments: process.env.HBR_DEV_PAYMENTS === "1",
+          manual_payments: true,
           db: { wal },
           counts: {
             users: countOf(users),

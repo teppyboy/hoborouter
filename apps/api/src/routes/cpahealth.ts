@@ -31,6 +31,9 @@ export const cpaHealthRoutes = (db: Database, auth: BetterAuthInstance) =>
 
       const key = cpaMgmtKey();
       if (!key) return jsonError(502, "CPA_UNCONFIGURED", "CPA_MANAGEMENT_KEY is not set");
+      // Host:port only — never the management key or any config contents.
+      const host = new URL(cpaBase()).host;
+      const started = performance.now();
       try {
         const health = await fetchOnce(`${cpaBase()}/healthz`);
         if (!health.ok) return jsonError(502, "CPA_UNHEALTHY", `healthz returned ${health.status}`);
@@ -40,6 +43,7 @@ export const cpaHealthRoutes = (db: Database, auth: BetterAuthInstance) =>
         const mgmt = await fetchOnce(`${cpaBase()}/v0/management/config`, {
           headers: { authorization: `Bearer ${key}` },
         });
+        const latency_ms = Math.round(performance.now() - started);
         if (mgmt.status === 401 || mgmt.status === 403)
           return jsonError(
             502,
@@ -48,9 +52,17 @@ export const cpaHealthRoutes = (db: Database, auth: BetterAuthInstance) =>
           );
         if (!mgmt.ok)
           return jsonError(502, "CPA_MANAGEMENT_UNAVAILABLE", `management returned ${mgmt.status}`);
-        return { status: "ok" };
-      } catch {
-        return jsonError(502, "CPA_UNREACHABLE", "CPA did not respond");
+        return {
+          status: "ok" as const,
+          proxy_endpoint: { healthy: true, http_status: health.status },
+          management_api: { healthy: true, http_status: mgmt.status },
+          latency_ms,
+          cpa_host: host,
+          checked_at: new Date().toISOString(),
+        };
+      } catch (err) {
+        const detail = err instanceof Error && err.name === "TimeoutError" ? "timed out" : "did not respond";
+        return jsonError(502, "CPA_UNREACHABLE", `CPA at ${host} ${detail}`);
       }
     },
   );
