@@ -305,7 +305,9 @@ describe("two-connection concurrency gate", () => {
 });
 
 describe("sequential fuzz (500 sequential mixed ops)", () => {
-  test("invariants hold after every commit; ledger balance_after consistent", async () => {
+  test(
+    "invariants hold after every commit; ledger balance_after consistent",
+    async () => {
     const fdb0 = await makeDb();
     const fdb = fdb0.db;
     const ff = await seedFixture(fdb);
@@ -373,6 +375,10 @@ describe("sequential fuzz (500 sequential mixed ops)", () => {
       expect(sum).toBe(after.balance);
     }
     await fdb0.drop();
-  });
+    },
+    // ~2000 sequential Postgres round trips; exceeds bun's default 5s timeout
+    // on CI runners. Explicit timeout keeps the full 500-op sweep.
+    60_000,
+  );
 });
 

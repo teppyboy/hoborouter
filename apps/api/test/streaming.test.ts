@@ -287,31 +287,46 @@ describe("gateway streaming through the app boundary", () => {
   });
 
   test("upstream error mid-stream: sent bytes delivered, stream terminates, no JSON 500 body", async () => {
-    handler = () =>
-      new Response(
-        new ReadableStream({
-          start(c) {
-            c.enqueue(enc.encode(chatChunkLine("A")));
-            // Error after the response head + first chunk have been read,
-            // otherwise fetch() itself rejects before headers arrive.
-            setTimeout(() => c.error(new Error("upstream blew up")), 20);
-          },
-        }),
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    const res = await post(CHAT_PATH, {
-      model: PUBLIC_MODEL,
-      messages: [{ role: "user", content: "hi" }],
-      stream: true,
+    // Simulate a mid-stream upstream failure with a dedicated one-shot server
+    // that force-stops (abrupt socket close) after the first chunk. Erroring the
+    // response stream (c.error) would surface as an unhandled error in the test
+    // process; force-stop terminates the connection with no error raised.
+    const prevBase = process.env.CPA_BASE_URL;
+    const oneShot = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(
+          new ReadableStream({
+            start(c) {
+              c.enqueue(enc.encode(chatChunkLine("A")));
+              // Stop only after the response head + first chunk have been read,
+              // otherwise fetch() itself rejects before headers arrive.
+              setTimeout(() => oneShot.stop(true), 20);
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
     });
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/event-stream");
-    const reader = res.body!.getReader();
-    const first = await reader.read();
-    expect(dec.decode(first.value!)).toContain('"content":"A"');
-    await expect(reader.read()).rejects.toThrow();
-    await waitFor(async () => (await lastCharge()).status === "settled_full_hold");
-    expect((await lastRequestStatus()).status).toBe("upstream_error");
+    process.env.CPA_BASE_URL = `http://127.0.0.1:${oneShot.port}`;
+    try {
+      const res = await post(CHAT_PATH, {
+        model: PUBLIC_MODEL,
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/event-stream");
+      const reader = res.body!.getReader();
+      const first = await reader.read();
+      expect(dec.decode(first.value!)).toContain('"content":"A"');
+      await expect(reader.read()).rejects.toThrow();
+      await waitFor(async () => (await lastCharge()).status === "settled_full_hold");
+      expect((await lastRequestStatus()).status).toBe("upstream_error");
+    } finally {
+      oneShot.stop(true);
+      if (prevBase === undefined) delete process.env.CPA_BASE_URL;
+      else process.env.CPA_BASE_URL = prevBase;
+    }
   });
 
   test("Responses API stream also streams incrementally", async () => {
