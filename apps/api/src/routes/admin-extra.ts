@@ -159,19 +159,25 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         } catch {
           return jsonError(502, "CPA_UNHEALTHY", "invalid /v1/models response");
         }
-        const mapped = new Set(
-          (
-            db.prepare("SELECT DISTINCT upstream_model FROM provider_model_mappings").all() as {
-              upstream_model: string;
-            }[]
-          ).map((r) => r.upstream_model),
-        );
+        const mappedIds = db
+          .prepare(
+            "SELECT DISTINCT pm.upstream_model, m.public_id FROM provider_model_mappings pm JOIN models m ON m.id = pm.model_id WHERE pm.enabled = 1",
+          )
+          .all() as { upstream_model: string; public_id: string }[];
+        const mapped = new Set(mappedIds.map((r) => r.upstream_model));
+        const publicIdsByUpstream = new Map<string, string[]>();
+        for (const r of mappedIds) {
+          const list = publicIdsByUpstream.get(r.upstream_model);
+          if (list) list.push(r.public_id);
+          else publicIdsByUpstream.set(r.upstream_model, [r.public_id]);
+        }
         const data = (upstream.data ?? [])
           .filter((m): m is { id: string; owned_by?: string } => typeof m.id === "string")
           .map((m) => ({
             id: m.id,
             owned_by: typeof m.owned_by === "string" ? m.owned_by : null,
             mapped: mapped.has(m.id),
+            mapped_public_ids: publicIdsByUpstream.get(m.id) ?? [],
           }));
         return json({ data });
       },

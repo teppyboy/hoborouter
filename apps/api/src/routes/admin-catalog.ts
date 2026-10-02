@@ -7,7 +7,7 @@ import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, writeAudit, jsonError } from "../authz";
 import { MAX_SAFE_INTEGER_MONEY } from "@hoborouter/db";
-import { listPublicModels } from "@hoborouter/catalog";
+import { getCurrentPrice, listPublicModels } from "@hoborouter/catalog";
 
 // `provider/name`, lowercase slug chars ([a-z0-9-]) on both sides.
 const PUBLIC_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -145,17 +145,58 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         if ("error" in gate) return gate.error;
         const denied = requireInstanceAdmin(db, gate.session.user.id);
         if (denied) return denied;
-        // Listing flags: listPublicModels hides models without an enabled
-        // mapping or a current price, so surface why here.
+        // Listing status mirrors listPublicModels (enabled + published + enabled
+        // mapping + current price); hidden_reason names the first blocker.
         const now = Date.now();
-        return db
+        const rows = db
           .prepare(
             `SELECT m.*,
               EXISTS(SELECT 1 FROM model_prices p WHERE p.model_id = m.id AND p.retired_at IS NULL AND p.effective_at <= ?) AS has_price,
               EXISTS(SELECT 1 FROM provider_model_mappings pm WHERE pm.model_id = m.id AND pm.enabled = 1) AS has_mapping
            FROM models m ORDER BY m.public_id`,
           )
-          .all(now);
+          .all(now) as (Record<string, unknown> & {
+          id: string;
+          enabled: number;
+          published: number;
+          has_price: number;
+          has_mapping: number;
+        })[];
+        return rows.map((m) => {
+          const mapping =
+            (
+              db
+                .prepare(
+                  "SELECT id, provider, upstream_model, enabled, created_at FROM provider_model_mappings WHERE model_id = ? AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
+                )
+                .get(m.id) as Record<string, unknown> | undefined
+            ) ?? null;
+          const currentPrice =
+            (
+              db
+                .prepare(
+                  "SELECT input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at FROM model_prices WHERE model_id = ? AND effective_at <= ? AND retired_at IS NULL ORDER BY effective_at DESC, id DESC LIMIT 1",
+                )
+                .get(m.id, now) as Record<string, unknown> | undefined
+            ) ?? null;
+          const hidden_reason =
+            m.enabled !== 1
+              ? "disabled"
+              : m.published !== 1
+                ? "not_published"
+                : m.has_mapping !== 1
+                  ? "missing_mapping"
+                  : m.has_price !== 1
+                    ? "missing_price"
+                    : null;
+          return {
+            ...m,
+            listed: hidden_reason === null,
+            hidden_reason,
+            mapping,
+            current_price: currentPrice,
+          };
+        });
       },
     )
     .put(
@@ -249,12 +290,12 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
           return jsonError(404, "NOT_FOUND", "Model not found");
         const b = (body ?? {}) as Record<string, unknown>;
         if (
-          typeof b.provider !== "string" ||
-          !b.provider.trim() ||
           typeof b.upstream_model !== "string" ||
-          !b.upstream_model.trim()
+          !b.upstream_model.trim() ||
+          (b.provider !== undefined && (typeof b.provider !== "string" || !b.provider.trim()))
         )
-          return jsonError(400, "INVALID", "provider and upstream_model are required");
+          return jsonError(400, "INVALID", "upstream_model is required");
+        const provider = typeof b.provider === "string" && b.provider.trim() ? b.provider : "cpa";
         const id = crypto.randomUUID();
         const now = Date.now();
         db.transaction(() => {
@@ -263,7 +304,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
           ).run(
             id,
             params.id,
-            b.provider as string,
+            provider,
             b.upstream_model as string,
             b.enabled === false ? 0 : 1,
             now,
@@ -274,13 +315,105 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
             workspaceId: null,
             action: "catalog.mapping.create",
             target: params.id,
-            detail: { mapping_id: id, provider: b.provider, upstream_model: b.upstream_model },
+            detail: { mapping_id: id, provider, upstream_model: b.upstream_model },
           });
         })();
         return new Response(JSON.stringify({ id, model_id: params.id }), {
           status: 201,
           headers: { "content-type": "application/json" },
         });
+      },
+    )
+    .get(
+      "/api/v1/admin/catalog/models/:id/prices",
+      {
+        params: t.Object({ id: t.String() }),
+        detail: {
+          tags: ["Catalog"],
+          summary: "List price history for a model",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const denied = requireInstanceAdmin(db, gate.session.user.id);
+        if (denied) return denied;
+        if (!db.prepare("SELECT 1 FROM models WHERE id = ?").get(params.id))
+          return jsonError(404, "NOT_FOUND", "Model not found");
+        const rows = db
+          .prepare(
+            "SELECT * FROM model_prices WHERE model_id = ? ORDER BY effective_at DESC, id DESC",
+          )
+          .all(params.id) as ({
+          id: string;
+          effective_at: number;
+        } & Record<string, unknown>)[];
+        const current = getCurrentPrice(db, params.id);
+        return rows.map((r) => ({ ...r, current: current !== null && r.id === current.id }));
+      },
+    )
+    .get(
+      "/api/v1/admin/catalog/models/:id/mappings",
+      {
+        params: t.Object({ id: t.String() }),
+        detail: {
+          tags: ["Catalog"],
+          summary: "List provider mappings for a model",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const denied = requireInstanceAdmin(db, gate.session.user.id);
+        if (denied) return denied;
+        if (!db.prepare("SELECT 1 FROM models WHERE id = ?").get(params.id))
+          return jsonError(404, "NOT_FOUND", "Model not found");
+        return db
+          .prepare(
+            "SELECT id, provider, upstream_model, enabled, created_at FROM provider_model_mappings WHERE model_id = ? ORDER BY created_at DESC",
+          )
+          .all(params.id);
+      },
+    )
+    .patch(
+      "/api/v1/admin/catalog/mappings/:id",
+      {
+        params: t.Object({ id: t.String() }),
+        body: t.Optional(t.Record(t.String(), t.Any())),
+        detail: {
+          tags: ["Catalog"],
+          summary: "Enable or disable a provider mapping",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params, body }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const userId = gate.session.user.id;
+        const denied = requireInstanceAdmin(db, userId);
+        if (denied) return denied;
+        const existing = db
+          .prepare("SELECT * FROM provider_model_mappings WHERE id = ?")
+          .get(params.id) as Record<string, unknown> | undefined;
+        if (!existing) return jsonError(404, "NOT_FOUND", "Mapping not found");
+        const b = (body ?? {}) as Record<string, unknown>;
+        if (typeof b.enabled !== "boolean")
+          return jsonError(400, "INVALID", "enabled (boolean) is required");
+        db.transaction(() => {
+          db.prepare(
+            "UPDATE provider_model_mappings SET enabled = ?, updated_at = ? WHERE id = ?",
+          ).run(b.enabled ? 1 : 0, Date.now(), params.id);
+          writeAudit(db, {
+            actorUserId: userId,
+            workspaceId: null,
+            action: "catalog.mapping.update",
+            target: params.id,
+            detail: { enabled: b.enabled },
+          });
+        })();
+        return { id: params.id, enabled: b.enabled };
       },
     )
     .post(
