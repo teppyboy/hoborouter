@@ -35,7 +35,7 @@ FROM oven/bun:1.4
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000 \
-    HBR_DB_PATH=/data/hoborouter.db \
+    HBR_AVATAR_DIR=/data/avatars \
     HBR_WEB_DIST=/app/apps/web/dist
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/api/node_modules ./apps/api/node_modules
