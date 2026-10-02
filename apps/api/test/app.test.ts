@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { resolveStaticPath } from "../src/static-spa";
+import { buildApp } from "../src/app";
 import { makeApp } from "./helpers";
 
 const secretName = "hbr-secret.txt";
@@ -52,6 +53,19 @@ describe("health + openapi", () => {
     const paths = Object.keys(doc.paths ?? {});
     expect(paths.some((p) => p.startsWith("/v1/chat/completions"))).toBe(false);
     expect(paths.some((p) => p.startsWith("/v1/responses"))).toBe(false);
+  });
+});
+
+describe("missing web dist tolerance", () => {
+  test("buildApp with HBR_WEB_DIST pointing to a missing folder still serves API", async () => {
+    process.env.HBR_WEB_DIST = join(tmpdir(), `hbr-missing-${Date.now()}`);
+    try {
+      const app2 = await buildApp({ db: ctx.db, auth: ctx.auth });
+      expect((await app2.handle(new Request("http://localhost/healthz"))).status).toBe(200);
+      expect((await app2.handle(new Request("http://localhost/v1/models"))).status).toBe(401);
+    } finally {
+      delete process.env.HBR_WEB_DIST;
+    }
   });
 });
 

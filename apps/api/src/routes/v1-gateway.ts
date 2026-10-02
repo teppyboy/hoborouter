@@ -621,6 +621,9 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
       status: upstream.status,
         headers: {
           "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
+          // Reverse proxies (nginx, Caddy, Cloudflare) re-buffer SSE without these.
+          "cache-control": "no-cache",
+          "x-accel-buffering": "no",
           "x-hbr-request-id": requestId,
         },
       },

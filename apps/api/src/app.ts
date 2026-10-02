@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { Elysia } from "elysia";
 import { openapi } from "@elysiajs/openapi";
 import { createDb, type Db } from "@hoborouter/db";
@@ -125,8 +126,12 @@ export const buildApp = async (deps: AppDeps = {}) => {
             headers: { "content-type": "application/json" },
           },
         ),
-    )
-    .use(staticSpa(webDist));
+    );
+
+  // CI runs tests before building the web app; a missing dist must not crash
+  // boot — log once and serve the API without the SPA.
+  if (existsSync(webDist)) app.use(staticSpa(webDist));
+  else console.warn(`[hoborouter] web dist not found at ${webDist}; serving API without SPA`);
 
   // Crash-safe reconciliation of stale reserved/dispatching rows at startup.
   await recoverPending(db, Date.now());
@@ -247,7 +252,16 @@ async function boundaryResponse(
     headers.delete("content-length");
   }
   const noBody = request.method === "HEAD" || status === 204 || status === 304;
+  // json === false is a passthrough of a route-produced Response: stream its
+  // body untouched so SSE reaches the client incrementally. Buffering is only
+  // for small JSON error bodies built by this boundary.
   const responseBody =
-    noBody || body === null ? null : body instanceof Response ? await body.arrayBuffer() : body;
+    noBody || body === null
+      ? null
+      : body instanceof Response
+        ? json
+          ? await body.arrayBuffer()
+          : body.body
+        : body;
   return new Response(responseBody, { status, headers });
 }

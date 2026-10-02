@@ -57,10 +57,14 @@ const chatChunk = (body: Record<string, unknown>, extra: Record<string, unknown>
 
 const sse = (parts: (string | null)[]) => {
   const encoder = new TextEncoder();
+  // HBR_FAKE_CPA_CHUNK_DELAY_MS: inter-chunk delay so E2E can measure real
+  // incremental delivery (default 0 = immediate).
+  const delay = Number(process.env.HBR_FAKE_CPA_CHUNK_DELAY_MS) || 0;
   const stream = new ReadableStream({
-    start(controller) {
+    async start(controller) {
       for (const p of parts) {
         if (p !== null) controller.enqueue(encoder.encode(p));
+        if (delay > 0) await Bun.sleep(delay);
       }
       controller.close();
     },
