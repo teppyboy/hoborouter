@@ -84,9 +84,9 @@ export function renderMarkdown(md: string) {
 }
 
 export function LegalPage({ title, md }: { title: string; md: string }) {
-  const operator = import.meta.env.VITE_LEGAL_OPERATOR_NAME || "[operator name]";
-  const email = import.meta.env.VITE_LEGAL_CONTACT_EMAIL || "[contact email]";
-  const effective = import.meta.env.VITE_LEGAL_EFFECTIVE_DATE || "[effective date]";
+  const operator = import.meta.env.VITE_LEGAL_OPERATOR_NAME || "Hoborouter Team";
+  const email = import.meta.env.VITE_LEGAL_CONTACT_EMAIL || "hoborouter@june8th.me";
+  const effective = import.meta.env.VITE_LEGAL_EFFECTIVE_DATE || "2026-10-02";
   const content = md
     .replaceAll("{{OPERATOR_NAME}}", operator)
     .replaceAll("{{CONTACT_EMAIL}}", email)

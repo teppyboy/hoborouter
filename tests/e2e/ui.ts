@@ -442,6 +442,20 @@ async function main() {
 
   const goto = (path: string) => navigate(BASE + path);
 
+  // --- legal pages public (logged out) + signup terms links ---
+  await step("legal pages public", async () => {
+    await goto("/signup");
+    await page.waitForText("Create account");
+    assert(await page.has("Terms of Service"), "signup links Terms of Service");
+    assert(await page.has("Privacy Policy"), "signup links Privacy Policy");
+    await goto("/terms");
+    await page.waitForText("Terms of Service");
+    await goto("/privacy");
+    await page.waitForText("Privacy Policy");
+    const body = await page.body();
+    assert(!body.includes("{{") && !body.includes("[operator"), "no template placeholders render");
+  });
+
   // --- signup admin ---
   await step("signup admin", async () => {
     await goto("/signup");
@@ -642,6 +656,7 @@ async function main() {
     await page.waitForText("Ledger");
     const body = await page.body();
     assert(/100\.000\s*₫/.test(body), "balance shows 100.000 ₫");
+    assert(/\$[0-9]/.test(body), "balance shows USD primary amount");
     assert(!body.includes("No ledger entries yet"), "ledger has entries");
     assert(body.includes("payment"), "ledger shows payment entry");
   });
@@ -716,7 +731,7 @@ async function main() {
     const body = await page.body();
     const m = body.match(/Requests\n+(\d+)/);
     assert(m && Number(m[1]) >= 3, `requests tile >= 3, got ${m?.[1] ?? "?"}`);
-    assert(!/Spend\n0 ₫/.test(body), "spend is non-zero");
+    assert(!/Spend\n\$0\.00/.test(body), "spend is non-zero in USD");
   });
 
   // --- key lifecycle: disable, enable, revoke ---
@@ -752,10 +767,25 @@ async function main() {
 
   await step("admin system page renders", async () => {
     await goto("/admin/system");
-    await page.waitForText("Instance health and audit log");
+    await page.waitForText("Instance health and status");
     assert(
       (await page.has("gateway_enabled")) || (await page.has("Gateway")),
       "system info present",
+    );
+  });
+
+  await step("admin audit log renders", async () => {
+    await goto("/admin/audit");
+    await page.waitForText("Audit log");
+    const body = await page.body();
+    assert(body.includes("E2E Admin"), "admin actor name shown");
+    assert(body.includes("Workspace created"), "humanized action shown");
+    const actorCol = await evaluate<string>(
+      `[...document.querySelectorAll('tbody tr')].map(r => r.children[2]?.textContent ?? '').join('|')`,
+    );
+    assert(
+      !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(actorCol),
+      "no raw user id in Actor column",
     );
   });
 

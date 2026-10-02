@@ -144,4 +144,4 @@ When either is unset, auth behaves exactly as before. The frontend widget is ski
 
 ## Legal pages
 
-Terms of Service (`/terms`) and Privacy Policy (`/privacy`) are public pages rendered from the markdown source of truth at `apps/web/src/pages/legal/content/`. Operator-specific facts (`{{OPERATOR_NAME}}`, `{{CONTACT_EMAIL}}`, `{{EFFECTIVE_DATE}}`) come from `VITE_LEGAL_OPERATOR_NAME`, `VITE_LEGAL_CONTACT_EMAIL`, and `VITE_LEGAL_EFFECTIVE_DATE` (visible `[operator name]`-style placeholders when unset).
+Terms of Service (`/terms`) and Privacy Policy (`/privacy`) are public pages rendered from the markdown source of truth at `apps/web/src/pages/legal/content/`. Operator-specific facts (`{{OPERATOR_NAME}}`, `{{CONTACT_EMAIL}}`, `{{EFFECTIVE_DATE}}`) come from `VITE_LEGAL_OPERATOR_NAME`, `VITE_LEGAL_CONTACT_EMAIL`, and `VITE_LEGAL_EFFECTIVE_DATE` (build-time for the web image; defaults to "Hoborouter Team" / "hoborouter@june8th.me" / "2026-10-02" when unset).

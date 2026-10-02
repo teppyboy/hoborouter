@@ -12,9 +12,8 @@ Placeholders are filled from Vite env vars:
 **Effective date:** {{EFFECTIVE_DATE}}
 
 These Terms of Service ("Terms") govern your access to and use of Hoborouter, an
-OpenAI-compatible API gateway operated by {{OPERATOR_NAME}}
-({{ADDRESS}}). By creating an account or using the service, you agree to
-these Terms.
+OpenAI-compatible API gateway operated by {{OPERATOR_NAME}}. By creating an
+account or using the service, you agree to these Terms.
 
 ## 1. Acceptance
 

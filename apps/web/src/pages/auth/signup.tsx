@@ -90,6 +90,17 @@ export default function SignupPage() {
           >
             Sign up
           </Button>
+          <p className="text-xs text-muted-foreground">
+            By creating an account you agree to the{" "}
+            <Link to="/terms" className="underline underline-offset-2">
+              Terms of Service
+            </Link>{" "}
+            and{" "}
+            <Link to="/privacy" className="underline underline-offset-2">
+              Privacy Policy
+            </Link>
+            .
+          </p>
         </form>
       </Form>
     </AuthLayout>

@@ -90,6 +90,11 @@ export default function LoginPage() {
           >
             Sign in
           </Button>
+          <p className="text-xs text-muted-foreground">
+            <Link to="/terms" className="underline underline-offset-2">Terms</Link>
+            {" · "}
+            <Link to="/privacy" className="underline underline-offset-2">Privacy</Link>
+          </p>
         </form>
       </Form>
     </AuthLayout>
