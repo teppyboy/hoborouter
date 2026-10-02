@@ -79,6 +79,7 @@ function settleFromTap(
   meta: { upstreamModel: string; provider: string; publicModel: string },
   cachingOn: boolean,
   done: { settled: boolean },
+  timing: { latencyMs?: number; ttftMs?: number },
 ) {
   const billable = resolveBillableUsage(result, rates);
   if (billable.billable) {
@@ -102,6 +103,7 @@ function settleFromTap(
         publicModel: meta.publicModel,
         ...(cachingOn ? {} : { storedCachedInputTokens: billable.usage.cachedInputTokens }),
         ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+        ...timing,
       } as never,
       done,
     );
@@ -206,10 +208,54 @@ function safeUpstreamError(
  * Line-buffered SSE rewriter: swaps the upstream model id for the public id
  * in every parseable `data: {…}` chunk. Non-JSON lines pass through verbatim.
  */
+/**
+ * True when an SSE event carries the first real generated content: a token /
+ * content delta. Role-only chunks, usage-only chunks, pings and empty deltas
+ * do not count as first token.
+ */
+function isFirstTokenEvent(obj: JsonValue, protocol: "chat" | "responses"): boolean {
+  if (typeof obj !== "object" || obj === null) return false;
+  const o = obj as Record<string, unknown>;
+  if (protocol === "chat") {
+    if (!Array.isArray(o.choices) || o.choices.length === 0) return false;
+    const delta = (o.choices[0] as Record<string, unknown> | null)?.delta;
+    if (typeof delta !== "object" || delta === null) return false;
+    const d = delta as Record<string, unknown>;
+    const text =
+      (typeof d.content === "string" && d.content.length > 0) ||
+      (typeof d.reasoning_content === "string" && d.reasoning_content.length > 0) ||
+      (typeof d.reasoning === "string" && d.reasoning.length > 0);
+    if (text) return true;
+    // tool_calls count as first token only when actual argument content is
+    // streaming; id/type/name metadata alone does not.
+    return (
+      Array.isArray(d.tool_calls) &&
+      d.tool_calls.some(
+        (tc) =>
+          typeof tc === "object" &&
+          tc !== null &&
+          typeof (tc as Record<string, unknown>).function === "object" &&
+          (tc as Record<string, unknown>).function !== null &&
+          typeof ((tc as Record<string, unknown>).function as Record<string, unknown>).arguments ===
+            "string" &&
+            (((tc as Record<string, unknown>).function as Record<string, unknown>).arguments as string)
+              .length > 0,
+      )
+    );
+  }
+  // Responses SSE: generated content arrives as *.delta events (text, function
+  // call arguments). Completed/usage/ping events are not first-token.
+  const type = typeof o.type === "string" ? o.type : "";
+  if (!type.endsWith(".delta")) return false;
+  return typeof o.delta === "string" && o.delta.length > 0;
+}
+
 function sseModelRewriteStream(
   source: ReadableStream<Uint8Array>,
   upstreamModel: string,
   publicModel: string,
+  protocol: "chat" | "responses",
+  onFirstToken?: (obj: JsonValue) => void,
 ) {
   const dec = new TextDecoder();
   const enc = new TextEncoder();
@@ -219,6 +265,7 @@ function sseModelRewriteStream(
     if (!line.startsWith("data: ")) return line;
     try {
       const o = JSON.parse(line.slice(6)) as JsonValue;
+      if (onFirstToken && isFirstTokenEvent(o, protocol)) onFirstToken(o);
       return `data: ${JSON.stringify(scrubJsonStrings(o, upstreamModel, publicModel))}`;
     } catch {
       // not JSON — passthrough
@@ -250,6 +297,10 @@ function sseModelRewriteStream(
 }
 
 function gatewayHandler(db: Database, path: string, protocol: "chat" | "responses") {
+  // Timing uses the monotonic clock: ttft (streams: first real token event;
+  // non-stream: not applicable) and total latency to settled completion.
+  const monotonic = () => performance.now();
+  const roundMs = (n: number) => Math.round(n);
   return async ({ request }: { request: Request }): Promise<Response> => {
     // 1. Disabled gate before any DB write.
     if (process.env.HBR_GATEWAY_ENABLED === "0") {
@@ -402,6 +453,7 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     }
 
     const controller = new AbortController();
+    const t0 = monotonic();
     const base = (process.env.CPA_BASE_URL || "http://cpa:8317").replace(/\/$/, "");
     const headers: Record<string, string> = {
       "content-type": "application/json",
@@ -482,7 +534,11 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
       const buf = new Uint8Array(ab);
       tap.push(buf);
       const result = tap.end();
-      settleFromTap(db, requestId, result, rates, meta, cachingOn, done);
+      // Non-stream: TTFT is not applicable (no incremental first token);
+      // record only total latency.
+      settleFromTap(db, requestId, result, rates, meta, cachingOn, done, {
+        latencyMs: roundMs(monotonic() - t0),
+      });
       const body = rewriteJsonModel(ab, mapping.upstream_model, model.public_id);
       return new Response(body, {
         status: upstream.status,
@@ -502,10 +558,14 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     // Pull-based passthrough: client cancel() triggers cancel() below.
     const reader = source.getReader();
     let streamedSettle = false;
+    let ttftMs: number | undefined;
     const settleStreamEnd = () => {
       if (streamedSettle) return;
       streamedSettle = true;
-      settleFromTap(db, requestId, tap.end(), rates, meta, cachingOn, done);
+      settleFromTap(db, requestId, tap.end(), rates, meta, cachingOn, done, {
+        latencyMs: roundMs(monotonic() - t0),
+        ...(ttftMs === undefined ? {} : { ttftMs }),
+      });
     };
     const passthrough = new ReadableStream<Uint8Array>({
       async pull(controller) {
@@ -543,7 +603,10 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     });
     request.signal.addEventListener("abort", () => controller.abort(), { once: true });
     return new Response(
-      sseModelRewriteStream(passthrough, mapping.upstream_model, model.public_id),
+      sseModelRewriteStream(passthrough, mapping.upstream_model, model.public_id, protocol, (obj) => {
+        if (ttftMs === undefined) ttftMs = roundMs(monotonic() - t0);
+        void obj;
+      }),
       {
       status: upstream.status,
         headers: {
