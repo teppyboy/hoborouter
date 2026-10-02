@@ -141,6 +141,22 @@ describe("GET mappings + PATCH mapping", () => {
     const res2 = await req(app, "/api/v1/admin/catalog/models/mdl-1/mappings", { cookie });
     const rows2 = (await res2.json()) as { provider: string; upstream_model: string }[];
     expect(rows2[0]).toMatchObject({ provider: "cpa", upstream_model: "up-2" });
+    expect(rows2[1]?.provider).toBe("cpa");
+  });
+
+  test("mappings listed newest-insertion-first even with identical created_at", async () => {
+    const { db, app, cookie } = await setup();
+    await seedModel(db, "cat@example.com", { mapping: true });
+    const now = Date.now();
+    // Same created_at as seedModel's map-1: ordering must fall back to
+    // insertion chronology (rowid), not random UUID id.
+    db.prepare(
+      "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-2','mdl-1','kimi','up-2',1,?,?)",
+    ).run(now, now);
+    const res = await req(app, "/api/v1/admin/catalog/models/mdl-1/mappings", { cookie });
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as { id: string }[];
+    expect(rows.map((r) => r.id)).toEqual(["map-2", "map-1"]);
   });
 
   test("admin: PATCH toggles enabled (audited); 403 non-admin; 404 unknown", async () => {

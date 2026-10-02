@@ -457,7 +457,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
           return jsonError(404, "NOT_FOUND", "Model not found");
         return db
           .prepare(
-            "SELECT id, provider, upstream_model, enabled, created_at FROM provider_model_mappings WHERE model_id = ? ORDER BY created_at DESC",
+            "SELECT id, provider, upstream_model, enabled, created_at FROM provider_model_mappings WHERE model_id = ? ORDER BY created_at DESC, rowid DESC",
           )
           .all(params.id);
       },
