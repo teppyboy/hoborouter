@@ -10,38 +10,35 @@ import {
 import { authClient } from "./lib/auth";
 import { AppShell } from "./components/app-shell";
 import { Button } from "./components/ui/button";
+import {
+  adminModels,
+  adminPayments,
+  adminPricing,
+  adminProviders,
+  adminSystem,
+  adminUsers,
+  credits,
+  keys,
+  logs,
+  modelDetail,
+  models,
+  overview,
+  payments,
+  settings,
+  usage,
+} from "./lib/prefetch";
+import { queryClient } from "./lib/query-client";
 
-// --- Public auth pages ---
+// Public auth pages (not part of nav prefetching).
 const Login = lazy(() => import("./pages/auth/login"));
 const Signup = lazy(() => import("./pages/auth/signup"));
-
-// --- Placeholder pages; page writers fill these in ---
-const overview = lazy(() => import("./pages/overview"));
-const models = lazy(() => import("./pages/models"));
-const modelDetail = lazy(() => import("./pages/models/detail"));
-const keys = lazy(() => import("./pages/keys"));
-const logs = lazy(() => import("./pages/logs"));
-const usage = lazy(() => import("./pages/usage"));
-const credits = lazy(() => import("./pages/billing/credits"));
-const payments = lazy(() => import("./pages/billing/payments"));
-const settings = lazy(() => import("./pages/settings"));
-const adminUsers = lazy(() => import("./pages/admin/users"));
-const adminModels = lazy(() => import("./pages/admin/models"));
-const adminProviders = lazy(() => import("./pages/admin/providers"));
-const adminPricing = lazy(() => import("./pages/admin/pricing"));
-const adminPayments = lazy(() => import("./pages/admin/payments"));
-const adminSystem = lazy(() => import("./pages/admin/system"));
 
 function Page({ children }: { children: React.ReactNode }) {
   return <div className="p-6">{children}</div>;
 }
 
 const rootRoute = createRootRoute({
-  component: () => (
-    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
-      <Outlet />
-    </Suspense>
-  ),
+  component: () => <Outlet />,
   notFoundComponent: () => (
     <Page>
       <p className="text-sm text-muted-foreground">Page not found.</p>
@@ -52,30 +49,51 @@ const rootRoute = createRootRoute({
   ),
 });
 
-// --- Protected layout: redirect to /login without a session ---
+/**
+ * Cached session check: one network round-trip per staleTime window instead
+ * of one per navigation. Cleared on sign-out via queryClient.clear() in the
+ * app shell, and queryClient.clear() on sign-in transitions keeps it honest.
+ */
+const SESSION_STALE_MS = 5 * 60_000;
+
+// --- Protected layout: owns the AppShell so the shell stays mounted (no
+// sidebar/header flash) while lazy page chunks load inside <Outlet>.
 const protectedLayout = createRoute({
   getParentRoute: () => rootRoute,
   id: "protected",
   beforeLoad: async () => {
-    const { data } = await authClient.getSession();
-    if (!data) {
+    try {
+      await queryClient.ensureQueryData({
+        queryKey: ["session"],
+        staleTime: SESSION_STALE_MS,
+        queryFn: async () => {
+          const { data } = await authClient.getSession();
+          if (!data) throw new Error("unauthenticated");
+          return data;
+        },
+      });
+    } catch {
       throw redirect({ to: "/login" });
     }
   },
-  component: () => <Outlet />,
+  component: () => (
+    <AppShell>
+      <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
+        <Outlet />
+      </Suspense>
+    </AppShell>
+  ),
 });
 
-/** Protected page route wrapped in the app shell. */
+/** Protected page route (chunk loaded from lib/prefetch). */
 function protectedRoute(path: string, PageComponent: React.ComponentType) {
   return createRoute({
     getParentRoute: () => protectedLayout,
     path,
     component: () => (
-      <AppShell>
-        <Page>
-          <PageComponent />
-        </Page>
-      </AppShell>
+      <Page>
+        <PageComponent />
+      </Page>
     ),
   });
 }
@@ -129,6 +147,12 @@ export const routeTree = rootRoute.addChildren([
 
 export const router = createRouter({
   routeTree,
+  defaultPreload: "intent",
+  // Preloaded route data stays fresh briefly so hover-then-click reuses it.
+  defaultPreloadStaleTime: 30_000,
+  // Fast navigations never flash the Suspense fallback.
+  defaultPendingMs: 150,
+  defaultPendingMinMs: 300,
 });
 
 declare module "@tanstack/react-router" {

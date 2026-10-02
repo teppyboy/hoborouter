@@ -28,6 +28,7 @@ import { authClient, useSession } from "../lib/auth";
 import { applyTheme, useThemeStore, type Theme } from "../lib/theme";
 import { useSidebarStore } from "../lib/sidebar";
 import { useWorkspaceStore } from "../lib/workspace";
+import { preloadChunk, preloadNavChunksOnIdle } from "../lib/prefetch";
 import { useCurrentWorkspaceId, useWorkspaces, type Workspace } from "../lib/workspace-queries";
 import { CreateWorkspace } from "./create-workspace";
 import { cn } from "../lib/utils";
@@ -230,7 +231,10 @@ function NavLink({
   const link = (
     <Link
       to={item.to}
+      preload="intent"
       viewTransition
+      onMouseEnter={() => preloadChunk(item.to)}
+      onFocus={() => preloadChunk(item.to)}
       aria-label={collapsed ? item.label : undefined}
       className={cn(
         "relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors duration-150",
@@ -255,6 +259,10 @@ function NavLink({
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // Warm main nav route chunks once the app has painted.
+  useEffect(() => {
+    preloadNavChunksOnIdle();
+  }, []);
   const isAdmin = useIsAdmin();
   const collapsed = useSidebarStore((s) => s.collapsed);
   const toggleCollapsed = useSidebarStore((s) => s.toggleCollapsed);
