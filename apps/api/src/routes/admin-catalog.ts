@@ -66,6 +66,49 @@ function validateModelBody(b: Record<string, unknown>): string | null {
   return null;
 }
 
+/**
+ * One route per model: disable all currently enabled mappings, then insert a
+ * new enabled one (history preserved — old rows keep their ids because
+ * requests.provider_model_mapping_id and billing settlement reference them).
+ * No-op when the enabled route already matches.
+ */
+function setModelRoute(
+  db: Database,
+  modelId: string,
+  upstreamModel: string,
+  provider: string,
+  userId: string,
+): { changed: boolean; mappingId: string | null } {
+  const current = db
+    .prepare(
+      "SELECT id, provider, upstream_model FROM provider_model_mappings WHERE model_id = ? AND enabled = 1 ORDER BY created_at ASC, id ASC LIMIT 1",
+    )
+    .get(modelId) as { id: string; provider: string; upstream_model: string } | undefined;
+  if (current && current.upstream_model === upstreamModel && current.provider === provider)
+    return { changed: false, mappingId: current.id };
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const before = current
+    ? { id: current.id, provider: current.provider, upstream_model: current.upstream_model }
+    : null;
+  db.transaction(() => {
+    db.prepare(
+      "UPDATE provider_model_mappings SET enabled = 0, updated_at = ? WHERE model_id = ? AND enabled = 1",
+    ).run(now, modelId);
+    db.prepare(
+      "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES (?,?,?,?,1,?,?)",
+    ).run(id, modelId, provider, upstreamModel, now, now);
+    writeAudit(db, {
+      actorUserId: userId,
+      workspaceId: null,
+      action: "catalog.route.update",
+      target: modelId,
+      detail: { before, after: { provider, upstream_model: upstreamModel, mapping_id: id } },
+    });
+  })();
+  return { changed: true, mappingId: id };
+}
+
 export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
   new Elysia({ name: "admin-catalog" })
     .post(
@@ -296,32 +339,63 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         )
           return jsonError(400, "INVALID", "upstream_model is required");
         const provider = typeof b.provider === "string" && b.provider.trim() ? b.provider : "cpa";
-        const id = crypto.randomUUID();
-        const now = Date.now();
-        db.transaction(() => {
-          db.prepare(
-            "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-          ).run(
-            id,
-            params.id,
-            provider,
-            b.upstream_model as string,
-            b.enabled === false ? 0 : 1,
-            now,
-            now,
-          );
-          writeAudit(db, {
-            actorUserId: userId,
-            workspaceId: null,
-            action: "catalog.mapping.create",
-            target: params.id,
-            detail: { mapping_id: id, provider, upstream_model: b.upstream_model },
+        if (b.enabled === false) {
+          const id = crypto.randomUUID();
+          const now = Date.now();
+          db.transaction(() => {
+            db.prepare(
+              "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES (?,?,?,?,0,?,?)",
+            ).run(id, params.id, provider, b.upstream_model as string, now, now);
+            writeAudit(db, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "catalog.mapping.create",
+              target: params.id,
+              detail: { mapping_id: id, provider, upstream_model: b.upstream_model },
+            });
+          })();
+          return new Response(JSON.stringify({ id, model_id: params.id }), {
+            status: 201,
+            headers: { "content-type": "application/json" },
           });
-        })();
-        return new Response(JSON.stringify({ id, model_id: params.id }), {
+        }
+        // Enabled insert = setting the model's single route (never leaves two enabled).
+        const { mappingId } = setModelRoute(db, params.id, b.upstream_model as string, provider, userId);
+        return new Response(JSON.stringify({ id: mappingId, model_id: params.id }), {
           status: 201,
           headers: { "content-type": "application/json" },
         });
+      },
+    )
+    .put(
+      "/api/v1/admin/catalog/models/:id/route",
+      {
+        params: t.Object({ id: t.String() }),
+        body: t.Optional(t.Record(t.String(), t.Any())),
+        detail: {
+          tags: ["Catalog"],
+          summary: "Set the model's single route",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params, body }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const userId = gate.session.user.id;
+        const denied = requireInstanceAdmin(db, userId);
+        if (denied) return denied;
+        if (!db.prepare("SELECT 1 FROM models WHERE id = ?").get(params.id))
+          return jsonError(404, "NOT_FOUND", "Model not found");
+        const b = (body ?? {}) as Record<string, unknown>;
+        if (
+          typeof b.upstream_model !== "string" ||
+          !b.upstream_model.trim() ||
+          (b.provider !== undefined && (typeof b.provider !== "string" || !b.provider.trim()))
+        )
+          return jsonError(400, "INVALID", "upstream_model is required");
+        const provider = typeof b.provider === "string" && b.provider.trim() ? b.provider : "cpa";
+        const result = setModelRoute(db, params.id, b.upstream_model.trim(), provider, userId);
+        return { id: result.mappingId, model_id: params.id, changed: result.changed };
       },
     )
     .get(
