@@ -61,6 +61,32 @@ Dashboard works without this. The gateway routes (`/v1/chat/completions`, `/v1/r
 
 Mock top-ups are on by default. As owner, self-mark paid: add `HBR_DEV_PAYMENTS=1` (only works with `NODE_ENV=development` or `test`).
 
+## Become admin in dev
+
+Start the backend with `HBR_DEV_ADMIN_EMAIL=you@example.com` and `NODE_ENV=development`, then sign up in the UI with that exact email — the account is created as an instance admin.
+
+## Fake CPA for local AI calls
+
+Run a fake CPA instead of the real one:
+
+```sh
+bun scripts/dev-fake-cpa.ts   # listens on http://127.0.0.1:8399
+```
+
+Start the backend with `CPA_BASE_URL=http://127.0.0.1:8399 CPA_ACCESS_KEY=<any>` so gateway calls route to it.
+
+## E2E UI check
+
+Isolated stack (fake CPA :8399, API :3099, vite :5199, fresh SQLite each up):
+
+```sh
+scripts/e2e-stack.sh up
+bun scripts/e2e-ui.ts          # full sweep, ~7 min
+scripts/e2e-stack.sh down
+```
+
+Iterate on one area only: `E2E_ONLY='gateway|overview' bun scripts/e2e-ui.ts` (regex over step names).
+
 ## Tests & type check
 
 ```sh
