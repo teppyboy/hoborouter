@@ -181,7 +181,7 @@ export const payments = sqliteTable(
     status: text("status", {
       enum: ["pending", "succeeded", "failed", "expired"],
     }).notNull(),
-    provider: text("provider", { enum: ["mock", "vietqr_manual", "payos"] }).notNull(),
+    provider: text("provider", { enum: ["manual", "mock", "vietqr_manual", "payos"] }).notNull(),
     provider_order_code: text("provider_order_code").notNull(),
     created_at: integer("created_at").notNull(),
     expires_at: integer("expires_at"),
@@ -356,6 +356,10 @@ export const requests = sqliteTable(
     ttft_ms: integer("ttft_ms"),
     duration_ms: integer("duration_ms"),
     created_at: integer("created_at").notNull(),
+    // Soft delete (migration 0007). Audit trail only: wallet, ledger, payments
+    // and financial totals are untouched by deletion.
+    deleted_at: integer("deleted_at"),
+    deleted_by: text("deleted_by"),
   },
   (t) => [
     index("requests_cpa_trace_idx").on(t.cpa_trace_id),

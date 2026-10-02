@@ -298,7 +298,11 @@ test("populated db already at 0002 (users have email) proceeds through pending m
   const userRows = rowsJson(db, "users");
   migrate(db);
   expect(rowsJson(db, "users")).toBe(userRows);
-  expect(journalRows(db)).toHaveLength(7);
+  expect(journalRows(db)).toHaveLength(
+    (JSON.parse(readFileSync(join(installedDrizzle, "meta", "_journal.json"), "utf8")) as {
+      entries: unknown[];
+    }).entries.length,
+  );
   expect(fkViolations(db)).toHaveLength(0);
 });
 
@@ -465,17 +469,33 @@ test("0004 requests rebuild: requests rows and billing_reservations/usage_logs c
     INSERT INTO usage_logs(id,idempotency_key,request_id,workspace_id,provider,public_model,upstream_model,input_tokens,output_tokens,cached_input_tokens,reasoning_tokens,status,created_at) VALUES ('ul','idem','r1','w','p','m','up',1,0,0,0,'ok',0);
   `);
   const tables = ["requests", "billing_reservations", "usage_logs"];
-  const rowsSorted = (t: string): string[] => {
+  const cols = (t: string): string[] => {
+    if (!/^\w+$/.test(t)) throw new Error(`bad table ${t}`);
+    return (db.prepare(`PRAGMA table_info("${t}")`).all() as { name: string }[]).map((c) => c.name);
+  };
+  const rowsSorted = (t: string, keys: string[]): string[] => {
     if (!/^(requests|billing_reservations|usage_logs)$/.test(t)) throw new Error(`bad table ${t}`);
     return (db.prepare(`SELECT * FROM "${t}"`).all() as object[])
-      .map((r) => JSON.stringify(r, Object.keys(r).sort()))
+      .map((r) => JSON.stringify(r, [...keys].sort()))
       .sort();
   };
-  const before = new Map(tables.map((t) => [t, rowsSorted(t)]));
+  const before = new Map(tables.map((t) => [t, { keys: cols(t), rows: rowsSorted(t, cols(t)) }]));
 
   migrate(db);
 
-  for (const t of tables) expect(rowsSorted(t)).toEqual(before.get(t)!);
+  for (const t of tables) {
+    const { keys, rows } = before.get(t)!;
+    // Compare on the pre-migration column set so added columns don't mask data preservation.
+    expect(rowsSorted(t, keys)).toEqual(rows);
+    // Any column added by the rebuild must be NULL on every preserved row.
+    for (const c of cols(t).filter((c) => !keys.includes(c))) {
+      if (!/^\w+$/.test(c)) throw new Error(`bad column ${c}`);
+      expect(
+        (db.prepare(`SELECT count(*) AS n FROM "${t}" WHERE "${c}" IS NOT NULL`).get() as { n: number })
+          .n,
+      ).toBe(0);
+    }
+  }
   // Canonical request with model_id only now legal; request with neither is not.
   expect(() =>
     db.exec(
@@ -526,11 +546,29 @@ test("0005 api_keys rebuild: api_keys rows and children preserved, FK clean, tri
     "usage_logs",
     "api_key_model_permissions",
   ];
-  const before = new Map(tables.map((t) => [t, rowsJson(db, t)]));
+  const beforeCols = new Map(
+    tables.map((t) => [t, (db.prepare(`PRAGMA table_info("${t}")`).all() as { name: string }[]).map((c) => c.name)]),
+  );
+  const before = new Map(tables.map((t) => [t, rowsJson(db, t, beforeCols.get(t))]));
 
   migrate(db); // applies 0005
 
-  for (const t of tables) expect(rowsJson(db, t)).toEqual(before.get(t)!);
+  for (const t of tables) {
+    // Compare on the pre-migration column set so added columns don't mask data preservation.
+    expect(rowsJson(db, t, beforeCols.get(t))).toEqual(before.get(t)!);
+    // Any column added by the rebuild must be NULL on every preserved row.
+    if (!/^\w+$/.test(t)) throw new Error(`bad table ${t}`);
+    const afterCols = (db.prepare(`PRAGMA table_info("${t}")`).all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    for (const c of afterCols.filter((c) => !beforeCols.get(t)!.includes(c))) {
+      if (!/^\w+$/.test(c)) throw new Error(`bad column ${c}`);
+      expect(
+        (db.prepare(`SELECT count(*) AS n FROM "${t}" WHERE "${c}" IS NOT NULL`).get() as { n: number })
+          .n,
+      ).toBe(0);
+    }
+  }
   expect(fkViolations(db)).toHaveLength(0);
   // Rebuilt table keeps 4-value status CHECK via triggers + CHECK.
   for (const s of ["enabled", "disabled"]) {
