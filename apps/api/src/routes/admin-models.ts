@@ -12,23 +12,37 @@ import {
   jsonError,
 } from "../authz";
 import { publishSnapshot } from "@hoborouter/catalog";
+import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
+import { modelBindings, priceSnapshots, orm } from "@hoborouter/db";
 
 function latestSnapshots(db: Database) {
-  return new Map(
-    (
-      db
-        .prepare(
-          "SELECT * FROM (SELECT ps.*, ROW_NUMBER() OVER (PARTITION BY binding_id ORDER BY created_at DESC, id DESC) rn FROM price_snapshots ps) WHERE rn = 1",
-        )
-        .all() as {
-        binding_id: string;
-        id: string;
-        price_input: number;
-        price_output: number;
-        created_at: number;
-      }[]
-    ).map((s) => [s.binding_id, s]),
+  // Latest snapshot per binding: ROW_NUMBER over (partition, created_at desc, id desc).
+  const rn = sql<number>`row_number() over (partition by ${priceSnapshots.binding_id} order by ${priceSnapshots.created_at} desc, ${priceSnapshots.id} desc)`.as(
+    "rn",
   );
+  const ranked = orm(db)
+    .select({
+      binding_id: priceSnapshots.binding_id,
+      id: priceSnapshots.id,
+      price_input: priceSnapshots.price_input,
+      price_output: priceSnapshots.price_output,
+      created_at: priceSnapshots.created_at,
+      rn,
+    })
+    .from(priceSnapshots)
+    .as("ps");
+  const rows = orm(db)
+    .select({
+      binding_id: ranked.binding_id,
+      id: ranked.id,
+      price_input: ranked.price_input,
+      price_output: ranked.price_output,
+      created_at: ranked.created_at,
+    })
+    .from(ranked)
+    .where(eq(ranked.rn, 1))
+    .all();
+  return new Map(rows.map((s) => [s.binding_id, s]));
 }
 
 export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
@@ -48,14 +62,23 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
         const denied = requireInstanceAdmin(db, gate.session.user.id);
         if (denied) return denied;
         const snaps = latestSnapshots(db);
-        const rows = db
-          .prepare(
-            "SELECT id, workspace_id, public_model, cpa_alias, status, price_input_per_1m, price_output_per_1m, effective_at FROM model_bindings ORDER BY public_model",
-          )
-          .all() as Record<string, unknown>[];
+        const rows = orm(db)
+          .select({
+            id: modelBindings.id,
+            workspace_id: modelBindings.workspace_id,
+            public_model: modelBindings.public_model,
+            cpa_alias: modelBindings.cpa_alias,
+            status: modelBindings.status,
+            price_input_per_1m: modelBindings.price_input_per_1m,
+            price_output_per_1m: modelBindings.price_output_per_1m,
+            effective_at: modelBindings.effective_at,
+          })
+          .from(modelBindings)
+          .orderBy(asc(modelBindings.public_model))
+          .all();
         return rows.map((r) => ({
           ...r,
-          latest_snapshot: snaps.get(r.id as string) ?? null,
+          latest_snapshot: snaps.get(r.id) ?? null,
         }));
       },
     )
@@ -99,9 +122,19 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
         const id = crypto.randomUUID();
         const now = Date.now();
         db.transaction(() => {
-          db.prepare(
-            "INSERT INTO model_bindings (id, workspace_id, public_model, cpa_alias, status, price_input_per_1m, price_output_per_1m, effective_at) VALUES (?,NULL,?,?,'published',?,?,?)",
-          ).run(id, publicModel, cpaAlias, pin, pout, now);
+          orm(db)
+            .insert(modelBindings)
+            .values({
+              id,
+              workspace_id: null,
+              public_model: publicModel,
+              cpa_alias: cpaAlias,
+              status: "published",
+              price_input_per_1m: pin,
+              price_output_per_1m: pout,
+              effective_at: now,
+            })
+            .run();
           publishSnapshot(db, { bindingId: id, priceInput: pin, priceOutput: pout, now });
           writeAudit(db, {
             actorUserId: userId,
@@ -137,9 +170,11 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
         const userId = gate.session.user.id;
         const denied = requireInstanceAdmin(db, userId);
         if (denied) return denied;
-        const existing = db
-          .prepare("SELECT id, status FROM model_bindings WHERE id = ?")
-          .get(params.id) as { id: string; status: string } | undefined;
+        const existing = orm(db)
+          .select({ id: modelBindings.id, status: modelBindings.status })
+          .from(modelBindings)
+          .where(eq(modelBindings.id, params.id))
+          .get();
         if (!existing) return jsonError(404, "NOT_FOUND", "Model binding not found");
         const b = (body ?? {}) as Record<string, unknown>;
         const pin = b.price_input_per_1m;
@@ -162,9 +197,15 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
         }
         const now = Date.now();
         db.transaction(() => {
-          db.prepare(
-            "UPDATE model_bindings SET price_input_per_1m = ?, price_output_per_1m = ?, status = ? WHERE id = ?",
-          ).run(pin, pout, status, params.id);
+          orm(db)
+            .update(modelBindings)
+            .set({
+              price_input_per_1m: pin,
+              price_output_per_1m: pout,
+              status: status as "published" | "disabled",
+            })
+            .where(eq(modelBindings.id, params.id))
+            .run();
           // A price change publishes a NEW immutable snapshot — never edits old rows.
           publishSnapshot(db, { bindingId: params.id, priceInput: pin, priceOutput: pout, now });
           writeAudit(db, {
@@ -202,18 +243,31 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
         // Read-only view: published bindings enabled for this workspace (own ∪ global).
         // No cpa_alias — aliases are never exposed outside the admin console.
         const snaps = latestSnapshots(db);
-        const rows = db
-          .prepare(
-            "SELECT id, public_model, status, price_input_per_1m, price_output_per_1m, effective_at FROM model_bindings WHERE status = 'published' AND (workspace_id IS NULL OR workspace_id = ?) ORDER BY public_model",
+        const rows = orm(db)
+          .select({
+            id: modelBindings.id,
+            public_model: modelBindings.public_model,
+            status: modelBindings.status,
+            price_input_per_1m: modelBindings.price_input_per_1m,
+            price_output_per_1m: modelBindings.price_output_per_1m,
+            effective_at: modelBindings.effective_at,
+          })
+          .from(modelBindings)
+          .where(
+            and(
+              eq(modelBindings.status, "published"),
+              or(isNull(modelBindings.workspace_id), eq(modelBindings.workspace_id, params.id)),
+            ),
           )
-          .all(params.id) as Record<string, unknown>[];
+          .orderBy(asc(modelBindings.public_model))
+          .all();
         return rows.map((r) => ({
           id: r.id,
           public_model: r.public_model,
           price_input_per_1m: r.price_input_per_1m,
           price_output_per_1m: r.price_output_per_1m,
           effective_at: r.effective_at,
-          snapshot_id: snaps.get(r.id as string)?.id ?? null,
+          snapshot_id: snaps.get(r.id)?.id ?? null,
         }));
       },
     );
