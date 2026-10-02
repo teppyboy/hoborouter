@@ -34,7 +34,7 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
         if (denied) return denied;
         return db
           .prepare(
-            "SELECT wm.user_id, wm.role, u.email, u.name FROM workspace_members wm JOIN users u ON u.id = wm.user_id WHERE wm.workspace_id = ?",
+            "SELECT wm.user_id, wm.role, u.email, u.name FROM workspace_members wm JOIN users u ON u.id = wm.user_id WHERE wm.workspace_id = ? ORDER BY CASE wm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, u.created_at",
           )
           .all(params.id);
       },

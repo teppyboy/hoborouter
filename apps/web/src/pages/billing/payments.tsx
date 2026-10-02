@@ -133,7 +133,7 @@ function PaymentStatus({ workspaceId, paymentId }: { workspaceId: string; paymen
           </p>
           <p className="text-xs text-muted-foreground">
             Provider <span className="font-mono">{p.provider}</span> · order{" "}
-            <span className="font-mono">{p.provider_order_code}</span> · {formatDate(String(p.created_at))}
+            <span className="font-mono">{p.provider_order_code}</span> · {formatDate(p.created_at)}
           </p>
           {p.status === "pending" && (
             <p className="text-xs text-muted-foreground">Waiting for admin confirmation…</p>

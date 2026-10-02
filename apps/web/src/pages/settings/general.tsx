@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -32,7 +33,12 @@ export default function GeneralTab({ workspaceId }: { workspaceId: string }) {
     queryFn: () => api<Workspace>(`/api/v1/workspaces/${workspaceId}`),
   });
 
-  const form = useForm<Values>({ resolver: zodResolver(schema) });
+  const form = useForm<Values>({ resolver: zodResolver(schema), defaultValues: { name: "" } });
+
+  // Load the current name once the workspace query resolves (controlled input).
+  useEffect(() => {
+    if (ws) form.reset({ name: ws.name });
+  }, [ws, form]);
 
   const save = useMutation({
     mutationFn: (values: Values) =>

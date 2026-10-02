@@ -32,6 +32,11 @@ export const workspacesRoutes = (db: Database, auth: BetterAuthInstance) =>
           db.prepare(
             "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?,?,'owner')",
           ).run(id, userId);
+          // Every workspace needs a wallet: payments, gateway billing and the
+          // ledger all assume one exists (they 404 without it).
+          db.prepare(
+            "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
+          ).run(crypto.randomUUID(), id, Date.now());
           writeAudit(db, {
             actorUserId: userId,
             workspaceId: id,
@@ -145,6 +150,14 @@ export const workspacesRoutes = (db: Database, auth: BetterAuthInstance) =>
             db.prepare("UPDATE audit_log SET workspace_id = NULL WHERE workspace_id = ?").run(
               params.id,
             );
+            // Empty wallet (no money ever held) is safe to remove with the
+            // workspace; a funded or reserved wallet keeps the 409 guard.
+            const wallet = db
+              .prepare("SELECT id, balance, reserved FROM wallets WHERE workspace_id = ?")
+              .get(params.id) as { id: string; balance: number; reserved: number } | undefined;
+            if (wallet && wallet.balance === 0 && wallet.reserved === 0) {
+              db.prepare("DELETE FROM wallets WHERE id = ?").run(wallet.id);
+            }
             db.prepare("DELETE FROM workspace_members WHERE workspace_id = ?").run(params.id);
             db.prepare("DELETE FROM workspaces WHERE id = ?").run(params.id);
           })();

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
+import { useSession } from "../lib/auth";
 import { useWorkspaceStore } from "../lib/workspace";
 
 export interface Workspace {
@@ -12,10 +13,14 @@ export interface Workspace {
 export function useWorkspaces() {
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
   const setWorkspaceId = useWorkspaceStore((s) => s.setWorkspaceId);
+  const { data: session } = useSession();
 
   const query = useQuery({
     queryKey: ["workspaces"],
     queryFn: () => api<Workspace[]>("/api/v1/workspaces"),
+    // Only fetch with a live session; avoids 401 noise across logout/login.
+    enabled: !!session?.user?.id,
+    retry: false,
   });
 
   useEffect(() => {

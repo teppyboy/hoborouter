@@ -3,6 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
+import { queryClient } from "../../lib/query-client";
 import { authClient } from "../../lib/auth";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -36,6 +37,7 @@ export default function SignupPage() {
       return;
     }
     toast("Account created");
+    queryClient.clear();
     navigate({ to: "/" });
   };
 

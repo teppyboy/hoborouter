@@ -14,13 +14,26 @@ import {
   type PriceRow,
 } from "@hoborouter/catalog";
 
+/** capabilities is stored as a JSON string; raw bun:sqlite reads return it unparsed. */
+function parseCaps(v: unknown): string[] {
+  if (typeof v === "string") {
+    try {
+      const parsed = JSON.parse(v);
+      if (Array.isArray(parsed) && parsed.every((c) => typeof c === "string")) return parsed;
+    } catch {
+      // fall through
+    }
+  }
+  return Array.isArray(v) ? (v as string[]) : [];
+}
+
 export const toCatalogItem = (model: ModelRow, price: PriceRow) => ({
   id: model.id,
   public_id: model.public_id,
   display_name: model.display_name,
   provider: model.provider,
   description: model.description,
-  capabilities: model.capabilities ?? [],
+  capabilities: parseCaps(model.capabilities),
   context_window: model.context_window,
   price: {
     input_usd_micro_per_1m: price.input_usd_micro_per_1m,

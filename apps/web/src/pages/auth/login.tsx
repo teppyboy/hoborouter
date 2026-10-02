@@ -3,6 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
+import { queryClient } from "../../lib/query-client";
 import { authClient } from "../../lib/auth";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -35,6 +36,9 @@ export default function LoginPage() {
       return;
     }
     toast("Signed in");
+    // Session identity changed: drop all cached workspace-scoped data so no
+    // stale (or unauthorized) queries from the previous session refetch.
+    queryClient.clear();
     navigate({ to: "/" });
   };
 

@@ -25,11 +25,16 @@ export function formatTokens(n: number | null | undefined): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
-/** Timestamp -> readable date/time. */
-export function formatDate(iso: string | Date | null | undefined): string {
+/** Timestamp (ms epoch, ISO string, or Date) -> readable date/time. */
+export function formatDate(iso: string | number | Date | null | undefined): string {
   if (iso == null) return "—";
+  const d = iso instanceof Date ? iso : new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : vndFormatDate(d);
+}
+
+function vndFormatDate(d: Date): string {
   return new Intl.DateTimeFormat("vi-VN", {
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(iso));
+  }).format(d);
 }

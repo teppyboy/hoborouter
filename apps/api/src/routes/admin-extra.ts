@@ -4,7 +4,7 @@
 import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
-import { requireSession, requireInstanceAdmin, jsonError, writeAudit } from "../authz";
+import { requireSession, requireInstanceAdmin, isInstanceAdmin, jsonError, writeAudit } from "../authz";
 import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments";
 
 const cpaBase = () => process.env.CPA_BASE_URL || "http://cpa:8317";
@@ -22,6 +22,33 @@ const json = (data: unknown, status = 200) =>
 
 export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
   new Elysia({ name: "admin-extra" })
+    .get(
+      "/api/v1/me",
+      {
+        detail: {
+          tags: ["Admin"],
+          summary: "Current session user",
+          description:
+            "Identity + instance-admin flag for any authenticated session (no admin required).",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const userId = gate.session.user.id;
+        const row = db
+          .prepare("SELECT id, name, email FROM users WHERE id = ?")
+          .get(userId) as { id: string; name: string; email: string } | undefined;
+        if (!row) return jsonError(404, "NOT_FOUND", "User not found");
+        return json({
+          id: row.id,
+          name: row.name,
+          email: row.email,
+          is_instance_admin: isInstanceAdmin(db, userId),
+        });
+      },
+    )
     .get(
       "/api/v1/admin/users",
       {

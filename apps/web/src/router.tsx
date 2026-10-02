@@ -104,8 +104,9 @@ const publicRoutes = [
 const protectedRoutes = [
   protectedRoute("/", overview),
   protectedRoute("/models", models),
-  // Splat: public model ids may contain "/"; read via useParams().["*"] (decoded).
-  protectedRoute("/models/$", modelDetail),
+  // Detail path uses a dedicated prefix so the splat cannot also match the
+  // empty /models path (which would collide with the models index route).
+  protectedRoute("/models/view/$", modelDetail),
   protectedRoute("/keys", keys),
   protectedRoute("/logs", logs),
   protectedRoute("/usage", usage),

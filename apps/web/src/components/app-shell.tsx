@@ -57,16 +57,15 @@ const ADMIN_NAV: NavItem[] = [
   { label: "System", to: "/admin/system" },
 ];
 
-/** Detect instance-admin via GET /api/v1/admin/system (200 = admin, 403 = not), cached for the session. */
+/** Detect instance-admin via GET /api/v1/me (200 = session, flag on the payload). */
 function useIsAdmin() {
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;
-    api<unknown>("/api/v1/admin/system")
-      .then(() => !cancelled && setIsAdmin(true))
-      .catch((err: { status?: number }) => {
-        if (!cancelled && err?.status === 403) setIsAdmin(false);
-        else if (!cancelled) setIsAdmin(false); // ponytail: 404/500 also hides admin nav
+    api<{ is_instance_admin?: boolean }>("/api/v1/me")
+      .then((me) => !cancelled && setIsAdmin(!!me.is_instance_admin))
+      .catch(() => {
+        if (!cancelled) setIsAdmin(false);
       });
     return () => {
       cancelled = true;
@@ -103,12 +102,17 @@ function ThemeToggle() {
 }
 
 function WorkspaceSwitcher() {
-  const { data: workspaces, isSuccess } = useWorkspaces();
+  const { data: workspaces, isSuccess, refetch } = useWorkspaces();
   const workspaceId = useCurrentWorkspaceId();
   const setWorkspaceId = useWorkspaceStore((s) => s.setWorkspaceId);
   if (!isSuccess || !workspaces?.length) return null;
   return (
-    <Select value={workspaceId ?? workspaces[0]?.id} onValueChange={setWorkspaceId}>
+    <Select
+      value={workspaceId ?? workspaces[0]?.id}
+      onValueChange={setWorkspaceId}
+      // Fresh list on open: workspaces can be created outside this cache.
+      onOpenChange={(open) => open && void refetch()}
+    >
       <SelectTrigger aria-label="Workspace" className="w-full">
         <span className="truncate">
           {workspaces.find((w: Workspace) => w.id === workspaceId)?.name ?? workspaces[0]?.name}
@@ -145,7 +149,12 @@ function UserMenu() {
             // refetch fires against an invalidated cookie (401 noise).
             useWorkspaceStore.setState({ workspaceId: null });
             void queryClient.cancelQueries();
-            authClient.signOut().then(() => window.location.assign("/login"));
+            authClient.signOut().then(() => {
+              // Session is gone: drop every cached query so the login screen
+              // cannot fire workspace-scoped refetches against a dead cookie.
+              queryClient.clear();
+              window.location.assign("/login");
+            });
           }}
         >
           <LogOut className="size-4" /> Sign out
