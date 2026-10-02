@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: PORT=3998 bun test --parallel=4
+        env:
+          HBR_TEST_DATABASE_URL:
+            postgres://postgres:postgres@127.0.0.1:55432/hoborouter_test
+    services:
+      postgres:
+        image: postgres:17-alpine
+        ports:
+          - 55432:5432
+        env:
+          POSTGRES_PASSWORD: postgres
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/teppyboy/hoborouter:${{ github.ref_name }}
+            ghcr.io/teppyboy/hoborouter:latest

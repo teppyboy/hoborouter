@@ -1,0 +1,10 @@
+[Unit]
+Description=Run hoborouter auto-update every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

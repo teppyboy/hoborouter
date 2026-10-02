@@ -1,0 +1,15 @@
+[Unit]
+Description=Hoborouter auto-update (pull image, backup, deploy, health gate)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=hoborouter
+Group=hoborouter
+WorkingDirectory=/opt/hoborouter/deploy
+ExecStart=/opt/hoborouter/deploy/vps-deploy.sh
+TimeoutStartSec=600
+# SupplementaryGroups=docker — add the "docker" group so the non-root user
+# can talk to the Docker socket:
+#   sudo usermod -aG docker hoborouter
