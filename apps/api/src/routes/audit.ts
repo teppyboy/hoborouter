@@ -6,6 +6,8 @@ import { Elysia } from "elysia";
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, requireInstanceAdmin, isInstanceAdmin } from "../authz";
+import { and, desc, eq, inArray, like, sql, type SQL } from "drizzle-orm";
+import { users, workspaces, apiKeys, payments, models, auditLog, orm } from "@hoborouter/db";
 
 interface AuditRow {
   id: string;
@@ -15,12 +17,6 @@ interface AuditRow {
   target: string | null;
   detail: string | null;
   created_at: number;
-}
-
-interface ActorInfo {
-  id: string;
-  name: string | null;
-  email: string | null;
 }
 
 const SECRET_KEY_RE = /(secret|password|token|hash|api_key|cpa)/i;
@@ -41,16 +37,6 @@ function sanitizeDetail(raw: string | null): string | null {
     return JSON.stringify(out);
   }
   return raw;
-}
-
-function placeholderList(n: number): string {
-  return new Array(n).fill("?").join(",");
-}
-
-function mapById<T>(rows: T[], key: keyof T): Map<string, T> {
-  const m = new Map<string, T>();
-  for (const r of rows) m.set(r[key] as string, r);
-  return m;
 }
 
 /** Resolve human labels for all rows in a handful of batched IN queries. */
@@ -80,41 +66,71 @@ function enrich(rows: AuditRow[], db: Database) {
     else if (r.action.startsWith("member.")) userIds.add(t);
   }
 
-  const lookup = <T>(sql: string, ids: Set<string>, key: keyof T): Map<string, T> => {
-    if (ids.size === 0) return new Map();
-    return mapById(
-      db.prepare(`${sql} WHERE id IN (${placeholderList(ids.size)})`).all(...ids) as T[],
-      key,
-    );
-  };
+  const byId = <T extends { id: string }>(rows: T[]): Map<string, T> =>
+    new Map(rows.map((r) => [r.id, r]));
+  const lookup = <T extends { id: string }>(
+    q: (ids: string[]) => T[],
+    ids: Set<string>,
+  ): Map<string, T> => (ids.size === 0 ? new Map() : byId(q([...ids])));
 
-  const actors = lookup<ActorInfo & { id: string }>(
-    "SELECT id, name, email FROM users",
+  const actors = lookup(
+    (ids) =>
+      orm(db)
+        .select({ id: users.id, name: users.name, email: users.email })
+        .from(users)
+        .where(inArray(users.id, ids))
+        .all(),
     new Set([...actorIds, ...userIds]),
-    "id",
   );
-  const workspaces = lookup<{ id: string; name: string }>(
-    "SELECT id, name FROM workspaces",
+  const workspacesById = lookup(
+    (ids) =>
+      orm(db)
+        .select({ id: workspaces.id, name: workspaces.name })
+        .from(workspaces)
+        .where(inArray(workspaces.id, ids))
+        .all(),
     wsIds,
-    "id",
   );
-  const keys = lookup<{ id: string; name: string; key_prefix: string }>(
-    "SELECT id, name, key_prefix FROM api_keys",
+  const keys = lookup(
+    (ids) =>
+      orm(db)
+        .select({ id: apiKeys.id, name: apiKeys.name, key_prefix: apiKeys.key_prefix })
+        .from(apiKeys)
+        .where(inArray(apiKeys.id, ids))
+        .all(),
     keyIds,
-    "id",
   );
-  const payments = lookup<{ id: string; amount: number; provider: string; status: string }>(
-    "SELECT id, amount, provider, status FROM payments",
+  const paymentsById = lookup(
+    (ids) =>
+      orm(db)
+        .select({
+          id: payments.id,
+          amount: payments.amount,
+          provider: payments.provider,
+          status: payments.status,
+        })
+        .from(payments)
+        .where(inArray(payments.id, ids))
+        .all(),
     payIds,
-    "id",
   );
-  const models = lookup<{ id: string; public_id: string }>(
-    "SELECT id, public_id FROM models",
+  const modelsById = lookup(
+    (ids) =>
+      orm(db)
+        .select({ id: models.id, public_id: models.public_id })
+        .from(models)
+        .where(inArray(models.id, ids))
+        .all(),
     modelIds,
-    "id",
   );
 
-  return { actors, workspaces, keys, payments, models };
+  return {
+    actors,
+    workspaces: workspacesById,
+    keys,
+    payments: paymentsById,
+    models: modelsById,
+  };
 }
 
 const MODEL_PREFIXES = ["catalog.model.", "catalog.mapping.", "catalog.price.", "model."];
@@ -176,20 +192,11 @@ export const auditRoutes = (db: Database, auth: BetterAuthInstance) =>
     const limit = Math.min(Math.max(Number(q.get("limit")) || 100, 1), 200);
     const before = q.get("before");
     const action = q.get("action");
-    const conds: string[] = [];
-    const params: (string | number)[] = [];
-    if (before) {
-      conds.push("created_at < ?");
-      params.push(Number(before) || 0);
-    }
-    if (action) {
-      conds.push("action LIKE ?");
-      params.push(`${action}%`);
-    }
-    const where = conds.length ? ` AND ${conds.join(" AND ")}` : "";
-    const sql = `SELECT id, actor_user_id, workspace_id, action, target, detail, created_at FROM audit_log WHERE${
-      wsId ? " workspace_id = ?" : " 1=1"
-    }${where} ORDER BY created_at DESC LIMIT ${limit}`;
+    const filters: SQL[] = [];
+    if (before) filters.push(sql`${auditLog.created_at} < ${Number(before) || 0}`);
+    if (action) filters.push(like(auditLog.action, `${action}%`));
+    if (wsId) filters.push(eq(auditLog.workspace_id, wsId));
+    const where = filters.length ? and(...filters) : undefined;
 
     let rows: AuditRow[];
     if (wsId) {
@@ -198,12 +205,26 @@ export const auditRoutes = (db: Database, auth: BetterAuthInstance) =>
         const denied = requireWsRole(db, wsId, userId, "admin");
         if (denied) return denied;
       }
-      rows = db.prepare(sql).all(wsId, ...params) as AuditRow[];
     } else {
       const denied = requireInstanceAdmin(db, userId);
       if (denied) return denied;
-      rows = db.prepare(sql).all(...params) as AuditRow[];
     }
+    rows = orm(db)
+      .select({
+        id: auditLog.id,
+        actor_user_id: auditLog.actor_user_id,
+        workspace_id: auditLog.workspace_id,
+        action: auditLog.action,
+        target: auditLog.target,
+        // detail column is json-mode in schema; re-type as the stored string.
+        detail: sql<string>`${auditLog.detail}`,
+        created_at: auditLog.created_at,
+      })
+      .from(auditLog)
+      .where(where)
+      .orderBy(desc(auditLog.created_at))
+      .limit(limit)
+      .all();
 
     const e = enrich(rows, db);
     return rows.map((r) => {
