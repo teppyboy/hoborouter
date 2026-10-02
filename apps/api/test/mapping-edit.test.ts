@@ -41,7 +41,7 @@ describe("admin route editing", () => {
     expect(second.status).toBe(200);
     const rows = db
       .prepare(
-        "SELECT id, provider, upstream_model, enabled FROM provider_model_mappings WHERE model_id = ? ORDER BY created_at ASC, id ASC",
+        "SELECT id, provider, upstream_model, enabled FROM provider_model_mappings WHERE model_id = ? ORDER BY rowid ASC",
       )
       .all(modelId) as { upstream_model: string; enabled: number }[];
     expect(rows.length).toBe(2);
