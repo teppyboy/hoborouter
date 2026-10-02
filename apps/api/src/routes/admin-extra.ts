@@ -6,6 +6,18 @@ import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, isInstanceAdmin, jsonError, writeAudit } from "../authz";
 import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments";
+import { desc, eq, sql } from "drizzle-orm";
+import {
+  requests as requestsTable,
+  users,
+  workspaces,
+  payments,
+  usageLogs,
+  apiKeys,
+  providerModelMappings,
+  models,
+  orm,
+} from "@hoborouter/db";
 
 const cpaBase = () => process.env.CPA_BASE_URL || "http://cpa:8317";
 
@@ -37,9 +49,11 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const row = db
-          .prepare("SELECT id, name, email FROM users WHERE id = ?")
-          .get(userId) as { id: string; name: string; email: string } | undefined;
+        const row = orm(db)
+          .select({ id: users.id, name: users.name, email: users.email })
+          .from(users)
+          .where(eq(users.id, userId))
+          .get();
         if (!row) return jsonError(404, "NOT_FOUND", "User not found");
         return json({
           id: row.id,
@@ -61,13 +75,20 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
-        const rows = db
-          .prepare(
-            `SELECT u.id, u.email, u.name, u.created_at,
-                  EXISTS(SELECT 1 FROM instance_admins ia WHERE ia.user_id = u.id) AS is_instance_admin,
-                  (SELECT COUNT(*) FROM workspace_members wm WHERE wm.user_id = u.id) AS workspace_count
-           FROM users u ORDER BY u.created_at DESC`,
-          )
+        const rows = orm(db)
+          .select({
+            id: users.id,
+            email: users.email,
+            name: users.name,
+            // timestamp_ms mode returns Date; raw column value is epoch millis.
+            created_at: sql<number>`${users.createdAt}`,
+            is_instance_admin:
+              sql<number>`exists(select 1 from instance_admins ia where ia.user_id = ${users.id})`,
+            workspace_count:
+              sql<number>`(select count(*) from workspace_members wm where wm.user_id = ${users.id})`,
+          })
+          .from(users)
+          .orderBy(desc(users.createdAt))
           .all();
         return json({ data: rows });
       },
@@ -86,13 +107,22 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         if ("error" in g) return g.error;
         // provider_order_code is the merchant-facing code, not a secret; raw
         // payloads live in payment_events and are never joined here.
-        const rows = db
-          .prepare(
-            `SELECT p.id, p.workspace_id, w.name AS workspace_name, p.amount, p.status,
-                  p.provider, p.provider_order_code, p.created_at, p.expires_at
-           FROM payments p JOIN workspaces w ON w.id = p.workspace_id
-           ORDER BY p.created_at DESC LIMIT 200`,
-          )
+        const rows = orm(db)
+          .select({
+            id: payments.id,
+            workspace_id: payments.workspace_id,
+            workspace_name: workspaces.name,
+            amount: payments.amount,
+            status: payments.status,
+            provider: payments.provider,
+            provider_order_code: payments.provider_order_code,
+            created_at: payments.created_at,
+            expires_at: payments.expires_at,
+          })
+          .from(payments)
+          .innerJoin(workspaces, eq(workspaces.id, payments.workspace_id))
+          .orderBy(desc(payments.created_at))
+          .limit(200)
           .all();
         return json({ data: rows });
       },
@@ -110,18 +140,31 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
         // raw_payload excluded — may contain upstream response data.
-        const rows = db
-          .prepare(
-            `SELECT ul.id, ul.workspace_id, w.name AS workspace_name,
-                  k.key_prefix, ul.provider, ul.public_model, ul.upstream_model,
-                  ul.input_tokens, ul.output_tokens, ul.cached_input_tokens,
-                  ul.reasoning_tokens, ul.status, ul.failure, ul.latency_ms,
-                  ul.upstream_cost_usd_micro, ul.charged_vnd, ul.created_at
-           FROM usage_logs ul
-           JOIN workspaces w ON w.id = ul.workspace_id
-           LEFT JOIN api_keys k ON k.id = ul.api_key_id
-           ORDER BY ul.created_at DESC LIMIT 200`,
-          )
+        const rows = orm(db)
+          .select({
+            id: usageLogs.id,
+            workspace_id: usageLogs.workspace_id,
+            workspace_name: workspaces.name,
+            key_prefix: apiKeys.key_prefix,
+            provider: usageLogs.provider,
+            public_model: usageLogs.public_model,
+            upstream_model: usageLogs.upstream_model,
+            input_tokens: usageLogs.input_tokens,
+            output_tokens: usageLogs.output_tokens,
+            cached_input_tokens: usageLogs.cached_input_tokens,
+            reasoning_tokens: usageLogs.reasoning_tokens,
+            status: usageLogs.status,
+            failure: usageLogs.failure,
+            latency_ms: usageLogs.latency_ms,
+            upstream_cost_usd_micro: usageLogs.upstream_cost_usd_micro,
+            charged_vnd: usageLogs.charged_vnd,
+            created_at: usageLogs.created_at,
+          })
+          .from(usageLogs)
+          .innerJoin(workspaces, eq(workspaces.id, usageLogs.workspace_id))
+          .leftJoin(apiKeys, eq(apiKeys.id, usageLogs.api_key_id))
+          .orderBy(desc(usageLogs.created_at))
+          .limit(200)
           .all();
         return json({ data: rows });
       },
@@ -159,11 +202,15 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         } catch {
           return jsonError(502, "CPA_UNHEALTHY", "invalid /v1/models response");
         }
-        const mappedIds = db
-          .prepare(
-            "SELECT DISTINCT pm.upstream_model, m.public_id FROM provider_model_mappings pm JOIN models m ON m.id = pm.model_id WHERE pm.enabled = 1",
-          )
-          .all() as { upstream_model: string; public_id: string }[];
+        const mappedIds = orm(db)
+          .selectDistinct({
+            upstream_model: providerModelMappings.upstream_model,
+            public_id: models.public_id,
+          })
+          .from(providerModelMappings)
+          .innerJoin(models, eq(models.id, providerModelMappings.model_id))
+          .where(eq(providerModelMappings.enabled, true))
+          .all();
         const mapped = new Set(mappedIds.map((r) => r.upstream_model));
         const publicIdsByUpstream = new Map<string, string[]>();
         for (const r of mappedIds) {
@@ -201,20 +248,18 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
         const userId = g.session.user.id;
-        const payment = db
-          .prepare(
-            "SELECT id, workspace_id, amount, status, provider, provider_order_code FROM payments WHERE id = ?",
-          )
-          .get(params.id) as
-          | {
-              id: string;
-              workspace_id: string;
-              amount: number;
-              status: string;
-              provider: string;
-              provider_order_code: string;
-            }
-          | undefined;
+        const payment = orm(db)
+          .select({
+            id: payments.id,
+            workspace_id: payments.workspace_id,
+            amount: payments.amount,
+            status: payments.status,
+            provider: payments.provider,
+            provider_order_code: payments.provider_order_code,
+          })
+          .from(payments)
+          .where(eq(payments.id, params.id))
+          .get();
         if (!payment) return jsonError(404, "NOT_FOUND", "Payment not found");
         try {
           const result = processMockPaymentEvent(db, {
@@ -258,8 +303,7 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
-        const count = (t: string) =>
-          (db.prepare(`SELECT COUNT(*) AS c FROM ${t}`).get() as { c: number }).c;
+        const o = orm(db);
         const wal = (db.prepare("PRAGMA journal_mode").get() as { journal_mode: string })
           .journal_mode;
         return json({
@@ -272,10 +316,10 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
           dev_payments: process.env.HBR_DEV_PAYMENTS === "1",
           db: { wal },
           counts: {
-            users: count("users"),
-            workspaces: count("workspaces"),
-            models: count("models"),
-            requests: count("requests"),
+            users: o.$count(users),
+            workspaces: o.$count(workspaces),
+            models: o.$count(models),
+            requests: o.$count(requestsTable),
           },
         });
       },
