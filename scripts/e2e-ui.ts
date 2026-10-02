@@ -296,9 +296,13 @@ const page = {
   clickLabel: (text: string) =>
     evaluateWhenPresent(`window.__hbr.clickLabel(${JSON.stringify(text)})`),
   setInput: (label: string, value: string) =>
-    evaluateWhenPresent(`window.__hbr.setInput(${JSON.stringify(label)}, ${JSON.stringify(value)})`),
+    evaluateWhenPresent(
+      `window.__hbr.setInput(${JSON.stringify(label)}, ${JSON.stringify(value)})`,
+    ),
   setInputById: (id: string, value: string) =>
-    evaluateWhenPresent(`window.__hbr.setInputById(${JSON.stringify(id)}, ${JSON.stringify(value)})`),
+    evaluateWhenPresent(
+      `window.__hbr.setInputById(${JSON.stringify(id)}, ${JSON.stringify(value)})`,
+    ),
   clickSwitch: (id: string) =>
     evaluateWhenPresent(`window.__hbr.switchById(${JSON.stringify(id)})`),
   has: (text: string) => evaluate<boolean>(`window.__hbr.bodyHas(${JSON.stringify(text)})`),
@@ -470,6 +474,10 @@ async function main() {
     await page.setInput("Workspace name", `${throwaway} 2`);
     await page.click("Save");
     await page.waitForText("Workspace name updated");
+    // Switch back to the main workspace: everything after this (keys, payments,
+    // gateway traffic) must belong to main so the throwaway stays deletable.
+    await selectOption('[aria-label="Workspace"]', wsName);
+    await page.waitForText("Overview");
   });
 
   // --- members: invite user2, change role, remove ---
@@ -608,8 +616,9 @@ async function main() {
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({ model: MODEL_ID, messages: [{ role: "user", content: "hi" }] }),
     });
-    assert(res.ok, `status ${res.status}`);
-    const json = await res.json();
+    const raw = await res.text();
+    assert(res.ok, `status ${res.status} ${raw}`);
+    const json = JSON.parse(raw);
     assert(json.choices?.[0]?.message?.content, "assistant content present");
     assert(json.usage?.total_tokens > 0, "usage present");
   });
@@ -624,11 +633,11 @@ async function main() {
         stream: true,
       }),
     });
-    assert(res.ok, `status ${res.status}`);
-    const text = await res.text();
-    assert(text.includes('"finish_reason":"stop"'), "finish_reason stop");
-    assert(text.includes("prompt_tokens"), "final usage chunk");
-    assert(text.trimEnd().endsWith("[DONE]"), "[DONE] terminator");
+    const raw = await res.text();
+    assert(res.ok, `status ${res.status} ${raw}`);
+    assert(raw.includes('"finish_reason":"stop"'), "finish_reason stop");
+    assert(raw.includes("prompt_tokens"), "final usage chunk");
+    assert(raw.trimEnd().endsWith("[DONE]"), "[DONE] terminator");
   });
 
   await step("gateway responses", async () => {
@@ -637,8 +646,9 @@ async function main() {
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({ model: MODEL_ID, input: "hello" }),
     });
-    assert(res.ok, `status ${res.status}`);
-    const json = await res.json();
+    const raw = await res.text();
+    assert(res.ok, `status ${res.status} ${raw}`);
+    const json = JSON.parse(raw);
     assert(json.status === "completed", "completed status");
     assert(json.usage?.input_tokens > 0, "usage present");
   });
@@ -661,7 +671,7 @@ async function main() {
     await page.waitForText("Requests");
     await sleep(300);
     const body = await page.body();
-    const m = body.match(/Requests\n(\d+)/);
+    const m = body.match(/Requests\n+(\d+)/);
     assert(m && Number(m[1]) >= 3, `requests tile >= 3, got ${m?.[1] ?? "?"}`);
     assert(!/Spend\n0 ₫/.test(body), "spend is non-zero");
   });
