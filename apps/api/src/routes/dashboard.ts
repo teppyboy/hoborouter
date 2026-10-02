@@ -6,6 +6,16 @@ import { Elysia, t } from "elysia";
 import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole } from "../authz";
+import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
+import {
+  usageLogs,
+  apiKeys,
+  wallets,
+  ledgerEntries,
+  billingReservations,
+  payments,
+  orm,
+} from "@hoborouter/db";
 
 // Same FX source billing uses: HBR_USD_VND_RATE, default 26000 (see v1-gateway/admin-extra).
 const usdVndRate = () => {
@@ -46,29 +56,40 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
         if (denied) return denied;
         const limit = parseLimit(query?.limit);
         const before = typeof query?.before === "string" ? parseInt(query.before, 10) : NaN;
+        const rowShape = {
+          id: usageLogs.id,
+          request_id: usageLogs.request_id,
+          created_at: usageLogs.created_at,
+          public_model: usageLogs.public_model,
+          provider: usageLogs.provider,
+          status: usageLogs.status,
+          failure: usageLogs.failure,
+          input_tokens: usageLogs.input_tokens,
+          output_tokens: usageLogs.output_tokens,
+          cached_input_tokens: usageLogs.cached_input_tokens,
+          reasoning_tokens: usageLogs.reasoning_tokens,
+          charged_vnd: usageLogs.charged_vnd,
+          latency_ms: usageLogs.latency_ms,
+          ttft_ms: usageLogs.ttft_ms,
+          key_prefix: apiKeys.key_prefix,
+        };
         const rows = Number.isFinite(before)
-          ? db
-              .prepare(
-                `SELECT ul.id, ul.request_id, ul.created_at, ul.public_model, ul.provider,
-                      ul.status, ul.failure, ul.input_tokens, ul.output_tokens,
-                      ul.cached_input_tokens, ul.reasoning_tokens, ul.charged_vnd, ul.latency_ms,
-                      ul.ttft_ms, k.key_prefix
-               FROM usage_logs ul LEFT JOIN api_keys k ON k.id = ul.api_key_id
-               WHERE ul.workspace_id = ? AND ul.created_at < ?
-               ORDER BY ul.created_at DESC LIMIT ?`,
-              )
-              .all(params.id, before, limit)
-          : db
-              .prepare(
-                `SELECT ul.id, ul.request_id, ul.created_at, ul.public_model, ul.provider,
-                      ul.status, ul.failure, ul.input_tokens, ul.output_tokens,
-                      ul.cached_input_tokens, ul.reasoning_tokens, ul.charged_vnd, ul.latency_ms,
-                      ul.ttft_ms, k.key_prefix
-               FROM usage_logs ul LEFT JOIN api_keys k ON k.id = ul.api_key_id
-               WHERE ul.workspace_id = ?
-               ORDER BY ul.created_at DESC LIMIT ?`,
-              )
-              .all(params.id, limit);
+          ? orm(db)
+              .select(rowShape)
+              .from(usageLogs)
+              .leftJoin(apiKeys, eq(apiKeys.id, usageLogs.api_key_id))
+              .where(and(eq(usageLogs.workspace_id, params.id), lt(usageLogs.created_at, before)))
+              .orderBy(desc(usageLogs.created_at))
+              .limit(limit)
+              .all()
+          : orm(db)
+              .select(rowShape)
+              .from(usageLogs)
+              .leftJoin(apiKeys, eq(apiKeys.id, usageLogs.api_key_id))
+              .where(eq(usageLogs.workspace_id, params.id))
+              .orderBy(desc(usageLogs.created_at))
+              .limit(limit)
+              .all();
         return { data: rows };
       },
     )
@@ -92,53 +113,42 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
         const daysRaw = typeof query?.days === "string" ? parseInt(query.days, 10) : NaN;
         const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(daysRaw, 365) : 30;
         const since = Date.now() - days * 24 * 60 * 60 * 1000;
-        const errExpr = `CASE WHEN status != 'ok' THEN 1 ELSE 0 END`;
-        const totals = db
-          .prepare(
-            `SELECT COUNT(*) AS requests,
-                  COALESCE(SUM(COALESCE(charged_vnd, 0)), 0) AS spend_vnd,
-                  COALESCE(SUM(input_tokens), 0) AS input_tokens,
-                  COALESCE(SUM(output_tokens), 0) AS output_tokens,
-                  COALESCE(SUM(${errExpr}), 0) AS errors
-           FROM usage_logs WHERE workspace_id = ? AND created_at >= ?`,
-          )
-          .get(params.id, since) as {
-          requests: number;
-          spend_vnd: number;
-          input_tokens: number;
-          output_tokens: number;
-          errors: number;
-        };
-        const daily = db
-          .prepare(
-            `SELECT date(created_at / 1000, 'unixepoch') AS day,
-                  COUNT(*) AS requests,
-                  COALESCE(SUM(COALESCE(charged_vnd, 0)), 0) AS spend_vnd,
-                  COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
-           FROM usage_logs WHERE workspace_id = ? AND created_at >= ?
-           GROUP BY day ORDER BY day`,
-          )
-          .all(params.id, since) as {
-          day: string;
-          requests: number;
-          spend_vnd: number;
-          tokens: number;
-        }[];
-        const by_model = db
-          .prepare(
-            `SELECT public_model,
-                  COUNT(*) AS requests,
-                  COALESCE(SUM(COALESCE(charged_vnd, 0)), 0) AS spend_vnd,
-                  COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
-           FROM usage_logs WHERE workspace_id = ? AND created_at >= ?
-           GROUP BY public_model ORDER BY spend_vnd DESC`,
-          )
-          .all(params.id, since) as {
-          public_model: string;
-          requests: number;
-          spend_vnd: number;
-          tokens: number;
-        }[];
+        const errExpr = sql<number>`case when ${usageLogs.status} != 'ok' then 1 else 0 end`;
+        const totals = orm(db)
+          .select({
+            requests: sql<number>`count(*)`,
+            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`,
+            input_tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens}), 0)`,
+            output_tokens: sql<number>`coalesce(sum(${usageLogs.output_tokens}), 0)`,
+            errors: sql<number>`coalesce(sum(${errExpr}), 0)`,
+          })
+          .from(usageLogs)
+          .where(and(eq(usageLogs.workspace_id, params.id), gte(usageLogs.created_at, since)))
+          .get();
+        const daily = orm(db)
+          .select({
+            day: sql<string>`date(${usageLogs.created_at} / 1000, 'unixepoch')`.as("day"),
+            requests: sql<number>`count(*)`,
+            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`,
+            tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`,
+          })
+          .from(usageLogs)
+          .where(and(eq(usageLogs.workspace_id, params.id), gte(usageLogs.created_at, since)))
+          .groupBy(sql`date(${usageLogs.created_at} / 1000, 'unixepoch')`)
+          .orderBy(sql`day`)
+          .all();
+        const by_model = orm(db)
+          .select({
+            public_model: usageLogs.public_model,
+            requests: sql<number>`count(*)`,
+            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`,
+            tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`,
+          })
+          .from(usageLogs)
+          .where(and(eq(usageLogs.workspace_id, params.id), gte(usageLogs.created_at, since)))
+          .groupBy(usageLogs.public_model)
+          .orderBy(sql`spend_vnd desc`)
+          .all();
         return { totals, daily, by_model };
       },
     )
@@ -158,9 +168,15 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
         if ("error" in gate) return gate.error;
         const denied = requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
-        const w = db
-          .prepare("SELECT currency, balance, reserved FROM wallets WHERE workspace_id = ?")
-          .get(params.id) as { currency: string; balance: number; reserved: number } | undefined;
+        const w = orm(db)
+          .select({
+            currency: wallets.currency,
+            balance: wallets.balance,
+            reserved: wallets.reserved,
+          })
+          .from(wallets)
+          .where(eq(wallets.workspace_id, params.id))
+          .get();
         const rate = usdVndRate();
         if (!w) return { currency: "VND", balance: 0, reserved: 0, available: 0, usd_vnd_rate: rate };
         return {
@@ -190,17 +206,25 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
         const denied = requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
         const limit = parseLimit(query?.limit);
-        const rows = db
-          .prepare(
-            `SELECT le.id, le.created_at, le.direction, le.kind, le.amount, le.balance_after,
-                  le.memo, le.payment_id, br.request_id
-           FROM ledger_entries le
-           JOIN wallets w ON w.id = le.wallet_id
-           LEFT JOIN billing_reservations br ON br.id = le.billing_reservation_id
-           WHERE w.workspace_id = ?
-           ORDER BY le.created_at DESC LIMIT ?`,
-          )
-          .all(params.id, limit) as Record<string, unknown>[];
+        const rows = orm(db)
+          .select({
+            id: ledgerEntries.id,
+            created_at: ledgerEntries.created_at,
+            direction: ledgerEntries.direction,
+            kind: ledgerEntries.kind,
+            amount: ledgerEntries.amount,
+            balance_after: ledgerEntries.balance_after,
+            memo: ledgerEntries.memo,
+            payment_id: ledgerEntries.payment_id,
+            request_id: billingReservations.request_id,
+          })
+          .from(ledgerEntries)
+          .innerJoin(wallets, eq(wallets.id, ledgerEntries.wallet_id))
+          .leftJoin(billingReservations, eq(billingReservations.id, ledgerEntries.billing_reservation_id))
+          .where(eq(wallets.workspace_id, params.id))
+          .orderBy(desc(ledgerEntries.created_at))
+          .limit(limit)
+          .all();
         return { data: rows };
       },
     )
@@ -223,13 +247,20 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
         if (denied) return denied;
         const limit = parseLimit(query?.limit);
         // no checkout_url column exists on payments — omitted per spec
-        const rows = db
-          .prepare(
-            `SELECT id, provider, amount, status, created_at, provider_order_code
-           FROM payments WHERE workspace_id = ?
-           ORDER BY created_at DESC LIMIT ?`,
-          )
-          .all(params.id, limit);
+        const rows = orm(db)
+          .select({
+            id: payments.id,
+            provider: payments.provider,
+            amount: payments.amount,
+            status: payments.status,
+            created_at: payments.created_at,
+            provider_order_code: payments.provider_order_code,
+          })
+          .from(payments)
+          .where(eq(payments.workspace_id, params.id))
+          .orderBy(desc(payments.created_at))
+          .limit(limit)
+          .all();
         return { data: rows };
       },
     );
