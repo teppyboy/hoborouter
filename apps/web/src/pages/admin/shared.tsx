@@ -35,9 +35,9 @@ export interface AdminModel {
     markup_ppm: number;
     effective_at: number;
   } | null;
-  /** 1 when the model is listed on public /models; hidden_reason explains why not. */
-  listed?: number;
-  hidden_reason?: string | null;
+  /** True when the model is listed on public /models; hidden_reason explains why not. */
+  listed?: boolean;
+  hidden_reason?: "disabled" | "not_published" | "missing_mapping" | "missing_price" | null;
 }
 
 export interface AuditRow {

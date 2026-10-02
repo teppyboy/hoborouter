@@ -746,26 +746,21 @@ export default function AdminModelsPage() {
       header: "Status",
       cell: ({ row }) => {
         const m = row.original;
-        const hidden =
-          m.listed !== undefined
-            ? m.listed === 1
-              ? null
-              : `Hidden: ${m.hidden_reason ?? "unknown"}`
-            : m.enabled !== 1
-              ? "Hidden: disabled"
-              : m.published !== 1
-                ? "Hidden: not published"
-                : m.has_mapping !== 1
-                  ? "Hidden: missing mapping"
-                  : m.has_price !== 1
-                    ? "Hidden: missing price"
-                    : null;
+        // SAFETY: older API responses sent listed as 1/0; accept both shapes.
+        const listed = m.listed === true || (m.listed as unknown as number) === 1;
+        const hiddenText: Record<NonNullable<AdminModel["hidden_reason"]>, string> = {
+          disabled: "Hidden: disabled",
+          not_published: "Hidden: not published",
+          missing_mapping: "Hidden: missing route",
+          missing_price: "Hidden: missing price",
+        };
+        const hidden = listed
+          ? null
+          : m.hidden_reason != null
+            ? (hiddenText[m.hidden_reason] ?? `Hidden: ${m.hidden_reason}`)
+            : "Hidden";
         return (
-          <span className="flex gap-1">
-            <Badge variant={hidden ? "secondary" : "default"}>{hidden ?? "Listed"}</Badge>
-            {m.enabled !== 1 && <Badge variant="secondary">disabled</Badge>}
-            {m.published === 1 && <Badge variant="outline">published</Badge>}
-          </span>
+          <Badge variant={hidden ? "secondary" : "default"}>{hidden ?? "Listed"}</Badge>
         );
       },
     },
