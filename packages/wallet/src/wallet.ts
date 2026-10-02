@@ -1,6 +1,8 @@
 // Task 8: VND wallet core — creditWallet, getWallet.
 // All money = integer VND. All mutations run in BEGIN IMMEDIATE transactions.
 import type { Database } from "bun:sqlite";
+import { and, eq } from "drizzle-orm";
+import { ledgerEntries, orm, wallets } from "@hoborouter/db";
 
 export type WalletErrorCode =
   | "not_found"
@@ -63,11 +65,11 @@ function getWalletRow(
   db: Database,
   walletId: string,
 ): { id: string; balance: number; reserved: number; version: number } {
-  const row = db
-    .prepare("SELECT id, balance, reserved, version FROM wallets WHERE id = ?")
-    .get(walletId) as
-    | { id: string; balance: number; reserved: number; version: number }
-    | undefined;
+  const row = orm(db)
+    .select({ id: wallets.id, balance: wallets.balance, reserved: wallets.reserved, version: wallets.version })
+    .from(wallets)
+    .where(eq(wallets.id, walletId))
+    .get();
   if (!row) throw new WalletError("not_found", `wallet not found: ${walletId}`);
   return row;
 }
@@ -86,9 +88,11 @@ export function creditWallet(
   return runInImmediate(db, () => {
     const wallet = getWalletRow(db, opts.walletId);
     if (opts.paymentId !== null) {
-      const existing = db
-        .prepare("SELECT 1 FROM ledger_entries WHERE payment_id = ? AND kind = 'topup'")
-        .get(opts.paymentId);
+      const existing = orm(db)
+        .select({ x: ledgerEntries.payment_id })
+        .from(ledgerEntries)
+        .where(and(eq(ledgerEntries.payment_id, opts.paymentId), eq(ledgerEntries.kind, "topup")))
+        .get();
       if (existing) {
         throw new WalletError(
           "conflict",
@@ -98,6 +102,9 @@ export function creditWallet(
     }
     const balanceAfter = overflowCheckedAdd("balance", wallet.balance, amount);
     const version = overflowCheckedAdd("version", wallet.version, 1);
+    // CAS guard on (balance, version). Kept as raw SQL: wallet.test.ts pins
+    // this exact statement text via a db.prepare Proxy ("UPDATE wallets SET
+    // balance"), which drizzle's quoted identifiers would not match.
     const updated = db
       .prepare(
         "UPDATE wallets SET balance = ?, version = ? WHERE id = ? AND balance = ? AND version = ?",
@@ -113,17 +120,20 @@ export function creditWallet(
       );
     }
     const ledgerEntryId = crypto.randomUUID();
-    db.prepare(
-      "INSERT INTO ledger_entries (id, wallet_id, direction, amount, kind, payment_id, balance_after, memo, created_at) VALUES (?, ?, 'credit', ?, 'topup', ?, ?, ?, ?)",
-    ).run(
-      ledgerEntryId,
-      wallet.id,
-      amount,
-      opts.paymentId,
-      balanceAfter,
-      opts.memo ?? null,
-      Date.now(),
-    );
+    orm(db)
+      .insert(ledgerEntries)
+      .values({
+        id: ledgerEntryId,
+        wallet_id: wallet.id,
+        direction: "credit",
+        amount,
+        kind: "topup",
+        payment_id: opts.paymentId,
+        balance_after: balanceAfter,
+        memo: opts.memo ?? null,
+        created_at: Date.now(),
+      })
+      .run();
     return { ledgerEntryId, balanceAfter };
   });
 }

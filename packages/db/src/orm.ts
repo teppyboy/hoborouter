@@ -18,3 +18,10 @@ export function orm(db: Database): Orm {
   }
   return instance;
 }
+
+// Drizzle types bun-sqlite run() results as `void`, but the runtime value is
+// bun:sqlite's Changes ({ changes, lastInsertRowid }). Centralized re-type of
+// that runtime value so CAS `changes` checks stay typed.
+export function runChanges(stmt: { run(): unknown }): { changes: number } {
+  return stmt.run() as { changes: number };
+}

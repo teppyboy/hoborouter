@@ -271,6 +271,8 @@ export type SettleOutcome =
   | {
       kind: "usage";
       usage: UsageTokens;
+      /** Real provider-reported cached tokens to STORE when usage.cachedInputTokens was zeroed for charging (prompt caching off). */
+      storedCachedInputTokens?: bigint;
       upstreamModel: string;
       provider: string;
       publicModel: string;
@@ -418,7 +420,7 @@ export function settleRequest(
         outcome.upstreamModel,
         outcome.usage.inputTokens,
         outcome.usage.outputTokens,
-        outcome.usage.cachedInputTokens,
+        outcome.storedCachedInputTokens ?? outcome.usage.cachedInputTokens,
         outcome.usage.reasoningTokens,
         outcome.latencyMs ?? null,
         outcome.ttftMs ?? null,
