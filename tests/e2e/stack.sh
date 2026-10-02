@@ -54,13 +54,21 @@ check_ports() {
 up() {
   check_ports || { echo "aborting: E2E ports occupied; run: tests/e2e/stack.sh down" >&2; exit 1; }
   : >"$PIDFILE"
-  rm -f "$DIR/e2e.sqlite" "$DIR/e2e.sqlite-wal" "$DIR/e2e.sqlite-shm" # fresh DB
+
+  # Throwaway E2E Postgres (hbr-e2e-pg, 127.0.0.1:55434). Fresh database each run.
+  docker rm -f hbr-e2e-pg >/dev/null 2>&1 || true
+  docker run -d --name hbr-e2e-pg \
+    -p 127.0.0.1:55434:5432 -e POSTGRES_PASSWORD=postgres \
+    --tmpfs /var/lib/postgresql/data postgres:17-alpine >/dev/null
+  i=0; until docker exec hbr-e2e-pg psql -h 127.0.0.1 -U postgres -tAc "select 1" >/dev/null 2>&1; do i=$((i+1)); [ $i -gt 100 ] && { echo "hbr-e2e-pg not ready" >&2; exit 1; }; sleep 0.3; done
+  docker exec hbr-e2e-pg psql -U postgres -q -c "CREATE DATABASE hbr_e2e"
+  export DATABASE_URL="postgres://postgres:postgres@127.0.0.1:55434/hbr_e2e"
 
   start_one cpa "$DIR/cpa.log" env PORT=$CPA_PORT bun "$ROOT/tests/fake-cpa.ts"
   start_one api "$DIR/api.log" env \
     NODE_ENV=development \
     PORT=$API_PORT \
-    HBR_DB_PATH="$DIR/e2e.sqlite" \
+    DATABASE_URL="$DATABASE_URL" \
     BETTER_AUTH_URL="$BETTER_AUTH_URL" \
     BETTER_AUTH_SECRET="$BETTER_AUTH_SECRET" \
     CPA_BASE_URL="http://127.0.0.1:$CPA_PORT" \
@@ -91,6 +99,8 @@ up() {
 }
 
 down() {
+  # Throwaway E2E database container is always removed.
+  docker rm -f hbr-e2e-pg >/dev/null 2>&1 || true
   # vite spawns through two wrapper levels; catch the e2e-port vite directly
   # even when the pidfile is already gone.
   pkill -f "vite/node/cli.js dev --host 127.0.0.1 --port $WEB_PORT" 2>/dev/null

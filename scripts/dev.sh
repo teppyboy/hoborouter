@@ -18,12 +18,36 @@ if [ ! -f .dev/secret ]; then
   chmod 600 .dev/secret
 fi
 export BETTER_AUTH_SECRET="$(cat .dev/secret)"
-export HBR_DB_PATH="${HBR_DB_PATH:-./.dev/hoborouter.sqlite}"
 export NODE_ENV=development
 export BETTER_AUTH_URL="${BETTER_AUTH_URL:-http://localhost:5173}"
-export HBR_DEV_PAYMENTS="${HBR_DEV_PAYMENTS:-1}"
 
 port_busy() { nc -z -G1 127.0.0.1 "$1" 2>/dev/null; }
+
+# Dev Postgres (hbr-dev-pg, named volume, 127.0.0.1:55433). Started idempotently.
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: docker not found on PATH; the dev database needs it." >&2
+  exit 1
+fi
+if ! docker info >/dev/null 2>&1; then
+  echo "ERROR: Docker daemon is not running; start Docker and retry." >&2
+  exit 1
+fi
+docker start hbr-dev-pg >/dev/null 2>&1 || docker run -d --name hbr-dev-pg \
+  -p 127.0.0.1:55433:5432 -e POSTGRES_PASSWORD=postgres \
+  -v hbr-dev-pgdata:/var/lib/postgresql/data postgres:17-alpine >/dev/null
+pg_wait=0
+until docker exec hbr-dev-pg psql -h 127.0.0.1 -U postgres -tAc "select 1" >/dev/null 2>&1; do
+  sleep 0.3
+  pg_wait=$((pg_wait + 1))
+  if [ "$pg_wait" -ge 100 ]; then
+    echo "ERROR: Postgres container hbr-dev-pg did not become ready; is Docker running?" >&2
+    exit 1
+  fi
+done
+if ! docker exec hbr-dev-pg psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='hoborouter'" | grep -q 1; then
+  docker exec hbr-dev-pg psql -U postgres -q -c "CREATE DATABASE hoborouter"
+fi
+export DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:55433/hoborouter}"
 
 for port in 3000 5173; do
   if port_busy "$port"; then
@@ -33,6 +57,8 @@ for port in 3000 5173; do
 done
 
 # Fake CPA unless a real CPA is configured (or --no-fake-cpa).
+API_PID=""
+WEB_PID=""
 CPA_PID=""
 if [ -n "${CPA_BASE_URL:-}" ] || [ "$NO_FAKE_CPA" = 1 ]; then
   : # user-provided CPA; nothing to start
@@ -66,7 +92,7 @@ trap cleanup EXIT INT TERM
 
 echo "Dashboard:  http://localhost:5173 (open this URL — sign-in breaks from http://127.0.0.1:5173)"
 echo "API docs:   http://localhost:3000/docs"
-echo "DB:         $HBR_DB_PATH"
+echo "DB:         ${DATABASE_URL%%://*}://${DATABASE_URL#*@}"
 echo "Admin tip:  HBR_DEV_ADMIN_EMAIL=you@example.com bun run dev — sign up with that email to become admin."
 
 NODE_ENV=development PORT=3000 bun --watch apps/api/src/index.ts > >(sed -u 's/^/[api] /') 2>&1 &

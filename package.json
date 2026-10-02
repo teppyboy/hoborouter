@@ -16,7 +16,10 @@
     "e2e": "bash tests/e2e/stack.sh up && bun tests/e2e/ui.ts; s=$?; bash tests/e2e/stack.sh down; exit $s",
     "e2e:up": "bash tests/e2e/stack.sh up",
     "e2e:down": "bash tests/e2e/stack.sh down",
-    "build": "vp build"
+    "build": "vp build",
+    "db:copy-from-sqlite": "bun scripts/sqlite-to-pg.ts",
+    "db:test:up": "docker start hbr-test-pg >/dev/null 2>&1 || docker run -d --name hbr-test-pg -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=postgres --tmpfs /var/lib/postgresql/data postgres:17-alpine -c max_connections=400 -c fsync=off; i=0; until docker exec hbr-test-pg psql -h 127.0.0.1 -U postgres -tAc \"select 1\" >/dev/null 2>&1; do i=$((i+1)); [ $i -gt 100 ] && { echo \"hbr-test-pg not ready\" >&2; exit 1; }; sleep 0.3; done",
+    "db:test:down": "docker rm -f hbr-test-pg >/dev/null 2>&1 || true"
   },
   "devDependencies": {
     "@better-auth/cli": "1.4.21",
