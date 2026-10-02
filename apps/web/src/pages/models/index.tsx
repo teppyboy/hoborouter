@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "../../components/ui/select";
 import { formatUsdMicroPer1m } from "../../lib/format";
+import { useIsAdmin } from "../../components/app-shell";
 // Created by shell writer; route is splat "/models/$".
 import { modelHref } from "../../lib/models";
 import { allCapabilities, allProviders, useCatalogModels, type CatalogModel } from "./data";
@@ -28,6 +29,7 @@ export default function ModelsPage() {
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("all");
   const [cap, setCap] = useState("all");
+  const isAdmin = useIsAdmin();
 
   const providers = useMemo(() => allProviders(models), [models]);
   const caps = useMemo(() => allCapabilities(models), [models]);
@@ -160,10 +162,12 @@ export default function ModelsPage() {
       ) : filtered.length === 0 ? (
         <EmptyState
           icon={Boxes}
-          title="No models found"
+          title="No models are available yet"
           description={
             models.length === 0
-              ? "Not available yet — the catalog is empty."
+              ? isAdmin
+                ? "A model needs to be published, mapped to a provider, and priced (Admin → Pricing)."
+                : "The catalog is empty — check back later."
               : "Try a different search, provider, or capability filter."
           }
         />

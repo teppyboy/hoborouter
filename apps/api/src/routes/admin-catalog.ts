@@ -145,7 +145,17 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         if ("error" in gate) return gate.error;
         const denied = requireInstanceAdmin(db, gate.session.user.id);
         if (denied) return denied;
-        return db.prepare("SELECT * FROM models ORDER BY public_id").all();
+        // Listing flags: listPublicModels hides models without an enabled
+        // mapping or a current price, so surface why here.
+        const now = Date.now();
+        return db
+          .prepare(
+            `SELECT m.*,
+              EXISTS(SELECT 1 FROM model_prices p WHERE p.model_id = m.id AND p.retired_at IS NULL AND p.effective_at <= ?) AS has_price,
+              EXISTS(SELECT 1 FROM provider_model_mappings pm WHERE pm.model_id = m.id AND pm.enabled = 1) AS has_mapping
+           FROM models m ORDER BY m.public_id`,
+          )
+          .all(now);
       },
     )
     .put(

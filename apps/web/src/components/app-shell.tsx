@@ -82,7 +82,7 @@ const ADMIN_NAV: NavItem[] = [
 ];
 
 /** Detect instance-admin via GET /api/v1/me (200 = session, flag on the payload). */
-function useIsAdmin() {
+export function useIsAdmin() {
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;

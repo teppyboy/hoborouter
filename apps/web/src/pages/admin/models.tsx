@@ -221,16 +221,28 @@ export default function AdminModelsPage() {
     {
       id: "status",
       header: "Status",
-      cell: ({ row }) => (
-        <span className="flex gap-1">
-          {row.original.enabled === 1 ? (
-            <Badge variant="outline">enabled</Badge>
-          ) : (
-            <Badge variant="secondary">disabled</Badge>
-          )}
-          {row.original.published === 1 && <Badge variant="outline">published</Badge>}
-        </span>
-      ),
+      cell: ({ row }) => {
+        const m = row.original;
+        const hidden =
+          m.enabled !== 1
+            ? "Hidden: disabled"
+            : m.published !== 1
+              ? "Hidden: not published"
+              : m.has_mapping !== 1
+                ? "Hidden: missing mapping"
+                : m.has_price !== 1
+                  ? "Hidden: missing price"
+                  : null;
+        return (
+          <span className="flex gap-1">
+            <Badge variant={hidden ? "secondary" : "default"}>
+              {hidden ?? "Listed"}
+            </Badge>
+            {m.enabled !== 1 && <Badge variant="secondary">disabled</Badge>}
+            {m.published === 1 && <Badge variant="outline">published</Badge>}
+          </span>
+        );
+      },
     },
     {
       id: "actions",

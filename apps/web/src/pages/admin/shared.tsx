@@ -15,6 +15,8 @@ export interface AdminModel {
   context_window: number | null;
   enabled: number;
   published: number;
+  has_price: number;
+  has_mapping: number;
   created_at: number;
   updated_at: number;
 }
