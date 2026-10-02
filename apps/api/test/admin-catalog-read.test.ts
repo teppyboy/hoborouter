@@ -147,15 +147,19 @@ describe("GET mappings + PATCH mapping", () => {
   test("mappings listed newest-insertion-first even with identical created_at", async () => {
     const { db, app, cookie } = await setup();
     await seedModel(db, "cat@example.com", { mapping: true });
-    const now = Date.now();
-    // Same created_at as seedModel's map-1: ordering must fall back to
+    // Force equality: reuse map-1's stored created_at exactly.
+    const { created_at: ts, updated_at: uts } = db
+      .prepare("SELECT created_at, updated_at FROM provider_model_mappings WHERE id = 'map-1'")
+      .get() as { created_at: number; updated_at: number };
+    // Ordering must fall back to
     // insertion chronology (rowid), not random UUID id.
     db.prepare(
       "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-2','mdl-1','kimi','up-2',1,?,?)",
-    ).run(now, now);
+    ).run(ts, uts);
     const res = await req(app, "/api/v1/admin/catalog/models/mdl-1/mappings", { cookie });
     expect(res.status).toBe(200);
-    const rows = (await res.json()) as { id: string }[];
+    const rows = (await res.json()) as { id: string; created_at: number }[];
+    expect(rows[0]!.created_at).toBe(rows[1]!.created_at);
     expect(rows.map((r) => r.id)).toEqual(["map-2", "map-1"]);
   });
 
