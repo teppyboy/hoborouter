@@ -55,7 +55,10 @@ export default function KeysPage() {
   const workspaceId = useCurrentWorkspaceId();
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
+  // Keep the last created key in state through the dialog's exit animation;
+  // cleared on the next "Create key" open so it never lingers longer.
   const [created, setCreated] = useState<{ name: string; plaintext: string } | null>(null);
+  const [showCreated, setShowCreated] = useState(false);
   const [restrictFor, setRestrictFor] = useState<ApiKey | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null);
   const [filter, setFilter] = useState("");
@@ -76,8 +79,8 @@ export default function KeysPage() {
       }),
     onSuccess: (_data, name) => {
       setCreateOpen(false);
-      // Only place plaintext is ever held; cleared on dialog close.
       setCreated({ name, plaintext: _data.plaintext });
+      setShowCreated(true);
       invalidate();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Create failed"),
@@ -185,7 +188,13 @@ export default function KeysPage() {
         title="API keys"
         description="Keys authenticate requests to the router. Admin/owner only."
         actions={
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Button
+            size="sm"
+            onClick={() => {
+              setCreated(null);
+              setCreateOpen(true);
+            }}
+          >
             <Plus className="size-4" /> Create key
           </Button>
         }
@@ -226,11 +235,11 @@ export default function KeysPage() {
         onSubmit={(name) => createMutation.mutate(name)}
       />
 
-      {/* Plaintext shown exactly once; state cleared on close. */}
+      {/* Plaintext shown exactly once; dialog stays populated during exit animation. */}
       <Dialog
-        open={!!created}
+        open={showCreated}
         onOpenChange={(open) => {
-          if (!open) setCreated(null);
+          if (!open) setShowCreated(false);
         }}
       >
         <DialogContent>
@@ -248,7 +257,7 @@ export default function KeysPage() {
             <CopyButton value={created?.plaintext ?? ""} label="Copy API key" />
           </div>
           <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setCreated(null)}>
+            <Button variant="outline" size="sm" onClick={() => setShowCreated(false)}>
               Done
             </Button>
           </DialogFooter>

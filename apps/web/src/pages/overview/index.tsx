@@ -14,22 +14,47 @@ function StatTile({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Fill a fixed 30-day (UTC) window; missing days are real zero-spend days. */
+function fillDaily30(daily: { day: string; spend_vnd: number }[]) {
+  const byDay = new Map(daily.map((d) => [d.day, d.spend_vnd]));
+  const out: { label: string; value: number }[] = [];
+  const fmt = (t: number) => new Date(t).toISOString().slice(0, 10);
+  const now = Date.now();
+  for (let i = 29; i >= 0; i--) {
+    const day = fmt(now - i * 86400000);
+    out.push({ label: day, value: byDay.get(day) ?? 0 });
+  }
+  return out;
+}
+
 /** Simple inline CSS bar chart: one bar per day, height scaled to max. */
 function BarChart({ data }: { data: { label: string; value: number }[] }) {
   const max = Math.max(...data.map((d) => d.value), 1);
+  const maxValue = Math.max(...data.map((d) => d.value));
   return (
-    <div className="flex h-32 items-end gap-1">
-      {data.map((d) => (
-        <div key={d.label} className="group relative h-full flex-1">
-          <div
-            className="w-full rounded-sm bg-foreground/70 group-hover:bg-foreground"
-            style={{ height: `${Math.max((d.value / max) * 100, d.value > 0 ? 2 : 0)}%` }}
-          />
-          <span className="pointer-events-none absolute -top-6 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs group-hover:block">
-            {d.label}: {d.value}
-          </span>
-        </div>
-      ))}
+    <div>
+      <div className="flex h-32 items-end gap-1">
+        {data.map((d) => (
+          <div key={d.label} className="group relative h-full min-w-0 flex-1">
+            <div
+              className={`mx-auto w-full max-w-3 rounded-sm ${
+                d.value > 0 ? "bg-foreground/70 group-hover:bg-foreground" : "bg-foreground/10"
+              }`}
+              style={{
+                height: d.value > 0 ? `${Math.max((d.value / max) * 100, 2)}%` : "2px",
+              }}
+            />
+            <span className="pointer-events-none absolute -top-6 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs group-hover:block">
+              {d.label}: {d.value}
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex justify-between text-xs text-muted-foreground">
+        <span>{data[0]?.label}</span>
+        <span>max {formatVnd(maxValue)}/day</span>
+        <span>{data.at(-1)?.label}</span>
+      </div>
     </div>
   );
 }
@@ -80,7 +105,7 @@ export default function OverviewPage() {
         {summary.data.daily.length === 0 ? (
           <EmptyState title="No requests yet" />
         ) : (
-          <BarChart data={summary.data.daily.map((d) => ({ label: d.day, value: d.spend_vnd }))} />
+          <BarChart data={fillDaily30(summary.data.daily)} />
         )}
       </div>
       <RecentRequests workspaceId={workspaceId} />

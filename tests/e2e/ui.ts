@@ -338,17 +338,32 @@ async function shot(name: string) {
   console.log(`shot: ${name}`);
 }
 
-/** Toggle theme until the button's aria-label includes the wanted theme. */
+/** Disable all CSS transitions/animations so shots never catch mid-animation. */
+async function freezeAnimations() {
+  const css = `*,*::before,*::after{transition:none!important;animation:none!important}`;
+  const inject = `(function(){var css=${JSON.stringify(css)};var f=function(){if(document.head&&!document.getElementById('__hbr-freeze')){var s=document.createElement('style');s.id='__hbr-freeze';s.textContent=css;document.head.appendChild(s)}};f();document.addEventListener('readystatechange',f)})();`;
+  await send("Page.addScriptToEvaluateOnNewDocument", { source: inject });
+  await evaluate(
+    `if(!document.getElementById('__hbr-freeze')){const s=document.createElement('style');s.id='__hbr-freeze';s.textContent=${JSON.stringify(css)};document.head.appendChild(s)}`,
+  );
+}
+
+/** Toggle theme until <html> has (or has not) the 'dark' class; verify it. */
 async function setTheme(theme: "dark" | "light") {
-  for (let i = 0; i < 3; i++) {
-    const label =
-      (await evaluate<string>(`window.__hbr.attr('button[aria-label^="Theme:"]','aria-label')`)) ??
-      "";
-    if (label.includes(theme)) return;
+  const want = theme === "dark";
+  const check = () =>
+    evaluate<boolean>(`document.documentElement.classList.contains('dark') === ${want}`);
+  for (let i = 0; i < 4; i++) {
+    if (await check()) return;
     await evaluate(`document.querySelector('button[aria-label^="Theme:"]').click()`);
     await page.waitForText("Overview");
   }
-  throw new Error(`could not set theme ${theme}`);
+  if (!(await check())) throw new Error(`could not set theme ${theme}`);
+}
+
+/** Capture only after any open dialog has fully closed. */
+async function waitForDialogClosed() {
+  await waitForExpr(`!document.querySelector('[role="dialog"]')`, "no open dialog");
 }
 
 // ---------- step runner ----------
@@ -414,6 +429,7 @@ async function main() {
     mobile: false,
   });
   await installHelpers();
+  await freezeAnimations();
   // Fresh storage per run: persisted workspace ids from previous runs point at
   // workspaces that no longer exist in the fresh SQLite DB.
   await navigate(BASE);
@@ -797,7 +813,8 @@ async function main() {
   // ---------- screenshots (after sweep: admin logged in, seeded data) ----------
   if (SHOTS) {
     mkdirSync(SHOT_DIR, { recursive: true });
-    // dark, sidebar expanded
+    // dark, sidebar expanded (set explicitly; default theme may be light)
+    await setTheme("dark");
     await goto("/");
     await page.waitForText("Requests");
     await shot("overview-dark-expanded.png");
@@ -823,6 +840,7 @@ async function main() {
     await page.click("Create");
     await page.waitForText("Copy your API key");
     await page.click("Done");
+    await waitForDialogClosed();
     await page.waitForText("shot-key");
     await shot("keys-dark.png");
     // account menu open
