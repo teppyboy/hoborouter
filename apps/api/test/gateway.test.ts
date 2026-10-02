@@ -293,11 +293,13 @@ describe("gateway core", () => {
     expect(lastCharge().status).toBe("settled_full_hold");
   });
 
-  test("upstream 500 -> status passthrough + full hold", async () => {
+  test("upstream 500 -> status passthrough + sanitized body + full hold", async () => {
     startFakeCpa(() => new Response("boom", { status: 500 }));
     const res = await gwr(CHAT_PATH, { model: "openai/gw-test", messages: [] });
     expect(res.status).toBe(500);
-    expect(await res.text()).toBe("boom");
+    const errBody = (await res.json()) as { error: { code: string; message: string } };
+    expect(errBody.error.code).toBe("upstream_error");
+    expect(errBody.error.message).not.toContain("boom");
     const last = db
       .prepare("SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1")
       .get() as { status: string };

@@ -88,25 +88,97 @@ function settleFromTap(
   }
 }
 
-/** Replace upstream model id with the public id in chat JSON responses. */
-function rewriteJsonModel(ab: ArrayBuffer, publicModel: string): ArrayBuffer {
+/**
+ * Recursively replace every occurrence of the upstream model id (and any
+ * extra `from -> to` pairs, e.g. the mapping provider label) in every string
+ * value of a parsed JSON value. Guarantees no upstream id reaches the client,
+ * wherever it nests (top-level `model`, `response.model`, nested fields).
+ */
+type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
+
+function scrubJsonStrings(
+  value: unknown,
+  upstreamModel: string,
+  publicModel: string,
+  extra: readonly (readonly [string, string])[] = [],
+): unknown {
+  const scrubString = (s: string): string => {
+    let out = s.split(upstreamModel).join(publicModel);
+    for (const [from, to] of extra) out = out.split(from).join(to);
+    return out;
+  };
+  if (typeof value === "string") return scrubString(value);
+  if (Array.isArray(value)) return value.map((v) => scrubJsonStrings(v, upstreamModel, publicModel, extra));
+  if (typeof value === "object" && value !== null) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value))
+      out[k] = scrubJsonStrings(v, upstreamModel, publicModel, extra);
+    return out;
+  }
+  return value;
+}
+
+/** Rewrite upstream model ids in a JSON response body. */
+function rewriteJsonModel(
+  ab: ArrayBuffer,
+  upstreamModel: string,
+  publicModel: string,
+): ArrayBuffer {
   try {
-    const o = JSON.parse(new TextDecoder().decode(ab)) as Record<string, unknown>;
-    if (typeof o.model === "string") {
-      o.model = publicModel;
-      return new TextEncoder().encode(JSON.stringify(o)).buffer as ArrayBuffer;
-    }
+    const o = JSON.parse(new TextDecoder().decode(ab)) as JsonValue;
+    const scrubbed = scrubJsonStrings(o, upstreamModel, publicModel);
+    return new TextEncoder().encode(JSON.stringify(scrubbed)).buffer as ArrayBuffer;
   } catch {
-    // not JSON — passthrough
+    // not JSON — passthrough (unparseable bodies are replaced wholesale below)
   }
   return ab;
+}
+
+/**
+ * Safe client-facing error for upstream failures: never forwards CPA's raw
+ * body. Status code passes through unchanged (no leak risk in the code).
+ * The body is always our own JSON shape; if CPA sent JSON, its strings have
+ * every upstream id / provider-label occurrence replaced by the public id.
+ * If the body is not JSON, returns a generic message.
+ */
+function safeUpstreamError(
+  rawText: string,
+  upstreamStatus: number,
+  upstreamModel: string,
+  publicModel: string,
+  providerLabel: string,
+): Response {
+  const status = upstreamStatus; // status codes carry no upstream-id leak; bodies do
+  let payload: unknown = {
+    error: {
+      message: `Upstream request failed (${upstreamStatus}).`,
+      type: "upstream_error",
+      code: "upstream_error",
+    },
+  };
+  try {
+    const parsed = JSON.parse(rawText) as JsonValue;
+    if (typeof parsed === "object" && parsed !== null) {
+      payload = scrubJsonStrings(parsed, upstreamModel, publicModel, [[providerLabel, publicModel]]);
+    }
+  } catch {
+    // not JSON — keep the generic payload
+  }
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 /**
  * Line-buffered SSE rewriter: swaps the upstream model id for the public id
  * in every parseable `data: {…}` chunk. Non-JSON lines pass through verbatim.
  */
-function sseModelRewriteStream(source: ReadableStream<Uint8Array>, publicModel: string) {
+function sseModelRewriteStream(
+  source: ReadableStream<Uint8Array>,
+  upstreamModel: string,
+  publicModel: string,
+) {
   const dec = new TextDecoder();
   const enc = new TextEncoder();
   const reader = source.getReader();
@@ -114,11 +186,8 @@ function sseModelRewriteStream(source: ReadableStream<Uint8Array>, publicModel: 
   const rewriteLine = (line: string): string => {
     if (!line.startsWith("data: ")) return line;
     try {
-      const o = JSON.parse(line.slice(6)) as Record<string, unknown>;
-      if (typeof o.model === "string") {
-        o.model = publicModel;
-        return `data: ${JSON.stringify(o)}`;
-      }
+      const o = JSON.parse(line.slice(6)) as JsonValue;
+      return `data: ${JSON.stringify(scrubJsonStrings(o, upstreamModel, publicModel))}`;
     } catch {
       // not JSON — passthrough
     }
@@ -351,13 +420,15 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     if (!upstream.ok) {
       const text = await upstream.text();
       settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
-      return new Response(text, {
-        status: upstream.status,
-        headers: {
-          "content-type": upstream.headers.get("content-type") ?? "application/json",
-          "x-hbr-request-id": requestId,
-        },
-      });
+      const errRes = safeUpstreamError(
+        text,
+        upstream.status,
+        mapping.upstream_model,
+        model.public_id,
+        model.provider,
+      );
+      errRes.headers.set("x-hbr-request-id", requestId);
+      return errRes;
     }
 
     const tap = createUsageTap({ protocol, stream });
@@ -379,7 +450,7 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
       tap.push(buf);
       const result = tap.end();
       settleFromTap(db, requestId, result, rates, meta, done);
-      const body = rewriteJsonModel(ab, model.public_id);
+      const body = rewriteJsonModel(ab, mapping.upstream_model, model.public_id);
       return new Response(body, {
         status: upstream.status,
         headers: {
@@ -438,13 +509,16 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
       },
     });
     request.signal.addEventListener("abort", () => controller.abort(), { once: true });
-    return new Response(sseModelRewriteStream(passthrough, model.public_id), {
+    return new Response(
+      sseModelRewriteStream(passthrough, mapping.upstream_model, model.public_id),
+      {
       status: upstream.status,
-      headers: {
-        "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
-        "x-hbr-request-id": requestId,
+        headers: {
+          "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
+          "x-hbr-request-id": requestId,
+        },
       },
-    });
+    );
   };
 }
 
