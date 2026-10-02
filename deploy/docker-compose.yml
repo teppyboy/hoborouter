@@ -1,4 +1,32 @@
 services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hoborouter
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: hoborouter
+    volumes:
+      - hbr-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hoborouter -d hoborouter"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Minimum set the postgres entrypoint needs to chown its data dir and
+    # drop to the postgres user; without these it exits on start.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+
   cpa:
     image: eceasy/cli-proxy-api:v8.0.4
     restart: unless-stopped
@@ -15,19 +43,39 @@ services:
       - ./cpa/auths:/root/.cli-proxy-api
 
   hoborouter:
+    # Deployed image tag; build: kept for local dev, VPS uses the pulled image.
+    image: ghcr.io/teppyboy/hoborouter:${HBR_IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
-      - cpa
+      cpa:
+        condition: service_started
+      db:
+        condition: service_healthy
     ports:
       - "127.0.0.1:3000:3000"
     env_file:
       - ./.env
     environment:
       CPA_BASE_URL: http://cpa:8317
+      DATABASE_URL: >-
+        postgres://hoborouter:${POSTGRES_PASSWORD}@db:5432/hoborouter
       HBR_GATEWAY_ENABLED: ${HBR_GATEWAY_ENABLED:-1}
+    healthcheck:
+      # oven/bun has no curl/wget; use bun fetch against the real health route.
+      test:
+        - CMD
+        - bun
+        - -e
+        - >-
+          const r = await fetch('http://127.0.0.1:3000/healthz');
+          if (!r.ok) process.exit(1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -39,3 +87,4 @@ services:
 
 volumes:
   hoborouter-data:
+  hbr-pgdata:

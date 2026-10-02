@@ -1,26 +1,51 @@
+// Better Auth-generated tables (via @better-auth/cli + drizzle-kit, user table
+// named `users`). schema.ts re-exports these bindings for FK builders.
 import { relations } from "drizzle-orm";
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import {
+  boolean,
+  customType,
+  index,
+  pgTable,
+  text,
+} from "drizzle-orm/pg-core";
 
-export const users = sqliteTable("users", {
+// Better Auth passes/expects Date objects for its timestamp fields while the
+// canonical storage contract is epoch-ms bigint. This type bridges both:
+// driver storage is bigint epoch-ms, drizzle-level data is Date.
+const tsMs = () =>
+  customType<{ data: Date; driverData: number; notNull: false; default: false }>({
+    dataType() {
+      return "bigint";
+    },
+    toDriver(value: Date) {
+      return value.getTime();
+    },
+    fromDriver(value: number) {
+      return new Date(Number(value));
+    },
+  });
+
+export const users = pgTable("users", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
-  emailVerified: integer("email_verified", { mode: "boolean" }).default(false).notNull(),
+  emailVerified: boolean("email_verified").default(false).notNull(),
   image: text("image"),
-  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
-  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+  // Epoch-ms timestamps, consistent with the rest of the schema.
+  createdAt: tsMs()("created_at").notNull(),
+  updatedAt: tsMs()("updated_at")
     .$onUpdate(() => new Date())
     .notNull(),
 });
 
-export const session = sqliteTable(
+export const session = pgTable(
   "session",
   {
     id: text("id").primaryKey(),
-    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    expiresAt: tsMs()("expires_at").notNull(),
     token: text("token").notNull().unique(),
-    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
-    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    createdAt: tsMs()("created_at").notNull(),
+    updatedAt: tsMs()("updated_at")
       .$onUpdate(() => new Date())
       .notNull(),
     ipAddress: text("ip_address"),
@@ -32,7 +57,7 @@ export const session = sqliteTable(
   (table) => [index("session_userId_idx").on(table.userId)],
 );
 
-export const account = sqliteTable(
+export const account = pgTable(
   "account",
   {
     id: text("id").primaryKey(),
@@ -44,31 +69,27 @@ export const account = sqliteTable(
     accessToken: text("access_token"),
     refreshToken: text("refresh_token"),
     idToken: text("id_token"),
-    accessTokenExpiresAt: integer("access_token_expires_at", {
-      mode: "timestamp_ms",
-    }),
-    refreshTokenExpiresAt: integer("refresh_token_expires_at", {
-      mode: "timestamp_ms",
-    }),
+    accessTokenExpiresAt: tsMs()("access_token_expires_at"),
+    refreshTokenExpiresAt: tsMs()("refresh_token_expires_at"),
     scope: text("scope"),
     password: text("password"),
-    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
-    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    createdAt: tsMs()("created_at").notNull(),
+    updatedAt: tsMs()("updated_at")
       .$onUpdate(() => new Date())
       .notNull(),
   },
   (table) => [index("account_userId_idx").on(table.userId)],
 );
 
-export const verification = sqliteTable(
+export const verification = pgTable(
   "verification",
   {
     id: text("id").primaryKey(),
     identifier: text("identifier").notNull(),
     value: text("value").notNull(),
-    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
-    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
-    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    expiresAt: tsMs()("expires_at").notNull(),
+    createdAt: tsMs()("created_at").notNull(),
+    updatedAt: tsMs()("updated_at")
       .$onUpdate(() => new Date())
       .notNull(),
   },

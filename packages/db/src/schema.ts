@@ -1,47 +1,47 @@
-// Task 2 handoff (Task 3, Better Auth): `users` is the MINIMAL referenced
-// identity contract — the Task 2 migration creates only `users (id TEXT
-// PRIMARY KEY)`. Better Auth's generated tables (via @better-auth/cli +
-// drizzle-kit, configured so the user table is named `users` — set
-// `user: { modelName: "users" }` in the Better Auth config, or reconcile the
-// generated table name before generating its migration) will extend this
-// table. Do NOT invent full user/session/account/verification definitions
-// here; packages/db/src/schema.ts must re-export the generated
-// auth-schema.ts in Task 3 instead of this placeholder.
+// PostgreSQL schema — 1:1 translation of the SQLite schema (same table/column
+// names, checks, indexes, FKs). Money/token/epoch-ms columns are bigint mode
+// 'number'; former typeof() type checks become bounded CHECKs
+// (col >= 0 AND col <= MAX_SAFE_INTEGER_MONEY).
 import { sql } from "drizzle-orm";
 import {
+  bigint,
+  boolean,
   check,
   index,
   integer,
+  jsonb,
+  pgTable,
   primaryKey,
-  sqliteTable,
   text,
   uniqueIndex,
-  type AnySQLiteColumn,
-} from "drizzle-orm/sqlite-core";
+  type AnyPgColumn,
+} from "drizzle-orm/pg-core";
 
 // `users`/`session`/`account`/`verification` are Better Auth-generated
-// (auth-schema.ts, @better-auth/cli). Re-export scope-local bindings (bare
-// `export *` breaks FK builders like workspaceMembers.user_id.references(() => users.id)).
+// (auth-schema.ts). Re-export scope-local bindings (bare `export *` breaks FK
+// builders like workspaceMembers.user_id.references(() => users.id)).
 import { users, session, account, verification } from "./auth-schema";
 export { users, session, account, verification };
 
 /** Largest integer representable exactly in IEEE doubles — upper bound for all canonical money/token columns. */
 export const MAX_SAFE_INTEGER_MONEY = 9007199254740991;
 const MAX_BOUND = sql.raw(String(MAX_SAFE_INTEGER_MONEY));
-const intBounded = (col: unknown) =>
-  sql`typeof(${col}) = 'integer' AND ${col} >= 0 AND ${col} <= ${MAX_BOUND}`;
+const intBounded = (col: AnyPgColumn) =>
+  sql`${col} >= 0 AND ${col} <= ${MAX_BOUND}`;
+
+const big = (name: string) => bigint(name, { mode: "number" });
 
 // --- workspaces & keys ---
-export const workspaces = sqliteTable("workspaces", {
+export const workspaces = pgTable("workspaces", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   status: text("status", { enum: ["active", "suspended"] })
     .notNull()
     .default("active"),
-  created_at: integer("created_at").notNull(),
+  created_at: big("created_at").notNull(),
 });
 
-export const workspaceMembers = sqliteTable(
+export const workspaceMembers = pgTable(
   "workspace_members",
   {
     workspace_id: text("workspace_id")
@@ -58,15 +58,15 @@ export const workspaceMembers = sqliteTable(
   ],
 );
 
-export const instanceAdmins = sqliteTable("instance_admins", {
+export const instanceAdmins = pgTable("instance_admins", {
   user_id: text("user_id")
     .primaryKey()
     .references(() => users.id, { onDelete: "cascade" }),
-  created_at: integer("created_at").notNull(),
+  created_at: big("created_at").notNull(),
   added_by: text("added_by"),
 });
 
-export const apiKeys = sqliteTable(
+export const apiKeys = pgTable(
   "api_keys",
   {
     id: text("id").primaryKey(),
@@ -79,9 +79,9 @@ export const apiKeys = sqliteTable(
     status: text("status", { enum: ["active", "enabled", "disabled", "revoked"] })
       .notNull()
       .default("active"),
-    created_at: integer("created_at").notNull(),
-    last_used_at: integer("last_used_at"),
-    revoked_at: integer("revoked_at"),
+    created_at: big("created_at").notNull(),
+    last_used_at: big("last_used_at"),
+    revoked_at: big("revoked_at"),
   },
   (t) => [
     uniqueIndex("api_keys_key_hash").on(t.key_hash),
@@ -89,7 +89,7 @@ export const apiKeys = sqliteTable(
   ],
 );
 
-export const keyRateLimits = sqliteTable("key_rate_limits", {
+export const keyRateLimits = pgTable("key_rate_limits", {
   api_key_id: text("api_key_id")
     .primaryKey()
     .references(() => apiKeys.id),
@@ -98,7 +98,7 @@ export const keyRateLimits = sqliteTable("key_rate_limits", {
 });
 
 // --- wallet & ledger ---
-export const wallets = sqliteTable(
+export const wallets = pgTable(
   "wallets",
   {
     id: text("id").primaryKey(),
@@ -106,23 +106,21 @@ export const wallets = sqliteTable(
       .notNull()
       .references(() => workspaces.id),
     currency: text("currency").notNull().default("VND"),
-    balance: integer("balance").notNull(),
-    reserved: integer("reserved").notNull(),
+    balance: big("balance").notNull(),
+    reserved: big("reserved").notNull(),
     version: integer("version").notNull().default(0),
-    created_at: integer("created_at").notNull(),
+    created_at: big("created_at").notNull(),
   },
   (t) => [
     uniqueIndex("wallets_workspace_id").on(t.workspace_id),
     check("wallets_currency", sql`${t.currency} = 'VND'`),
-    check("wallets_balance_type", sql`typeof(${t.balance}) = 'integer'`),
-    check("wallets_reserved_type", sql`typeof(${t.reserved}) = 'integer'`),
-    check("wallets_balance_nonneg", sql`${t.balance} >= 0`),
-    check("wallets_reserved_nonneg", sql`${t.reserved} >= 0`),
+    check("wallets_balance_type", intBounded(t.balance)),
+    check("wallets_reserved_type", intBounded(t.reserved)),
     check("wallets_balance_gte_reserved", sql`${t.balance} >= ${t.reserved}`),
   ],
 );
 
-export const ledgerEntries = sqliteTable(
+export const ledgerEntries = pgTable(
   "ledger_entries",
   {
     id: text("id").primaryKey(),
@@ -131,16 +129,16 @@ export const ledgerEntries = sqliteTable(
       .references(() => wallets.id),
     direction: text("direction", { enum: ["debit", "credit"] }).notNull(),
     billing_reservation_id: text("billing_reservation_id").references(() => billingReservations.id),
-    amount: integer("amount").notNull(),
+    amount: big("amount").notNull(),
     kind: text("kind", { enum: ["topup", "settle", "adjustment", "refund"] }).notNull(),
     reservation_id: text("reservation_id").references(() => reservations.id),
     original_ledger_entry_id: text("original_ledger_entry_id").references(
-      (): AnySQLiteColumn => ledgerEntries.id,
+      (): AnyPgColumn => ledgerEntries.id,
     ),
     payment_id: text("payment_id").references(() => payments.id),
-    balance_after: integer("balance_after").notNull(),
+    balance_after: big("balance_after").notNull(),
     memo: text("memo"),
-    created_at: integer("created_at").notNull(),
+    created_at: big("created_at").notNull(),
   },
   (t) => [
     index("ledger_wallet_idx").on(t.wallet_id),
@@ -156,9 +154,8 @@ export const ledgerEntries = sqliteTable(
       .where(sql`kind = 'refund'`),
     check("ledger_direction", sql`${t.direction} IN ('debit','credit')`),
     check("ledger_kind", sql`${t.kind} IN ('topup','settle','adjustment','refund')`),
-    check("ledger_amount_type", sql`typeof(${t.amount}) = 'integer'`),
-    check("ledger_amount_positive", sql`${t.amount} > 0`),
-    check("ledger_balance_after_type", sql`typeof(${t.balance_after}) = 'integer'`),
+    check("ledger_amount_type", sql`${t.amount} > 0 AND ${t.amount} <= ${MAX_BOUND}`),
+    check("ledger_balance_after_type", intBounded(t.balance_after)),
     check(
       "ledger_refund_requires_original",
       sql`kind != 'refund' OR ${t.original_ledger_entry_id} IS NOT NULL`,
@@ -170,30 +167,29 @@ export const ledgerEntries = sqliteTable(
   ],
 );
 // --- payments ---
-export const payments = sqliteTable(
+export const payments = pgTable(
   "payments",
   {
     id: text("id").primaryKey(),
     workspace_id: text("workspace_id")
       .notNull()
       .references(() => workspaces.id),
-    amount: integer("amount").notNull(),
+    amount: big("amount").notNull(),
     status: text("status", {
       enum: ["pending", "succeeded", "failed", "expired"],
     }).notNull(),
     provider: text("provider", { enum: ["manual", "mock", "vietqr_manual", "payos"] }).notNull(),
     provider_order_code: text("provider_order_code").notNull(),
-    created_at: integer("created_at").notNull(),
-    expires_at: integer("expires_at"),
+    created_at: big("created_at").notNull(),
+    expires_at: big("expires_at"),
   },
   (t) => [
     uniqueIndex("payments_provider_order").on(t.provider, t.provider_order_code),
-    check("payments_amount_type", sql`typeof(${t.amount}) = 'integer'`),
-    check("payments_amount_positive", sql`${t.amount} > 0`),
+    check("payments_amount_type", sql`${t.amount} > 0 AND ${t.amount} <= ${MAX_BOUND}`),
   ],
 );
 
-export const paymentEvents = sqliteTable(
+export const paymentEvents = pgTable(
   "payment_events",
   {
     id: text("id").primaryKey(),
@@ -203,14 +199,14 @@ export const paymentEvents = sqliteTable(
     provider: text("provider").notNull(),
     provider_reference: text("provider_reference").notNull(),
     raw_payload: text("raw_payload"),
-    signature_valid: integer("signature_valid", { mode: "boolean" }),
-    processed_at: integer("processed_at").notNull(),
+    signature_valid: boolean("signature_valid"),
+    processed_at: big("processed_at").notNull(),
   },
   (t) => [uniqueIndex("payment_events_provider_reference").on(t.provider, t.provider_reference)],
 );
 
 // --- canonical paid-gateway catalog ---
-export const models = sqliteTable(
+export const models = pgTable(
   "models",
   {
     id: text("id").primaryKey(),
@@ -219,17 +215,17 @@ export const models = sqliteTable(
     display_name: text("display_name").notNull(),
     provider: text("provider").notNull(),
     description: text("description"),
-    capabilities: text("capabilities", { mode: "json" }),
+    capabilities: jsonb("capabilities"),
     context_window: integer("context_window"),
-    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-    published: integer("published", { mode: "boolean" }).notNull().default(false),
+    enabled: boolean("enabled").notNull().default(true),
+    published: boolean("published").notNull().default(false),
     // Per-model prompt-caching override; 'inherit' follows the global
     // instance_settings.prompt_caching_enabled flag.
     prompt_caching: text("prompt_caching", { enum: ["inherit", "on", "off"] })
       .notNull()
       .default("inherit"),
-    created_at: integer("created_at").notNull(),
-    updated_at: integer("updated_at").notNull(),
+    created_at: big("created_at").notNull(),
+    updated_at: big("updated_at").notNull(),
   },
   (t) => [
     uniqueIndex("models_public_id").on(t.public_id),
@@ -237,43 +233,43 @@ export const models = sqliteTable(
   ],
 );
 
-export const providerModelMappings = sqliteTable("provider_model_mappings", {
+export const providerModelMappings = pgTable("provider_model_mappings", {
   id: text("id").primaryKey(),
   model_id: text("model_id")
     .notNull()
     .references(() => models.id),
   provider: text("provider").notNull(),
   upstream_model: text("upstream_model").notNull(),
-  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
-  created_at: integer("created_at").notNull(),
-  updated_at: integer("updated_at").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  created_at: big("created_at").notNull(),
+  updated_at: big("updated_at").notNull(),
 });
 
-export const modelPrices = sqliteTable(
+export const modelPrices = pgTable(
   "model_prices",
   {
     id: text("id").primaryKey(),
     model_id: text("model_id")
       .notNull()
       .references(() => models.id),
-    input_usd_micro_per_1m: integer("input_usd_micro_per_1m").notNull(),
-    output_usd_micro_per_1m: integer("output_usd_micro_per_1m").notNull(),
-    cached_input_usd_micro_per_1m: integer("cached_input_usd_micro_per_1m").notNull(),
-    reasoning_usd_micro_per_1m: integer("reasoning_usd_micro_per_1m").notNull(),
-    markup_ppm: integer("markup_ppm").notNull(),
-    effective_at: integer("effective_at").notNull(),
-    retired_at: integer("retired_at"),
+    input_usd_micro_per_1m: big("input_usd_micro_per_1m").notNull(),
+    output_usd_micro_per_1m: big("output_usd_micro_per_1m").notNull(),
+    cached_input_usd_micro_per_1m: big("cached_input_usd_micro_per_1m").notNull(),
+    reasoning_usd_micro_per_1m: big("reasoning_usd_micro_per_1m").notNull(),
+    markup_ppm: big("markup_ppm").notNull(),
+    effective_at: big("effective_at").notNull(),
+    retired_at: big("retired_at"),
   },
   (t) => [
     check(
       "model_prices_integer_nonnegative",
-      sql`typeof(${t.input_usd_micro_per_1m}) = 'integer' AND ${intBounded(t.input_usd_micro_per_1m)} AND typeof(${t.output_usd_micro_per_1m}) = 'integer' AND ${intBounded(t.output_usd_micro_per_1m)} AND typeof(${t.cached_input_usd_micro_per_1m}) = 'integer' AND ${intBounded(t.cached_input_usd_micro_per_1m)} AND typeof(${t.reasoning_usd_micro_per_1m}) = 'integer' AND ${intBounded(t.reasoning_usd_micro_per_1m)}`,
+      sql`${intBounded(t.input_usd_micro_per_1m)} AND ${intBounded(t.output_usd_micro_per_1m)} AND ${intBounded(t.cached_input_usd_micro_per_1m)} AND ${intBounded(t.reasoning_usd_micro_per_1m)}`,
     ),
     check("model_prices_markup", intBounded(t.markup_ppm)),
   ],
 );
 
-export const apiKeyModelPermissions = sqliteTable(
+export const apiKeyModelPermissions = pgTable(
   "api_key_model_permissions",
   {
     api_key_id: text("api_key_id")
@@ -282,13 +278,13 @@ export const apiKeyModelPermissions = sqliteTable(
     model_id: text("model_id")
       .notNull()
       .references(() => models.id),
-    created_at: integer("created_at").notNull(),
+    created_at: big("created_at").notNull(),
   },
   (t) => [primaryKey({ columns: [t.api_key_id, t.model_id] })],
 );
 
 // --- model catalog & price snapshots ---
-export const modelBindings = sqliteTable(
+export const modelBindings = pgTable(
   "model_bindings",
   {
     id: text("id").primaryKey(),
@@ -296,40 +292,36 @@ export const modelBindings = sqliteTable(
     public_model: text("public_model").notNull(),
     cpa_alias: text("cpa_alias").notNull(),
     status: text("status", { enum: ["published", "disabled"] }).notNull(),
-    price_input_per_1m: integer("price_input_per_1m").notNull(),
-    price_output_per_1m: integer("price_output_per_1m").notNull(),
-    effective_at: integer("effective_at").notNull(),
+    price_input_per_1m: big("price_input_per_1m").notNull(),
+    price_output_per_1m: big("price_output_per_1m").notNull(),
+    effective_at: big("effective_at").notNull(),
   },
   (t) => [
-    check("mb_price_input_type", sql`typeof(${t.price_input_per_1m}) = 'integer'`),
-    check("mb_price_output_type", sql`typeof(${t.price_output_per_1m}) = 'integer'`),
-    check("mb_price_input_nonneg", sql`${t.price_input_per_1m} >= 0`),
-    check("mb_price_output_nonneg", sql`${t.price_output_per_1m} >= 0`),
+    check("mb_price_input_type", intBounded(t.price_input_per_1m)),
+    check("mb_price_output_type", intBounded(t.price_output_per_1m)),
     check("mb_status", sql`${t.status} IN ('published','disabled')`),
   ],
 );
 
-export const priceSnapshots = sqliteTable(
+export const priceSnapshots = pgTable(
   "price_snapshots",
   {
     id: text("id").primaryKey(),
     binding_id: text("binding_id")
       .notNull()
       .references(() => modelBindings.id),
-    price_input: integer("price_input").notNull(),
-    price_output: integer("price_output").notNull(),
-    created_at: integer("created_at").notNull(),
+    price_input: big("price_input").notNull(),
+    price_output: big("price_output").notNull(),
+    created_at: big("created_at").notNull(),
   },
   (t) => [
-    check("ps_price_input_type", sql`typeof(${t.price_input}) = 'integer'`),
-    check("ps_price_input_nonneg", sql`${t.price_input} >= 0`),
-    check("ps_price_output_type", sql`typeof(${t.price_output}) = 'integer'`),
-    check("ps_price_output_nonneg", sql`${t.price_output} >= 0`),
+    check("ps_price_input_type", intBounded(t.price_input)),
+    check("ps_price_output_type", intBounded(t.price_output)),
   ],
 );
 
 // --- requests & usage ---
-export const requests = sqliteTable(
+export const requests = pgTable(
   "requests",
   {
     id: text("id").primaryKey(),
@@ -351,14 +343,14 @@ export const requests = sqliteTable(
     dispatch_state: text("dispatch_state", { enum: ["reserved", "dispatching", "terminal"] })
       .notNull()
       .default("reserved"),
-    dispatched_at: integer("dispatched_at"),
+    dispatched_at: big("dispatched_at"),
     http_status: integer("http_status"),
     ttft_ms: integer("ttft_ms"),
     duration_ms: integer("duration_ms"),
-    created_at: integer("created_at").notNull(),
-    // Soft delete (migration 0007). Audit trail only: wallet, ledger, payments
-    // and financial totals are untouched by deletion.
-    deleted_at: integer("deleted_at"),
+    created_at: big("created_at").notNull(),
+    // Soft delete. Audit trail only: wallet, ledger, payments and financial
+    // totals are untouched by deletion.
+    deleted_at: big("deleted_at"),
     deleted_by: text("deleted_by"),
   },
   (t) => [
@@ -380,24 +372,33 @@ export const requests = sqliteTable(
   ],
 );
 
-export const usageEvents = sqliteTable("usage_events", {
-  id: text("id").primaryKey(),
-  source_request_id: text("source_request_id").notNull(),
-  cpa_execution_uuid: text("cpa_execution_uuid"),
-  gateway_request_id: text("gateway_request_id").references(() => requests.id),
-  tokens_input: integer("tokens_input").notNull(),
-  tokens_output: integer("tokens_output").notNull(),
-  tokens_reasoning: integer("tokens_reasoning").notNull(),
-  tokens_cached: integer("tokens_cached").notNull(),
-  tokens_total: integer("tokens_total").notNull(),
-  failed: integer("failed", { mode: "boolean" }).notNull(),
-  latency_ms: integer("latency_ms"),
-  raw_payload: text("raw_payload"),
-  ingested_at: integer("ingested_at").notNull(),
-});
+export const usageEvents = pgTable(
+  "usage_events",
+  {
+    id: text("id").primaryKey(),
+    source_request_id: text("source_request_id").notNull(),
+    cpa_execution_uuid: text("cpa_execution_uuid"),
+    gateway_request_id: text("gateway_request_id").references(() => requests.id),
+    tokens_input: big("tokens_input").notNull(),
+    tokens_output: big("tokens_output").notNull(),
+    tokens_reasoning: big("tokens_reasoning").notNull(),
+    tokens_cached: big("tokens_cached").notNull(),
+    tokens_total: big("tokens_total").notNull(),
+    failed: boolean("failed").notNull(),
+    latency_ms: integer("latency_ms"),
+    raw_payload: text("raw_payload"),
+    ingested_at: big("ingested_at").notNull(),
+  },
+  (t) => [
+    check(
+      "usage_events_tokens_nonnegative",
+      sql`${intBounded(t.tokens_input)} AND ${intBounded(t.tokens_output)} AND ${intBounded(t.tokens_reasoning)} AND ${intBounded(t.tokens_cached)} AND ${intBounded(t.tokens_total)}`,
+    ),
+  ],
+);
 
 // --- reservations ---
-export const reservations = sqliteTable(
+export const reservations = pgTable(
   "reservations",
   {
     id: text("id").primaryKey(),
@@ -414,21 +415,20 @@ export const reservations = sqliteTable(
     status: text("status", {
       enum: ["held", "settled", "released", "unknown"],
     }).notNull(),
-    cap_amount: integer("cap_amount").notNull(),
-    estimated_input_tokens: integer("estimated_input_tokens").notNull(),
-    created_at: integer("created_at").notNull(),
-    resolved_at: integer("resolved_at"),
-    expires_at: integer("expires_at"),
+    cap_amount: big("cap_amount").notNull(),
+    estimated_input_tokens: big("estimated_input_tokens").notNull(),
+    created_at: big("created_at").notNull(),
+    resolved_at: big("resolved_at"),
+    expires_at: big("expires_at"),
   },
   (t) => [
     uniqueIndex("reservations_gateway_request_id").on(t.gateway_request_id),
-    check("res_cap_amount_type", sql`typeof(${t.cap_amount}) = 'integer'`),
-    check("res_cap_amount_positive", sql`${t.cap_amount} > 0`),
+    check("res_cap_amount_type", sql`${t.cap_amount} > 0 AND ${t.cap_amount} <= ${MAX_BOUND}`),
     check("res_status", sql`${t.status} IN ('held','settled','released','unknown')`),
   ],
 );
 
-export const billingReservations = sqliteTable(
+export const billingReservations = pgTable(
   "billing_reservations",
   {
     id: text("id").primaryKey(),
@@ -446,19 +446,19 @@ export const billingReservations = sqliteTable(
     model_price_id: text("model_price_id")
       .notNull()
       .references(() => modelPrices.id),
-    usd_vnd_exchange_rate: integer("usd_vnd_exchange_rate").notNull(),
-    markup_ppm: integer("markup_ppm").notNull(),
-    cap_vnd: integer("cap_vnd").notNull(),
+    usd_vnd_exchange_rate: big("usd_vnd_exchange_rate").notNull(),
+    markup_ppm: big("markup_ppm").notNull(),
+    cap_vnd: big("cap_vnd").notNull(),
     status: text("status", {
       enum: ["held", "settled", "settled_full_hold", "released"],
     }).notNull(),
-    created_at: integer("created_at").notNull(),
-    resolved_at: integer("resolved_at"),
+    created_at: big("created_at").notNull(),
+    resolved_at: big("resolved_at"),
   },
   (t) => [
     check(
       "billing_reservations_money",
-      sql`typeof(${t.cap_vnd}) = 'integer' AND ${t.cap_vnd} > 0 AND ${t.cap_vnd} <= ${MAX_BOUND} AND typeof(${t.usd_vnd_exchange_rate}) = 'integer' AND ${t.usd_vnd_exchange_rate} > 0 AND ${t.usd_vnd_exchange_rate} <= ${MAX_BOUND} AND typeof(${t.markup_ppm}) = 'integer' AND ${t.markup_ppm} >= 0 AND ${t.markup_ppm} <= ${MAX_BOUND}`,
+      sql`${t.cap_vnd} > 0 AND ${t.cap_vnd} <= ${MAX_BOUND} AND ${t.usd_vnd_exchange_rate} > 0 AND ${t.usd_vnd_exchange_rate} <= ${MAX_BOUND} AND ${intBounded(t.markup_ppm)}`,
     ),
     check(
       "billing_reservations_status",
@@ -467,7 +467,7 @@ export const billingReservations = sqliteTable(
   ],
 );
 
-export const usageLogs = sqliteTable(
+export const usageLogs = pgTable(
   "usage_logs",
   {
     id: text("id").primaryKey(),
@@ -483,68 +483,65 @@ export const usageLogs = sqliteTable(
     provider: text("provider").notNull(),
     public_model: text("public_model").notNull(),
     upstream_model: text("upstream_model").notNull(),
-    input_tokens: integer("input_tokens").notNull(),
-    output_tokens: integer("output_tokens").notNull(),
-    cached_input_tokens: integer("cached_input_tokens").notNull(),
-    reasoning_tokens: integer("reasoning_tokens").notNull(),
+    input_tokens: big("input_tokens").notNull(),
+    output_tokens: big("output_tokens").notNull(),
+    cached_input_tokens: big("cached_input_tokens").notNull(),
+    reasoning_tokens: big("reasoning_tokens").notNull(),
     status: text("status").notNull(),
     failure: text("failure"),
     latency_ms: integer("latency_ms"),
     ttft_ms: integer("ttft_ms"),
-    upstream_cost_usd_micro: integer("upstream_cost_usd_micro"),
-    usd_vnd_exchange_rate: integer("usd_vnd_exchange_rate"),
-    markup_ppm: integer("markup_ppm"),
-    charged_vnd: integer("charged_vnd"),
+    upstream_cost_usd_micro: big("upstream_cost_usd_micro"),
+    usd_vnd_exchange_rate: big("usd_vnd_exchange_rate"),
+    markup_ppm: big("markup_ppm"),
+    charged_vnd: big("charged_vnd"),
     raw_payload: text("raw_payload"),
-    created_at: integer("created_at").notNull(),
+    created_at: big("created_at").notNull(),
   },
   (t) => [
     check(
       "usage_logs_tokens_nonnegative",
-      sql`typeof(${t.input_tokens}) = 'integer' AND ${intBounded(t.input_tokens)} AND typeof(${t.output_tokens}) = 'integer' AND ${intBounded(t.output_tokens)} AND typeof(${t.cached_input_tokens}) = 'integer' AND ${intBounded(t.cached_input_tokens)} AND typeof(${t.reasoning_tokens}) = 'integer' AND ${intBounded(t.reasoning_tokens)} AND ${t.cached_input_tokens} <= ${t.input_tokens} AND ${t.reasoning_tokens} <= ${t.output_tokens}`,
+      sql`${intBounded(t.input_tokens)} AND ${intBounded(t.output_tokens)} AND ${intBounded(t.cached_input_tokens)} AND ${intBounded(t.reasoning_tokens)} AND ${t.cached_input_tokens} <= ${t.input_tokens} AND ${t.reasoning_tokens} <= ${t.output_tokens}`,
     ),
     check(
       "usage_logs_snapshot_money",
-      sql`(${t.upstream_cost_usd_micro} IS NULL OR (typeof(${t.upstream_cost_usd_micro}) = 'integer' AND ${t.upstream_cost_usd_micro} >= 0 AND ${t.upstream_cost_usd_micro} <= ${MAX_BOUND})) AND (${t.usd_vnd_exchange_rate} IS NULL OR (typeof(${t.usd_vnd_exchange_rate}) = 'integer' AND ${t.usd_vnd_exchange_rate} > 0 AND ${t.usd_vnd_exchange_rate} <= ${MAX_BOUND})) AND (${t.markup_ppm} IS NULL OR (typeof(${t.markup_ppm}) = 'integer' AND ${t.markup_ppm} >= 0 AND ${t.markup_ppm} <= ${MAX_BOUND})) AND (${t.charged_vnd} IS NULL OR (typeof(${t.charged_vnd}) = 'integer' AND ${t.charged_vnd} >= 0 AND ${t.charged_vnd} <= ${MAX_BOUND}))`,
+      sql`(${t.upstream_cost_usd_micro} IS NULL OR ${intBounded(t.upstream_cost_usd_micro)}) AND (${t.usd_vnd_exchange_rate} IS NULL OR (${t.usd_vnd_exchange_rate} > 0 AND ${t.usd_vnd_exchange_rate} <= ${MAX_BOUND})) AND (${t.markup_ppm} IS NULL OR ${intBounded(t.markup_ppm)}) AND (${t.charged_vnd} IS NULL OR ${intBounded(t.charged_vnd)})`,
     ),
   ],
 );
 
 /** Instance-level key/value settings (e.g. prompt_caching_enabled). Values are the string 'true'/'false' for booleans. */
-export const instanceSettings = sqliteTable("instance_settings", {
+export const instanceSettings = pgTable("instance_settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
-  updated_at: integer("updated_at").notNull(),
+  updated_at: big("updated_at").notNull(),
 });
 
 // --- Phase 2 settlement tables (schema preserved per spec; no app code touches them) ---
-export const settlements = sqliteTable(
+export const settlements = pgTable(
   "settlements",
   {
     id: text("id").primaryKey(),
     reservation_id: text("reservation_id").references(() => reservations.id),
     billing_reservation_id: text("billing_reservation_id").references(() => billingReservations.id),
-    charged_input: integer("charged_input").notNull(),
-    charged_output: integer("charged_output").notNull(),
-    charged_total: integer("charged_total").notNull(),
-    settled_at: integer("settled_at").notNull(),
-    charged_vnd: integer("charged_vnd"),
+    charged_input: big("charged_input").notNull(),
+    charged_output: big("charged_output").notNull(),
+    charged_total: big("charged_total").notNull(),
+    settled_at: big("settled_at").notNull(),
+    charged_vnd: big("charged_vnd"),
     usage_log_id: text("usage_log_id").references(() => usageLogs.id),
     reason: text("reason"),
-    created_at: integer("created_at"),
+    created_at: big("created_at"),
   },
   (t) => [
     uniqueIndex("settlements_reservation_id").on(t.reservation_id),
     uniqueIndex("settlements_billing_reservation_id").on(t.billing_reservation_id),
-    check("st_charged_input_type", sql`typeof(${t.charged_input}) = 'integer'`),
-    check("st_charged_output_type", sql`typeof(${t.charged_output}) = 'integer'`),
-    check("st_charged_input_nonneg", sql`${t.charged_input} >= 0`),
-    check("st_charged_output_nonneg", sql`${t.charged_output} >= 0`),
-    check("st_charged_total_type", sql`typeof(${t.charged_total}) = 'integer'`),
-    check("st_charged_total_nonneg", sql`${t.charged_total} >= 0`),
+    check("st_charged_input_type", intBounded(t.charged_input)),
+    check("st_charged_output_type", intBounded(t.charged_output)),
+    check("st_charged_total_type", intBounded(t.charged_total)),
     check(
       "st_charged_vnd_nonneg",
-      sql`${t.charged_vnd} IS NULL OR (typeof(${t.charged_vnd}) = 'integer' AND ${t.charged_vnd} >= 0 AND ${t.charged_vnd} <= ${MAX_BOUND})`,
+      sql`${t.charged_vnd} IS NULL OR ${intBounded(t.charged_vnd)}`,
     ),
     check(
       "st_one_reservation",
@@ -553,7 +550,7 @@ export const settlements = sqliteTable(
   ],
 );
 
-export const settlementUsageEvents = sqliteTable(
+export const settlementUsageEvents = pgTable(
   "settlement_usage_events",
   {
     settlement_id: text("settlement_id")
@@ -569,7 +566,7 @@ export const settlementUsageEvents = sqliteTable(
   ],
 );
 
-export const unknownResolutions = sqliteTable(
+export const unknownResolutions = pgTable(
   "unknown_resolutions",
   {
     id: text("id").primaryKey(),
@@ -584,7 +581,7 @@ export const unknownResolutions = sqliteTable(
     outcome: text("outcome", { enum: ["hold_release", "manual_settle"] }).notNull(),
     result: text("result").notNull(),
     actor_user_id: text("actor_user_id").references(() => users.id),
-    created_at: integer("created_at").notNull(),
+    created_at: big("created_at").notNull(),
   },
   (t) => [
     uniqueIndex("ur_resolution_key").on(t.resolution_key),
@@ -593,7 +590,7 @@ export const unknownResolutions = sqliteTable(
   ],
 );
 
-export const refundOperations = sqliteTable(
+export const refundOperations = pgTable(
   "refund_operations",
   {
     id: text("id").primaryKey(),
@@ -608,26 +605,25 @@ export const refundOperations = sqliteTable(
       .notNull()
       .references(() => reservations.id),
     payload_hash: text("payload_hash").notNull(),
-    amount: integer("amount").notNull(),
+    amount: big("amount").notNull(),
     result: text("result").notNull(),
     actor_user_id: text("actor_user_id").references(() => users.id),
-    created_at: integer("created_at").notNull(),
+    created_at: big("created_at").notNull(),
   },
   (t) => [
     uniqueIndex("ro_operation_key").on(t.operation_key),
     uniqueIndex("ro_original_ledger_entry_id").on(t.original_ledger_entry_id),
-    check("ro_amount_type", sql`typeof(${t.amount}) = 'integer'`),
-    check("ro_amount_positive", sql`${t.amount} > 0`),
+    check("ro_amount_type", sql`${t.amount} > 0 AND ${t.amount} <= ${MAX_BOUND}`),
   ],
 );
 
 // --- audit ---
-export const auditLog = sqliteTable("audit_log", {
+export const auditLog = pgTable("audit_log", {
   id: text("id").primaryKey(),
   actor_user_id: text("actor_user_id").references(() => users.id),
   workspace_id: text("workspace_id").references(() => workspaces.id),
   action: text("action").notNull(),
   target: text("target").notNull(),
-  detail: text("detail", { mode: "json" }),
-  created_at: integer("created_at").notNull(),
+  detail: jsonb("detail"),
+  created_at: big("created_at").notNull(),
 });
