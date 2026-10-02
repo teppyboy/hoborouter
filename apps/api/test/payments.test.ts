@@ -3,6 +3,7 @@
 // cross-workspace denial.
 import { describe, test, expect, beforeAll } from "bun:test";
 import {
+  q,
   makeApp,
   signUp,
   req,
@@ -11,11 +12,10 @@ import {
   addMember,
   userIdByEmail,
 } from "./helpers";
-import type { Database } from "bun:sqlite";
 import type { buildApp } from "../src/app";
 
-let app: ReturnType<typeof buildApp>;
-let db: Database;
+let app: Awaited<ReturnType<typeof buildApp>>;
+let db: Awaited<ReturnType<typeof makeApp>>["db"];
 let memberCookie: string;
 let outsiderCookie: string;
 let wsA: string;
@@ -28,19 +28,19 @@ beforeAll(async () => {
   outsiderCookie = await signUp(app, "pay-outsider@test.dev", "Out");
   wsA = "ws-pay-a";
   wsB = "ws-pay-b";
-  const ownerId = userIdByEmail(db, "pay-owner@test.dev");
-  createWorkspace(db, wsA, ownerId);
-  addMember(db, wsA, userIdByEmail(db, "pay-member@test.dev"), "member");
+  const ownerId = await userIdByEmail(db, "pay-owner@test.dev");
+  await createWorkspace(db, wsA, ownerId);
+  await addMember(db, wsA, await userIdByEmail(db, "pay-member@test.dev"), "member");
   const ownerB = await signUp(app, "pay-owner-b@test.dev", "OwnerB");
-  createWorkspace(db, wsB, userIdByEmail(db, "pay-owner-b@test.dev"));
+  await createWorkspace(db, wsB, await userIdByEmail(db, "pay-owner-b@test.dev"));
   // keep cookie var used
   void ownerB;
-  db.prepare(
+  await q(db, 
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
-  ).run(`wal-${wsA}`, wsA, Date.now());
-  db.prepare(
+`wal-${wsA}`, wsA, Date.now());
+  await q(db, 
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
-  ).run(`wal-${wsB}`, wsB, Date.now());
+`wal-${wsB}`, wsB, Date.now());
 });
 
 describe("POST /api/v1/workspaces/:id/payments", () => {
@@ -62,7 +62,7 @@ describe("POST /api/v1/workspaces/:id/payments", () => {
     expect(body.provider).toBe("manual");
     expect(body.provider_order_code).toBe(`MANUAL-${body.id}`);
     expect(body.checkout_url).toBe(`/billing/payments?payment=${body.id}`);
-    const row = db.prepare("SELECT * FROM payments WHERE id = ?").get(body.id) as {
+    const row = (await q(db, "SELECT * FROM payments WHERE id = ?", body.id))[0] as {
       amount: number;
       status: string;
       workspace_id: string;
@@ -109,15 +109,14 @@ describe("POST /api/v1/workspaces/:id/payments", () => {
     const savedUrl = process.env.BETTER_AUTH_URL;
     process.env.BETTER_AUTH_URL = "http://localhost:3000";
     const { buildApp } = await import("../src/app");
-    const { createDb, migrate } = await import("@hoborouter/db");
-    const d = createDb(":memory:");
-    migrate(d);
-    const fresh = buildApp({ db: d });
+    const { createTestDb } = await import("@hoborouter/db");
+    const d = (await createTestDb()).db;
+    const fresh = await buildApp({ db: d });
     const cookie = await signUp(fresh, "pay-prod@test.dev", "P");
-    createWorkspace(d, "ws-prod", userIdByEmail(d, "pay-prod@test.dev"));
-    d.prepare(
+    await createWorkspace(d, "ws-prod", await userIdByEmail(d, "pay-prod@test.dev"));
+    await q(d,
       "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
-    ).run("wal-ws-prod", "ws-prod", Date.now());
+"wal-ws-prod", "ws-prod", Date.now());
     const res = await req(fresh, "/api/v1/workspaces/ws-prod/payments", {
       method: "POST",
       cookie,
@@ -129,7 +128,7 @@ describe("POST /api/v1/workspaces/:id/payments", () => {
     expect(body.status).toBe("pending");
     // No fund change: wallet balance untouched at creation.
     expect(
-      (d.prepare("SELECT balance FROM wallets WHERE workspace_id = 'ws-prod'").get() as {
+      ((await q(d, "SELECT balance FROM wallets WHERE workspace_id = 'ws-prod'"))[0] as {
         balance: number;
       }).balance,
     ).toBe(0);

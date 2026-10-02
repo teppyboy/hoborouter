@@ -5,7 +5,7 @@
 // payload, unknown order, or amount mismatch — never a wallet change, and
 // never any secret in logs or responses.
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Db } from "@hoborouter/db";
 import {
   PayOSProvider,
   PayosWebhookError,
@@ -15,7 +15,7 @@ import {
 } from "@hoborouter/payments";
 import { jsonError } from "../authz";
 
-export const payosWebhookRoutes = (db: Database, cfg: PayosWebhookConfig) => {
+export const payosWebhookRoutes = (db: Db, cfg: PayosWebhookConfig) => {
   const provider = new PayOSProvider({
     clientId: "",
     apiKey: "",
@@ -45,7 +45,7 @@ export const payosWebhookRoutes = (db: Database, cfg: PayosWebhookConfig) => {
         });
       }
       try {
-        processMockPaymentEvent(db, {
+        await processMockPaymentEvent(db, {
           provider: "payos",
           orderCode: event.orderCode,
           providerReference: event.providerRef,

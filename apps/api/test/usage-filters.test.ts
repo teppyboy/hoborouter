@@ -2,17 +2,18 @@
 // empty/populated results, model isolation across workspaces, error counts,
 // membership 403, daily.errors. No filter = unchanged semantics.
 import { describe, test, expect, beforeAll } from "bun:test";
-import type { Database } from "bun:sqlite";
+import type { Db } from "@hoborouter/db";
 import { makeApp, signUp, req, createWorkspace, userIdByEmail } from "./helpers";
+import { sql } from "drizzle-orm";
 
-let db: Database;
+let db: Db;
 let app: Awaited<ReturnType<typeof makeApp>>["app"];
 let cookie: string;
 let otherCookie: string;
 const ws = "ws-uf";
 const now = Date.now();
 
-function insertLog(
+async function insertLog(
   id: string,
   wsId: string,
   model: string,
@@ -21,24 +22,11 @@ function insertLog(
   at: number,
   tokens: { input: number; output: number } = { input: 1, output: 1 },
 ) {
-  db.prepare(
-    "INSERT INTO requests (id, workspace_id, endpoint, mode, status, dispatch_state, model_id, created_at) VALUES (?,?,'/v1/chat/completions','non-stream',?,'terminal','m-1',?)",
-  ).run(`req-${id}`, wsId, status === "error" ? "upstream_error" : status, at);
-  db.prepare(
-    "INSERT INTO usage_logs (id, idempotency_key, request_id, workspace_id, provider, public_model, upstream_model, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, status, charged_vnd, created_at) VALUES (?,?,?,?,'openrouter',?,'secret',?,?,?,?,?,?,?)",
-  ).run(
-    id,
-    `idem-${id}`,
-    `req-${id}`,
-    wsId,
-    model,
-    tokens.input,
-    tokens.output,
-    0,
-    0,
-    status,
-    vnd,
-    at,
+  await db.execute(
+    sql`INSERT INTO requests (id, workspace_id, endpoint, mode, status, dispatch_state, model_id, created_at) VALUES (${`req-${id}`}, ${wsId}, '/v1/chat/completions', 'non-stream', ${status === "error" ? "upstream_error" : status}, 'terminal', 'm-1', ${at})`,
+  );
+  await db.execute(
+    sql`INSERT INTO usage_logs (id, idempotency_key, request_id, workspace_id, provider, public_model, upstream_model, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, status, charged_vnd, created_at) VALUES (${id}, ${`idem-${id}`}, ${`req-${id}`}, ${wsId}, 'openrouter', ${model}, 'secret', ${tokens.input}, ${tokens.output}, 0, 0, ${status}, ${vnd}, ${at})`,
   );
 }
 
@@ -46,16 +34,16 @@ beforeAll(async () => {
   ({ db, app } = await makeApp());
   cookie = await signUp(app, "uf@t.test", "U");
   otherCookie = await signUp(app, "uf2@t.test", "V");
-  createWorkspace(db, ws, userIdByEmail(db, "uf@t.test"));
-  db.prepare(
-    "INSERT INTO models (id, public_id, slug, display_name, provider, enabled, published, created_at, updated_at) VALUES ('m-1','m1','m1','M','vendor',1,1,?,?)"
-  ).run(now, now);
-  insertLog("l-a", ws, "model-a", "ok", 100, now);
-  insertLog("l-b", ws, "model-a", "error", 0, now);
-  insertLog("l-c", ws, "model-b", "ok", 500, now);
+  await createWorkspace(db, ws, await userIdByEmail(db, "uf@t.test"));
+  await db.execute(
+    sql`INSERT INTO models (id, public_id, slug, display_name, provider, enabled, published, created_at, updated_at) VALUES ('m-1','m1','m1','M','vendor',true,true,${now},${now})`,
+  );
+  await insertLog("l-a", ws, "model-a", "ok", 100, now);
+  await insertLog("l-b", ws, "model-a", "error", 0, now);
+  await insertLog("l-c", ws, "model-b", "ok", 500, now);
   // Hidden rows (visibility gate): empty model, and both-tokens-0 error row.
-  insertLog("l-h1", ws, "", "error", 0, now, { input: 0, output: 0 });
-  insertLog("l-h2", ws, "model-b", "error", 50, now, { input: 0, output: 0 });
+  await insertLog("l-h1", ws, "", "error", 0, now, { input: 0, output: 0 });
+  await insertLog("l-h2", ws, "model-b", "error", 50, now, { input: 0, output: 0 });
 });
 
 const summary = async (q = "", c = cookie) => {
@@ -122,8 +110,8 @@ describe("usage-summary model filter", () => {
 
   test("model filter does not cross workspaces", async () => {
     const ws2 = "ws-uf2";
-    createWorkspace(db, ws2, userIdByEmail(db, "uf2@t.test"));
-    insertLog("l-x", ws2, "model-a", "ok", 999, now);
+    await createWorkspace(db, ws2, await userIdByEmail(db, "uf2@t.test"));
+    await insertLog("l-x", ws2, "model-a", "ok", 999, now);
     const res = await req(app, `/api/v1/workspaces/${ws2}/usage-summary?model=model-a`, {
       cookie,
     });
@@ -141,8 +129,8 @@ describe("usage-summary model filter", () => {
     const d = new Date();
     const todayUtcMidnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
     const since = todayUtcMidnight - 29 * 86_400_000; // days=30
-    insertLog("l-early", ws, "model-a", "ok", 111, since - 1); // excluded
-    insertLog("l-edge", ws, "model-a", "ok", 222, since); // included
+    await insertLog("l-early", ws, "model-a", "ok", 111, since - 1); // excluded
+    await insertLog("l-edge", ws, "model-a", "ok", 222, since); // included
     const body = await summary("?days=30");
     expect(body.totals.requests).toBe(6); // l-a,l-b,l-c,l-h1,l-h2,l-edge
     expect(body.totals.spend_vnd).toBe(100 + 500 + 50 + 222);

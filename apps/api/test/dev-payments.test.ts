@@ -4,11 +4,11 @@
 // complete endpoint (/api/v1/admin/payments/:id/complete) may credit.
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { makeApp, signUp, req, makeInstanceAdmin, userIdByEmail } from "./helpers";
-import type { Database } from "bun:sqlite";
+import type { Db } from "@hoborouter/db";
 import type { buildApp } from "../src/app";
 
-let app: ReturnType<typeof buildApp>;
-let db: Database;
+let app: Awaited<ReturnType<typeof buildApp>>;
+let db: Db;
 let memberCookie: string;
 let adminCookie: string;
 
@@ -16,7 +16,7 @@ beforeAll(async () => {
   ({ db, app } = await makeApp());
   memberCookie = await signUp(app, "dev404-member@test.dev", "Member");
   adminCookie = await signUp(app, "dev404-admin@test.dev", "Admin");
-  makeInstanceAdmin(db, userIdByEmail(db, "dev404-admin@test.dev"));
+  await makeInstanceAdmin(db, await userIdByEmail(db, "dev404-admin@test.dev"));
 });
 
 afterAll(() => {

@@ -1,13 +1,11 @@
 // Key lifecycle: PATCH status transitions + model restrictions (api_key_model_permissions).
-import { beforeAll, afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { Database } from "bun:sqlite";
-import { createDb, migrate } from "@hoborouter/db";
+import { beforeAll, describe, expect, test } from "bun:test";
+import type { Db } from "@hoborouter/db";
+import { createTestDb } from "@hoborouter/db";
 import { createAuth } from "../src/auth";
 import { buildApp } from "../src/app";
-import { req, createWorkspace, addMember, userIdByEmail } from "./helpers";
+import { req, createWorkspace, addMember, userIdByEmail, q } from "./helpers";
+import { sql } from "drizzle-orm";
 
 const A = "ws-lc-a";
 const B = "ws-lc-b";
@@ -15,32 +13,30 @@ const OWNER = "lcowner@example.com";
 const MEMBER = "lcmember@example.com";
 const BOWNER = "lcbowner@example.com";
 
-let db: Database;
-let app: ReturnType<typeof buildApp>;
+let db: Db;
+let app: Awaited<ReturnType<typeof buildApp>>;
 let owner: string, member: string, bowner: string;
-let dir: string;
 
 const A_KEY_MODEL = "openai/gpt-x";
 const A_KEY_MODEL_2 = "anthropic/claude-x";
 
 beforeAll(async () => {
-  dir = mkdtempSync(join(tmpdir(), "hbr-keyslc-"));
-  db = createDb(join(dir, "keyslc.sqlite"));
-  migrate(db);
+  const t = await createTestDb();
+  db = t.db;
   const auth = createAuth(db);
-  app = buildApp({ db, auth });
+  app = await buildApp({ db, auth });
 
   owner = await signUpLocal(OWNER, "O");
   member = await signUpLocal(MEMBER, "M");
   bowner = await signUpLocal(BOWNER, "B");
-  createWorkspace(db, A, userIdByEmail(db, OWNER), "A");
-  addMember(db, A, userIdByEmail(db, MEMBER), "member");
-  createWorkspace(db, B, userIdByEmail(db, BOWNER), "B");
+  await createWorkspace(db, A, await userIdByEmail(db, OWNER), "A");
+  await addMember(db, A, await userIdByEmail(db, MEMBER), "member");
+  await createWorkspace(db, B, await userIdByEmail(db, BOWNER), "B");
   // seed catalog
   for (const m of [A_KEY_MODEL, A_KEY_MODEL_2, "google/gemini-x"]) {
-    db.prepare(
-      "INSERT INTO models (id, public_id, slug, display_name, provider, created_at, updated_at) VALUES (?,?,?,?,'p',1,1)",
-    ).run(m, m, m, m);
+    await db.execute(
+      sql`INSERT INTO models (id, public_id, slug, display_name, provider, created_at, updated_at) VALUES (${m}, ${m}, ${m}, ${m}, 'p', 1, 1)`,
+    );
   }
 });
 
@@ -71,12 +67,10 @@ async function makeKey(ws: string, cookie: string, name: string) {
   };
 }
 
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
-
 describe("POST keys — enabled status + new prefix format", () => {
   test("new key created with status 'enabled'", async () => {
     const body = await makeKey(A, owner, "st");
-    const row = db.prepare("SELECT status FROM api_keys WHERE id = ?").get(body.id) as any;
+    const row = (await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id = ?", body.id))[0]!;
     expect(row.status).toBe("enabled");
   });
 
@@ -89,11 +83,11 @@ describe("POST keys — enabled status + new prefix format", () => {
 });
 
 describe("GET keys — legacy 'active' normalized to 'enabled'", () => {
-  test("legacy active row listed as 'enabled'", () => {
+  test("legacy active row listed as 'enabled'", async () => {
     const id = crypto.randomUUID();
-    db.prepare(
-      "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES (?,?,?,'pfx','legacy','active',1)",
-    ).run(id, A, "legacy-hash-" + id);
+    await db.execute(
+      sql`INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES (${id}, ${A}, ${"legacy-hash-" + id}, 'pfx', 'legacy', 'active', 1)`,
+    );
   });
 
   test("list shows normalized statuses", async () => {
@@ -142,18 +136,14 @@ describe("PATCH /api/v1/workspaces/:id/keys/:keyId", () => {
       body: { status: "disabled" },
     });
     expect(d.status).toBe(200);
-    expect((db.prepare("SELECT status FROM api_keys WHERE id=?").get(k.id) as any).status).toBe(
-      "disabled",
-    );
+    expect((await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id=?", k.id))[0]!.status).toBe("disabled");
     const e = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}`, {
       method: "PATCH",
       cookie: owner,
       body: { status: "enabled" },
     });
     expect(e.status).toBe(200);
-    expect((db.prepare("SELECT status FROM api_keys WHERE id=?").get(k.id) as any).status).toBe(
-      "enabled",
-    );
+    expect((await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id=?", k.id))[0]!.status).toBe("enabled");
   });
 
   test("revoked is terminal: 409 on disable/enable of revoked", async () => {
@@ -167,7 +157,7 @@ describe("PATCH /api/v1/workspaces/:id/keys/:keyId", () => {
       });
       expect(res.status).toBe(409);
     }
-    const row = db.prepare("SELECT status FROM api_keys WHERE id=?").get(k.id) as any;
+    const row = (await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id=?", k.id))[0]!;
     expect(row.status).toBe("revoked");
   });
 
@@ -184,7 +174,7 @@ describe("PATCH /api/v1/workspaces/:id/keys/:keyId", () => {
       body: { status: "enabled" },
     });
     const actions = (
-      db.prepare("SELECT action FROM audit_log WHERE target = ? ORDER BY id").all(k.id) as any[]
+      await q<{ action: string }>(db, "SELECT action FROM audit_log WHERE target = ? ORDER BY id", k.id)
     ).map((r) => r.action);
     expect(actions).toContain("key.disable");
     expect(actions).toContain("key.enable");
@@ -223,9 +213,11 @@ describe("model restrictions GET/PUT /api/v1/workspaces/:id/keys/:keyId/models",
     const get = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}/models`, { cookie: owner });
     const body = (await get.json()) as { modelIds: string[] };
     expect(body.modelIds.sort()).toEqual([A_KEY_MODEL, A_KEY_MODEL_2].sort());
-    const rows = db
-      .prepare("SELECT model_id FROM api_key_model_permissions WHERE api_key_id = ?")
-      .all(k.id) as any[];
+    const rows = await q<{ model_id: string }>(
+      db,
+      "SELECT model_id FROM api_key_model_permissions WHERE api_key_id = ?",
+      k.id,
+    );
     expect(rows.length).toBe(2);
   });
 
@@ -242,9 +234,11 @@ describe("model restrictions GET/PUT /api/v1/workspaces/:id/keys/:keyId/models",
       body: { modelIds: [A_KEY_MODEL, "nope/unknown"] },
     });
     expect(put.status).toBe(400);
-    const rows = db
-      .prepare("SELECT model_id FROM api_key_model_permissions WHERE api_key_id = ?")
-      .all(k.id) as any[];
+    const rows = await q<{ model_id: string }>(
+      db,
+      "SELECT model_id FROM api_key_model_permissions WHERE api_key_id = ?",
+      k.id,
+    );
     expect(rows.length).toBe(1);
   });
 
@@ -261,9 +255,11 @@ describe("model restrictions GET/PUT /api/v1/workspaces/:id/keys/:keyId/models",
       body: { modelIds: [] },
     });
     expect(put.status).toBe(200);
-    const rows = db
-      .prepare("SELECT model_id FROM api_key_model_permissions WHERE api_key_id = ?")
-      .all(k.id) as any[];
+    const rows = await q<{ model_id: string }>(
+      db,
+      "SELECT model_id FROM api_key_model_permissions WHERE api_key_id = ?",
+      k.id,
+    );
     expect(rows.length).toBe(0);
   });
 
@@ -275,19 +271,20 @@ describe("model restrictions GET/PUT /api/v1/workspaces/:id/keys/:keyId/models",
       body: { modelIds: [A_KEY_MODEL] },
     });
     const actions = (
-      db.prepare("SELECT action FROM audit_log WHERE target = ?").all(k.id) as any[]
+      await q<{ action: string }>(db, "SELECT action FROM audit_log WHERE target = ?", k.id)
     ).map((r) => r.action);
     expect(actions).toContain("key.models.set");
   });
 
   test("audit detail carries no plaintext or hash", async () => {
     const k = await makeKey(A, owner, "msec");
-    const detail = (
-      db
-        .prepare("SELECT detail FROM audit_log WHERE target = ? AND action='key.create'")
-        .get(k.id) as any
-    ).detail as string;
-    expect(detail).not.toContain(k.plaintext);
-    expect(detail).not.toMatch(/^[0-9a-f]{64}$/);
+    const detail = (await q<{ detail: unknown }>(
+      db,
+      "SELECT detail FROM audit_log WHERE target = ? AND action='key.create'",
+      k.id,
+    ))[0]!.detail;
+    // detail is jsonb (parsed object) — no secret material anywhere in it.
+    expect(JSON.stringify(detail)).not.toContain(k.plaintext);
+    expect(JSON.stringify(detail)).not.toMatch(/^[0-9a-f]{64}$/);
   });
 });

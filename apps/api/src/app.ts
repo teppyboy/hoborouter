@@ -1,7 +1,6 @@
 import { Elysia } from "elysia";
 import { openapi } from "@elysiajs/openapi";
-import { createDb, migrate } from "@hoborouter/db";
-import type { Database } from "bun:sqlite";
+import { createDb, type Db } from "@hoborouter/db";
 import type { BetterAuthInstance } from "./auth-types";
 import { healthRoutes } from "./routes/health";
 import { staticSpa } from "./static-spa";
@@ -68,19 +67,16 @@ const openapiDocumentation = {
 } satisfies Partial<import("openapi-types").OpenAPIV3.Document>;
 
 export interface AppDeps {
-  db?: Database;
+  db?: Db;
   auth?: BetterAuthInstance;
 }
 
-export const buildApp = (deps: AppDeps = {}) => {
+// Async: startup reconciliation (recoverPending) is awaited so tests and boot
+// observe a fully reconciled app. Migration happens in boot (src/index.ts) or
+// the test harness, NOT here — buildApp never mutates the schema.
+export const buildApp = async (deps: AppDeps = {}) => {
   const webDist = process.env.HBR_WEB_DIST || defaultWebDist;
-  const db =
-    deps.db ??
-    (() => {
-      const d = createDb(process.env.HBR_DB_PATH || ":memory:");
-      migrate(d);
-      return d;
-    })();
+  const db = deps.db ?? createDb();
   const auth = deps.auth ?? createAuth(db);
   const mockPayments = mockWebhookConfig();
 
@@ -133,7 +129,7 @@ export const buildApp = (deps: AppDeps = {}) => {
     .use(staticSpa(webDist));
 
   // Crash-safe reconciliation of stale reserved/dispatching rows at startup.
-  recoverPending(db, Date.now());
+  await recoverPending(db, Date.now());
 
   const handle = app.handle.bind(app);
   Object.defineProperty(app, "handle", {

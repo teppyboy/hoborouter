@@ -1,15 +1,37 @@
-// Shared test scaffolding: in-memory DB + migrated schema + Better Auth + app.
-import { type Database } from "bun:sqlite";
-import { createDb, migrate } from "@hoborouter/db";
+// Shared test scaffolding: isolated Postgres test DB + migrated schema +
+// Better Auth + app. Each call creates a throwaway database (hbr_t_<random>);
+// call close() in afterAll to drop it.
+import type { Db } from "@hoborouter/db";
+import { createTestDb } from "@hoborouter/db";
+import { sql } from "drizzle-orm";
+import { afterAll } from "bun:test";
 import { createAuth } from "../src/auth";
 import { buildApp } from "../src/app";
 
+// Auto-cleanup: every test file importing helpers registers ONE afterAll that
+// drops every test database opened via makeApp (per-test makeApp callers need
+// no explicit close).
+const openDbs: (() => Promise<void>)[] = [];
+export const trackDrop = (drop: () => Promise<void>) => openDbs.push(drop);
+afterAll(async () => {
+  for (const close of openDbs) await close();
+});
+
 export async function makeApp() {
-  const db = createDb(":memory:");
-  migrate(db);
+  const t = await createTestDb();
+  // Idempotent close: tests may close a pool early (afterEach) to free
+  // connections; the global afterAll must not double-drop.
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    await t.drop();
+  };
+  openDbs.push(close);
+  const db = t.db;
   const auth = createAuth(db);
-  const app = buildApp({ db, auth });
-  return { db, auth, app };
+  const app = await buildApp({ db, auth });
+  return { db, auth, app, close };
 }
 
 export const cookieOf = (res: Response) =>
@@ -19,7 +41,7 @@ export const cookieOf = (res: Response) =>
     .join("; ");
 
 export async function signUp(
-  app: ReturnType<typeof buildApp>,
+  app: Awaited<ReturnType<typeof buildApp>>,
   email: string,
   name = "U",
 ): Promise<string> {
@@ -35,7 +57,7 @@ export async function signUp(
 }
 
 export function req(
-  app: ReturnType<typeof buildApp>,
+  app: Awaited<ReturnType<typeof buildApp>>,
   path: string,
   opts: { method?: string; cookie?: string; body?: unknown; headers?: Record<string, string> } = {},
 ) {
@@ -51,38 +73,52 @@ export function req(
   );
 }
 
+/** Raw SQL helper for test seeding/assertions: sqlite-style `?` params → Postgres `$n`. */
+export async function q<T = Record<string, unknown>>(
+  db: Db,
+  query: string,
+  ...params: unknown[]
+): Promise<T[]> {
+  let i = 0;
+  const pg = query.replace(/\?/g, () => `$${++i}`);
+  const rows = (await db.$client.unsafe(pg, params as never[])) as T[];
+  // bun SQL returns int8 (bigint) columns as strings; coerce for assertions.
+  return rows.map((r) => {
+    const o = { ...(r as Record<string, unknown>) };
+    for (const k of Object.keys(o)) {
+      if (typeof o[k] === "string" && /^-?\d+$/.test(o[k] as string) && (o[k] as string).length < 16)
+        o[k] = Number(o[k]);
+    }
+    return o as T;
+  });
+}
+
 /** Direct DB helpers (setup only — authz itself goes through HTTP). */
-export function createWorkspace(db: Database, id: string, ownerId: string, name = "ws") {
+export async function createWorkspace(db: Db, id: string, ownerId: string, name = "ws") {
   const now = Date.now();
-  db.prepare("INSERT INTO workspaces (id, name, status, created_at) VALUES (?,?,'active',?)").run(
-    id,
-    name,
-    now,
+  await db.execute(
+    sql`INSERT INTO workspaces (id, name, status, created_at) VALUES (${id}, ${name}, 'active', ${now})`,
   );
-  db.prepare(
-    "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?,?,'owner')",
-  ).run(id, ownerId);
-}
-
-export function addMember(db: Database, wsId: string, userId: string, role: string) {
-  db.prepare("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?,?,?)").run(
-    wsId,
-    userId,
-    role,
+  await db.execute(
+    sql`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (${id}, ${ownerId}, 'owner')`,
   );
 }
 
-export function makeInstanceAdmin(db: Database, userId: string) {
-  db.prepare("INSERT INTO instance_admins (user_id, created_at) VALUES (?,?)").run(
-    userId,
-    Date.now(),
+export async function addMember(db: Db, wsId: string, userId: string, role: string) {
+  await db.execute(
+    sql`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (${wsId}, ${userId}, ${role})`,
   );
 }
 
-export function userIdByEmail(db: Database, email: string): string {
-  const row = db.prepare("SELECT id FROM users WHERE email = ?").get(email) as {
-    id: string;
-  } | null;
+export async function makeInstanceAdmin(db: Db, userId: string) {
+  await db.execute(
+    sql`INSERT INTO instance_admins (user_id, created_at) VALUES (${userId}, ${Date.now()})`,
+  );
+}
+
+export async function userIdByEmail(db: Db, email: string): Promise<string> {
+  const res = (await db.execute(sql`SELECT id FROM users WHERE email = ${email} LIMIT 1`)) as unknown as { id: string }[];
+  const row = res[0];
   if (!row) throw new Error("no user " + email);
   return row.id;
 }

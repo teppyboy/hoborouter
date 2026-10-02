@@ -3,12 +3,12 @@
 // object:'model', created, owned_by: provider}]}. No CPA aliases, no legacy
 // model_bindings. Each request queries the DB — no caching.
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Db } from "@hoborouter/db";
 import { verifyApiKey } from "@hoborouter/keys";
 import { listPublicModels, resolveModel } from "@hoborouter/catalog";
 import { jsonError } from "../authz";
 
-function keyAuth(db: Database, request: Request) {
+async function keyAuth(db: Db, request: Request) {
   const header = request.headers.get("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
   return verifyApiKey(db, token); // null for missing/malformed/revoked keys
@@ -21,20 +21,20 @@ const toOpenAiModel = (m: { public_id: string; provider: string; created_at: num
   owned_by: m.provider,
 });
 
-export const v1ModelsRoutes = (db: Database) =>
+export const v1ModelsRoutes = (db: Db) =>
   new Elysia({ name: "v1-models" })
-    .get("/v1/models", ({ request }) => {
-      const key = keyAuth(db, request);
+    .get("/v1/models", async ({ request }) => {
+      const key = await keyAuth(db, request);
       if (!key) return jsonError(401, "UNAUTHORIZED", "Valid Bearer sk-hbr- key required");
       return {
         object: "list",
-        data: listPublicModels(db).map(toOpenAiModel),
+        data: (await listPublicModels(db)).map(toOpenAiModel),
       };
     })
-    .get("/v1/models/:id", ({ request, params }) => {
-      const key = keyAuth(db, request);
+    .get("/v1/models/:id", async ({ request, params }) => {
+      const key = await keyAuth(db, request);
       if (!key) return jsonError(401, "UNAUTHORIZED", "Valid Bearer sk-hbr- key required");
-      const r = resolveModel(db, params.id);
+      const r = await resolveModel(db, params.id);
       if (!r) return jsonError(404, "NOT_FOUND", "Model not found");
       return toOpenAiModel(r.model);
     });

@@ -3,10 +3,10 @@
 // non-stream: ttft NULL (not applicable), latency measured. Monotonic clock:
 // latency_ms >= ttft_ms always. No real upstream — isolated fake CPA.
 import { describe, expect, test, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
-import type { Database } from "bun:sqlite";
 import { Elysia } from "elysia";
-import { createDb, migrate } from "@hoborouter/db";
+import { createTestDb } from "@hoborouter/db";
 import { hashApiKey } from "@hoborouter/keys";
+import { q, trackDrop, makeApp } from "./helpers";
 import { gatewayRoutes } from "../src/routes/v1-gateway";
 
 const PLAINTEXT = "sk-hbr-gw-timing-key";
@@ -16,35 +16,36 @@ const CHAT_PATH = "/v1/chat/completions";
 const ENV_KEYS = ["HBR_GATEWAY_ENABLED", "CPA_BASE_URL", "CPA_ACCESS_KEY", "HBR_USD_VND_RATE"];
 let savedEnv: Record<string, string | undefined> = {};
 
-function seedGateway(db: Database) {
+async function seedGateway(db: Awaited<ReturnType<typeof makeApp>>["db"]) {
   const now = Date.now();
-  db.prepare(
+  await q(db, 
     "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-gw-t','gw-t','active',?)",
-  ).run(now);
-  db.prepare(
+now);
+  await q(db, 
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-gw-t','ws-gw-t','VND',1000000000,0,0,?)",
-  ).run(now);
-  db.prepare(
+now);
+  await q(db, 
     "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key-gw-t','ws-gw-t',?,?,'gw-t','active',?)",
-  ).run(hashApiKey(PLAINTEXT), "sk-hbr-gw...", now);
-  db.prepare(
-    "INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-t','anthropic/claude-mythos-5','claude-mythos-5','Mythos 5','anthropic',128000,1,1,?,?)",
-  ).run(now, now);
-  db.prepare(
-    "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-t','mdl-t','anthropic','claude-mythos-5-upstream',1,?,?)",
-  ).run(now, now);
-  db.prepare(
+hashApiKey(PLAINTEXT), "sk-hbr-gw...", now);
+  await q(db, 
+    "INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-t','anthropic/claude-mythos-5','claude-mythos-5','Mythos 5','anthropic',128000,true,true,?,?)",
+now, now);
+  await q(db, 
+    "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-t','mdl-t','anthropic','claude-mythos-5-upstream',true,?,?)",
+now, now);
+  await q(db, 
     "INSERT INTO model_prices (id, model_id, input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at, retired_at) VALUES ('price-t','mdl-t',1000000,1000000,100000,100000,1000000,?,NULL)",
-  ).run(now - 1000);
+now - 1000);
 }
 
-let db: Database;
+let db: Awaited<ReturnType<typeof makeApp>>["db"];
 let gw: (req: Request) => Promise<Response>;
 
-beforeAll(() => {
-  db = createDb(":memory:");
-  migrate(db);
-  seedGateway(db);
+beforeAll(async () => {
+  const t = await createTestDb();
+  db = t.db;
+  trackDrop(t.drop);
+  await seedGateway(db);
   gw = (req) => new Elysia().use(gatewayRoutes(db)).handle(req);
 });
 
@@ -85,12 +86,10 @@ function startFakeCpa(handler: () => Response) {
   process.env.CPA_BASE_URL = `http://127.0.0.1:${fakeServer.port}`;
 }
 
-const lastUsageLog = () =>
-  db
-    .prepare(
-      "SELECT status, latency_ms, ttft_ms FROM usage_logs ORDER BY rowid DESC LIMIT 1",
-    )
-    .get() as { status: string; latency_ms: number | null; ttft_ms: number | null };
+const lastUsageLog = async () =>
+  (await q(db, 
+      "SELECT status, latency_ms, ttft_ms FROM usage_logs ORDER BY ctid DESC LIMIT 1",
+    ))[0] as { status: string; latency_ms: number | null; ttft_ms: number | null };
 
 const finitePositive = (n: number | null) => n !== null && Number.isFinite(n) && n >= 0;
 
@@ -102,15 +101,15 @@ beforeEach(() => {
   delete process.env.CPA_BASE_URL;
 });
 
-afterEach(() => {
+afterEach(async () => {
   fakeServer?.stop(true);
   fakeServer = null;
   for (const k of ENV_KEYS) {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
   }
-  db.prepare("DELETE FROM settlements").run();
-  db.prepare("UPDATE wallets SET balance = 1000000000, reserved = 0 WHERE id = 'wal-gw-t'").run();
+  await q(db, "DELETE FROM settlements");
+  await q(db, "UPDATE wallets SET balance = 1000000000, reserved = 0 WHERE id = 'wal-gw-t'");
 });
 
 afterAll(() => {
@@ -129,7 +128,7 @@ describe("gateway timing fields", () => {
     });
     expect(res.status).toBe(200);
     await res.text();
-    const log = lastUsageLog();
+    const log = await lastUsageLog();
     expect(log.status).toBe("ok");
     expect(finitePositive(log.ttft_ms)).toBe(true);
     expect(finitePositive(log.latency_ms)).toBe(true);
@@ -159,7 +158,7 @@ describe("gateway timing fields", () => {
     });
     expect(res.status).toBe(200);
     await res.text();
-    const log = lastUsageLog();
+    const log = await lastUsageLog();
     expect(log.status).toBe("ok");
     expect(finitePositive(log.ttft_ms)).toBe(true);
     expect(log.latency_ms! >= log.ttft_ms!).toBe(true);
@@ -206,7 +205,7 @@ describe("gateway timing fields", () => {
     });
     expect(res.status).toBe(200);
     await res.text();
-    const log = lastUsageLog();
+    const log = await lastUsageLog();
     expect(log.status).toBe("ok");
     expect(log.ttft_ms).toBeNull();
     expect(finitePositive(log.latency_ms)).toBe(true);
@@ -251,7 +250,7 @@ describe("gateway timing fields", () => {
     });
     expect(res.status).toBe(200);
     await res.text();
-    const log = lastUsageLog();
+    const log = await lastUsageLog();
     expect(log.status).toBe("ok");
     expect(finitePositive(log.ttft_ms)).toBe(true);
     expect(log.latency_ms! >= log.ttft_ms!).toBe(true);
@@ -283,7 +282,7 @@ describe("gateway timing fields", () => {
     );
     expect(res.status).toBe(200);
     await res.text();
-    const log = lastUsageLog();
+    const log = await lastUsageLog();
     expect(log.status).toBe("ok");
     expect(finitePositive(log.ttft_ms)).toBe(true);
     expect(finitePositive(log.latency_ms)).toBe(true);
@@ -308,7 +307,7 @@ describe("gateway timing fields", () => {
     );
     const res = await gwr({ model: "anthropic/claude-mythos-5", messages: [{ role: "user", content: "hi" }] });
     expect(res.status).toBe(200);
-    const log = lastUsageLog();
+    const log = await lastUsageLog();
     expect(log.status).toBe("ok");
     expect(log.ttft_ms).toBeNull();
     expect(finitePositive(log.latency_ms)).toBe(true);

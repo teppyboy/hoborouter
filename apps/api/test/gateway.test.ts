@@ -2,10 +2,10 @@
 // Bun.serve fake CPA. No real network, no real provider calls. Core behaviors
 // only (disabled gate, auth, reservation, settlement, streaming, errors).
 import { describe, expect, test, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
-import type { Database } from "bun:sqlite";
 import { Elysia } from "elysia";
-import { createDb, migrate } from "@hoborouter/db";
+import { createTestDb } from "@hoborouter/db";
 import { hashApiKey } from "@hoborouter/keys";
+import { q, trackDrop, makeApp } from "./helpers";
 import { gatewayRoutes } from "../src/routes/v1-gateway";
 
 const PLAINTEXT = "sk-hbr-gw-test-key";
@@ -22,35 +22,36 @@ const ENV_KEYS = [
 ];
 let savedEnv: Record<string, string | undefined> = {};
 
-function seedGateway(db: Database) {
+async function seedGateway(db: Awaited<ReturnType<typeof makeApp>>["db"]) {
   const now = Date.now();
-  db.prepare(
+  await q(db, 
     "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-gw','gw','active',?)",
-  ).run(now);
-  db.prepare(
+now);
+  await q(db, 
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-gw','ws-gw','VND',1000000000,0,0,?)",
-  ).run(now);
-  db.prepare(
+now);
+  await q(db, 
     "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key-gw','ws-gw',?,?,'gw','active',?)",
-  ).run(hashApiKey(PLAINTEXT), "sk-hbr-gw...", now);
-  db.prepare(
-    "INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-a','openai/gw-test','gw-test','GW Test','openai',128000,1,1,?,?)",
-  ).run(now, now);
-  db.prepare(
-    "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-a','mdl-a','openai','gpt-4o-upstream',1,?,?)",
-  ).run(now, now);
-  db.prepare(
+hashApiKey(PLAINTEXT), "sk-hbr-gw...", now);
+  await q(db, 
+    "INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-a','openai/gw-test','gw-test','GW Test','openai',128000,true,true,?,?)",
+now, now);
+  await q(db, 
+    "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-a','mdl-a','openai', 'gpt-4o-upstream',true,?,?)",
+now, now);
+  await q(db, 
     "INSERT INTO model_prices (id, model_id, input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at, retired_at) VALUES ('price-a','mdl-a',1000000,2000000,500000,3000000,1200000,?,NULL)",
-  ).run(now - 1000);
+now - 1000);
 }
 
-let db: Database;
+let db: Awaited<ReturnType<typeof makeApp>>["db"];
 let gw: (req: Request) => Promise<Response>;
 
-beforeAll(() => {
-  db = createDb(":memory:");
-  migrate(db);
-  seedGateway(db);
+beforeAll(async () => {
+  const t = await createTestDb();
+  db = t.db;
+  trackDrop(t.drop);
+  await seedGateway(db);
   gw = (req) => new Elysia().use(gatewayRoutes(db)).handle(req);
 });
 
@@ -121,17 +122,15 @@ const chatSse = () => {
   );
 };
 
-const lastCharge = () =>
-  db
-    .prepare(
-      "SELECT br.cap_vnd, br.status, le.amount FROM billing_reservations br LEFT JOIN ledger_entries le ON le.billing_reservation_id = br.id ORDER BY br.rowid DESC LIMIT 1",
-    )
-    .get() as { cap_vnd: number; status: string; amount: number | null };
+const lastCharge = async () =>
+  (await q(db, 
+      "SELECT br.cap_vnd, br.status, le.amount FROM billing_reservations br LEFT JOIN ledger_entries le ON le.billing_reservation_id = br.id ORDER BY br.ctid DESC LIMIT 1",
+    ))[0] as { cap_vnd: number; status: string; amount: number | null };
 
-const requestCount = () => (db.prepare("SELECT COUNT(*) c FROM requests").get() as { c: number }).c;
+const requestCount = async () => ((await q(db, "SELECT COUNT(*) c FROM requests"))[0] as { c: number }).c;
 
-const walletBalance = () =>
-  db.prepare("SELECT balance, reserved FROM wallets WHERE id = 'wal-gw'").get() as {
+const walletBalance = async () =>
+  (await q(db, "SELECT balance, reserved FROM wallets WHERE id = 'wal-gw'"))[0] as {
     balance: number;
     reserved: number;
   };
@@ -145,15 +144,15 @@ beforeEach(() => {
   delete process.env.HBR_DEFAULT_MAX_OUTPUT_TOKENS;
 });
 
-afterEach(() => {
+afterEach(async () => {
   fakeServer?.stop(true);
   fakeServer = null;
   for (const k of ENV_KEYS) {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
   }
-  db.prepare("UPDATE wallets SET balance = 1000000000, reserved = 0 WHERE id = 'wal-gw'").run();
-  db.prepare("DELETE FROM settlements").run();
+  await q(db, "UPDATE wallets SET balance = 1000000000, reserved = 0 WHERE id = 'wal-gw'");
+  await q(db, "DELETE FROM settlements");
 });
 
 afterAll(() => {
@@ -164,12 +163,12 @@ describe("gateway core", () => {
   test("disabled -> 503 gateway_disabled, no DB writes, no fetch", async () => {
     process.env.HBR_GATEWAY_ENABLED = "0";
     startFakeCpa(() => chatJson());
-    const before = requestCount();
+    const before = await requestCount();
     const res = await gwr(CHAT_PATH, { model: "openai/gw-test", messages: [] });
     expect(res.status).toBe(503);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("gateway_disabled");
     expect(captured.length).toBe(0);
-    expect(requestCount()).toBe(before);
+    expect(await requestCount()).toBe(before);
   });
 
   test("invalid key -> 401 OpenAI-style", async () => {
@@ -182,15 +181,15 @@ describe("gateway core", () => {
 
   test("insufficient balance -> 402, no fetch, no request rows", async () => {
     startFakeCpa(() => chatJson());
-    db.prepare("UPDATE wallets SET balance = 1 WHERE id = 'wal-gw'").run();
-    const before = requestCount();
+    await q(db, "UPDATE wallets SET balance = 1 WHERE id = 'wal-gw'");
+    const before = await requestCount();
     const res = await gwr(CHAT_PATH, { model: "openai/gw-test", messages: ["x".repeat(50)] });
     expect(res.status).toBe(402);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
       "insufficient_balance",
     );
     expect(captured.length).toBe(0);
-    expect(requestCount()).toBe(before);
+    expect(await requestCount()).toBe(before);
   });
 
   test("non-stream chat: exact settled charge, one upstream call, model replaced", async () => {
@@ -210,10 +209,10 @@ describe("gateway core", () => {
     expect(JSON.parse(captured[0]!.body).model).toBe("gpt-4o-upstream");
     // 1000 input * 1_000_000 + 100 output * 2_000_000 -> 1200 micro USD
     // -> ceil(1200 * 26000 * 1200000 / 1e12) = 38 VND.
-    expect(lastCharge().status).toBe("settled");
-    expect(lastCharge().amount).toBe(38);
-    expect(walletBalance().balance).toBe(1000000000 - 38);
-    expect(walletBalance().reserved).toBe(0);
+    expect((await lastCharge()).status).toBe("settled");
+    expect((await lastCharge()).amount).toBe(38);
+    expect((await walletBalance()).balance).toBe(1000000000 - 38);
+    expect((await walletBalance()).reserved).toBe(0);
   });
 
   test("non-stream responses: exact settled charge with splits", async () => {
@@ -239,8 +238,8 @@ describe("gateway core", () => {
     expect(res.status).toBe(200);
     // (500-100)*1e6 + 100*5e5 + (200-50)*2e6 + 50*3e6 -> 900 micro USD
     // -> ceil(900 * 26000 * 1200000 / 1e12) = 29 VND.
-    expect(lastCharge().status).toBe("settled");
-    expect(lastCharge().amount).toBe(29);
+    expect((await lastCharge()).status).toBe("settled");
+    expect((await lastCharge()).amount).toBe(29);
   });
 
   test("stream: SSE passthrough with model rewritten to public id + settled, usage option injected", async () => {
@@ -257,8 +256,8 @@ describe("gateway core", () => {
       sse.replaceAll('"model":"gpt-4o-upstream"', '"model":"openai/gw-test"'),
     );
     expect(JSON.parse(captured[0]!.body).stream_options.include_usage).toBe(true);
-    expect(lastCharge().status).toBe("settled");
-    expect(lastCharge().amount).toBe(38);
+    expect((await lastCharge()).status).toBe("settled");
+    expect((await lastCharge()).amount).toBe(38);
   });
 
   test("client abort mid-stream -> full hold + upstream aborted", async () => {
@@ -286,11 +285,9 @@ describe("gateway core", () => {
     await reader.cancel();
     await new Promise((r) => setTimeout(r, 100));
     expect(upstreamAborted).toBe(true);
-    const last = db
-      .prepare("SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1")
-      .get() as { status: string };
+    const last = (await q(db, "SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1"))[0] as { status: string };
     expect(last.status).toBe("client_abort");
-    expect(lastCharge().status).toBe("settled_full_hold");
+    expect((await lastCharge()).status).toBe("settled_full_hold");
   });
 
   test("upstream 500 -> status passthrough + sanitized body + full hold", async () => {
@@ -300,11 +297,9 @@ describe("gateway core", () => {
     const errBody = (await res.json()) as { error: { code: string; message: string } };
     expect(errBody.error.code).toBe("upstream_error");
     expect(errBody.error.message).not.toContain("boom");
-    const last = db
-      .prepare("SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1")
-      .get() as { status: string };
+    const last = (await q(db, "SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1"))[0] as { status: string };
     expect(last.status).toBe("upstream_error");
-    expect(lastCharge().status).toBe("settled_full_hold");
+    expect((await lastCharge()).status).toBe("settled_full_hold");
   });
 
   test("upstream body read failure after headers -> 502 + full hold", async () => {
@@ -320,7 +315,7 @@ describe("gateway core", () => {
     server = fakeServer;
     const res = await gwr(CHAT_PATH, { model: "openai/gw-test", messages: [] });
     expect(res.status).toBe(502);
-    expect(lastCharge().status).toBe("settled_full_hold");
+    expect((await lastCharge()).status).toBe("settled_full_hold");
     fakeServer = null;
   });
 
@@ -328,14 +323,14 @@ describe("gateway core", () => {
     process.env.CPA_BASE_URL = "http://127.0.0.1:1"; // nothing listens
     const res = await gwr(CHAT_PATH, { model: "openai/gw-test", messages: [] });
     expect(res.status).toBe(502);
-    expect(lastCharge().status).toBe("settled_full_hold");
+    expect((await lastCharge()).status).toBe("settled_full_hold");
   });
 });
 
 describe("gateway body cap", () => {
   test("oversized content-length -> 413 before any DB write", async () => {
     captured = [];
-    const before = requestCount();
+    const before = await requestCount();
     const big = "x".repeat(1024 * 1024 + 1);
     const res = await gw(
       new Request("http://localhost" + CHAT_PATH, {
@@ -351,7 +346,7 @@ describe("gateway body cap", () => {
     expect(res.status).toBe(413);
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe("payload_too_large");
-    expect(requestCount()).toBe(before);
+    expect(await requestCount()).toBe(before);
     expect(captured.length).toBe(0);
   });
 });

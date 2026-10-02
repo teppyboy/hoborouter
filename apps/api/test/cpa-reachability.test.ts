@@ -5,11 +5,11 @@ import { makeApp, signUp, req, createWorkspace, makeInstanceAdmin, userIdByEmail
 test("cpa health: member and workspace admin get 403", async () => {
   const { db, app } = await makeApp();
   const memberCookie = await signUp(app, "m@example.com");
-  createWorkspace(db, "ws1", userIdByEmail(db, "m@example.com"));
+  await createWorkspace(db, "ws1", await userIdByEmail(db, "m@example.com"));
   expect((await req(app, "/api/v1/admin/cpa/health", { cookie: memberCookie })).status).toBe(403);
   const wsAdminCookie = await signUp(app, "wsadmin@example.com");
   const { addMember } = await import("./helpers");
-  addMember(db, "ws1", userIdByEmail(db, "wsadmin@example.com"), "admin");
+  await addMember(db, "ws1", await userIdByEmail(db, "wsadmin@example.com"), "admin");
   expect((await req(app, "/api/v1/admin/cpa/health", { cookie: wsAdminCookie })).status).toBe(403);
 });
 
@@ -36,7 +36,7 @@ test("cpa health: instance admin makes each upstream request once", async () => 
   try {
     const { db, app } = await makeApp();
     const adminCookie = await signUp(app, "admin@example.com");
-    makeInstanceAdmin(db, userIdByEmail(db, "admin@example.com"));
+    await makeInstanceAdmin(db, await userIdByEmail(db, "admin@example.com"));
     const res = await req(app, "/api/v1/admin/cpa/health", { cookie: adminCookie });
     expect(res.status).toBe(502);
     expect(healthzHits).toBe(1);
@@ -83,7 +83,7 @@ test("cpa health: healthy CPA returns labeled fields", async () => {
   try {
     const { db, app } = await makeApp();
     const cookie = await signUp(app, "healthy-admin@example.com");
-    makeInstanceAdmin(db, userIdByEmail(db, "healthy-admin@example.com"));
+    await makeInstanceAdmin(db, await userIdByEmail(db, "healthy-admin@example.com"));
     const res = await req(app, "/api/v1/admin/cpa/health", { cookie });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -108,7 +108,7 @@ test("cpa health: unreachable CPA → 502", async () => {
   try {
     const { db, app } = await makeApp();
     const cookie = await signUp(app, "admin2@example.com");
-    makeInstanceAdmin(db, userIdByEmail(db, "admin2@example.com"));
+    await makeInstanceAdmin(db, await userIdByEmail(db, "admin2@example.com"));
     expect((await req(app, "/api/v1/admin/cpa/health", { cookie })).status).toBe(502);
   } finally {
     delete process.env.CPA_BASE_URL;

@@ -3,7 +3,7 @@
 // otherwise the route 404s. Unsigned completion goes through the admin
 // complete endpoint (production) or /api/dev/... (dev only).
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Db } from "@hoborouter/db";
 import {
   verifyMockSignature,
   MockPaymentError,
@@ -12,7 +12,7 @@ import {
 import { jsonError } from "../authz";
 import { mockWebhookConfig, type MockWebhookConfig } from "../mock-config";
 
-export const mockWebhookRoutes = (db: Database, cfg: MockWebhookConfig) => {
+export const mockWebhookRoutes = (db: Db, cfg: MockWebhookConfig) => {
   const enabled = cfg.webhookEnabled;
   return new Elysia({ name: "webhooks-mock" }).post(
     "/webhooks/payments/mock",
@@ -45,7 +45,7 @@ export const mockWebhookRoutes = (db: Database, cfg: MockWebhookConfig) => {
         return jsonError(400, "INVALID", "provider_order_code and provider_reference are required");
       }
       try {
-        const result = processMockPaymentEvent(db, {
+        const result = await processMockPaymentEvent(db, {
           orderCode,
           providerReference,
           amount,

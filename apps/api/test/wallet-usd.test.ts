@@ -1,13 +1,14 @@
 // Workspace wallet endpoint exposes usd_vnd_rate (same env billing uses) and
 // customer usage-logs responses never leak upstream_model.
-import { describe, test, expect, beforeAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
-import { createDb, migrate } from "@hoborouter/db";
+import { sql } from "drizzle-orm";
+import { createTestDb, type Db } from "@hoborouter/db";
 import { dashboardRoutes } from "../src/routes/dashboard";
 
 const ws = "ws-usd";
-let db: Database;
+let t: Awaited<ReturnType<typeof createTestDb>>;
+let db: Db;
 
 const authAs = (userId: string) => ({
   handler: async () => new Response("", { status: 404 }),
@@ -16,35 +17,36 @@ const authAs = (userId: string) => ({
 
 let app: ReturnType<typeof dashboardRoutes>;
 
-beforeAll(() => {
-  db = createDb(":memory:");
-  migrate(db);
-  db.prepare(
-    "INSERT INTO users (id, name, email, email_verified, created_at, updated_at) VALUES (?,?,?,1,?,?)",
-  ).run("u1", "U", "u@t.test", Date.now(), Date.now());
-  db.prepare("INSERT INTO workspaces (id, name, status, created_at) VALUES (?,?,'active',?)").run(
-    ws,
-    "ws",
-    Date.now(),
+beforeAll(async () => {
+  t = await createTestDb();
+  db = t.db;
+  const now = Date.now();
+  await db.execute(
+    sql`INSERT INTO users (id, name, email, email_verified, created_at, updated_at) VALUES ('u1','U','u@t.test',true,${now},${now})`,
   );
-  db.prepare("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?,?,'owner')").run(
-    ws,
-    "u1",
+  await db.execute(
+    sql`INSERT INTO workspaces (id, name, status, created_at) VALUES (${ws},'ws','active',${now})`,
   );
-  db.prepare(
-    "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 100000, 0, 0, ?)",
-  ).run(`wal-${ws}`, ws, Date.now());
-  const reqId = "req-1";
-  db.prepare(
-    "INSERT INTO models (id, public_id, slug, display_name, provider, enabled, published, created_at, updated_at) VALUES ('m-1','gpt-public','gpt-public','GPT','vendor',1,1,?,?)",
-  ).run(Date.now(), Date.now());
-  db.prepare(
-    "INSERT INTO requests (id, workspace_id, endpoint, mode, status, dispatch_state, model_id, created_at) VALUES (?,?,?, 'non-stream', 'ok', 'terminal', 'm-1', ?)",
-  ).run(reqId, ws, "/v1/chat/completions", Date.now());
-  db.prepare(
-    "INSERT INTO usage_logs (id, idempotency_key, request_id, workspace_id, provider, public_model, upstream_model, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, status, created_at) VALUES ('log-1','idem-1',?,?,'openrouter','gpt-public','gpt-secret-upstream-xyz',10,5,0,0,'ok',?)",
-  ).run(reqId, ws, Date.now());
+  await db.execute(
+    sql`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (${ws},'u1','owner')`,
+  );
+  await db.execute(
+    sql`INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (${`wal-${ws}`},${ws},'VND',100000,0,0,${now})`,
+  );
+  await db.execute(
+    sql`INSERT INTO models (id, public_id, slug, display_name, provider, enabled, published, created_at, updated_at) VALUES ('m-1','gpt-public','gpt-public','GPT','vendor',true,true,${now},${now})`,
+  );
+  await db.execute(
+    sql`INSERT INTO requests (id, workspace_id, endpoint, mode, status, dispatch_state, model_id, created_at) VALUES ('req-1',${ws},'/v1/chat/completions','non-stream','ok','terminal','m-1',${now})`,
+  );
+  await db.execute(
+    sql`INSERT INTO usage_logs (id, idempotency_key, request_id, workspace_id, provider, public_model, upstream_model, input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, status, created_at) VALUES ('log-1','idem-1','req-1',${ws},'openrouter','gpt-public','gpt-secret-upstream-xyz',10,5,0,0,'ok',${now})`,
+  );
   app = new Elysia().use(dashboardRoutes(db, authAs("u1")));
+});
+
+afterAll(async () => {
+  await t.drop();
 });
 
 const get = (path: string) => app.handle(new Request(`http://localhost${path}`));

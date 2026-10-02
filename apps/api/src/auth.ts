@@ -1,14 +1,13 @@
-// Task 3A: Better Auth instance on Drizzle/bun:sqlite.
+// Better Auth instance on Drizzle over Bun SQL (Postgres).
 // Adapter + dialect declared HERE (that's why @better-auth/cli generate needs
-// no adapter/dialect flags). The user table is the Task 2 `users` table —
-// alias singular `user` model key to the canonical `users` export (REQUIRED:
+// no adapter/dialect flags). The user table is the `users` table — alias
+// singular `user` model key to the canonical `users` export (REQUIRED:
 // drizzleAdapter looks up schema["user"], canonical export key is `users`).
-import { Database } from "bun:sqlite";
 import { betterAuth } from "better-auth";
 import { captcha } from "better-auth/plugins";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
-import { drizzle } from "drizzle-orm/bun-sqlite";
-import { createDb, schema } from "@hoborouter/db";
+import type { Db } from "@hoborouter/db";
+import { schema, instanceAdmins } from "@hoborouter/db";
 
 /** Swap localhost<->127.0.0.1 host of an origin string; null if not one of them. */
 const swappedLoopback = (origin: string): string | null => {
@@ -23,8 +22,8 @@ const swappedLoopback = (origin: string): string | null => {
   }
 };
 
-/** Build a Better Auth instance over an existing bun:sqlite Database. */
-export function createAuth(db: Database) {
+/** Build a Better Auth instance over an existing drizzle/pg Db. */
+export function createAuth(db: Db) {
   const baseURL =
     process.env.BETTER_AUTH_URL || process.env.HBR_BASE_URL || "http://localhost:3000";
   if (
@@ -56,8 +55,8 @@ export function createAuth(db: Database) {
   return betterAuth({
     baseURL,
     trustedOrigins,
-    database: drizzleAdapter(drizzle(db, { schema }), {
-      provider: "sqlite",
+    database: drizzleAdapter(db, {
+      provider: "pg",
       schema: { ...schema, user: schema.users },
     }),
     user: { modelName: "users" },
@@ -75,9 +74,10 @@ export function createAuth(db: Database) {
               typeof user.email === "string" &&
               user.email.toLowerCase() === adminEmail.toLowerCase()
             ) {
-              db.prepare(
-                "INSERT OR IGNORE INTO instance_admins (user_id, created_at, added_by) VALUES (?, ?, NULL)",
-              ).run(user.id, Date.now());
+              await db
+                .insert(instanceAdmins)
+                .values({ user_id: user.id, created_at: Date.now(), added_by: null })
+                .onConflictDoNothing();
             }
           },
         },
@@ -96,8 +96,3 @@ export function createAuth(db: Database) {
       : [],
   });
 }
-
-// Default instance used by the app and by `@better-auth/cli generate`
-// (override the target DB file with HBR_DB_PATH; defaults to in-memory).
-const defaultDb = createDb(process.env.HBR_DB_PATH || ":memory:");
-export const auth = createAuth(defaultDb);

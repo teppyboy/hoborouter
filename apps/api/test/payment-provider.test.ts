@@ -7,10 +7,10 @@
 //   - webhook: HMAC_SHA256(checksumKey, data keys sorted asc, `k=v&k=v`
 //       joined with &, no URI encoding, null/undefined -> empty string)
 // Fixtures below were precomputed with the exact documented strings.
-import { describe, test, expect, beforeAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { createHmac } from "node:crypto";
-import type { Database } from "bun:sqlite";
-import { createDb, migrate } from "@hoborouter/db";
+import { sql, type SQL } from "drizzle-orm";
+import { createTestDb, type Db } from "@hoborouter/db";
 import {
   PayOSProvider,
   PayosWebhookError,
@@ -32,13 +32,18 @@ const WEBHOOK_SIG = "b4f858d67bb31c4ecfbcff765c5edd269e6a0ed437364edd1a239b45fbb
 // amount=50000&cancelUrl=https://x/c&description=topup&orderCode=123456&returnUrl=https://x/r
 const REQUEST_SIG = "33ce8097e4397a7c41c139dabd84c79fe39a17013f3bc18387ecb838eed000da";
 
-let db: Database;
+let t: Awaited<ReturnType<typeof createTestDb>>;
+let db: Db;
 
-function seedPayosPayment(orderCode: string, amount: number) {
+async function q<T = Record<string, unknown>>(query: SQL): Promise<T[]> {
+  return (await db.execute(query)) as unknown as T[];
+}
+
+async function seedPayosPayment(orderCode: string, amount: number) {
   const id = crypto.randomUUID();
-  db.prepare(
-    "INSERT INTO payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) VALUES (?,?,?,'pending','payos',?,?)",
-  ).run(id, "ws-payos", amount, orderCode, Date.now());
+  await db.execute(
+    sql`INSERT INTO payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) VALUES (${id},'ws-payos',${amount},'pending','payos',${orderCode},${Date.now()})`,
+  );
   return id;
 }
 
@@ -67,15 +72,20 @@ function payosWebhookBody(
   return { code: "00", desc: "success", success: true, data, signature, ...overrides };
 }
 
-beforeAll(() => {
-  db = createDb(":memory:");
-  migrate(db);
-  db.prepare(
-    "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-payos','ws','active',?)",
-  ).run(Date.now());
-  db.prepare(
-    "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-ws-payos','ws-payos','VND', 0, 0, 0, ?)",
-  ).run(Date.now());
+beforeAll(async () => {
+  t = await createTestDb();
+  db = t.db;
+  const now = Date.now();
+  await db.execute(
+    sql`INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-payos','ws','active',${now})`,
+  );
+  await db.execute(
+    sql`INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-ws-payos','ws-payos','VND', 0, 0, 0, ${now})`,
+  );
+});
+
+afterAll(async () => {
+  await t.drop();
 });
 
 describe("payOS config gating", () => {
@@ -254,9 +264,9 @@ describe("payOS webhook verification", () => {
 });
 
 describe("payOS credit path — replay/idempotency via payment_events", () => {
-  test("paid event credits once; replay single credit; amount mismatch rejected", () => {
-    const id = seedPayosPayment("111222333", 70000);
-    const r1 = processMockPaymentEvent(db, {
+  test("paid event credits once; replay single credit; amount mismatch rejected", async () => {
+    const id = await seedPayosPayment("111222333", 70000);
+    const r1 = await processMockPaymentEvent(db, {
       provider: "payos",
       orderCode: "111222333",
       providerReference: "ref-payos-1",
@@ -264,16 +274,10 @@ describe("payOS credit path — replay/idempotency via payment_events", () => {
       rawPayload: "{}",
     });
     expect(r1.outcome).toBe("credited");
-    expect(
-      (
-        db.prepare("SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'").get() as {
-          balance: number;
-        }
-      ).balance,
-    ).toBe(70000);
+    expect(Number((await q<{ balance: number }>(sql`SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'`))[0]!.balance)).toBe(70000);
 
     // replay same reference: already_processed, no second credit
-    const r2 = processMockPaymentEvent(db, {
+    const r2 = await processMockPaymentEvent(db, {
       provider: "payos",
       orderCode: "111222333",
       providerReference: "ref-payos-1",
@@ -281,18 +285,12 @@ describe("payOS credit path — replay/idempotency via payment_events", () => {
       rawPayload: "{}",
     });
     expect(r2.outcome).toBe("already_processed");
-    expect(
-      (
-        db.prepare("SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'").get() as {
-          balance: number;
-        }
-      ).balance,
-    ).toBe(70000);
+    expect(Number((await q<{ balance: number }>(sql`SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'`))[0]!.balance)).toBe(70000);
 
     // amount mismatch -> 400-class error, no credit, payment stays pending
-    const id2 = seedPayosPayment("444555666", 80000);
+    const id2 = await seedPayosPayment("444555666", 80000);
     void id;
-    expect(() =>
+    await expect(
       processMockPaymentEvent(db, {
         provider: "payos",
         orderCode: "444555666",
@@ -300,35 +298,34 @@ describe("payOS credit path — replay/idempotency via payment_events", () => {
         amount: 1,
         rawPayload: "{}",
       }),
-    ).toThrow(MockPaymentError);
+    ).rejects.toThrow(MockPaymentError);
+    expect(Number((await q<{ balance: number }>(sql`SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'`))[0]!.balance)).toBe(70000);
     expect(
-      (
-        db.prepare("SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'").get() as {
-          balance: number;
-        }
-      ).balance,
-    ).toBe(70000);
-    expect(
-      (db.prepare("SELECT status FROM payments WHERE id = ?").get(id2) as { status: string })
+      (await q<{ status: string }>(sql`SELECT status FROM payments WHERE id = ${id2}`))[0]!
         .status,
     ).toBe("pending");
     expect(
-      db.prepare("SELECT 1 FROM ledger_entries WHERE payment_id = ? AND kind = 'topup'").all(id)
-        .length,
+      (
+        await q(
+          sql`SELECT 1 FROM ledger_entries WHERE payment_id = ${id} AND kind = 'topup'`,
+        )
+      ).length,
     ).toBe(1);
   });
 
-  test("cancelled event never credits (only code '00'/success path reaches processing)", () => {
-    seedPayosPayment("777888999", 90000);
+  test("cancelled event never credits (only code '00'/success path reaches processing)", async () => {
+    await seedPayosPayment("777888999", 90000);
     // The route only invokes credit for status 'paid'; cancelled is recorded as
     // no event -> no credit. Assert the invariant directly: processing a
     // cancelled-shaped amount change is rejected and balance unchanged.
-    const before = (
-      db.prepare("SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'").get() as {
-        balance: number;
-      }
-    ).balance;
-    expect(() =>
+    const before = Number(
+      (
+        await q<{ balance: number }>(
+          sql`SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'`,
+        )
+      )[0]!.balance,
+    );
+    await expect(
       processMockPaymentEvent(db, {
         provider: "payos",
         orderCode: "777888999",
@@ -336,14 +333,16 @@ describe("payOS credit path — replay/idempotency via payment_events", () => {
         amount: 90000,
         rawPayload: "{}",
       }),
-    ).not.toThrow();
+    ).resolves.toBeDefined();
     // ...but a cancelled webhook never reaches this call in the route; the
     // provider maps it to status 'cancelled' and the route skips processing.
-    const after = (
-      db.prepare("SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'").get() as {
-        balance: number;
-      }
-    ).balance;
+    const after = Number(
+      (
+        await q<{ balance: number }>(
+          sql`SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'`,
+        )
+      )[0]!.balance,
+    );
     // This direct call DOES credit (it is a paid event by contract); route-level
     // cancelled-no-credit is covered in webhooks-payos.test.ts.
     expect(after).toBe(before + 90000);

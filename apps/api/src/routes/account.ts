@@ -1,13 +1,11 @@
 // Account self-service: email change (password-verified), avatar upload /
-// delete / serve. Avatar files live next to the SQLite DB file; a temp dir
-// override (HBR_AVATAR_DIR) keeps :memory: test DBs writable.
+// delete / serve. Avatar files live in HBR_AVATAR_DIR (default ./data/avatars).
 import { Elysia, t } from "elysia";
 import { mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import type { Database } from "bun:sqlite";
+import { join } from "node:path";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, writeAudit, jsonError } from "../authz";
-import { users, orm } from "@hoborouter/db";
+import { type Db, users } from "@hoborouter/db";
 import { eq, sql } from "drizzle-orm";
 
 const MAX_AVATAR_BYTES = 1_048_576;
@@ -36,30 +34,26 @@ function magicExt(bytes: Uint8Array): Ext | null {
   return null;
 }
 
-function avatarDir(db: Database): string {
-  const override = process.env.HBR_AVATAR_DIR;
-  if (override) return override;
-  // ponytail: pragma file path per DB; :memory: without HBR_AVATAR_DIR yields cwd.
-  const row = db.prepare("PRAGMA database_list").get() as { file?: string } | null;
-  const file = row?.file || "";
-  return join(file ? dirname(file) : process.cwd(), "avatars");
+function avatarDir(): string {
+  return process.env.HBR_AVATAR_DIR || join(process.cwd(), "data", "avatars");
 }
 
 function publicUser(u: { id: string; name: string; email: string; image: string | null }) {
   return { id: u.id, name: u.name, email: u.email, image: u.image };
 }
 
-function getUser(db: Database, id: string) {
-  return orm(db)
+async function getUser(db: Db, id: string) {
+  const rows = await db
     .select({ id: users.id, name: users.name, email: users.email, image: users.image })
     .from(users)
     .where(eq(users.id, id))
-    .get();
+    .limit(1);
+  return rows[0] ?? null;
 }
 
 /** Persist avatar bytes for a user; returns the cache-busted public image URL. */
-function storeAvatar(db: Database, userId: string, ext: Ext, bytes: Uint8Array): string {
-  const dir = avatarDir(db);
+function storeAvatar(userId: string, ext: Ext, bytes: Uint8Array): string {
+  const dir = avatarDir();
   mkdirSync(dir, { recursive: true });
   // Remove stale files from prior uploads with a different extension.
   for (const e of Object.keys(MIME_BY_EXT)) {
@@ -72,7 +66,7 @@ function storeAvatar(db: Database, userId: string, ext: Ext, bytes: Uint8Array):
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export const accountRoutes = (db: Database, auth: BetterAuthInstance) =>
+export const accountRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "account" })
     .post(
       "/api/v1/account/email",
@@ -95,21 +89,21 @@ export const accountRoutes = (db: Database, auth: BetterAuthInstance) =>
         } catch {
           return jsonError(403, "WRONG_PASSWORD", "Incorrect password");
         }
-        const taken = orm(db)
+        const taken = await db
           .select({ id: users.id })
           .from(users)
           .where(sql`lower(${users.email}) = ${email}`)
-          .get();
-        if (taken) return jsonError(409, "EMAIL_TAKEN", "Email already in use");
-        orm(db).update(users).set({ email }).where(eq(users.id, user.id)).run();
-        writeAudit(db, {
+          .limit(1);
+        if (taken[0]) return jsonError(409, "EMAIL_TAKEN", "Email already in use");
+        await db.update(users).set({ email }).where(eq(users.id, user.id));
+        await writeAudit(db, {
           actorUserId: user.id,
           workspaceId: null,
           action: "user.email_change",
           target: user.id,
           detail: { to: email },
         });
-        const fresh = getUser(db, user.id);
+        const fresh = await getUser(db, user.id);
         return { user: publicUser(fresh!) };
       },
     )
@@ -148,9 +142,9 @@ export const accountRoutes = (db: Database, auth: BetterAuthInstance) =>
         const bytes = Buffer.concat(chunks);
         const ext = magicExt(bytes);
         if (!ext) return jsonError(400, "INVALID_IMAGE", "File is not a valid image");
-        const image = storeAvatar(db, userId, ext, bytes);
-        orm(db).update(users).set({ image }).where(eq(users.id, userId)).run();
-        return { user: publicUser(getUser(db, userId)!) };
+        const image = storeAvatar(userId, ext, bytes);
+        await db.update(users).set({ image }).where(eq(users.id, userId));
+        return { user: publicUser((await getUser(db, userId))!) };
       },
     )
     .delete(
@@ -162,13 +156,13 @@ export const accountRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const dir = avatarDir(db);
+        const dir = avatarDir();
         for (const e of Object.keys(MIME_BY_EXT)) {
           const p = join(dir, `${userId}.${e}`);
           if (existsSync(p)) rmSync(p);
         }
-        orm(db).update(users).set({ image: null }).where(eq(users.id, userId)).run();
-        return { user: publicUser(getUser(db, userId)!) };
+        await db.update(users).set({ image: null }).where(eq(users.id, userId));
+        return { user: publicUser((await getUser(db, userId))!) };
       },
     )
     .get(
@@ -183,7 +177,7 @@ export const accountRoutes = (db: Database, auth: BetterAuthInstance) =>
           return jsonError(400, "INVALID", "Invalid user id");
         }
         for (const [ext, mime] of Object.entries(MIME_BY_EXT)) {
-          const p = join(avatarDir(db), `${params.userId}.${ext}`);
+          const p = join(avatarDir(), `${params.userId}.${ext}`);
           if (existsSync(p)) {
             return new Response(readFileSync(p), {
               headers: {

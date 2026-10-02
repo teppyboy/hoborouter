@@ -1,7 +1,8 @@
 // Task 3B: route matrix RBAC (api-boundaries.md §2), cross-workspace denial,
 // instance-admin independence, bootstrap idempotence, owner lockout.
 import { beforeAll, describe, expect, test } from "bun:test";
-import type { Database } from "bun:sqlite";
+import type { Db } from "@hoborouter/db";
+import { sql } from "drizzle-orm";
 import {
   makeApp,
   signUp,
@@ -11,10 +12,10 @@ import {
   makeInstanceAdmin,
   userIdByEmail,
 } from "./helpers";
-import { bootstrapInstanceAdmin } from "@hoborouter/api";
+import { bootstrapInstanceAdmin } from "../src/instance-admin";
 
 let ctx: Awaited<ReturnType<typeof makeApp>>;
-let db: Database;
+let db: Db;
 const A = "ws-a";
 const B = "ws-b";
 
@@ -48,15 +49,15 @@ beforeAll(async () => {
   outsider = cookies[OUTSIDER]!;
   inst = cookies[INST]!;
 
-  const ownerId = userIdByEmail(db, OWNER);
-  const adminId = userIdByEmail(db, ADMIN);
-  const memberId = userIdByEmail(db, MEMBER);
-  createWorkspace(db, A, ownerId, "A");
-  addMember(db, A, adminId, "admin");
-  addMember(db, A, memberId, "member");
-  const outsiderId = userIdByEmail(db, OUTSIDER);
-  createWorkspace(db, B, outsiderId, "B");
-  makeInstanceAdmin(db, userIdByEmail(db, INST));
+  const ownerId = await userIdByEmail(db, OWNER);
+  const adminId = await userIdByEmail(db, ADMIN);
+  const memberId = await userIdByEmail(db, MEMBER);
+  await createWorkspace(db, A, ownerId, "A");
+  await addMember(db, A, adminId, "admin");
+  await addMember(db, A, memberId, "member");
+  const outsiderId = await userIdByEmail(db, OUTSIDER);
+  await createWorkspace(db, B, outsiderId, "B");
+  await makeInstanceAdmin(db, await userIdByEmail(db, INST));
 });
 
 // POST /api/v1/workspaces — any authenticated user ✓
@@ -69,10 +70,10 @@ describe("workspace create/list", () => {
     });
     expect(res.status).toBe(201);
     const body = (await res.json()) as { id: string };
-    const role = db
-      .prepare("SELECT role FROM workspace_members WHERE workspace_id=? AND user_id=?")
-      .get(body.id, userIdByEmail(db, MEMBER));
-    expect((role as any).role).toBe("owner");
+    const rows = (await db.execute(
+      sql`SELECT role FROM workspace_members WHERE workspace_id = ${body.id} AND user_id = ${await userIdByEmail(db, MEMBER)}`,
+    )) as unknown as { role: string }[];
+    expect(rows[0]!.role).toBe("owner");
   });
 
   test("list shows only own memberships", async () => {
@@ -114,7 +115,7 @@ describe("workspace detail + delete", () => {
   });
 
   test("cross-workspace: member of A GET ws B (recreated) → 403", async () => {
-    createWorkspace(db, B, userIdByEmail(db, OUTSIDER), "B2");
+    await createWorkspace(db, B, await userIdByEmail(db, OUTSIDER), "B2");
     expect((await req(ctx.app, `/api/v1/workspaces/${B}`, { cookie: member })).status).toBe(403);
   });
 
@@ -192,25 +193,25 @@ describe("members CRUD", () => {
   });
 
   test("owner PATCH member role → 200; audit written", async () => {
-    const newbieId = userIdByEmail(db, NEWBIE);
+    const newbieId = await userIdByEmail(db, NEWBIE);
     const res = await req(ctx.app, `/api/v1/workspaces/${A}/members/${newbieId}`, {
       method: "PATCH",
       cookie: owner,
       body: { role: "admin" },
     });
     expect(res.status).toBe(200);
-    const role = db
-      .prepare("SELECT role FROM workspace_members WHERE workspace_id=? AND user_id=?")
-      .get(A, newbieId);
-    expect((role as any).role).toBe("admin");
-    const audit = db
-      .prepare("SELECT count(*) c FROM audit_log WHERE workspace_id=? AND action LIKE 'member.%'")
-      .get(A);
-    expect((audit as any).c).toBeGreaterThan(0);
+    const roleRows = (await db.execute(
+      sql`SELECT role FROM workspace_members WHERE workspace_id = ${A} AND user_id = ${newbieId}`,
+    )) as unknown as { role: string }[];
+    expect(roleRows[0]!.role).toBe("admin");
+    const auditRows = (await db.execute(
+      sql`SELECT count(*) AS c FROM audit_log WHERE workspace_id = ${A} AND action LIKE 'member.%'`,
+    )) as unknown as { c: string }[];
+    expect(Number(auditRows[0]!.c)).toBeGreaterThan(0);
   });
 
   test("cross-workspace: owner of A PATCH member of B → 403", async () => {
-    const outsiderId = userIdByEmail(db, OUTSIDER);
+    const outsiderId = await userIdByEmail(db, OUTSIDER);
     expect(
       (
         await req(ctx.app, `/api/v1/workspaces/${A}/members/${outsiderId}`, {
@@ -223,7 +224,7 @@ describe("members CRUD", () => {
   });
 
   test("no owner lockout: demoting the ONLY owner → 409; removing → 409", async () => {
-    const ownerId = userIdByEmail(db, OWNER);
+    const ownerId = await userIdByEmail(db, OWNER);
     expect(
       (
         await req(ctx.app, `/api/v1/workspaces/${A}/members/${ownerId}`, {
@@ -244,8 +245,8 @@ describe("members CRUD", () => {
   });
 
   test("owner can demote THEMSELVES when another owner exists", async () => {
-    const ownerId = userIdByEmail(db, OWNER);
-    await req(ctx.app, `/api/v1/workspaces/${A}/members/${userIdByEmail(db, NEWBIE)}`, {
+    const ownerId = await userIdByEmail(db, OWNER);
+    await req(ctx.app, `/api/v1/workspaces/${A}/members/${await userIdByEmail(db, NEWBIE)}`, {
       method: "PATCH",
       cookie: owner,
       body: { role: "owner" },
@@ -265,16 +266,15 @@ describe("members CRUD", () => {
   });
 
   test("owner DELETE member → 200", async () => {
-    const res = await req(ctx.app, `/api/v1/workspaces/${A}/members/${userIdByEmail(db, NEWBIE)}`, {
+    const res = await req(ctx.app, `/api/v1/workspaces/${A}/members/${await userIdByEmail(db, NEWBIE)}`, {
       method: "DELETE",
       cookie: owner,
     });
     expect(res.status).toBe(200);
-    expect(
-      db
-        .prepare("SELECT count(*) c FROM workspace_members WHERE user_id=? AND workspace_id=?")
-        .get(userIdByEmail(db, NEWBIE), A),
-    ).toEqual({ c: 0 });
+    const rows = (await db.execute(
+      sql`SELECT count(*) AS c FROM workspace_members WHERE user_id = ${await userIdByEmail(db, NEWBIE)} AND workspace_id = ${A}`,
+    )) as unknown as { c: string }[];
+    expect(Number(rows[0]!.c)).toBe(0);
   });
 });
 
@@ -307,7 +307,9 @@ describe("workspace rename (PATCH)", () => {
         })
       ).status,
     ).toBe(403);
-    expect(db.prepare("SELECT name FROM workspaces WHERE id=?").get(A)).toEqual({ name: "A" });
+    expect(
+      (await db.execute(sql`SELECT name FROM workspaces WHERE id = ${A}`)) as unknown as unknown[],
+    ).toEqual([{ name: "A" }]);
   });
 
   test("blank/whitespace name → 400; unknown ws → 404", async () => {
@@ -339,15 +341,17 @@ describe("workspace rename (PATCH)", () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ id: B, name: "Renamed", status: "active" });
-    expect(db.prepare("SELECT name FROM workspaces WHERE id=?").get(B)).toEqual({
-      name: "Renamed",
-    });
-    const audit = db
-      .prepare(
-        "SELECT count(*) c FROM audit_log WHERE workspace_id=? AND action='workspace.rename'",
-      )
-      .get(B);
-    expect((audit as any).c).toBeGreaterThan(0);
+    expect(
+      (await db.execute(sql`SELECT name FROM workspaces WHERE id = ${B}`)) as unknown as unknown[],
+    ).toEqual([
+      {
+        name: "Renamed",
+      },
+    ]);
+    const auditRows = (await db.execute(
+      sql`SELECT count(*) AS c FROM audit_log WHERE workspace_id = ${B} AND action = 'workspace.rename'`,
+    )) as unknown as { c: string }[];
+    expect(Number(auditRows[0]!.c)).toBeGreaterThan(0);
   });
 });
 
@@ -363,10 +367,13 @@ describe("members POST error handling", () => {
   });
 
   test("unexpected DB error → 500 (not masked as 409)", async () => {
-    db.exec(
-      `CREATE TRIGGER boom_before_member BEFORE INSERT ON workspace_members
-       WHEN new.user_id = (SELECT id FROM users WHERE email = 'newbie@example.com')
-       BEGIN SELECT RAISE(ABORT, 'boom'); END`,
+    // pg equivalent of the old SQLite RAISE(ABORT) trigger: reject inserts for NEWBIE
+    await db.execute(
+      // pg: subqueries are not allowed in WHEN conditions, so the check lives in the function body
+      sql`CREATE FUNCTION boom_before_member() RETURNS trigger AS $fn$ BEGIN IF new.user_id = (SELECT id FROM users WHERE email = ${sql.raw(`'${NEWBIE}'`)}) THEN RAISE EXCEPTION 'boom'; END IF; RETURN NEW; END $fn$ LANGUAGE plpgsql`,
+    );
+    await db.execute(
+      sql`CREATE TRIGGER boom_before_member_ins BEFORE INSERT ON workspace_members FOR EACH ROW EXECUTE FUNCTION boom_before_member()`,
     );
     try {
       const res = await req(ctx.app, `/api/v1/workspaces/${A}/members`, {
@@ -376,7 +383,8 @@ describe("members POST error handling", () => {
       });
       expect(res.status).toBe(500);
     } finally {
-      db.exec("DROP TRIGGER boom_before_member");
+      await db.execute(sql`DROP TRIGGER boom_before_member_ins ON workspace_members`);
+      await db.execute(sql`DROP FUNCTION boom_before_member()`);
     }
   });
 });
@@ -421,22 +429,24 @@ describe("instance admin bootstrap", () => {
   test("idempotent upsert", async () => {
     const email = "boot@example.com";
     await signUp(ctx.app, email, "Boot");
-    const first = bootstrapInstanceAdmin(db, email);
+    const first = await bootstrapInstanceAdmin(db, email);
     expect(first.inserted).toBe(true);
-    const second = bootstrapInstanceAdmin(db, email);
+    const second = await bootstrapInstanceAdmin(db, email);
     expect(second.inserted).toBe(false);
-    const count = db.prepare("SELECT count(*) c FROM instance_admins").get() as any;
-    expect(count.c).toBe(2); // inst + boot
+    const adminRows = (await db.execute(
+      sql`SELECT count(*) AS c FROM instance_admins`,
+    )) as unknown as { c: string }[];
+    expect(Number(adminRows[0]!.c)).toBe(2); // inst + boot
   });
 
   test("unknown email → error", () => {
-    expect(() => bootstrapInstanceAdmin(db, "nobody@example.com")).toThrow();
+    expect(bootstrapInstanceAdmin(db, "nobody@example.com")).rejects.toThrow();
   });
 
-  test("workspace owner is NOT instance admin (roles independent)", () => {
-    const count = db
-      .prepare("SELECT count(*) c FROM instance_admins WHERE user_id=?")
-      .get(userIdByEmail(db, OWNER));
-    expect(count).toEqual({ c: 0 });
+  test("workspace owner is NOT instance admin (roles independent)", async () => {
+    const rows = (await db.execute(
+      sql`SELECT count(*) AS c FROM instance_admins WHERE user_id = ${await userIdByEmail(db, OWNER)}`,
+    )) as unknown as { c: string }[];
+    expect(Number(rows[0]!.c)).toBe(0);
   });
 });

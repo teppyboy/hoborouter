@@ -39,16 +39,16 @@ describe("trusted origins (loopback swap)", () => {
     // Minimal Better Auth instance in a real NODE_ENV=production process.
     const script = `
       const { createAuth } = await import("./src/auth");
-      const { createDb, migrate } = await import("@hoborouter/db");
-      const db = createDb(":memory:");
-      migrate(db);
-      const auth = createAuth(db);
+      const { createTestDb } = await import("@hoborouter/db");
+      const t = await createTestDb();
+      const auth = createAuth(t.db);
       const res = await auth.handler(new Request("http://localhost/api/auth/sign-up/email", {
         method: "POST",
         headers: { "content-type": "application/json", origin: "http://127.0.0.1:5199", cookie: "x=1" },
         body: JSON.stringify({ email: "a@b.test", password: "correct horse battery staple", name: "U" }),
       }));
       console.log("STATUS " + res.status);
+      await t.drop();
     `;
     const proc = Bun.spawnSync({
       cmd: ["bun", "-e", script],

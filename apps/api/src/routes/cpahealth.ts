@@ -3,7 +3,7 @@
 // retried. Upstream response bodies are never proxied (may contain credential
 // metadata); the management key is never echoed into responses.
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Db } from "@hoborouter/db";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, jsonError } from "../authz";
 
@@ -13,7 +13,7 @@ const cpaMgmtKey = () => process.env.CPA_MANAGEMENT_KEY || "";
 const fetchOnce = (url: string, init?: RequestInit) =>
   fetch(url, { ...init, signal: AbortSignal.timeout(3000) });
 
-export const cpaHealthRoutes = (db: Database, auth: BetterAuthInstance) =>
+export const cpaHealthRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "cpahealth" }).get(
     "/api/v1/admin/cpa/health",
     {
@@ -26,7 +26,7 @@ export const cpaHealthRoutes = (db: Database, auth: BetterAuthInstance) =>
     async ({ request }) => {
       const gate = await requireSession(auth, request);
       if ("error" in gate) return gate.error;
-      const denied = requireInstanceAdmin(db, gate.session.user.id);
+      const denied = await requireInstanceAdmin(db, gate.session.user.id);
       if (denied) return denied;
 
       const key = cpaMgmtKey();

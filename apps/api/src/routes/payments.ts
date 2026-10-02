@@ -4,14 +4,14 @@
 // legacy signed mock webhook stays for pre-existing 'mock' provider rows and
 // is never routed for new 'manual' rows.
 import { Elysia, t } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Db } from "@hoborouter/db";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, writeAudit, jsonError } from "../authz";
 import { requirePositiveSafeInteger } from "@hoborouter/wallet";
 import { eq } from "drizzle-orm";
-import { workspaces, payments, orm } from "@hoborouter/db";
+import { workspaces, payments } from "@hoborouter/db";
 
-export const paymentsRoutes = (db: Database, auth: BetterAuthInstance) =>
+export const paymentsRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "payments" })
     .post(
       "/api/v1/workspaces/:id/payments",
@@ -38,14 +38,14 @@ export const paymentsRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if (gate.error) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireWsRole(db, params.id, userId, "member");
+        const denied = await requireWsRole(db, params.id, userId, "member");
         if (denied) return denied;
-        const ws = orm(db)
+        const wsRows = await db
           .select({ id: workspaces.id })
           .from(workspaces)
           .where(eq(workspaces.id, params.id))
-          .get();
-        if (!ws) return jsonError(404, "NOT_FOUND", "Workspace not found");
+          .limit(1);
+        if (!wsRows[0]) return jsonError(404, "NOT_FOUND", "Workspace not found");
         const raw = (body as { amount?: unknown } | null)?.amount;
         let amount: number;
         try {
@@ -56,27 +56,24 @@ export const paymentsRoutes = (db: Database, auth: BetterAuthInstance) =>
         const id = crypto.randomUUID();
         const orderCode = `MANUAL-${id}`;
         const now = Date.now();
-        db.transaction(() => {
-          orm(db)
-            .insert(payments)
-            .values({
-              id,
-              workspace_id: params.id,
-              amount,
-              status: "pending",
-              provider: "manual",
-              provider_order_code: orderCode,
-              created_at: now,
-            })
-            .run();
-          writeAudit(db, {
+        await db.transaction(async (tx) => {
+          await tx.insert(payments).values({
+            id,
+            workspace_id: params.id,
+            amount,
+            status: "pending",
+            provider: "manual",
+            provider_order_code: orderCode,
+            created_at: now,
+          });
+          await writeAudit(tx, {
             actorUserId: userId,
             workspaceId: params.id,
             action: "payment.create",
             target: id,
             detail: { amount, provider: "manual" },
           });
-        })();
+        });
         // No provider checkout: admin approval happens out-of-band; the
         // member tracks status in the billing UI.
         return new Response(
@@ -106,17 +103,18 @@ export const paymentsRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if (gate.error) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireWsRole(db, params.id, userId, "member");
+        const denied = await requireWsRole(db, params.id, userId, "member");
         if (denied) return denied;
-        const row = orm(db)
+        const rows = await db
           .select({ workspace_id: payments.workspace_id })
           .from(payments)
           .where(eq(payments.id, params.paymentId))
-          .get();
+          .limit(1);
+        const row = rows[0];
         if (!row) return jsonError(404, "NOT_FOUND", "Payment not found");
         if (row.workspace_id !== params.id)
           return jsonError(403, "FORBIDDEN", "Payment belongs to another workspace");
-        const payment = orm(db)
+        const paymentRows = await db
           .select({
             id: payments.id,
             workspace_id: payments.workspace_id,
@@ -128,8 +126,8 @@ export const paymentsRoutes = (db: Database, auth: BetterAuthInstance) =>
           })
           .from(payments)
           .where(eq(payments.id, params.paymentId))
-          .get();
-        return new Response(JSON.stringify(payment), {
+          .limit(1);
+        return new Response(JSON.stringify(paymentRows[0]), {
           headers: { "content-type": "application/json" },
         });
       },

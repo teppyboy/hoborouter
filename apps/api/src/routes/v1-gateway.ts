@@ -5,7 +5,7 @@
 // service. Input token bound: 1 token per JSON body byte (a conservative
 // upper bound — no tokenizer can exceed it), capped by context_window.
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
+import type { Db } from "@hoborouter/db";
 import { verifyApiKey, isModelAllowed } from "@hoborouter/keys";
 import { resolveModel } from "@hoborouter/catalog";
 import {
@@ -17,6 +17,8 @@ import {
   WalletError,
 } from "@hoborouter/wallet";
 import { injectChatUsageOption, createUsageTap, resolveBillableUsage } from "@hoborouter/usage";
+import { eq } from "drizzle-orm";
+import { apiKeys, requests, instanceSettings } from "@hoborouter/db";
 import { jsonError } from "../authz";
 
 const MAX_BODY_BYTES = 1024 * 1024; // 1 MiB inbound JSON body limit
@@ -39,18 +41,20 @@ const intEnv = (name: string, fallback: number) => {
  * (default true when unset). Requests are IDENTICAL either way — this only
  * affects billing (OFF bills cached tokens at the full input rate).
  */
-function effectiveCachingOn(db: Database, promptCaching: string): boolean {
+async function effectiveCachingOn(db: Db, promptCaching: string): Promise<boolean> {
   if (promptCaching === "on") return true;
   if (promptCaching === "off") return false;
-  const row = db
-    .prepare("SELECT value FROM instance_settings WHERE key = 'prompt_caching_enabled'")
-    .get() as { value: string } | undefined;
-  return row ? row.value === "true" : true;
+  const rows = await db
+    .select({ value: instanceSettings.value })
+    .from(instanceSettings)
+    .where(eq(instanceSettings.key, "prompt_caching_enabled"))
+    .limit(1);
+  return rows[0] ? rows[0].value === "true" : true;
 }
 
 /** Settle exactly once per request; wraps the billing service. */
-function settle(
-  db: Database,
+async function settle(
+  db: Db,
   requestId: string,
   outcome:
     | { kind: "usage"; usage: import("@hoborouter/wallet").UsageTokens }
@@ -64,15 +68,15 @@ function settle(
   if (done.settled) return;
   done.settled = true;
   try {
-    settleRequest(db, requestId, outcome as never, Date.now());
+    await settleRequest(db, requestId, outcome as never, Date.now());
   } catch (err) {
     // A concurrent/repeat settlement is fine; anything else is a billing bug.
     if (!(err instanceof WalletError)) throw err;
   }
 }
 
-function settleFromTap(
-  db: Database,
+async function settleFromTap(
+  db: Db,
   requestId: string,
   result: ReturnType<ReturnType<typeof createUsageTap>["end"]>,
   rates: { input: bigint; output: bigint; cachedInput: bigint; reasoning: bigint },
@@ -92,7 +96,7 @@ function settleFromTap(
       ...(billable.assumed ? { assumed_splits: billable.assumed } : {}),
       ...(cachingOn ? {} : { caching: "off" }),
     };
-    settle(
+    await settle(
       db,
       requestId,
       {
@@ -108,7 +112,7 @@ function settleFromTap(
       done,
     );
   } else {
-    settle(
+    await settle(
       db,
       requestId,
       {
@@ -296,7 +300,7 @@ function sseModelRewriteStream(
   });
 }
 
-function gatewayHandler(db: Database, path: string, protocol: "chat" | "responses") {
+function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
   // Timing uses the monotonic clock: ttft (streams: first real token event;
   // non-stream: not applicable) and total latency to settled completion.
   const monotonic = () => performance.now();
@@ -310,9 +314,9 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     // 2. Auth.
     const header = request.headers.get("authorization") ?? "";
     const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-    const key = token ? verifyApiKey(db, token) : null;
+    const key = token ? await verifyApiKey(db, token) : null;
     if (!key) return openAiError(401, "Invalid API key provided.", "invalid_api_key");
-    db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").run(Date.now(), key.api_key_id);
+    await db.update(apiKeys).set({ last_used_at: Date.now() }).where(eq(apiKeys.id, key.api_key_id));
 
     // 3. Body validation — size-limited BEFORE buffering (memory DoS guard).
     const declaredLength = Number(request.headers.get("content-length"));
@@ -346,11 +350,11 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     if (typeof body.model !== "string" || body.model === "") {
       return jsonError(400, "INVALID", "'model' is required");
     }
-    const resolved = resolveModel(db, body.model);
+    const resolved = await resolveModel(db, body.model);
     if (!resolved) return jsonError(404, "model_not_found", `Model '${body.model}' not found`);
     const { model, mapping, price } = resolved;
-    const cachingOn = effectiveCachingOn(db, model.prompt_caching);
-    if (!isModelAllowed(db, key.api_key_id, model.id)) {
+    const cachingOn = await effectiveCachingOn(db, model.prompt_caching);
+    if (!(await isModelAllowed(db, key.api_key_id, model.id))) {
       return jsonError(403, "FORBIDDEN", "Model not allowed for this API key");
     }
 
@@ -400,7 +404,7 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     const requestId = crypto.randomUUID();
     const stream = body.stream === true;
     try {
-      reserveRequest(db, {
+      await reserveRequest(db, {
         requestId,
         workspaceId: key.workspace_id,
         apiKeyId: key.api_key_id,
@@ -421,9 +425,9 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     }
 
     const done = { settled: false };
-    const releaseOrFail = (err: unknown): Response => {
+    const releaseOrFail = async (err: unknown): Promise<Response> => {
       try {
-        releaseRequest(db, requestId, Date.now());
+        await releaseRequest(db, requestId, Date.now());
       } catch {
         // dispatching already? markDispatching happens right after; safe to ignore here.
       }
@@ -432,9 +436,9 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     };
 
     try {
-      markDispatching(db, requestId, Date.now());
+      await markDispatching(db, requestId, Date.now());
     } catch (err) {
-      return releaseOrFail(err);
+      return await releaseOrFail(err);
     }
 
     const outbound: Record<string, unknown> = { ...body, model: mapping.upstream_model };
@@ -477,17 +481,17 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     } catch (err) {
       clearTimeout(headerTimeout);
       if (request.signal.aborted) {
-        settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done);
+        await settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done);
         return jsonError(499, "client_abort", "Client aborted the request");
       }
-      settle(db, requestId, { kind: "full_hold", reason: "upstream_error", metadata: err }, done);
+      await settle(db, requestId, { kind: "full_hold", reason: "upstream_error", metadata: err }, done);
       return jsonError(502, "upstream_error", "Upstream dispatch failed");
     }
     clearTimeout(headerTimeout);
 
     const traceId = upstream.headers.get("x-cpa-trace-id");
     if (traceId)
-      db.prepare("UPDATE requests SET cpa_trace_id = ? WHERE id = ?").run(traceId, requestId);
+      await db.update(requests).set({ cpa_trace_id: traceId }).where(eq(requests.id, requestId));
 
     const rates = {
       input: BigInt(price.input_usd_micro_per_1m),
@@ -504,7 +508,7 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     // 6. Response pass-through + settlement.
     if (!upstream.ok) {
       const text = await upstream.text();
-      settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
+      await settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
       const errRes = safeUpstreamError(
         text,
         upstream.status,
@@ -525,9 +529,9 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
         // Body read failure (incl. client abort) must not leave 'dispatching'.
         if (request.signal.aborted) {
           tap.abort("client_abort");
-          settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done);
+          await settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done);
         } else {
-          settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
+          await settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
         }
         return jsonError(502, "upstream_error", "Upstream body read failed");
       }
@@ -536,7 +540,7 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
       const result = tap.end();
       // Non-stream: TTFT is not applicable (no incremental first token);
       // record only total latency.
-      settleFromTap(db, requestId, result, rates, meta, cachingOn, done, {
+      await settleFromTap(db, requestId, result, rates, meta, cachingOn, done, {
         latencyMs: roundMs(monotonic() - t0),
       });
       const body = rewriteJsonModel(ab, mapping.upstream_model, model.public_id);
@@ -552,17 +556,17 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
     // Stream: pass bytes through unbuffered, feed the tap, settle on flush.
     const source = upstream.body;
     if (!source) {
-      settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
+      await settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
       return jsonError(502, "upstream_error", "Upstream returned no body");
     }
     // Pull-based passthrough: client cancel() triggers cancel() below.
     const reader = source.getReader();
     let streamedSettle = false;
     let ttftMs: number | undefined;
-    const settleStreamEnd = () => {
+    const settleStreamEnd = async () => {
       if (streamedSettle) return;
       streamedSettle = true;
-      settleFromTap(db, requestId, tap.end(), rates, meta, cachingOn, done, {
+      await settleFromTap(db, requestId, tap.end(), rates, meta, cachingOn, done, {
         latencyMs: roundMs(monotonic() - t0),
         ...(ttftMs === undefined ? {} : { ttftMs }),
       });
@@ -572,8 +576,10 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
         try {
           const { done: upstreamDone, value } = await reader.read();
           if (upstreamDone) {
+            // Settle BEFORE closing: the consumer's res.text() resolves as
+            // soon as close is signaled; settlement must be durable by then.
+            await settleStreamEnd();
             controller.close();
-            settleStreamEnd();
             return;
           }
           tap.push(value);
@@ -583,9 +589,9 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
             streamedSettle = true;
             if (request.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
               tap.abort("client_abort");
-              settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done);
+              await settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done);
             } else {
-              settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
+              await settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
             }
           }
           controller.error(err instanceof Error ? err : new Error("stream error"));
@@ -597,7 +603,11 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
         if (!done.settled && !streamedSettle) {
           streamedSettle = true;
           tap.abort("client_abort");
-          settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done);
+          // Sync cancel context: best-effort settlement; a settlement failure
+          // here must not crash the stream teardown.
+          void settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done).catch(
+            () => {},
+          );
         }
       },
     });
@@ -618,7 +628,7 @@ function gatewayHandler(db: Database, path: string, protocol: "chat" | "response
   };
 }
 
-export const gatewayRoutes = (db: Database) =>
+export const gatewayRoutes = (db: Db) =>
   new Elysia({ name: "v1-gateway" })
     .post(
       "/v1/chat/completions",

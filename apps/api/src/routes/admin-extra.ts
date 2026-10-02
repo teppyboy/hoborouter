@@ -3,22 +3,27 @@
 // no key hashes, no raw provider payloads, no env values — booleans only.
 import { Elysia, t } from "elysia";
 import { APIError } from "better-auth";
-import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, isInstanceAdmin, jsonError, writeAudit } from "../authz";
 import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments";
-import { desc, eq, sql, count } from "drizzle-orm";
-import type { SQLiteTable } from "drizzle-orm/sqlite-core";
+import { and, desc, eq, ne, notExists, sql, count } from "drizzle-orm";
+import type { PgTable } from "drizzle-orm/pg-core";
 import {
+  type Db,
+  type Tx,
   requests as requestsTable,
   users,
   workspaces,
+  workspaceMembers,
   payments,
   usageLogs,
   apiKeys,
   providerModelMappings,
   models,
-  orm,
+  instanceAdmins,
+  auditLog,
+  unknownResolutions,
+  refundOperations,
 } from "@hoborouter/db";
 
 const cpaBase = () => process.env.CPA_BASE_URL || "http://cpa:8317";
@@ -30,17 +35,32 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * no OTHER owner exists. Used to block user removal that would orphan a
  * workspace (409 SOLE_OWNER).
  */
-function soleOwnedWorkspaces(db: Database, userId: string) {
+async function soleOwnedWorkspaces(db: Db | Tx, userId: string) {
   return db
-    .prepare(
-      `select w.id, w.name from workspaces w
-       join workspace_members wm on wm.workspace_id = w.id and wm.user_id = ? and wm.role = 'owner'
-       where not exists (
-         select 1 from workspace_members wm2
-         where wm2.workspace_id = w.id and wm2.user_id != ? and wm2.role = 'owner'
-       )`,
+    .selectDistinct({ id: workspaces.id, name: workspaces.name })
+    .from(workspaces)
+    .innerJoin(
+      workspaceMembers,
+      and(
+        eq(workspaceMembers.workspace_id, workspaces.id),
+        eq(workspaceMembers.user_id, userId),
+        eq(workspaceMembers.role, "owner"),
+      ),
     )
-    .all(userId, userId) as { id: string; name: string }[];
+    .where(
+      notExists(
+        db
+          .select({ one: sql`1` })
+          .from(workspaceMembers)
+          .where(
+            and(
+              eq(workspaceMembers.workspace_id, workspaces.id),
+              ne(workspaceMembers.user_id, userId),
+              eq(workspaceMembers.role, "owner"),
+            ),
+          ),
+      ),
+    );
 }
 
 /**
@@ -50,28 +70,50 @@ function soleOwnedWorkspaces(db: Database, userId: string) {
  * FK-blocked delete falls back to anonymizing the user row (no login: the
  * credential account row is already gone). Money/history tables untouched.
  */
-function removeUserIdentity(db: Database, userId: string) {
-  db.transaction(() => {
-    db.prepare("delete from session where user_id = ?").run(userId);
-    db.prepare("delete from account where user_id = ?").run(userId);
-    db.prepare("delete from workspace_members where user_id = ?").run(userId);
-    db.prepare("delete from instance_admins where user_id = ?").run(userId);
-    try {
-      db.prepare("delete from users where id = ?").run(userId);
-    } catch {
-      // ponytail: FK check via exception; swap to a pre-count of referencing
-      // rows if delete-failure logging ever becomes noisy.
-      db.prepare(
-        "update users set email = ?, name = 'Deleted user', image = null where id = ?",
-      ).run(`deleted+${userId}@invalid`, userId);
+async function removeUserIdentity(db: Db | Tx, userId: string) {
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`delete from session where user_id = ${userId}`);
+    await tx.execute(sql`delete from "account" where user_id = ${userId}`);
+    await tx.execute(sql`delete from workspace_members where user_id = ${userId}`);
+    await tx.execute(sql`delete from instance_admins where user_id = ${userId}`);
+    // Postgres poisons a transaction after any statement error, so the old
+    // try-delete/catch-anonymize pattern cannot work: pre-check remaining FK
+    // references (money/history tables) and anonymize instead of deleting.
+    const refCount =
+      (
+        await tx
+          .select({ n: count() })
+          .from(auditLog)
+          .where(eq(auditLog.actor_user_id, userId))
+      )[0]!.n +
+      (
+        await tx
+          .select({ n: count() })
+            .from(unknownResolutions)
+          .where(eq(unknownResolutions.actor_user_id, userId))
+      )[0]!.n +
+      (
+        await tx
+          .select({ n: count() })
+          .from(refundOperations)
+          .where(eq(refundOperations.actor_user_id, userId))
+      )[0]!.n;
+    if (refCount > 0) {
+      // History rows must never be deleted; anonymize the user row instead
+      // (no login: the credential account row is already gone).
+      await tx.execute(
+        sql`update users set email = ${`deleted+${userId}@invalid`}, name = 'Deleted user', image = null where id = ${userId}`,
+      );
+    } else {
+      await tx.execute(sql`delete from users where id = ${userId}`);
     }
-  })();
+  });
 }
 
-async function guard(db: Database, auth: BetterAuthInstance, request: Request) {
+async function guard(db: Db, auth: BetterAuthInstance, request: Request) {
   const gate = await requireSession(auth, request);
   if ("error" in gate) return { error: gate.error } as const;
-  const denied = requireInstanceAdmin(db, gate.session.user.id);
+  const denied = await requireInstanceAdmin(db, gate.session.user.id);
   if (denied) return { error: denied } as const;
   return { session: gate.session } as const;
 }
@@ -79,7 +121,7 @@ async function guard(db: Database, auth: BetterAuthInstance, request: Request) {
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 
-export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
+export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "admin-extra" })
     .get(
       "/api/v1/me",
@@ -96,17 +138,17 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const row = orm(db)
+        const row = await db
           .select({ id: users.id, name: users.name, email: users.email })
           .from(users)
           .where(eq(users.id, userId))
-          .get();
-        if (!row) return jsonError(404, "NOT_FOUND", "User not found");
+          .limit(1);
+        if (!row[0]) return jsonError(404, "NOT_FOUND", "User not found");
         return json({
-          id: row.id,
-          name: row.name,
-          email: row.email,
-          is_instance_admin: isInstanceAdmin(db, userId),
+          id: row[0].id,
+          name: row[0].name,
+          email: row[0].email,
+          is_instance_admin: await isInstanceAdmin(db, userId),
         });
       },
     )
@@ -122,7 +164,7 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
-        const rows = orm(db)
+        const rows = await db
           .select({
             id: users.id,
             email: users.email,
@@ -135,8 +177,7 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
               sql<number>`(select count(*) from workspace_members wm where wm.user_id = ${users.id})`,
           })
           .from(users)
-          .orderBy(desc(users.createdAt))
-          .all();
+          .orderBy(desc(users.createdAt));
         return json({ data: rows });
       },
     )
@@ -154,7 +195,7 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         if ("error" in g) return g.error;
         // provider_order_code is the merchant-facing code, not a secret; raw
         // payloads live in payment_events and are never joined here.
-        const rows = orm(db)
+        const rows = await db
           .select({
             id: payments.id,
             workspace_id: payments.workspace_id,
@@ -169,8 +210,7 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
           .from(payments)
           .innerJoin(workspaces, eq(workspaces.id, payments.workspace_id))
           .orderBy(desc(payments.created_at))
-          .limit(200)
-          .all();
+          .limit(200);
         return json({ data: rows });
       },
     )
@@ -187,7 +227,7 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
         // raw_payload excluded — may contain upstream response data.
-        const rows = orm(db)
+        const rows = await db
           .select({
             id: usageLogs.id,
             workspace_id: usageLogs.workspace_id,
@@ -211,8 +251,7 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
           .innerJoin(workspaces, eq(workspaces.id, usageLogs.workspace_id))
           .leftJoin(apiKeys, eq(apiKeys.id, usageLogs.api_key_id))
           .orderBy(desc(usageLogs.created_at))
-          .limit(200)
-          .all();
+          .limit(200);
         return json({ data: rows });
       },
     )
@@ -249,15 +288,14 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         } catch {
           return jsonError(502, "CPA_UNHEALTHY", "invalid /v1/models response");
         }
-        const mappedIds = orm(db)
+        const mappedIds = await db
           .selectDistinct({
             upstream_model: providerModelMappings.upstream_model,
             public_id: models.public_id,
           })
           .from(providerModelMappings)
           .innerJoin(models, eq(models.id, providerModelMappings.model_id))
-          .where(eq(providerModelMappings.enabled, true))
-          .all();
+          .where(eq(providerModelMappings.enabled, true));
         const mapped = new Set(mappedIds.map((r) => r.upstream_model));
         const publicIdsByUpstream = new Map<string, string[]>();
         for (const r of mappedIds) {
@@ -318,11 +356,12 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
           throw err;
         }
         if (instanceAdmin) {
-          db.prepare(
-            "insert or ignore into instance_admins (user_id, created_at, added_by) values (?, ?, ?)",
-          ).run(created.user.id, Date.now(), g.session.user.id);
+          await db
+            .insert(instanceAdmins)
+            .values({ user_id: created.user.id, created_at: Date.now(), added_by: g.session.user.id })
+            .onConflictDoNothing();
         }
-        writeAudit(db, {
+        await writeAudit(db, {
           actorUserId: g.session.user.id,
           workspaceId: null,
           action: "user.create",
@@ -354,24 +393,24 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
         const actorId = g.session.user.id;
-        const target = orm(db)
+        const target = await db
           .select({ id: users.id })
           .from(users)
           .where(eq(users.id, params.id))
-          .get();
-        if (!target) return jsonError(404, "NOT_FOUND", "User not found");
+          .limit(1);
+        if (!target[0]) return jsonError(404, "NOT_FOUND", "User not found");
         // Guards re-read inside the same transaction as the removal:
         // check-then-act between separate statements could otherwise remove
         // the last admin or self after a concurrent change. LAST_ADMIN before
         // self: removing the final instance admin is blocked even when the
         // remover is that admin (add another admin first).
         let violation: Response | undefined;
-        db.transaction(() => {
-          if (isInstanceAdmin(db, params.id)) {
-            const adminCount = db
-              .prepare("select count(*) as n from instance_admins")
-              .get() as { n: number };
-            if (adminCount.n <= 1) {
+        await db.transaction(async (tx) => {
+          if (await isInstanceAdmin(tx, params.id)) {
+            const adminCount = await tx
+              .select({ n: sql<number>`count(*)` })
+              .from(instanceAdmins);
+            if (Number(adminCount[0]?.n ?? 0) <= 1) {
               violation = jsonError(409, "LAST_ADMIN", "Cannot remove the last instance admin");
               return;
             }
@@ -380,7 +419,7 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
             violation = jsonError(400, "CANNOT_REMOVE_SELF", "You cannot remove your own account");
             return;
           }
-          const sole = soleOwnedWorkspaces(db, params.id);
+          const sole = await soleOwnedWorkspaces(tx, params.id);
           if (sole.length > 0) {
             violation = new Response(
               JSON.stringify({
@@ -394,10 +433,10 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
             );
             return;
           }
-          removeUserIdentity(db, params.id);
-        })();
+          await removeUserIdentity(tx, params.id);
+        });
         if (violation) return violation;
-        writeAudit(db, {
+        await writeAudit(db, {
           actorUserId: actorId,
           workspaceId: null,
           action: "user.remove",
@@ -426,7 +465,7 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
         const userId = g.session.user.id;
-        const payment = orm(db)
+        const payment = await db
           .select({
             id: payments.id,
             workspace_id: payments.workspace_id,
@@ -437,24 +476,26 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
           })
           .from(payments)
           .where(eq(payments.id, params.id))
-          .get();
-        if (!payment) return jsonError(404, "NOT_FOUND", "Payment not found");
+          .limit(1);
+        if (!payment[0]) return jsonError(404, "NOT_FOUND", "Payment not found");
+        const p = payment[0];
         try {
-          const result = processMockPaymentEvent(db, {
-            provider: payment.provider,
-            orderCode: payment.provider_order_code,
+          const result = await processMockPaymentEvent(db, {
+            provider: p.provider,
+            orderCode: p.provider_order_code,
             // Fixed reference per payment: replays are idempotent (already_processed).
-            providerReference: `admin-complete-${payment.id}`,
-            amount: payment.amount,
-            rawPayload: JSON.stringify({ source: "admin-complete", paymentId: payment.id }),
+            providerReference: `admin-complete-${p.id}`,
+            amount: p.amount,
+            rawPayload: JSON.stringify({ source: "admin-complete", paymentId: p.id }),
           });
-          writeAudit(db, {
+          await writeAudit(db, {
             actorUserId: userId,
-            workspaceId: payment.workspace_id,
+            workspaceId: p.workspace_id,
             action: "payment.admin_complete",
-            target: payment.id,
+            target: p.id,
             detail: { outcome: result.outcome },
           });
+
           return new Response(JSON.stringify({ success: true, outcome: result.outcome }), {
             status: 200,
             headers: { "content-type": "application/json" },
@@ -481,15 +522,11 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
-        const wal = (db.prepare("PRAGMA journal_mode").get() as { journal_mode: string })
-          .journal_mode;
-        // o.$count(...) returns a cyclic SQL builder object that cannot be
-        // JSON.stringify-ed (500). Count synchronously instead.
-        const countOf = (t: SQLiteTable) =>
-          orm(db)
-            .select({ n: count() })
-            .from(t)
-            .get()?.n ?? 0;
+        // Count via SQL aggregate; PG has no cheap table row count.
+        const countOf = async (t: PgTable) => {
+          const rows = await db.select({ n: count() }).from(t);
+          return Number(rows[0]?.n ?? 0);
+        };
         return json({
           gateway_enabled: process.env.HBR_GATEWAY_ENABLED !== "0",
           usd_vnd_rate: Number(process.env.HBR_USD_VND_RATE) || 26000,
@@ -498,12 +535,12 @@ export const adminExtraRoutes = (db: Database, auth: BetterAuthInstance) =>
             !!process.env.PAYOS_API_KEY &&
             !!process.env.PAYOS_CHECKSUM_KEY,
           manual_payments: true,
-          db: { wal },
+          db: { engine: "postgres" },
           counts: {
-            users: countOf(users),
-            workspaces: countOf(workspaces),
-            models: countOf(models),
-            requests: countOf(requestsTable),
+            users: await countOf(users),
+            workspaces: await countOf(workspaces),
+            models: await countOf(models),
+            requests: await countOf(requestsTable),
           },
         });
       },

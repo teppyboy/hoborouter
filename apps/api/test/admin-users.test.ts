@@ -1,6 +1,8 @@
 // Admin user create/remove routes: contract per lane spec. Real HTTP against
 // the built app; DB helpers only for setup (admin flag, workspaces, rows).
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { sql } from "drizzle-orm";
+import { q } from "./helpers";
 import {
   addMember,
   cookieOf,
@@ -14,11 +16,21 @@ import {
 
 const PASSWORD = "correct horse battery staple";
 
+// Close each test's pool after the test: Bun SQL pools hold connections until
+// closed and the test Postgres has a finite connection budget.
+let drops: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const d of drops) await d();
+  drops = [];
+});
+
 async function makeAdmin() {
-  const { db, app } = await makeApp();
+  const made = await makeApp();
+  drops.push(made.close);
+  const { db, app } = made;
   const email = `admin-${crypto.randomUUID()}@example.com`;
   const cookie = await signUp(app, email, "Admin");
-  makeInstanceAdmin(db, userIdByEmail(db, email));
+  await makeInstanceAdmin(db, await userIdByEmail(db, email));
   return { db, app, cookie };
 }
 
@@ -58,10 +70,12 @@ describe("POST /api/v1/admin/users", () => {
     });
     expect(res.status).toBe(201);
     expect((await res.json()).instance_admin).toBe(true);
-    const row = db.prepare("select 1 from instance_admins where user_id = ?").get(
-      userIdByEmail(db, "a2@example.com"),
+    const row = await q(
+      db,
+      "select 1 from instance_admins where user_id = ?",
+      await userIdByEmail(db, "a2@example.com"),
     );
-    expect(row).toBeTruthy();
+    expect(row.length).toBe(1);
   });
 
   test("duplicate email 409 EMAIL_TAKEN", async () => {
@@ -105,7 +119,9 @@ describe("POST /api/v1/admin/users", () => {
   });
 
   test("non-admin 403", async () => {
-    const { app } = await makeApp();
+    const made = await makeApp();
+    drops.push(made.close);
+    const { app } = made;
     const cookie = await signUp(app, `u-${crypto.randomUUID()}@example.com`);
     const res = await req(app, "/api/v1/admin/users", {
       method: "POST",
@@ -142,10 +158,11 @@ describe("DELETE /api/v1/admin/users/:id", () => {
       body: { name: "A2", email: "a2@example.com", password: PASSWORD, instance_admin: true },
     });
     const selfId = (
-      db.prepare("select id from users where email like 'admin-%@example.com' limit 1").get() as {
-        id: string;
-      }
-    ).id;
+      await q<{ id: string }>(
+        db,
+        "select id from users where email like 'admin-%@example.com' limit 1",
+      )
+    )[0]!.id;
     const res = await req(app, `/api/v1/admin/users/${selfId}`, { method: "DELETE", cookie });
     expect(res.status).toBe(400);
     expect((await res.json()).error.code).toBe("CANNOT_REMOVE_SELF");
@@ -154,10 +171,11 @@ describe("DELETE /api/v1/admin/users/:id", () => {
   test("last instance admin 409 LAST_ADMIN (sole admin removing self)", async () => {
     const { db, app, cookie } = await makeAdmin();
     const adminId = (
-      db.prepare("select id from users where email like 'admin-%@example.com' limit 1").get() as {
-        id: string;
-      }
-    ).id;
+      await q<{ id: string }>(
+        db,
+        "select id from users where email like 'admin-%@example.com' limit 1",
+      )
+    )[0]!.id;
     const res = await req(app, `/api/v1/admin/users/${adminId}`, { method: "DELETE", cookie });
     expect(res.status).toBe(409);
     expect((await res.json()).error.code).toBe("LAST_ADMIN");
@@ -166,10 +184,11 @@ describe("DELETE /api/v1/admin/users/:id", () => {
   test("removing one of two admins succeeds; survivor keeps access", async () => {
     const { db, app, cookie } = await makeAdmin();
     const adminId = (
-      db.prepare("select id from users where email like 'admin-%@example.com' limit 1").get() as {
-        id: string;
-      }
-    ).id;
+      await q<{ id: string }>(
+        db,
+        "select id from users where email like 'admin-%@example.com' limit 1",
+      )
+    )[0]!.id;
     await req(app, "/api/v1/admin/users", {
       method: "POST",
       cookie,
@@ -192,7 +211,7 @@ describe("DELETE /api/v1/admin/users/:id", () => {
     });
     const thirdLogin = await login(app, "a3@example.com");
     expect(thirdLogin.status).toBe(200);
-    const res = await req(app, `/api/v1/admin/users/${userIdByEmail(db, "a2@example.com")}`, {
+    const res = await req(app, `/api/v1/admin/users/${await userIdByEmail(db, "a2@example.com")}`, {
       method: "DELETE",
       cookie: cookieOf(thirdLogin),
     });
@@ -208,8 +227,8 @@ describe("DELETE /api/v1/admin/users/:id", () => {
         body: { name: "Owner", email: "owner@example.com", password: PASSWORD },
       })
     ).json();
-    createWorkspace(db, "ws-1", created.id, "Solo WS");
-    createWorkspace(db, "ws-2", created.id, "Second WS");
+    await createWorkspace(db, "ws-1", created.id, "Solo WS");
+    await createWorkspace(db, "ws-2", created.id, "Second WS");
     const res = await req(app, `/api/v1/admin/users/${created.id}`, { method: "DELETE", cookie });
     expect(res.status).toBe(409);
     const body = await res.json();
@@ -220,11 +239,12 @@ describe("DELETE /api/v1/admin/users/:id", () => {
     ]);
     // Co-owner added on one workspace -> only the other workspace is listed.
     const adminEmail = (
-      db.prepare("select email from users where email like 'admin-%@example.com' limit 1").get() as {
-        email: string;
-      }
-    ).email;
-    addMember(db, "ws-1", userIdByEmail(db, adminEmail), "owner");
+      await q<{ email: string }>(
+        db,
+        "select email from users where email like 'admin-%@example.com' limit 1",
+      )
+    )[0]!.email;
+    await addMember(db, "ws-1", await userIdByEmail(db, adminEmail), "owner");
     const res2 = await req(app, `/api/v1/admin/users/${created.id}`, { method: "DELETE", cookie });
     expect(res2.status).toBe(409);
     expect(((await res2.json()) as { error: { workspaces: unknown[] } }).error.workspaces).toEqual([
@@ -248,42 +268,36 @@ describe("DELETE /api/v1/admin/users/:id", () => {
       })
     ).json();
     const now = Date.now();
-    db.prepare(
-      "insert into workspaces (id, name, status, created_at) values ('ws-h','H','active',?)",
-    ).run(now);
-    db.prepare("insert into workspace_members (workspace_id, user_id, role) values ('ws-h',?,'member')").run(
-      created.id,
-    );
-    db.prepare(
-      "insert into wallets (id, workspace_id, balance, reserved, created_at) values ('w-h','ws-h',1000,0,?)",
-    ).run(now);
-    db.prepare(
-      "insert into ledger_entries (id, wallet_id, direction, amount, kind, balance_after, created_at) values ('le-h','w-h','credit',1000,'topup',1000,?)",
-    ).run(now);
-    db.prepare(
-      "insert into payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) values ('p-h','ws-h',1000,'succeeded','manual','ord-h',?)",
-    ).run(now);
-    db.prepare(
-      "insert into audit_log (id, actor_user_id, action, target, created_at) values ('au-h',?, 'user.create', 'x', ?)",
-    ).run(created.id, now);
-    const snap = () =>
+    await db.execute(sql`insert into workspaces (id, name, status, created_at) values ('ws-h','H','active',${now})`);
+    await db.execute(sql`insert into workspace_members (workspace_id, user_id, role) values ('ws-h',${created.id},'member')`);
+    await db.execute(sql`insert into wallets (id, workspace_id, balance, reserved, created_at) values ('w-h','ws-h',1000,0,${now})`);
+    await db.execute(sql`insert into ledger_entries (id, wallet_id, direction, amount, kind, balance_after, created_at) values ('le-h','w-h','credit',1000,'topup',1000,${now})`);
+    await db.execute(sql`insert into payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) values ('p-h','ws-h',1000,'succeeded','manual','ord-h',${now})`);
+    await db.execute(sql`insert into audit_log (id, actor_user_id, action, target, created_at) values ('au-h',${created.id}, 'user.create', 'x', ${now})`);
+    const snap = async () =>
       (
-        db
-          .prepare(
-            "select (select count(*) from requests) r, (select count(*) from ledger_entries) l, (select count(*) from payments) p, (select count(*) from audit_log where action != 'user.remove') a",
-          )
-          .get() as { r: number; l: number; p: number; a: number }
-      );
-    const before = snap();
+        await q<{
+          r: string;
+          l: string;
+          p: string;
+          a: string;
+        }>(
+          db,
+          "select (select count(*) from requests) r, (select count(*) from ledger_entries) l, (select count(*) from payments) p, (select count(*) from audit_log where action != 'user.remove') a",
+        )
+      )[0]!;
+    const before = await snap();
     const res = await req(app, `/api/v1/admin/users/${created.id}`, { method: "DELETE", cookie });
     expect(res.status).toBe(200);
-    expect(snap()).toEqual(before);
+    expect(await snap()).toEqual(before);
     // User row anonymized (FK-blocked by audit_log/membership), not deleted.
-    const row = db.prepare("select email, name, image from users where id = ?").get(created.id) as {
-      email: string;
-      name: string;
-      image: string | null;
-    };
+    const row = (
+      await q<{ email: string; name: string; image: string | null }>(
+        db,
+        "select email, name, image from users where id = ?",
+        created.id,
+      )
+    )[0]!;
     expect(row.email).toBe(`deleted+${created.id}@invalid`);
     expect(row.name).toBe("Deleted user");
     expect(row.image).toBeNull();

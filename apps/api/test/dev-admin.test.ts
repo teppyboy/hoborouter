@@ -1,15 +1,16 @@
 // Dev-only instance-admin auto-bootstrap on signup (HBR_DEV_ADMIN_EMAIL).
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { type Database } from "bun:sqlite";
+import type { Db } from "@hoborouter/db";
+import { sql } from "drizzle-orm";
 import { makeApp } from "./helpers";
 
-let db: Database;
+let db: Db;
 
-const isAdmin = (email: string) => {
-  const row = db
-    .prepare("SELECT 1 FROM instance_admins ia JOIN users u ON u.id = ia.user_id WHERE u.email = ?")
-    .get(email);
-  return !!row;
+const isAdmin = async (email: string) => {
+  const rows = (await db.execute(
+    sql`SELECT 1 FROM instance_admins ia JOIN users u ON u.id = ia.user_id WHERE u.email = ${email}`,
+  )) as unknown as unknown[];
+  return rows.length > 0;
 };
 
 const signupViaAuth = async (app: Awaited<ReturnType<typeof makeApp>>, email: string) => {
@@ -41,7 +42,7 @@ describe("dev instance-admin bootstrap", () => {
     const app = await makeApp();
     db = app.db;
     await signupViaAuth(app, "admin@e2e.test");
-    expect(isAdmin("admin@e2e.test")).toBe(true);
+    expect(await isAdmin("admin@e2e.test")).toBe(true);
   });
 
   test("development + non-matching email -> not admin", async () => {
@@ -50,7 +51,7 @@ describe("dev instance-admin bootstrap", () => {
     const app = await makeApp();
     db = app.db;
     await signupViaAuth(app, "someone@e2e.test");
-    expect(isAdmin("someone@e2e.test")).toBe(false);
+    expect(await isAdmin("someone@e2e.test")).toBe(false);
   });
 
   test("production + matching email -> not admin", async () => {
@@ -59,6 +60,6 @@ describe("dev instance-admin bootstrap", () => {
     const app = await makeApp();
     db = app.db;
     await signupViaAuth(app, "admin@e2e.test");
-    expect(isAdmin("admin@e2e.test")).toBe(false);
+    expect(await isAdmin("admin@e2e.test")).toBe(false);
   });
 });

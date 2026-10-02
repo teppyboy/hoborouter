@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { makeApp, req, signUp, userIdByEmail } from "./helpers";
+import { sql } from "drizzle-orm";
 
 let ctx: Awaited<ReturnType<typeof makeApp>>;
 let avatarDir = "";
@@ -134,10 +135,10 @@ describe("POST /api/v1/account/email", () => {
     expect(body.user.email).toBe("email4-new@example.com");
     expect(body.user.name).toBe("E4");
     expect(body.user.image).toBeNull();
-    const audit = ctx.db
-      .prepare("SELECT action FROM audit_log WHERE action = 'user.email_change'")
-      .all();
-    expect(audit.length).toBe(1);
+    const audit = await ctx.db.execute(
+      sql`SELECT action FROM audit_log WHERE action = 'user.email_change'`,
+    );
+    expect((audit as unknown as unknown[]).length).toBe(1);
   });
 });
 
@@ -279,12 +280,12 @@ describe("avatar upload/serve/delete", () => {
         cookie,
       );
       expect(res.status).toBe(200);
-      const id = userIdByEmail(ctx.db, email);
+      const id = await userIdByEmail(ctx.db, email);
       const serve = await ctx.app.handle(new Request(`http://localhost/api/v1/avatars/${id}`));
       expect(serve.headers.get("content-type")).toBe(mime);
     }
     // files live in the configured temp dir
-    const id5 = userIdByEmail(ctx.db, "av5@example.com");
+    const id5 = await userIdByEmail(ctx.db, "av5@example.com");
     expect(existsSync(join(avatarDir, `${id5}.jpg`))).toBe(true);
   });
 
@@ -292,7 +293,7 @@ describe("avatar upload/serve/delete", () => {
     const cookie = await signUp(ctx.app, "av7@example.com", "A7");
     await raw(ctx.app, "/api/v1/account/avatar", PNG, { "content-type": "image/png" }, cookie);
     await raw(ctx.app, "/api/v1/account/avatar", JPEG, { "content-type": "image/jpeg" }, cookie);
-    const id = userIdByEmail(ctx.db, "av7@example.com");
+    const id = await userIdByEmail(ctx.db, "av7@example.com");
     expect(existsSync(`${avatarDir}/${id}.png`)).toBe(false);
     expect(existsSync(`${avatarDir}/${id}.jpg`)).toBe(true);
   });

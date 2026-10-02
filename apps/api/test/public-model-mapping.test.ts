@@ -3,7 +3,8 @@
 // `z-ai/glm-5.3-flash`), gateway outbound body + response model rewrite
 // (JSON and SSE), and /v1/models listing public ids only.
 import { describe, expect, test, afterAll } from "bun:test";
-import type { Database } from "bun:sqlite";
+import type { Db } from "@hoborouter/db";
+import { sql } from "drizzle-orm";
 import { hashApiKey } from "@hoborouter/keys";
 import { makeApp, signUp, req, makeInstanceAdmin, userIdByEmail } from "./helpers";
 
@@ -71,7 +72,7 @@ afterAll(() => {
 async function setup() {
   const { db, app } = await makeApp();
   const cookie = await signUp(app, "pubmap@example.com");
-  makeInstanceAdmin(db, userIdByEmail(db, "pubmap@example.com"));
+  await makeInstanceAdmin(db, await userIdByEmail(db, "pubmap@example.com"));
 
   const created = await req(app, "/api/v1/admin/catalog/models", {
     method: "POST",
@@ -109,24 +110,24 @@ async function setup() {
   });
   expect(price.status).toBe(201);
 
-  seedWalletAndKey(db);
+  await seedWalletAndKey(db);
   return { app };
 }
 
-function seedWalletAndKey(db: Database) {
+async function seedWalletAndKey(db: Db) {
   const now = Date.now();
-  db.prepare(
-    "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-pm','pm','active',?)",
-  ).run(now);
-  db.prepare(
-    "INSERT INTO workspace_members (workspace_id, user_id, role) SELECT 'ws-pm', id, 'owner' FROM users WHERE email = 'pubmap@example.com'",
-  ).run();
-  db.prepare(
-    "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-pm','ws-pm','VND',1000000000,0,0,?)",
-  ).run(now);
-  db.prepare(
-    "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key-pm','ws-pm',?,?,'pm','active',?)",
-  ).run(hashApiKey(PLAINTEXT), "sk-hbr-pm...", now);
+  await db.execute(
+    sql`INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-pm','pm','active',${now})`,
+  );
+  await db.execute(
+    sql`INSERT INTO workspace_members (workspace_id, user_id, role) SELECT 'ws-pm', id, 'owner' FROM users WHERE email = 'pubmap@example.com'`,
+  );
+  await db.execute(
+    sql`INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-pm','ws-pm','VND',1000000000,0,0,${now})`,
+  );
+  await db.execute(
+    sql`INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key-pm','ws-pm',${hashApiKey(PLAINTEXT)},'sk-hbr-pm...','pm','active',${now})`,
+  );
 }
 
 describe("public model id -> upstream mapping", () => {

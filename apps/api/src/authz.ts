@@ -1,11 +1,10 @@
 // Task 3B authz: session resolution + role checks per api-boundaries.md §2.
 // Instance admin is checked ONLY against instance_admins — never implied by
 // workspace roles and never granting any workspace role.
-import type { Database } from "bun:sqlite";
+import type { Db, Tx } from "@hoborouter/db";
 import type { BetterAuthInstance } from "./auth-types";
 import { and, eq } from "drizzle-orm";
 import { workspaceMembers, instanceAdmins, auditLog } from "@hoborouter/db";
-import { orm } from "@hoborouter/db";
 
 export type WsRole = "owner" | "admin" | "member";
 
@@ -30,8 +29,8 @@ export async function requireSession(auth: BetterAuthInstance, request: Request)
   return { session } as const;
 }
 
-export function wsRole(db: Database, workspaceId: string, userId: string): WsRole | null {
-  const row = orm(db)
+export async function wsRole(db: Db | Tx, workspaceId: string, userId: string): Promise<WsRole | null> {
+  const row = await db
     .select({ role: workspaceMembers.role })
     .from(workspaceMembers)
     .where(
@@ -40,38 +39,39 @@ export function wsRole(db: Database, workspaceId: string, userId: string): WsRol
         eq(workspaceMembers.user_id, userId),
       ),
     )
-    .get();
-  return row?.role ?? null;
+    .limit(1);
+  return row[0]?.role ?? null;
 }
 
-export function isInstanceAdmin(db: Database, userId: string): boolean {
-  return !!orm(db)
+export async function isInstanceAdmin(db: Db | Tx, userId: string): Promise<boolean> {
+  const row = await db
     .select({ one: instanceAdmins.user_id })
     .from(instanceAdmins)
     .where(eq(instanceAdmins.user_id, userId))
-    .get();
+    .limit(1);
+  return !!row[0];
 }
 
 const ROLE_RANK: Record<WsRole, number> = { member: 1, admin: 2, owner: 3 };
 
 /** Membership + minimum-role guard for ws-scoped routes. Instance admins get nothing here. */
-export function requireWsRole(db: Database, workspaceId: string, userId: string, min: WsRole) {
-  const role = wsRole(db, workspaceId, userId);
+export async function requireWsRole(db: Db | Tx, workspaceId: string, userId: string, min: WsRole) {
+  const role = await wsRole(db, workspaceId, userId);
   if (!role || ROLE_RANK[role] < ROLE_RANK[min]) {
     return jsonError(403, "FORBIDDEN", "Insufficient workspace role");
   }
   return null;
 }
 
-export function requireInstanceAdmin(db: Database, userId: string) {
-  if (!isInstanceAdmin(db, userId)) {
+export async function requireInstanceAdmin(db: Db | Tx, userId: string) {
+  if (!(await isInstanceAdmin(db, userId))) {
     return jsonError(403, "FORBIDDEN", "Instance admin required");
   }
   return null;
 }
 
-export function writeAudit(
-  db: Database,
+export async function writeAudit(
+  db: Db | Tx,
   opts: {
     actorUserId: string | null;
     workspaceId: string | null;
@@ -80,18 +80,13 @@ export function writeAudit(
     detail?: unknown;
   },
 ) {
-  orm(db)
-    .insert(auditLog)
-    .values({
-      id: crypto.randomUUID(),
-      actor_user_id: opts.actorUserId,
-      workspace_id: opts.workspaceId,
-      action: opts.action,
-      target: opts.target,
-      // drizzle json mode stringifies; passing the value directly matches the
-      // previous JSON.stringify(opts.detail) bytes.
-      detail: opts.detail === undefined ? null : opts.detail,
-      created_at: Date.now(),
-    })
-    .run();
+  await db.insert(auditLog).values({
+    id: crypto.randomUUID(),
+    actor_user_id: opts.actorUserId,
+    workspace_id: opts.workspaceId,
+    action: opts.action,
+    target: opts.target,
+    detail: opts.detail === undefined ? null : opts.detail,
+    created_at: Date.now(),
+  });
 }

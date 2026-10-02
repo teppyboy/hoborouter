@@ -7,30 +7,47 @@
 //   upstream_model, enabled, created_at); provider defaults to 'cpa'.
 // - PATCH /api/v1/admin/catalog/mappings/:id toggles enabled (audited).
 // Authz: non-admin 403 on every route.
-import { describe, expect, test } from "bun:test";
-import type { Database } from "bun:sqlite";
-import { makeApp, signUp, req, makeInstanceAdmin, userIdByEmail } from "./helpers";
+import { afterEach, describe, expect, test } from "bun:test";
+import type { Db } from "@hoborouter/db";
+import { createTestDb } from "@hoborouter/db";
+import { createAuth } from "../src/auth";
+import { buildApp } from "../src/app";
+import { signUp, req, makeInstanceAdmin, userIdByEmail, q } from "./helpers";
+import { sql } from "drizzle-orm";
 
-async function seedModel(db: Database, email: string, opts: { mapping?: boolean; price?: boolean } = {}) {
+async function seedModel(db: Db, email: string, opts: { mapping?: boolean; price?: boolean } = {}) {
   const now = Date.now();
-  db.prepare(
-    "INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-1','x/y','y','Y','z-ai',1000,1,1,?,?)",
-  ).run(now, now);
+  await db.execute(
+    sql`INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-1','x/y','y','Y','z-ai',1000,true,true,${now},${now})`,
+  );
   if (opts.mapping)
-    db.prepare(
-      "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-1','mdl-1','cpa','up-1',1,?,?)",
-    ).run(now, now);
+    await db.execute(
+      sql`INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-1','mdl-1','cpa','up-1',true,${now},${now})`,
+    );
   if (opts.price)
-    db.prepare(
-      "INSERT INTO model_prices (id, model_id, input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at, retired_at) VALUES ('price-1','mdl-1',100,200,0,0,1000000,?,NULL)",
-    ).run(now - 1000);
+    await db.execute(
+      sql`INSERT INTO model_prices (id, model_id, input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at, retired_at) VALUES ('price-1','mdl-1',100,200,0,0,1000000,${now - 1000},NULL)`,
+    );
   void email;
 }
 
+// One live test DB at a time: each Bun SQL pool holds connections until
+// closed and the test Postgres has a finite connection budget, so many
+// simultaneously-open test DBs exhaust it. afterEach closes the pool.
+let drops: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const d of drops) await d();
+  drops = [];
+});
+
 async function setup(opts: { admin: boolean } = { admin: true }) {
-  const { db, app } = await makeApp();
+  const t = await createTestDb();
+  drops.push(t.drop);
+  const db = t.db;
+  const auth = createAuth(db);
+  const app = await buildApp({ db, auth });
   const cookie = await signUp(app, "cat@example.com");
-  if (opts.admin) makeInstanceAdmin(db, userIdByEmail(db, "cat@example.com"));
+  if (opts.admin) await makeInstanceAdmin(db, await userIdByEmail(db, "cat@example.com"));
   return { db, app, cookie };
 }
 
@@ -43,10 +60,10 @@ describe("admin catalog list summary", () => {
     const [m] = (await res.json()) as {
       listed: boolean;
       hidden_reason: string | null;
-      mapping: { id: string; provider: string; upstream_model: string; enabled: number } | null;
+      mapping: { id: string; provider: string; upstream_model: string; enabled: boolean } | null;
       current_price: { markup_ppm: number; effective_at: number } | null;
-      has_price: number;
-      has_mapping: number;
+      has_price: boolean;
+      has_mapping: boolean;
     }[];
     if (!m) throw new Error("no rows");
     expect(m.listed).toBe(true);
@@ -55,21 +72,21 @@ describe("admin catalog list summary", () => {
     expect(m.mapping?.provider).toBe("cpa");
     expect(m.mapping?.upstream_model).toBe("up-1");
     expect(m.current_price?.markup_ppm).toBe(1000000);
-    expect(m.has_price).toBe(1);
-    expect(m.has_mapping).toBe(1);
+    expect(m.has_price).toBe(true);
+    expect(m.has_mapping).toBe(true);
   });
 
   test("admin: hidden_reason for missing price / missing mapping / unpublished", async () => {
     const { db, app, cookie } = await setup();
     await seedModel(db, "cat@example.com", { mapping: true });
-    await db
-      .prepare("INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-2','x/y2','y2','Y2','z-ai',1000,1,1,?,?)")
-      .run(Date.now(), Date.now());
+    await db.execute(
+      sql`INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-2','x/y2','y2','Y2','z-ai',1000,true,true,${Date.now()},${Date.now()})`,
+    );
     const res = await req(app, "/api/v1/admin/catalog/models", { cookie });
     const rows = (await res.json()) as { public_id: string; listed: boolean; hidden_reason: string | null }[];
     expect(rows.find((r) => r.public_id === "x/y")?.hidden_reason).toBe("missing_price");
     expect(rows.find((r) => r.public_id === "x/y2")?.hidden_reason).toBe("missing_mapping");
-    await db.prepare("UPDATE models SET published = 0, enabled = 0 WHERE id = 'mdl-1'").run();
+    await db.execute(sql`UPDATE models SET published = false, enabled = false WHERE id = 'mdl-1'`);
     const res2 = await req(app, "/api/v1/admin/catalog/models", { cookie });
     const rows2 = (await res2.json()) as { public_id: string; hidden_reason: string | null }[];
     expect(rows2.find((r) => r.public_id === "x/y")?.hidden_reason).toBe("disabled");
@@ -86,9 +103,9 @@ describe("GET prices history", () => {
   test("admin: newest first with current flag", async () => {
     const { db, app, cookie } = await setup();
     await seedModel(db, "cat@example.com", { price: true });
-    db.prepare(
-      "INSERT INTO model_prices (id, model_id, input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at, retired_at) VALUES ('price-old','mdl-1',1,1,0,0,0,?,NULL)",
-    ).run(Date.now() - 2000);
+    await db.execute(
+      sql`INSERT INTO model_prices (id, model_id, input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at, retired_at) VALUES ('price-old','mdl-1',1,1,0,0,0,${Date.now() - 2000},NULL)`,
+    );
     const res = await req(app, "/api/v1/admin/catalog/models/mdl-1/prices", { cookie });
     expect(res.status).toBe(200);
     const rows = (await res.json()) as {
@@ -126,11 +143,11 @@ describe("GET mappings + PATCH mapping", () => {
       id: string;
       provider: string;
       upstream_model: string;
-      enabled: number;
+      enabled: boolean;
       created_at: number;
     }[];
     expect(rows).toEqual([
-      { id: "map-1", provider: "cpa", upstream_model: "up-1", enabled: 1, created_at: expect.any(Number) },
+      { id: "map-1", provider: "cpa", upstream_model: "up-1", enabled: true, created_at: expect.any(Number) },
     ]);
     const created = await req(app, "/api/v1/admin/catalog/models/mdl-1/mappings", {
       method: "POST",
@@ -148,14 +165,16 @@ describe("GET mappings + PATCH mapping", () => {
     const { db, app, cookie } = await setup();
     await seedModel(db, "cat@example.com", { mapping: true });
     // Force equality: reuse map-1's stored created_at exactly.
-    const { created_at: ts, updated_at: uts } = db
-      .prepare("SELECT created_at, updated_at FROM provider_model_mappings WHERE id = 'map-1'")
-      .get() as { created_at: number; updated_at: number };
-    // Ordering must fall back to
-    // insertion chronology (rowid), not random UUID id.
-    db.prepare(
-      "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-2','mdl-1','kimi','up-2',1,?,?)",
-    ).run(ts, uts);
+    const { created_at: ts, updated_at: uts } = (
+      await q<{ created_at: number; updated_at: number }>(
+        db,
+        "SELECT created_at, updated_at FROM provider_model_mappings WHERE id = 'map-1'",
+      )
+    )[0]!;
+    // Ordering must fall back to id DESC on created_at ties ('map-2' > 'map-1').
+    await db.execute(
+      sql`INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-2','mdl-1','kimi','up-2',true,${ts},${uts})`,
+    );
     const res = await req(app, "/api/v1/admin/catalog/models/mdl-1/mappings", { cookie });
     expect(res.status).toBe(200);
     const rows = (await res.json()) as { id: string; created_at: number }[];
@@ -176,11 +195,11 @@ describe("GET mappings + PATCH mapping", () => {
       ((await on.json()) as { id: string; enabled: boolean }).enabled,
     ).toBe(false);
     expect(
-      ((db.prepare("SELECT enabled FROM provider_model_mappings WHERE id = 'map-1'").get() as { enabled: number }).enabled),
-    ).toBe(0);
+      ((await q<{ enabled: boolean }>(db, "SELECT enabled FROM provider_model_mappings WHERE id = 'map-1'"))[0]!).enabled,
+    ).toBe(false);
     expect(
-      (db.prepare("SELECT 1 FROM audit_log WHERE action = 'catalog.mapping.update' AND target = 'map-1'").get()),
-    ).toBeTruthy();
+      (await q(db, "SELECT 1 FROM audit_log WHERE action = 'catalog.mapping.update' AND target = 'map-1'")).length,
+    ).toBe(1);
     const { app: app2, cookie: c2 } = await setup({ admin: false });
     expect(
       (await req(app2, "/api/v1/admin/catalog/mappings/map-1", { method: "PATCH", cookie: c2, body: { enabled: true } })).status,

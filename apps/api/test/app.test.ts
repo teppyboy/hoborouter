@@ -2,17 +2,17 @@ import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { buildApp } from "../src/app";
 import { resolveStaticPath } from "../src/static-spa";
+import { makeApp } from "./helpers";
 
 const secretName = "hbr-secret.txt";
 let fixtureDist = "";
 let outsideFile = "";
 
-let app: ReturnType<typeof buildApp>;
-const req = (path: string) => app.handle(new Request(`http://localhost${path}`));
+let ctx: Awaited<ReturnType<typeof makeApp>>;
+const req = (path: string) => ctx.app.handle(new Request(`http://localhost${path}`));
 
-beforeAll(() => {
+beforeAll(async () => {
   fixtureDist = join(tmpdir(), `hbr-fixture-${Date.now()}`);
   outsideFile = join(tmpdir(), secretName);
   mkdirSync(join(fixtureDist, "assets"), { recursive: true });
@@ -22,7 +22,7 @@ beforeAll(() => {
   writeFileSync(outsideFile, "TOP-SECRET-OUTSIDE");
   symlinkSync(outsideFile, join(fixtureDist, "symlinked-secret.txt"));
   process.env.HBR_WEB_DIST = fixtureDist;
-  app = buildApp();
+  ctx = await makeApp();
 });
 
 afterAll(() => {

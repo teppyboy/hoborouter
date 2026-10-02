@@ -1,26 +1,22 @@
 // Members CRUD + role mutation: owner-only per route matrix.
 // No owner lockout: the last owner cannot be demoted or removed (409).
 import { Elysia, t } from "elysia";
-import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, writeAudit, jsonError, type WsRole } from "../authz";
 import { and, asc, eq, sql } from "drizzle-orm";
-import { users, workspaces, workspaceMembers } from "@hoborouter/db";
-import { orm } from "@hoborouter/db";
+import { type Db, isUniqueViolation, users, workspaces, workspaceMembers } from "@hoborouter/db";
 
 const ROLES: WsRole[] = ["owner", "admin", "member"];
 
-function ownerCount(db: Database, wsId: string): number {
-  return (
-    orm(db)
-      .select({ c: sql<number>`count(*)` })
-      .from(workspaceMembers)
-      .where(and(eq(workspaceMembers.workspace_id, wsId), eq(workspaceMembers.role, "owner")))
-      .get()?.c ?? 0
-  );
+async function ownerCount(db: Db, wsId: string): Promise<number> {
+  const rows = await db
+    .select({ c: sql<number>`count(*)` })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.workspace_id, wsId), eq(workspaceMembers.role, "owner")));
+  return Number(rows[0]?.c ?? 0);
 }
 
-export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
+export const membersRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "members" })
     .get(
       "/api/v1/workspaces/:id/members",
@@ -35,9 +31,9 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request, params }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireWsRole(db, params.id, gate.session.user.id, "member");
+        const denied = await requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
-        return orm(db)
+        return db
           .select({
             user_id: workspaceMembers.user_id,
             role: workspaceMembers.role,
@@ -50,8 +46,7 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
           .orderBy(
             sql`case ${workspaceMembers.role} when 'owner' then 0 when 'admin' then 1 else 2 end`,
             asc(users.createdAt),
-          )
-          .all();
+          );
       },
     )
     .post(
@@ -69,15 +64,14 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireWsRole(db, params.id, userId, "owner");
+        const denied = await requireWsRole(db, params.id, userId, "owner");
         if (denied) return denied;
-        if (
-          !orm(db)
-            .select({ one: workspaces.id })
-            .from(workspaces)
-            .where(eq(workspaces.id, params.id))
-            .get()
-        )
+        const wsRow = await db
+          .select({ one: workspaces.id })
+          .from(workspaces)
+          .where(eq(workspaces.id, params.id))
+          .limit(1);
+        if (!wsRow[0])
           return jsonError(404, "NOT_FOUND", "Workspace not found");
         const emailRaw = (body as { email?: unknown } | null)?.email;
         const email = typeof emailRaw === "string" ? emailRaw : "";
@@ -87,35 +81,31 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
             : null;
         if (!email) return jsonError(400, "INVALID", "email is required");
         if (!ROLES.includes(role as WsRole)) return jsonError(400, "INVALID", "Invalid role");
-        const target = orm(db)
+        const target = await db
           .select({ id: users.id })
           .from(users)
           .where(eq(users.email, email))
-          .get();
-        if (!target) return jsonError(404, "NOT_FOUND", "User not found");
+          .limit(1);
+        if (!target[0]) return jsonError(404, "NOT_FOUND", "User not found");
         try {
-          orm(db)
+          await db
             .insert(workspaceMembers)
-            .values({ workspace_id: params.id, user_id: target.id, role: role as WsRole })
-            .run();
+            .values({ workspace_id: params.id, user_id: target[0].id, role: role as WsRole });
         } catch (e) {
           // 409 only for UNIQUE(workspace_id,user_id) violation (composite PK); other DB errors → 500.
-          if (
-            (e as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE" ||
-            (e as { code?: string }).code === "SQLITE_CONSTRAINT_PRIMARYKEY"
-          ) {
+          if (isUniqueViolation(e)) {
             return jsonError(409, "CONFLICT", "User is already a member");
           }
           throw e;
         }
-        writeAudit(db, {
+        await writeAudit(db, {
           actorUserId: userId,
           workspaceId: params.id,
           action: "member.add",
-          target: target.id,
+          target: target[0].id,
           detail: { role },
         });
-        return new Response(JSON.stringify({ user_id: target.id, role }), {
+        return new Response(JSON.stringify({ user_id: target[0].id, role }), {
           status: 201,
           headers: { "content-type": "application/json" },
         });
@@ -136,12 +126,12 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireWsRole(db, params.id, userId, "owner");
+        const denied = await requireWsRole(db, params.id, userId, "owner");
         if (denied) return denied;
         const rawRole = (body as { role?: unknown } | null)?.role;
         if (!ROLES.includes(rawRole as WsRole)) return jsonError(400, "INVALID", "Invalid role");
         const role = rawRole as WsRole;
-        const member = orm(db)
+        const member = await db
           .select({ role: workspaceMembers.role })
           .from(workspaceMembers)
           .where(
@@ -150,13 +140,17 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
               eq(workspaceMembers.user_id, params.userId),
             ),
           )
-          .get();
-        if (!member) return jsonError(403, "FORBIDDEN", "Not a member of this workspace");
+          .limit(1);
+        if (!member[0]) return jsonError(403, "FORBIDDEN", "Not a member of this workspace");
         // Owner lockout guard: last owner cannot lose the owner role.
-        if (member.role === "owner" && role !== "owner" && ownerCount(db, params.id) === 1) {
+        if (
+          member[0].role === "owner" &&
+          role !== "owner" &&
+          (await ownerCount(db, params.id)) === 1
+        ) {
           return jsonError(409, "LAST_OWNER", "Cannot demote the last owner");
         }
-        orm(db)
+        await db
           .update(workspaceMembers)
           .set({ role })
           .where(
@@ -164,14 +158,13 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
               eq(workspaceMembers.workspace_id, params.id),
               eq(workspaceMembers.user_id, params.userId),
             ),
-          )
-          .run();
-        writeAudit(db, {
+          );
+        await writeAudit(db, {
           actorUserId: userId,
           workspaceId: params.id,
           action: "member.role_change",
           target: params.userId,
-          detail: { from: member.role, to: role },
+          detail: { from: member[0].role, to: role },
         });
         return new Response(JSON.stringify({ user_id: params.userId, role }), {
           headers: { "content-type": "application/json" },
@@ -192,9 +185,9 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireWsRole(db, params.id, userId, "owner");
+        const denied = await requireWsRole(db, params.id, userId, "owner");
         if (denied) return denied;
-        const member = orm(db)
+        const member = await db
           .select({ role: workspaceMembers.role })
           .from(workspaceMembers)
           .where(
@@ -203,27 +196,26 @@ export const membersRoutes = (db: Database, auth: BetterAuthInstance) =>
               eq(workspaceMembers.user_id, params.userId),
             ),
           )
-          .get();
-        if (!member) return jsonError(403, "FORBIDDEN", "Not a member of this workspace");
+          .limit(1);
+        if (!member[0]) return jsonError(403, "FORBIDDEN", "Not a member of this workspace");
         // Owner lockout guard: last owner cannot be removed either.
-        if (member.role === "owner" && ownerCount(db, params.id) === 1) {
+        if (member[0].role === "owner" && (await ownerCount(db, params.id)) === 1) {
           return jsonError(409, "LAST_OWNER", "Cannot remove the last owner");
         }
-        orm(db)
+        await db
           .delete(workspaceMembers)
           .where(
             and(
               eq(workspaceMembers.workspace_id, params.id),
               eq(workspaceMembers.user_id, params.userId),
             ),
-          )
-          .run();
-        writeAudit(db, {
+          );
+        await writeAudit(db, {
           actorUserId: userId,
           workspaceId: params.id,
           action: "member.remove",
           target: params.userId,
-          detail: { role: member.role },
+          detail: { role: member[0].role },
         });
         return new Response(null, { status: 200 });
       },

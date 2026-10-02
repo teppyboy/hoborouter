@@ -4,8 +4,8 @@
 import { describe, test, expect, beforeAll } from "bun:test";
 import { createHmac } from "node:crypto";
 import { Elysia } from "elysia";
-import type { Database } from "bun:sqlite";
-import { createDb, migrate } from "@hoborouter/db";
+import { createTestDb } from "@hoborouter/db";
+import { q, trackDrop, makeApp } from "./helpers";
 import { payosWebhookRoutes } from "../src/routes/webhooks-payos";
 import type { PayosWebhookConfig } from "@hoborouter/payments";
 
@@ -44,32 +44,31 @@ function body(
   });
 }
 
-function makeTestApp(db: Database, cfg: PayosWebhookConfig) {
+function makeTestApp(db: Awaited<ReturnType<typeof makeApp>>["db"], cfg: PayosWebhookConfig) {
   return new Elysia().use(payosWebhookRoutes(db, cfg));
 }
 
-function seedPayment(orderCode: string, amount: number) {
+async function seedPayment(orderCode: string, amount: number) {
   const id = crypto.randomUUID();
-  db.prepare(
+  await q(db, 
     "INSERT INTO payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) VALUES (?,?,?,'pending','payos',?,?)",
-  ).run(id, ws, amount, orderCode, Date.now());
+id, ws, amount, orderCode, Date.now());
   return id;
 }
 
-let db: Database;
+let db: Awaited<ReturnType<typeof makeApp>>["db"];
 let app: ReturnType<typeof makeTestApp>;
 
-beforeAll(() => {
-  db = createDb(":memory:");
-  migrate(db);
-  db.prepare("INSERT INTO workspaces (id, name, status, created_at) VALUES (?,?, 'active', ?)").run(
-    ws,
+beforeAll(async () => {
+  const t = await createTestDb();
+  db = t.db;
+  trackDrop(t.drop);
+  await q(db, "INSERT INTO workspaces (id, name, status, created_at) VALUES (?,?, 'active', ?)", ws,
     "ws",
-    Date.now(),
-  );
-  db.prepare(
+    Date.now(),);
+  await q(db, 
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
-  ).run(`wal-${ws}`, ws, Date.now());
+`wal-${ws}`, ws, Date.now());
   app = makeTestApp(db, { available: true, checksumKey: KEY });
 });
 
@@ -82,59 +81,58 @@ const post = (raw: string, app2 = app) =>
     }),
   );
 
-const balance = () =>
-  (db.prepare("SELECT balance FROM wallets WHERE workspace_id = ?").get(ws) as { balance: number })
+const balance = async () =>
+  ((await q(db, "SELECT balance FROM wallets WHERE workspace_id = ?", ws))[0] as { balance: number })
     .balance;
 
 describe("payos webhook route", () => {
   test("valid signed paid event -> 200 {success:true}, credited once", async () => {
-    seedPayment("123456789", 50000);
+    await seedPayment("123456789", 50000);
     const res = await post(body());
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ success: true });
-    expect(balance()).toBe(50000);
+    expect(await balance()).toBe(50000);
     expect(
-      db.prepare("SELECT 1 FROM ledger_entries WHERE kind = 'topup' AND amount = 50000").all()
-        .length,
+      (await q(db, "SELECT 1 FROM ledger_entries WHERE kind = 'topup' AND amount = 50000")).length,
     ).toBe(1);
   });
 
   test("idempotent replay -> 200, exactly one credit", async () => {
     const res = await post(body());
     expect(res.status).toBe(200);
-    expect(balance()).toBe(50000);
+    expect(await balance()).toBe(50000);
     expect(
-      db.prepare("SELECT 1 FROM payment_events WHERE provider_reference = 'ref-wh-1'").all().length,
+      (await q(db, "SELECT 1 FROM payment_events WHERE provider_reference = 'ref-wh-1'")).length,
     ).toBe(1);
   });
 
   test("bad signature -> 400, no credit", async () => {
-    seedPayment("222333444", 10000);
-    const before = balance();
+    await seedPayment("222333444", 10000);
+    const before = await balance();
     const res = await post(body({}, { signature: "0".repeat(64) }));
     expect(res.status).toBe(400);
-    expect(balance()).toBe(before);
+    expect(await balance()).toBe(before);
   });
 
   test("tampered amount (valid sig over wrong data) -> 400, no credit", async () => {
-    seedPayment("333444555", 20000);
-    const before = balance();
+    await seedPayment("333444555", 20000);
+    const before = await balance();
     const res = await post(body({ amount: 1 }));
     expect(res.status).toBe(400);
-    expect(balance()).toBe(before);
+    expect(await balance()).toBe(before);
   });
 
   test("amount mismatches stored payment -> 400, no credit", async () => {
-    seedPayment("444555666", 30000);
-    const before = balance();
+    await seedPayment("444555666", 30000);
+    const before = await balance();
     const res = await post(body({ amount: 29999 }));
     expect(res.status).toBe(400);
-    expect(balance()).toBe(before);
+    expect(await balance()).toBe(before);
   });
 
   test("cancelled event -> 200, no credit, payment not succeeded", async () => {
-    const id = seedPayment("555666777", 40000);
-    const before = balance();
+    const id = await seedPayment("555666777", 40000);
+    const before = await balance();
     const res = await post(
       body(
         { code: "01", desc: "Người dùng hủy thanh toán" },
@@ -142,9 +140,9 @@ describe("payos webhook route", () => {
       ),
     );
     expect(res.status).toBe(200);
-    expect(balance()).toBe(before);
+    expect(await balance()).toBe(before);
     expect(
-      (db.prepare("SELECT status FROM payments WHERE id = ?").get(id) as { status: string }).status,
+      ((await q(db, "SELECT status FROM payments WHERE id = ?", id))[0] as { status: string }).status,
     ).toBe("pending");
   });
 

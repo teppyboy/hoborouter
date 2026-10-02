@@ -2,7 +2,6 @@
 // member read-only workspace view. CPA alias is exposed ONLY here (admin
 // console); it never appears in /v1 or workspace member responses.
 import { Elysia, t } from "elysia";
-import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import {
   requireSession,
@@ -13,14 +12,14 @@ import {
 } from "../authz";
 import { publishSnapshot } from "@hoborouter/catalog";
 import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
-import { modelBindings, priceSnapshots, orm } from "@hoborouter/db";
+import { type Db, modelBindings, priceSnapshots } from "@hoborouter/db";
 
-function latestSnapshots(db: Database) {
+async function latestSnapshots(db: Db) {
   // Latest snapshot per binding: ROW_NUMBER over (partition, created_at desc, id desc).
   const rn = sql<number>`row_number() over (partition by ${priceSnapshots.binding_id} order by ${priceSnapshots.created_at} desc, ${priceSnapshots.id} desc)`.as(
     "rn",
   );
-  const ranked = orm(db)
+  const ranked = db
     .select({
       binding_id: priceSnapshots.binding_id,
       id: priceSnapshots.id,
@@ -31,7 +30,7 @@ function latestSnapshots(db: Database) {
     })
     .from(priceSnapshots)
     .as("ps");
-  const rows = orm(db)
+  const rows = await db
     .select({
       binding_id: ranked.binding_id,
       id: ranked.id,
@@ -40,12 +39,11 @@ function latestSnapshots(db: Database) {
       created_at: ranked.created_at,
     })
     .from(ranked)
-    .where(eq(ranked.rn, 1))
-    .all();
+    .where(eq(ranked.rn, 1));
   return new Map(rows.map((s) => [s.binding_id, s]));
 }
 
-export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
+export const adminModelsRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "admin-models" })
     .get(
       "/api/v1/admin/models",
@@ -59,10 +57,10 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireInstanceAdmin(db, gate.session.user.id);
+        const denied = await requireInstanceAdmin(db, gate.session.user.id);
         if (denied) return denied;
-        const snaps = latestSnapshots(db);
-        const rows = orm(db)
+        const snaps = await latestSnapshots(db);
+        const rows = await db
           .select({
             id: modelBindings.id,
             workspace_id: modelBindings.workspace_id,
@@ -74,8 +72,7 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
             effective_at: modelBindings.effective_at,
           })
           .from(modelBindings)
-          .orderBy(asc(modelBindings.public_model))
-          .all();
+          .orderBy(asc(modelBindings.public_model));
         return rows.map((r) => ({
           ...r,
           latest_snapshot: snaps.get(r.id) ?? null,
@@ -96,7 +93,7 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireInstanceAdmin(db, userId);
+        const denied = await requireInstanceAdmin(db, userId);
         if (denied) return denied;
         const b = (body ?? {}) as Record<string, unknown>;
         const publicModel = typeof b.public_model === "string" ? b.public_model.trim() : "";
@@ -121,8 +118,8 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
         }
         const id = crypto.randomUUID();
         const now = Date.now();
-        db.transaction(() => {
-          orm(db)
+        await db.transaction(async (tx) => {
+          await tx
             .insert(modelBindings)
             .values({
               id,
@@ -133,17 +130,16 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
               price_input_per_1m: pin,
               price_output_per_1m: pout,
               effective_at: now,
-            })
-            .run();
-          publishSnapshot(db, { bindingId: id, priceInput: pin, priceOutput: pout, now });
-          writeAudit(db, {
+            });
+          await publishSnapshot(tx, { bindingId: id, priceInput: pin, priceOutput: pout, now });
+          await writeAudit(tx, {
             actorUserId: userId,
             workspaceId: null,
             action: "model.create",
             target: id,
             detail: { public_model: publicModel },
           });
-        })();
+        });
         return new Response(
           JSON.stringify({ id, public_model: publicModel, status: "published" }),
           {
@@ -168,18 +164,18 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireInstanceAdmin(db, userId);
+        const denied = await requireInstanceAdmin(db, userId);
         if (denied) return denied;
-        const existing = orm(db)
+        const existing = await db
           .select({ id: modelBindings.id, status: modelBindings.status })
           .from(modelBindings)
           .where(eq(modelBindings.id, params.id))
-          .get();
-        if (!existing) return jsonError(404, "NOT_FOUND", "Model binding not found");
+          .limit(1);
+        if (!existing[0]) return jsonError(404, "NOT_FOUND", "Model binding not found");
         const b = (body ?? {}) as Record<string, unknown>;
         const pin = b.price_input_per_1m;
         const pout = b.price_output_per_1m;
-        const status = (b.status as string | undefined) ?? existing.status;
+        const status = (b.status as string | undefined) ?? existing[0].status;
         if (
           typeof pin !== "number" ||
           !Number.isSafeInteger(pin) ||
@@ -196,19 +192,18 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
           );
         }
         const now = Date.now();
-        db.transaction(() => {
-          orm(db)
+        await db.transaction(async (tx) => {
+          await tx
             .update(modelBindings)
             .set({
               price_input_per_1m: pin,
               price_output_per_1m: pout,
               status: status as "published" | "disabled",
             })
-            .where(eq(modelBindings.id, params.id))
-            .run();
+            .where(eq(modelBindings.id, params.id));
           // A price change publishes a NEW immutable snapshot — never edits old rows.
-          publishSnapshot(db, { bindingId: params.id, priceInput: pin, priceOutput: pout, now });
-          writeAudit(db, {
+          await publishSnapshot(tx, { bindingId: params.id, priceInput: pin, priceOutput: pout, now });
+          await writeAudit(tx, {
             actorUserId: userId,
             workspaceId: null,
             action: "model.update",
@@ -219,7 +214,7 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
               status,
             },
           });
-        })();
+        });
         return new Response(JSON.stringify({ id: params.id, status }), {
           headers: { "content-type": "application/json" },
         });
@@ -238,12 +233,12 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request, params }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireWsRole(db, params.id, gate.session.user.id, "member");
+        const denied = await requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
         // Read-only view: published bindings enabled for this workspace (own ∪ global).
         // No cpa_alias — aliases are never exposed outside the admin console.
-        const snaps = latestSnapshots(db);
-        const rows = orm(db)
+        const snaps = await latestSnapshots(db);
+        const rows = await db
           .select({
             id: modelBindings.id,
             public_model: modelBindings.public_model,
@@ -259,8 +254,7 @@ export const adminModelsRoutes = (db: Database, auth: BetterAuthInstance) =>
               or(isNull(modelBindings.workspace_id), eq(modelBindings.workspace_id, params.id)),
             ),
           )
-          .orderBy(asc(modelBindings.public_model))
-          .all();
+          .orderBy(asc(modelBindings.public_model));
         return rows.map((r) => ({
           id: r.id,
           public_model: r.public_model,

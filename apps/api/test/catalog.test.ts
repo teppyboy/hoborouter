@@ -1,10 +1,10 @@
 // Canonical catalog admin API (/api/v1/admin/catalog) — instance-admin only,
 // atomic audit, immutable prices — and canonical /v1/models listing.
 import { describe, expect, test, beforeAll } from "bun:test";
-import type { Database } from "bun:sqlite";
-import { makeApp, signUp, req, makeInstanceAdmin, userIdByEmail } from "./helpers";
+import type { Db } from "@hoborouter/db";
+import { makeApp, signUp, req, makeInstanceAdmin, userIdByEmail, q } from "./helpers";
 
-let db: Database;
+let db: Db;
 let app: Awaited<ReturnType<typeof makeApp>>["app"];
 let iadmin: string;
 let owner: string;
@@ -58,7 +58,7 @@ beforeAll(async () => {
   db = made.db;
   app = made.app;
   iadmin = await signUp(app, "catalog-admin@example.com", "IA");
-  makeInstanceAdmin(db, userIdByEmail(db, "catalog-admin@example.com"));
+  await makeInstanceAdmin(db, await userIdByEmail(db, "catalog-admin@example.com"));
   owner = await signUp(app, "catalog-owner@example.com", "O");
   const wsOwner = await signUp(app, "catalog-wsowner@example.com", "W");
   const wsRes = await req(app, "/api/v1/workspaces", {
@@ -95,10 +95,8 @@ describe("POST /api/v1/admin/catalog/models", () => {
     const { res, id } = await createModel();
     expect(res.status).toBe(201);
     expect(id).toBeDefined();
-    const audit = db
-      .prepare("SELECT * FROM audit_log WHERE target = ? AND action = 'catalog.model.create'")
-      .get(id);
-    expect(audit).toBeDefined();
+    const audit = await q(db, "SELECT * FROM audit_log WHERE target = ? AND action = 'catalog.model.create'", id);
+    expect(audit.length).toBe(1);
   });
 
   test("bad public_id variants → 400", async () => {
@@ -127,9 +125,7 @@ describe("POST /api/v1/admin/catalog/models", () => {
         provider: "p",
       });
       expect(res.status, public_id).toBe(201);
-      const row = db
-        .prepare("SELECT public_id, slug FROM models WHERE id = ?")
-        .get(id) as { public_id: string; slug: string };
+      const row = (await q<{ public_id: string; slug: string }>(db, "SELECT public_id, slug FROM models WHERE id = ?", id))[0]!;
       expect(row.public_id).toBe(public_id);
       expect(row.slug).toBe(expectedSlug);
     }
@@ -161,14 +157,10 @@ describe("PUT /api/v1/admin/catalog/models/:id", () => {
       body: { display_name: "Renamed", published: true },
     });
     expect(res.status).toBe(200);
-    const row = db.prepare("SELECT display_name FROM models WHERE id = ?").get(id) as {
-      display_name: string;
-    };
+    const row = (await q<{ display_name: string }>(db, "SELECT display_name FROM models WHERE id = ?", id))[0]!;
     expect(row.display_name).toBe("Renamed");
-    const audit = db
-      .prepare("SELECT * FROM audit_log WHERE target = ? AND action = 'catalog.model.update'")
-      .get(id);
-    expect(audit).toBeDefined();
+    const audit = await q(db, "SELECT * FROM audit_log WHERE target = ? AND action = 'catalog.model.update'", id);
+    expect(audit.length).toBe(1);
   });
 
   test("non-admin → 403", async () => {
@@ -187,22 +179,27 @@ describe("mappings + prices", () => {
     const { id } = await createModel({ slug: "price-model", public_id: "openai/price-model" });
     expect((await addMapping(id!)).status).toBe(201);
     expect((await addPrice(id!)).status).toBe(201);
-    const prices = db.prepare("SELECT * FROM model_prices WHERE model_id = ?").all(id) as {
-      id: string;
-      input_usd_micro_per_1m: number;
-    }[];
+    const prices = await q<{ id: string; input_usd_micro_per_1m: number }>(
+      db,
+      "SELECT id, input_usd_micro_per_1m FROM model_prices WHERE model_id = ? ORDER BY effective_at, id",
+      id,
+    );
     expect(prices.length).toBe(1);
-    const audit = db
-      .prepare("SELECT COUNT(*) c FROM audit_log WHERE target = ? AND action LIKE 'catalog.%'")
-      .get(id) as { c: number };
-    expect(audit.c).toBe(3); // create + mapping + price
+    const audit = (await q<{ c: string }>(
+      db,
+      "SELECT COUNT(*) c FROM audit_log WHERE target = ? AND action LIKE 'catalog.%'",
+      id,
+    ))[0]!;
+    expect(Number(audit.c)).toBe(3); // create + mapping + price
 
     // Price change = NEW row; old row unchanged.
     const before = prices[0]!;
     expect((await addPrice(id!, 700)).status).toBe(201);
-    const after = db
-      .prepare("SELECT * FROM model_prices WHERE model_id = ? ORDER BY rowid")
-      .all(id) as { id: string; input_usd_micro_per_1m: number }[];
+    const after = await q<{ id: string; input_usd_micro_per_1m: number }>(
+      db,
+      "SELECT id, input_usd_micro_per_1m FROM model_prices WHERE model_id = ? ORDER BY effective_at, id",
+      id,
+    );
     expect(after.length).toBe(2);
     expect(after[0]!.id).toBe(before.id);
     expect(after[0]!.input_usd_micro_per_1m).toBe(500);
@@ -310,40 +307,28 @@ describe("PUT public_id collision + /v1/models/:id gating", () => {
   test("PUT to a colliding public_id → 400, no row change, no audit", async () => {
     const a = await createModel({ slug: "col-a", public_id: "openai/col-a" });
     await createModel({ slug: "col-b", public_id: "openai/col-b" });
-    const auditsBefore = (
-      db
-        .prepare("SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'")
-        .get() as {
-        c: number;
-      }
-    ).c;
+    const auditsBefore = Number(
+      (await q<{ c: string }>(db, "SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'"))[0]!.c,
+    );
     const res = await req(app, `/api/v1/admin/catalog/models/${a.id}`, {
       method: "PUT",
       cookie: iadmin,
       body: { public_id: "openai/col-b" },
     });
     expect(res.status).toBe(400);
-    const row = db.prepare("SELECT public_id FROM models WHERE id = ?").get(a.id) as {
-      public_id: string;
-    };
+    const row = (await q<{ public_id: string }>(db, "SELECT public_id FROM models WHERE id = ?", a.id))[0]!;
     expect(row.public_id).toBe("openai/col-a");
-    const auditsAfter = (
-      db
-        .prepare("SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'")
-        .get() as {
-        c: number;
-      }
-    ).c;
+    const auditsAfter = Number(
+      (await q<{ c: string }>(db, "SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'"))[0]!.c,
+    );
     expect(auditsAfter).toBe(auditsBefore);
   });
 
   test("PUT with changed public_id → 400 INVALID immutable, no write, no audit", async () => {
     const m = await createModel({ slug: "immutable-id", public_id: "openai/immutable-id" });
-    const auditsBefore = (
-      db
-        .prepare("SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'")
-        .get() as { c: number }
-    ).c;
+    const auditsBefore = Number(
+      (await q<{ c: string }>(db, "SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'"))[0]!.c,
+    );
     const res = await req(app, `/api/v1/admin/catalog/models/${m.id}`, {
       method: "PUT",
       cookie: iadmin,
@@ -356,15 +341,11 @@ describe("PUT public_id collision + /v1/models/:id gating", () => {
       code: "INVALID",
       message: "public_id is immutable",
     });
-    const row = db.prepare("SELECT public_id FROM models WHERE id = ?").get(m.id) as {
-      public_id: string;
-    };
+    const row = (await q<{ public_id: string }>(db, "SELECT public_id FROM models WHERE id = ?", m.id))[0]!;
     expect(row.public_id).toBe("openai/immutable-id");
-    const auditsAfter = (
-      db
-        .prepare("SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'")
-        .get() as { c: number }
-    ).c;
+    const auditsAfter = Number(
+      (await q<{ c: string }>(db, "SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'"))[0]!.c,
+    );
     expect(auditsAfter).toBe(auditsBefore);
   });
 

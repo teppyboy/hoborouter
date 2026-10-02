@@ -2,20 +2,23 @@
 // global prompt-caching toggle (instance_settings.prompt_caching_enabled).
 // PUT is audited as settings.update.
 import { Elysia, t } from "elysia";
-import type { Database } from "bun:sqlite";
-import type { BetterAuthInstance } from "../auth-types";
+import { type Db } from "@hoborouter/db";
+import { eq } from "drizzle-orm";
+import { instanceSettings } from "@hoborouter/db";import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, writeAudit } from "../authz";
 
 const KEY = "prompt_caching_enabled";
 
-function getPromptCachingEnabled(db: Database): boolean {
-  const row = db.prepare("SELECT value FROM instance_settings WHERE key = ?").get(KEY) as
-    | { value: string }
-    | undefined;
-  return row ? row.value === "true" : true;
+async function getPromptCachingEnabled(db: Db): Promise<boolean> {
+  const rows = await db
+    .select({ value: instanceSettings.value })
+    .from(instanceSettings)
+    .where(eq(instanceSettings.key, KEY))
+    .limit(1);
+  return rows[0] ? rows[0].value === "true" : true;
 }
 
-export const adminSettingsRoutes = (db: Database, auth: BetterAuthInstance) =>
+export const adminSettingsRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "admin-settings" })
     .get(
       "/api/v1/admin/settings",
@@ -29,10 +32,10 @@ export const adminSettingsRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireInstanceAdmin(db, gate.session.user.id);
+        const denied = await requireInstanceAdmin(db, gate.session.user.id);
         if (denied) return denied;
         return new Response(
-          JSON.stringify({ prompt_caching_enabled: getPromptCachingEnabled(db) }),
+          JSON.stringify({ prompt_caching_enabled: await getPromptCachingEnabled(db) }),
           { headers: { "content-type": "application/json" } },
         );
       },
@@ -51,13 +54,17 @@ export const adminSettingsRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireInstanceAdmin(db, userId);
+        const denied = await requireInstanceAdmin(db, userId);
         if (denied) return denied;
-        const before = getPromptCachingEnabled(db);
-        db.prepare(
-          "INSERT INTO instance_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        ).run(KEY, body.prompt_caching_enabled ? "true" : "false", Date.now());
-        writeAudit(db, {
+        const before = await getPromptCachingEnabled(db);
+        await db
+          .insert(instanceSettings)
+          .values({ key: KEY, value: body.prompt_caching_enabled ? "true" : "false", updated_at: Date.now() })
+          .onConflictDoUpdate({
+            target: instanceSettings.key,
+            set: { value: body.prompt_caching_enabled ? "true" : "false", updated_at: Date.now() },
+          });
+        await writeAudit(db, {
           actorUserId: userId,
           workspaceId: null,
           action: "settings.update",

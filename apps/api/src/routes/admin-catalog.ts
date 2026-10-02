@@ -3,10 +3,10 @@
 // transaction. model_prices rows are immutable: a price change inserts a NEW
 // row with effective_at = server time; old rows are never updated.
 import { Elysia, t } from "elysia";
-import type { Database } from "bun:sqlite";
-import type { BetterAuthInstance } from "../auth-types";
+import type { Db, Tx } from "@hoborouter/db";import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, writeAudit, jsonError } from "../authz";
 import { MAX_SAFE_INTEGER_MONEY } from "@hoborouter/db";
+import { sql, type SQL } from "drizzle-orm";
 import { getCurrentPrice, listPublicModels } from "@hoborouter/catalog";
 
 // Bare lowercase slug, or `provider/name`, lowercase slug chars ([a-z0-9-]).
@@ -24,19 +24,44 @@ function isSlug(v: unknown): v is string {
   return typeof v === "string" && SLUG_RE.test(v);
 }
 
-/** capabilities is stored as a JSON string; raw bun:sqlite reads return it unparsed. */
-function parseCaps(v: unknown): string[] | null {
-  if (typeof v === "string") {
-    try {
-      const parsed = JSON.parse(v);
-      return Array.isArray(parsed) && parsed.every((c) => typeof c === "string")
-        ? (parsed as string[])
-        : null;
-    } catch {
-      return null;
-    }
+/** Row-fetch helper for raw SQL reads; connection-level execute wraps rows in { rows }. */
+async function rawRows<T>(db: Db | Tx, query: SQL): Promise<T[]> {
+  const result: unknown = await db.execute(query);
+  return (result as { rows?: T[] }).rows ?? (result as T[]);
+}
+
+// Bun SQL returns int8 columns (epoch-ms, money) as strings; coerce known
+// numeric fields so JSON responses keep number types.
+const NUMERIC_FIELDS = new Set([
+  "created_at",
+  "updated_at",
+  "effective_at",
+  "retired_at",
+  "context_window",
+  "input_usd_micro_per_1m",
+  "output_usd_micro_per_1m",
+  "cached_input_usd_micro_per_1m",
+  "reasoning_usd_micro_per_1m",
+  "markup_ppm",
+]);
+function coerceNums<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((v) => coerceNums(v)) as unknown as T;
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>))
+      out[k] =
+        NUMERIC_FIELDS.has(k) && typeof v === "string" ? Number(v) : coerceNums(v);
+    return out as unknown as T;
   }
-  return Array.isArray(v) ? (v as string[]) : null;
+  return value;
+}
+
+async function modelExists(db: Db | Tx, id: string): Promise<boolean> {
+  return (await rawRows(db, sql`SELECT 1 FROM models WHERE id = ${id}`)).length > 0;
+}
+
+function parseCaps(v: unknown): string[] | null {
+  return Array.isArray(v) && v.every((c) => typeof c === "string") ? (v as string[]) : null;
 }
 
 /** Non-negative safe integer within the canonical money bound. */
@@ -80,18 +105,18 @@ function validateModelBody(b: Record<string, unknown>): string | null {
  * requests.provider_model_mapping_id and billing settlement reference them).
  * No-op when the enabled route already matches.
  */
-function setModelRoute(
-  db: Database,
+async function setModelRoute(
+  db: Db,
   modelId: string,
   upstreamModel: string,
   provider: string,
   userId: string,
-): { changed: boolean; mappingId: string | null } {
-  const current = db
-    .prepare(
-      "SELECT id, provider, upstream_model FROM provider_model_mappings WHERE model_id = ? AND enabled = 1 ORDER BY created_at ASC, id ASC LIMIT 1",
-    )
-    .get(modelId) as { id: string; provider: string; upstream_model: string } | undefined;
+): Promise<{ changed: boolean; mappingId: string | null }> {
+  const currentRows = await rawRows<{ id: string; provider: string; upstream_model: string }>(
+    db,
+    sql`SELECT id, provider, upstream_model FROM provider_model_mappings WHERE model_id = ${modelId} AND enabled = true ORDER BY created_at ASC, id ASC LIMIT 1`,
+  );
+  const current = currentRows[0];
   if (current && current.upstream_model === upstreamModel && current.provider === provider)
     return { changed: false, mappingId: current.id };
   const id = crypto.randomUUID();
@@ -99,25 +124,25 @@ function setModelRoute(
   const before = current
     ? { id: current.id, provider: current.provider, upstream_model: current.upstream_model }
     : null;
-  db.transaction(() => {
-    db.prepare(
-      "UPDATE provider_model_mappings SET enabled = 0, updated_at = ? WHERE model_id = ? AND enabled = 1",
-    ).run(now, modelId);
-    db.prepare(
-      "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES (?,?,?,?,1,?,?)",
-    ).run(id, modelId, provider, upstreamModel, now, now);
-    writeAudit(db, {
+  await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`UPDATE provider_model_mappings SET enabled = false, updated_at = ${now} WHERE model_id = ${modelId} AND enabled = true`,
+    );
+    await tx.execute(
+      sql`INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES (${id}, ${modelId}, ${provider}, ${upstreamModel}, true, ${now}, ${now})`,
+    );
+    await writeAudit(tx, {
       actorUserId: userId,
       workspaceId: null,
       action: "catalog.route.update",
       target: modelId,
       detail: { before, after: { provider, upstream_model: upstreamModel, mapping_id: id } },
     });
-  })();
+  });
   return { changed: true, mappingId: id };
 }
 
-export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
+export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "admin-catalog" })
     .post(
       "/api/v1/admin/catalog/models",
@@ -133,7 +158,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireInstanceAdmin(db, userId);
+        const denied = await requireInstanceAdmin(db, userId);
         if (denied) return denied;
         const b = (body ?? {}) as Record<string, unknown>;
         const invalid = validateModelBody(b);
@@ -147,36 +172,22 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
           capabilities?: string[];
           context_window?: number | null;
         };
-        if (db.prepare("SELECT 1 FROM models WHERE public_id = ?").get(m.public_id))
-          return jsonError(400, "DUPLICATE", "public_id already exists");
+        const dup = await rawRows(db, sql`SELECT 1 FROM models WHERE public_id = ${m.public_id}`);
+        if (dup.length) return jsonError(400, "DUPLICATE", "public_id already exists");
         const id = crypto.randomUUID();
         const now = Date.now();
-        db.transaction(() => {
-          db.prepare(
-            "INSERT INTO models (id, public_id, slug, display_name, provider, description, capabilities, context_window, enabled, published, prompt_caching, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-          ).run(
-            id,
-            m.public_id,
-            m.slug,
-            m.display_name,
-            m.provider,
-            m.description ?? null,
-            m.capabilities === undefined ? null : JSON.stringify(m.capabilities),
-            m.context_window ?? null,
-            b.enabled === false ? 0 : 1,
-            b.published === true ? 1 : 0,
-            (b.prompt_caching as string | undefined) ?? "inherit",
-            now,
-            now,
+        await db.transaction(async (tx) => {
+          await tx.execute(
+            sql`INSERT INTO models (id, public_id, slug, display_name, provider, description, capabilities, context_window, enabled, published, prompt_caching, created_at, updated_at) VALUES (${id}, ${m.public_id}, ${m.slug}, ${m.display_name}, ${m.provider}, ${m.description ?? null}, ${m.capabilities === undefined || m.capabilities === null ? null : JSON.stringify(m.capabilities)}, ${m.context_window ?? null}, ${b.enabled === false ? false : true}, ${b.published === true ? true : false}, ${(b.prompt_caching as string | undefined) ?? "inherit"}, ${now}, ${now})`,
           );
-          writeAudit(db, {
+          await writeAudit(tx, {
             actorUserId: userId,
             workspaceId: null,
             action: "catalog.model.create",
             target: id,
             detail: { public_id: m.public_id, slug: m.slug, provider: m.provider },
           });
-        })();
+        });
         return new Response(JSON.stringify({ id, public_id: b.public_id }), {
           status: 201,
           headers: { "content-type": "application/json" },
@@ -195,60 +206,63 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireInstanceAdmin(db, gate.session.user.id);
+        const denied = await requireInstanceAdmin(db, gate.session.user.id);
         if (denied) return denied;
         // Listing status mirrors listPublicModels (enabled + published + enabled
         // mapping + current price); hidden_reason names the first blocker.
         const now = Date.now();
-        const rows = db
-          .prepare(
-            `SELECT m.*,
-              EXISTS(SELECT 1 FROM model_prices p WHERE p.model_id = m.id AND p.retired_at IS NULL AND p.effective_at <= ?) AS has_price,
-              EXISTS(SELECT 1 FROM provider_model_mappings pm WHERE pm.model_id = m.id AND pm.enabled = 1) AS has_mapping
-           FROM models m ORDER BY m.public_id`,
-          )
-          .all(now) as (Record<string, unknown> & {
-          id: string;
-          enabled: number;
-          published: number;
-          has_price: number;
-          has_mapping: number;
-        })[];
-        return rows.map((m) => {
-          const mapping =
-            (
-              db
-                .prepare(
-                  "SELECT id, provider, upstream_model, enabled, created_at FROM provider_model_mappings WHERE model_id = ? AND enabled = 1 ORDER BY created_at ASC LIMIT 1",
-                )
-                .get(m.id) as Record<string, unknown> | undefined
-            ) ?? null;
-          const currentPrice =
-            (
-              db
-                .prepare(
-                  "SELECT input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at FROM model_prices WHERE model_id = ? AND effective_at <= ? AND retired_at IS NULL ORDER BY effective_at DESC, id DESC LIMIT 1",
-                )
-                .get(m.id, now) as Record<string, unknown> | undefined
-            ) ?? null;
-          const hidden_reason =
-            m.enabled !== 1
+        const rows = await rawRows<
+          Record<string, unknown> & {
+            id: string;
+            enabled: boolean;
+            published: boolean;
+            has_price: boolean;
+            has_mapping: boolean;
+          }
+        >(db, sql`
+          SELECT m.*,
+            EXISTS(SELECT 1 FROM model_prices p WHERE p.model_id = m.id AND p.retired_at IS NULL AND p.effective_at <= ${now}) AS has_price,
+            EXISTS(SELECT 1 FROM provider_model_mappings pm WHERE pm.model_id = m.id AND pm.enabled = true) AS has_mapping
+          FROM models m ORDER BY m.public_id`);
+        return await Promise.all(
+          rows.map(async (rawRow) => {
+            const m = coerceNums(rawRow);
+            const mapping =
+              coerceNums(
+                (
+                  await rawRows<Record<string, unknown>>(
+                    db,
+                    sql`SELECT id, provider, upstream_model, enabled, created_at FROM provider_model_mappings WHERE model_id = ${m.id} AND enabled = true ORDER BY created_at ASC LIMIT 1`,
+                  )
+                )[0] ?? null,
+              ) ?? null;
+            const currentPrice =
+              coerceNums(
+                (
+                  await rawRows<Record<string, unknown>>(
+                    db,
+                    sql`SELECT input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at FROM model_prices WHERE model_id = ${m.id} AND effective_at <= ${now} AND retired_at IS NULL ORDER BY effective_at DESC, id DESC LIMIT 1`,
+                  )
+                )[0] ?? null,
+              ) ?? null;
+            const hidden_reason = !m.enabled
               ? "disabled"
-              : m.published !== 1
+              : !m.published
                 ? "not_published"
-                : m.has_mapping !== 1
+                : !m.has_mapping
                   ? "missing_mapping"
-                  : m.has_price !== 1
+                  : !m.has_price
                     ? "missing_price"
                     : null;
-          return {
-            ...m,
-            listed: hidden_reason === null,
-            hidden_reason,
-            mapping,
-            current_price: currentPrice,
-          };
-        });
+            return {
+              ...m,
+              listed: hidden_reason === null,
+              hidden_reason,
+              mapping,
+              current_price: currentPrice,
+            };
+          }),
+        );
       },
     )
     .put(
@@ -266,11 +280,13 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireInstanceAdmin(db, userId);
+        const denied = await requireInstanceAdmin(db, userId);
         if (denied) return denied;
-        const existing = db.prepare("SELECT * FROM models WHERE id = ?").get(params.id) as
-          | Record<string, unknown>
-          | undefined;
+        const existingRows = await rawRows<Record<string, unknown>>(
+          db,
+          sql`SELECT * FROM models WHERE id = ${params.id}`,
+        );
+        const existing = existingRows[0];
         if (!existing) return jsonError(404, "NOT_FOUND", "Model not found");
         const b = (body ?? {}) as Record<string, unknown>;
         // public_id is the stable public identifier and never mutable (P2).
@@ -288,36 +304,18 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         };
         const invalid = validateModelBody(merged as Record<string, unknown>);
         if (invalid) return jsonError(400, "INVALID", invalid);
-        db.transaction(() => {
-          db.prepare(
-            "UPDATE models SET slug = ?, display_name = ?, provider = ?, description = ?, capabilities = ?, context_window = ?, enabled = ?, published = ?, prompt_caching = ?, updated_at = ? WHERE id = ?",
-          ).run(
-            merged.slug as string,
-            merged.display_name as string,
-            merged.provider as string,
-            b.description !== undefined
-              ? (b.description as string | null)
-              : (existing.description as string | null),
-            b.capabilities !== undefined
-              ? JSON.stringify(b.capabilities)
-              : (existing.capabilities as string | null),
-            b.context_window !== undefined
-              ? (b.context_window as number | null)
-              : (existing.context_window as number | null),
-            b.enabled !== undefined ? (b.enabled ? 1 : 0) : (existing.enabled as number),
-            b.published !== undefined ? (b.published ? 1 : 0) : (existing.published as number),
-            (b.prompt_caching as string | undefined) ?? (existing.prompt_caching as string),
-            Date.now(),
-            params.id,
+        await db.transaction(async (tx) => {
+          await tx.execute(
+            sql`UPDATE models SET slug = ${merged.slug as string}, display_name = ${merged.display_name as string}, provider = ${merged.provider as string}, description = ${b.description !== undefined ? (b.description as string | null) : (existing.description as string | null)}, capabilities = ${b.capabilities !== undefined ? (b.capabilities === null ? null : JSON.stringify(b.capabilities)) : (existing.capabilities == null ? null : JSON.stringify(existing.capabilities))}, context_window = ${b.context_window !== undefined ? ((b.context_window as number | null) ?? null) : ((existing.context_window as number | null) ?? null)}, enabled = ${b.enabled !== undefined ? !!b.enabled : !!existing.enabled}, published = ${b.published !== undefined ? !!b.published : !!existing.published}, prompt_caching = ${(b.prompt_caching as string | undefined) ?? (existing.prompt_caching as string)}, updated_at = ${Date.now()} WHERE id = ${params.id}`,
           );
-          writeAudit(db, {
+          await writeAudit(tx, {
             actorUserId: userId,
             workspaceId: null,
             action: "catalog.model.update",
             target: params.id,
             detail: b as Record<string, unknown>,
           });
-        })();
+        });
         return new Response(JSON.stringify({ id: params.id }), {
           headers: { "content-type": "application/json" },
         });
@@ -338,10 +336,9 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireInstanceAdmin(db, userId);
+        const denied = await requireInstanceAdmin(db, userId);
         if (denied) return denied;
-        if (!db.prepare("SELECT 1 FROM models WHERE id = ?").get(params.id))
-          return jsonError(404, "NOT_FOUND", "Model not found");
+        if (!(await modelExists(db, params.id))) return jsonError(404, "NOT_FOUND", "Model not found");
         const b = (body ?? {}) as Record<string, unknown>;
         if (
           typeof b.upstream_model !== "string" ||
@@ -353,25 +350,25 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         if (b.enabled === false) {
           const id = crypto.randomUUID();
           const now = Date.now();
-          db.transaction(() => {
-            db.prepare(
-              "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES (?,?,?,?,0,?,?)",
-            ).run(id, params.id, provider, b.upstream_model as string, now, now);
-            writeAudit(db, {
+          await db.transaction(async (tx) => {
+            await tx.execute(
+              sql`INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES (${id}, ${params.id}, ${provider}, ${b.upstream_model as string}, false, ${now}, ${now})`,
+            );
+            await writeAudit(tx, {
               actorUserId: userId,
               workspaceId: null,
               action: "catalog.mapping.create",
               target: params.id,
               detail: { mapping_id: id, provider, upstream_model: b.upstream_model },
             });
-          })();
+          });
           return new Response(JSON.stringify({ id, model_id: params.id }), {
             status: 201,
             headers: { "content-type": "application/json" },
           });
         }
         // Enabled insert = setting the model's single route (never leaves two enabled).
-        const { mappingId } = setModelRoute(db, params.id, b.upstream_model as string, provider, userId);
+        const { mappingId } = await setModelRoute(db, params.id, b.upstream_model as string, provider, userId);
         return new Response(JSON.stringify({ id: mappingId, model_id: params.id }), {
           status: 201,
           headers: { "content-type": "application/json" },
@@ -393,10 +390,9 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireInstanceAdmin(db, userId);
+        const denied = await requireInstanceAdmin(db, userId);
         if (denied) return denied;
-        if (!db.prepare("SELECT 1 FROM models WHERE id = ?").get(params.id))
-          return jsonError(404, "NOT_FOUND", "Model not found");
+        if (!(await modelExists(db, params.id))) return jsonError(404, "NOT_FOUND", "Model not found");
         const b = (body ?? {}) as Record<string, unknown>;
         if (
           typeof b.upstream_model !== "string" ||
@@ -405,7 +401,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         )
           return jsonError(400, "INVALID", "upstream_model is required");
         const provider = typeof b.provider === "string" && b.provider.trim() ? b.provider : "cpa";
-        const result = setModelRoute(db, params.id, b.upstream_model.trim(), provider, userId);
+        const result = await setModelRoute(db, params.id, b.upstream_model.trim(), provider, userId);
         return { id: result.mappingId, model_id: params.id, changed: result.changed };
       },
     )
@@ -422,20 +418,18 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request, params }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireInstanceAdmin(db, gate.session.user.id);
+        const denied = await requireInstanceAdmin(db, gate.session.user.id);
         if (denied) return denied;
-        if (!db.prepare("SELECT 1 FROM models WHERE id = ?").get(params.id))
-          return jsonError(404, "NOT_FOUND", "Model not found");
-        const rows = db
-          .prepare(
-            "SELECT * FROM model_prices WHERE model_id = ? ORDER BY effective_at DESC, id DESC",
-          )
-          .all(params.id) as ({
-          id: string;
-          effective_at: number;
-        } & Record<string, unknown>)[];
-        const current = getCurrentPrice(db, params.id);
-        return rows.map((r) => ({ ...r, current: current !== null && r.id === current.id }));
+        if (!(await modelExists(db, params.id))) return jsonError(404, "NOT_FOUND", "Model not found");
+        const rows = await rawRows<{ id: string; effective_at: number } & Record<string, unknown>>(
+          db,
+          sql`SELECT * FROM model_prices WHERE model_id = ${params.id} ORDER BY effective_at DESC, id DESC`,
+        );
+        const current = await getCurrentPrice(db, params.id);
+        return rows.map((r) => ({
+          ...coerceNums(r),
+          current: current !== null && r.id === current.id,
+        }));
       },
     )
     .get(
@@ -451,15 +445,13 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request, params }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireInstanceAdmin(db, gate.session.user.id);
+        const denied = await requireInstanceAdmin(db, gate.session.user.id);
         if (denied) return denied;
-        if (!db.prepare("SELECT 1 FROM models WHERE id = ?").get(params.id))
-          return jsonError(404, "NOT_FOUND", "Model not found");
-        return db
-          .prepare(
-            "SELECT id, provider, upstream_model, enabled, created_at FROM provider_model_mappings WHERE model_id = ? ORDER BY created_at DESC, rowid DESC",
-          )
-          .all(params.id);
+        if (!(await modelExists(db, params.id))) return jsonError(404, "NOT_FOUND", "Model not found");
+        return (await rawRows(
+          db,
+          sql`SELECT id, provider, upstream_model, enabled, created_at FROM provider_model_mappings WHERE model_id = ${params.id} ORDER BY created_at DESC, id DESC`,
+        )).map((r) => coerceNums(r));
       },
     )
     .patch(
@@ -477,27 +469,28 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireInstanceAdmin(db, userId);
+        const denied = await requireInstanceAdmin(db, userId);
         if (denied) return denied;
-        const existing = db
-          .prepare("SELECT * FROM provider_model_mappings WHERE id = ?")
-          .get(params.id) as Record<string, unknown> | undefined;
-        if (!existing) return jsonError(404, "NOT_FOUND", "Mapping not found");
+        const existingRows = await rawRows<Record<string, unknown>>(
+          db,
+          sql`SELECT * FROM provider_model_mappings WHERE id = ${params.id}`,
+        );
+        if (!existingRows[0]) return jsonError(404, "NOT_FOUND", "Mapping not found");
         const b = (body ?? {}) as Record<string, unknown>;
         if (typeof b.enabled !== "boolean")
           return jsonError(400, "INVALID", "enabled (boolean) is required");
-        db.transaction(() => {
-          db.prepare(
-            "UPDATE provider_model_mappings SET enabled = ?, updated_at = ? WHERE id = ?",
-          ).run(b.enabled ? 1 : 0, Date.now(), params.id);
-          writeAudit(db, {
+        await db.transaction(async (tx) => {
+          await tx.execute(
+            sql`UPDATE provider_model_mappings SET enabled = ${b.enabled}, updated_at = ${Date.now()} WHERE id = ${params.id}`,
+          );
+          await writeAudit(tx, {
             actorUserId: userId,
             workspaceId: null,
             action: "catalog.mapping.update",
             target: params.id,
             detail: { enabled: b.enabled },
           });
-        })();
+        });
         return { id: params.id, enabled: b.enabled };
       },
     )
@@ -516,10 +509,9 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const denied = requireInstanceAdmin(db, userId);
+        const denied = await requireInstanceAdmin(db, userId);
         if (denied) return denied;
-        if (!db.prepare("SELECT 1 FROM models WHERE id = ?").get(params.id))
-          return jsonError(404, "NOT_FOUND", "Model not found");
+        if (!(await modelExists(db, params.id))) return jsonError(404, "NOT_FOUND", "Model not found");
         const b = (body ?? {}) as Record<string, unknown>;
         // Validate all money fields BEFORE touching the DB — model_prices rows are
         // never updated, only appended, so no bad row can sneak in later.
@@ -533,27 +525,18 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
         }
         const id = crypto.randomUUID();
         const now = Date.now();
-        db.transaction(() => {
-          db.prepare(
-            "INSERT INTO model_prices (id, model_id, input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at, retired_at) VALUES (?,?,?,?,?,?,?,?,NULL)",
-          ).run(
-            id,
-            params.id,
-            b.input_usd_micro_per_1m as number,
-            b.output_usd_micro_per_1m as number,
-            b.cached_input_usd_micro_per_1m as number,
-            b.reasoning_usd_micro_per_1m as number,
-            b.markup_ppm as number,
-            now,
+        await db.transaction(async (tx) => {
+          await tx.execute(
+            sql`INSERT INTO model_prices (id, model_id, input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at, retired_at) VALUES (${id}, ${params.id}, ${b.input_usd_micro_per_1m as number}, ${b.output_usd_micro_per_1m as number}, ${b.cached_input_usd_micro_per_1m as number}, ${b.reasoning_usd_micro_per_1m as number}, ${b.markup_ppm as number}, ${now}, NULL)`,
           );
-          writeAudit(db, {
+          await writeAudit(tx, {
             actorUserId: userId,
             workspaceId: null,
             action: "catalog.price.create",
             target: params.id,
             detail: { price_id: id, effective_at: now },
           });
-        })();
+        });
         return new Response(JSON.stringify({ id, model_id: params.id, effective_at: now }), {
           status: 201,
           headers: { "content-type": "application/json" },
@@ -572,7 +555,7 @@ export const adminCatalogRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireInstanceAdmin(db, gate.session.user.id);
+        const denied = await requireInstanceAdmin(db, gate.session.user.id);
         if (denied) return denied;
         return listPublicModels(db);
       },

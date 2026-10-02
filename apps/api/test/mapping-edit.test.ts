@@ -1,12 +1,12 @@
 // One editable route per model: PUT route endpoint, no-op on same value,
 // POST never leaves two enabled mappings, non-admin 403.
 import { describe, expect, test } from "bun:test";
-import { makeApp, signUp, req, makeInstanceAdmin, userIdByEmail } from "./helpers";
+import { makeApp, signUp, req, makeInstanceAdmin, userIdByEmail, q } from "./helpers";
 
 async function setup() {
   const { db, app } = await makeApp();
   const cookie = await signUp(app, "mapedit@example.com");
-  makeInstanceAdmin(db, userIdByEmail(db, "mapedit@example.com"));
+  await makeInstanceAdmin(db, await userIdByEmail(db, "mapedit@example.com"));
   const created = await req(app, "/api/v1/admin/catalog/models", {
     method: "POST",
     cookie,
@@ -39,18 +39,20 @@ describe("admin route editing", () => {
       body: { provider: "cpa", upstream_model: "z-ai/glm-5.3-pro" },
     });
     expect(second.status).toBe(200);
-    const rows = db
-      .prepare(
-        "SELECT id, provider, upstream_model, enabled FROM provider_model_mappings WHERE model_id = ? ORDER BY rowid ASC",
-      )
-      .all(modelId) as { upstream_model: string; enabled: number }[];
+    const rows = await q<{ upstream_model: string; enabled: boolean }>(
+      db,
+      "SELECT upstream_model, enabled FROM provider_model_mappings WHERE model_id = ? ORDER BY created_at ASC, id ASC",
+      modelId,
+    );
     expect(rows.length).toBe(2);
-    expect(rows[0]).toMatchObject({ upstream_model: "z-ai/glm-5.3-flash", enabled: 0 });
-    expect(rows[1]).toMatchObject({ upstream_model: "z-ai/glm-5.3-pro", enabled: 1 });
-    const enabledCount = db
-      .prepare("SELECT COUNT(*) AS n FROM provider_model_mappings WHERE model_id = ? AND enabled = 1")
-      .get(modelId) as { n: number };
-    expect(enabledCount.n).toBe(1);
+    expect(rows[0]).toMatchObject({ upstream_model: "z-ai/glm-5.3-flash", enabled: false });
+    expect(rows[1]).toMatchObject({ upstream_model: "z-ai/glm-5.3-pro", enabled: true });
+    const enabledCount = await q<{ n: string }>(
+      db,
+      "SELECT COUNT(*) AS n FROM provider_model_mappings WHERE model_id = ? AND enabled = true",
+      modelId,
+    );
+    expect(Number(enabledCount[0]!.n)).toBe(1);
   });
 
   test("same-value PUT is a no-op", async () => {
@@ -67,10 +69,12 @@ describe("admin route editing", () => {
     });
     expect(res.status).toBe(200);
     expect(((await res.json()) as { changed: boolean }).changed).toBe(false);
-    const n = db
-      .prepare("SELECT COUNT(*) AS n FROM provider_model_mappings WHERE model_id = ?")
-      .get(modelId) as { n: number };
-    expect(n.n).toBe(1);
+    const n = await q<{ n: string }>(
+      db,
+      "SELECT COUNT(*) AS n FROM provider_model_mappings WHERE model_id = ?",
+      modelId,
+    );
+    expect(Number(n[0]!.n)).toBe(1);
   });
 
   test("POST mappings no longer leaves two enabled", async () => {
@@ -85,10 +89,12 @@ describe("admin route editing", () => {
       cookie,
       body: { upstream_model: "z-ai/glm-5.3-pro" },
     });
-    const n = db
-      .prepare("SELECT COUNT(*) AS n FROM provider_model_mappings WHERE model_id = ? AND enabled = 1")
-      .get(modelId) as { n: number };
-    expect(n.n).toBe(1);
+    const n = await q<{ n: string }>(
+      db,
+      "SELECT COUNT(*) AS n FROM provider_model_mappings WHERE model_id = ? AND enabled = true",
+      modelId,
+    );
+    expect(Number(n[0]!.n)).toBe(1);
   });
 
   test("non-admin gets 403", async () => {

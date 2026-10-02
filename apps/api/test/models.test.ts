@@ -1,7 +1,7 @@
 // Task 7: published catalog routes — admin CRUD, member view, /v1 key-auth view.
-import { describe, expect, test, beforeAll } from "bun:test";
-import type { Database } from "bun:sqlite";
-import { createDb, migrate } from "@hoborouter/db";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { sql, type SQL } from "drizzle-orm";
+import { createTestDb, type Db } from "@hoborouter/db";
 import { createAuth } from "../src/auth";
 import { buildApp } from "../src/app";
 import {
@@ -20,12 +20,18 @@ const ADMIN = "madmin@example.com";
 const MEMBER = "mmember@example.com";
 const IADMIN = "miadmin@example.com";
 
-let db: Database;
-let app: ReturnType<typeof buildApp>;
+let t: Awaited<ReturnType<typeof createTestDb>>;
+let db: Db;
+let app: Awaited<ReturnType<typeof buildApp>>;
 let owner: string, admin: string, member: string, iadmin: string;
 let keyA: string; // plaintext for ws-a key
 
-function seedBinding(o: {
+/** Run a raw SQL query and return its rows. */
+async function q<T = Record<string, unknown>>(query: SQL): Promise<T[]> {
+  return (await db.execute(query)) as unknown as T[];
+}
+
+async function seedBinding(o: {
   id: string;
   wsId: string | null;
   publicModel: string;
@@ -34,17 +40,8 @@ function seedBinding(o: {
   pin?: number;
   pout?: number;
 }) {
-  db.prepare(
-    "INSERT INTO model_bindings (id, workspace_id, public_model, cpa_alias, status, price_input_per_1m, price_output_per_1m, effective_at) VALUES (?,?,?,?,?,?,?,?)",
-  ).run(
-    o.id,
-    o.wsId,
-    o.publicModel,
-    o.cpaAlias,
-    o.status ?? "published",
-    o.pin ?? 1000,
-    o.pout ?? 2000,
-    Date.now(),
+  await db.execute(
+    sql`INSERT INTO model_bindings (id, workspace_id, public_model, cpa_alias, status, price_input_per_1m, price_output_per_1m, effective_at) VALUES (${o.id},${o.wsId},${o.publicModel},${o.cpaAlias},${o.status ?? "published"},${o.pin ?? 1000},${o.pout ?? 2000},${Date.now()})`,
   );
 }
 
@@ -65,31 +62,31 @@ const bearer = (token: string) => ({
 });
 
 beforeAll(async () => {
-  db = createDb(":memory:");
-  migrate(db);
+  t = await createTestDb();
+  db = t.db;
   const auth = createAuth(db);
-  app = buildApp({ db, auth });
+  app = await buildApp({ db, auth });
 
   owner = await signUp(app, OWNER, "O");
   admin = await signUp(app, ADMIN, "Ad");
   member = await signUp(app, MEMBER, "M");
   iadmin = await signUp(app, IADMIN, "IA");
 
-  createWorkspace(db, A, userIdByEmail(db, OWNER), "A");
-  addMember(db, A, userIdByEmail(db, ADMIN), "admin");
-  addMember(db, A, userIdByEmail(db, MEMBER), "member");
-  createWorkspace(db, B, userIdByEmail(db, ADMIN), "B"); // admin also owns B → cross-ws negative
-  makeInstanceAdmin(db, userIdByEmail(db, IADMIN));
+  await createWorkspace(db, A, await userIdByEmail(db, OWNER), "A");
+  await addMember(db, A, await userIdByEmail(db, ADMIN), "admin");
+  await addMember(db, A, await userIdByEmail(db, MEMBER), "member");
+  await createWorkspace(db, B, await userIdByEmail(db, ADMIN), "B"); // admin also owns B → cross-ws negative
+  await makeInstanceAdmin(db, await userIdByEmail(db, IADMIN));
 
-  seedBinding({
+  await seedBinding({
     id: "mb-global",
     wsId: null,
     publicModel: "global-model",
     cpaAlias: "secret-alias",
   });
-  seedBinding({ id: "mb-a", wsId: A, publicModel: "wsa-model", cpaAlias: "wsa-alias" });
-  seedBinding({ id: "mb-b", wsId: B, publicModel: "wsb-model", cpaAlias: "wsb-alias" });
-  seedBinding({
+  await seedBinding({ id: "mb-a", wsId: A, publicModel: "wsa-model", cpaAlias: "wsa-alias" });
+  await seedBinding({ id: "mb-b", wsId: B, publicModel: "wsb-model", cpaAlias: "wsb-alias" });
+  await seedBinding({
     id: "mb-off",
     wsId: null,
     publicModel: "off-model",
@@ -98,6 +95,10 @@ beforeAll(async () => {
   });
 
   keyA = await makeKey(owner, A, "test-key-a");
+});
+
+afterAll(async () => {
+  await t.drop();
 });
 
 describe("GET /api/v1/workspaces/:id/models (member+ read-only view)", () => {
@@ -153,14 +154,14 @@ describe("POST /api/v1/admin/models (instance admin only)", () => {
     });
     expect(res.status).toBe(201);
     const body = (await res.json()) as { id: string };
-    const snap = db
-      .prepare("SELECT * FROM price_snapshots WHERE binding_id = ? ORDER BY created_at DESC")
-      .get(body.id) as { price_input: number; price_output: number } | undefined;
+    const [snap] = await q<{ price_input: number }>(
+      sql`SELECT price_input FROM price_snapshots WHERE binding_id = ${body.id} ORDER BY created_at DESC`,
+    );
     expect(snap).toBeDefined();
-    expect(snap!.price_input).toBe(500);
-    const audit = db
-      .prepare("SELECT * FROM audit_log WHERE target = ? AND action LIKE 'model%'")
-      .get(body.id) as { id: string } | undefined;
+    expect(Number(snap!.price_input)).toBe(500);
+    const [audit] = await q(
+      sql`SELECT id FROM audit_log WHERE target = ${body.id} AND action LIKE 'model%'`,
+    );
     expect(audit).toBeDefined();
   });
 
@@ -172,27 +173,30 @@ describe("POST /api/v1/admin/models (instance admin only)", () => {
 
 describe("PUT /api/v1/admin/models/:id (price change → NEW snapshot)", () => {
   test("instance admin updates prices; old snapshot row untouched, new row added", async () => {
-    const before = db
-      .prepare("SELECT price_input FROM price_snapshots WHERE binding_id = 'mb-global'")
-      .all() as { price_input: number }[];
+    const before = (
+      await q<{ price_input: number }>(
+        sql`SELECT price_input FROM price_snapshots WHERE binding_id = 'mb-global'`,
+      )
+    ).map((r) => Number(r.price_input));
     const res = await req(app, "/api/v1/admin/models/mb-global", {
       method: "PUT",
       cookie: iadmin,
       body: { price_input_per_1m: 3000, price_output_per_1m: 4000, status: "published" },
     });
     expect(res.status).toBe(200);
-    const after = db
-      .prepare("SELECT price_input FROM price_snapshots WHERE binding_id = 'mb-global'")
-      .all() as { price_input: number }[];
+    const after = (
+      await q<{ price_input: number }>(
+        sql`SELECT price_input FROM price_snapshots WHERE binding_id = 'mb-global'`,
+      )
+    ).map((r) => Number(r.price_input));
     expect(after.length).toBe(before.length + 1);
-    expect(after.at(-1)!.price_input).toBe(3000);
+    expect(after.at(-1)).toBe(3000);
     // immutability: original rows unchanged
-    for (let i = 0; i < before.length; i++)
-      expect(after[i]!.price_input).toBe(before[i]!.price_input);
+    for (let i = 0; i < before.length; i++) expect(after[i]).toBe(before[i]);
   });
 
   test("price-only PUT preserves existing disabled status; explicit published reactivates", async () => {
-    seedBinding({ id: "mb-dis", wsId: null, publicModel: "d", cpaAlias: "d", status: "disabled" });
+    await seedBinding({ id: "mb-dis", wsId: null, publicModel: "d", cpaAlias: "d", status: "disabled" });
     const res = await req(app, "/api/v1/admin/models/mb-dis", {
       method: "PUT",
       cookie: iadmin,
@@ -200,13 +204,10 @@ describe("PUT /api/v1/admin/models/:id (price change → NEW snapshot)", () => {
     });
     expect(res.status).toBe(200);
     expect(((await res.json()) as { status: string }).status).toBe("disabled");
-    expect(
-      (
-        db.prepare("SELECT status FROM model_bindings WHERE id = 'mb-dis'").get() as {
-          status: string;
-        }
-      ).status,
-    ).toBe("disabled");
+    const [dis] = await q<{ status: string }>(
+      sql`SELECT status FROM model_bindings WHERE id = 'mb-dis'`,
+    );
+    expect(dis!.status).toBe("disabled");
     const res2 = await req(app, "/api/v1/admin/models/mb-dis", {
       method: "PUT",
       cookie: iadmin,
@@ -234,10 +235,10 @@ describe("GET /v1/models + /v1/models/:id (canonical catalog, Bearer sk-hbr- key
   test("revoked key → 401", async () => {
     const plaintext = await makeKey(owner, A, "revoke-me");
     expect((await req(app, "/v1/models", bearer(plaintext))).status).toBe(200);
-    const row = db
-      .prepare("SELECT id FROM api_keys WHERE key_prefix || '' LIKE '%' AND name = 'revoke-me'")
-      .get() as { id: string };
-    db.prepare("UPDATE api_keys SET status = 'revoked' WHERE id = ?").run(row.id);
+    const [row] = await q<{ id: string }>(
+      sql`SELECT id FROM api_keys WHERE name = 'revoke-me'`,
+    );
+    await db.execute(sql`UPDATE api_keys SET status = 'revoked' WHERE id = ${row!.id}`);
     expect((await req(app, "/v1/models", bearer(plaintext))).status).toBe(401);
   });
 

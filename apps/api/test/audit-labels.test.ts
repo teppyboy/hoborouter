@@ -1,47 +1,58 @@
 // Audit route: server-resolved actor/target labels, scoping, filters.
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { makeApp, signUp, req, createWorkspace, makeInstanceAdmin, userIdByEmail } from "./helpers";
 import { writeAudit } from "../src/authz";
+import { sql } from "drizzle-orm";
+
+// Close each test's pool after the test: Bun SQL pools hold connections until
+// closed and the test Postgres has a finite connection budget.
+let drops: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const d of drops) await d();
+  drops = [];
+});
 
 async function seed() {
-  const { db, app } = await makeApp();
+  const made = await makeApp();
+  drops.push(made.close);
+  const { db, app } = made;
   const adminCookie = await signUp(app, "admin@test.dev", "Admin User");
-  const adminId = userIdByEmail(db, "admin@test.dev");
-  makeInstanceAdmin(db, adminId);
-  createWorkspace(db, "ws1", adminId, "Test Workspace");
+  const adminId = await userIdByEmail(db, "admin@test.dev");
+  await makeInstanceAdmin(db, adminId);
+  await createWorkspace(db, "ws1", adminId, "Test Workspace");
 
   // api_keys / payments / models rows referenced by audit targets.
-  db.prepare(
-    "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key1','ws1','h','hr_abcd','My Key','active',?)",
-  ).run(Date.now());
-  db.prepare(
-    "INSERT INTO payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) VALUES ('pay1','ws1',500000,'pending','mock','ORD1',?)",
-  ).run(Date.now());
-  db.prepare(
-    "INSERT INTO models (id, public_id, slug, display_name, provider, enabled, published, created_at, updated_at) VALUES ('model1','anthropic/claude-x','claude-x','Claude X','anthropic',1,1,?,?)",
-  ).run(Date.now(), Date.now());
+  await db.execute(
+    sql`INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key1','ws1','h','hr_abcd','My Key','active',${Date.now()})`,
+  );
+  await db.execute(
+    sql`INSERT INTO payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) VALUES ('pay1','ws1',500000,'pending','mock','ORD1',${Date.now()})`,
+  );
+  await db.execute(
+    sql`INSERT INTO models (id, public_id, slug, display_name, provider, enabled, published, created_at, updated_at) VALUES ('model1','anthropic/claude-x','claude-x','Claude X','anthropic',true,true,${Date.now()},${Date.now()})`,
+  );
 
-  writeAudit(db, {
+  await writeAudit(db, {
     actorUserId: adminId,
     workspaceId: "ws1",
     action: "workspace.create",
     target: "ws1",
   });
-  writeAudit(db, {
+  await writeAudit(db, {
     actorUserId: adminId,
     workspaceId: "ws1",
     action: "key.create",
     target: "key1",
     detail: { name: "My Key", key_prefix: "hr_abcd" },
   });
-  writeAudit(db, {
+  await writeAudit(db, {
     actorUserId: adminId,
     workspaceId: "ws1",
     action: "payment.create",
     target: "pay1",
     detail: { amount: 500000, provider: "mock" },
   });
-  writeAudit(db, {
+  await writeAudit(db, {
     actorUserId: adminId,
     workspaceId: null,
     action: "catalog.model.create",
@@ -85,20 +96,20 @@ describe("GET /api/v1/audit", () => {
 
   test("redacts secret-looking detail fields", async () => {
     const { db, app, adminCookie } = await seed();
-    writeAudit(db, {
-      actorUserId: userIdByEmail(db, "admin@test.dev"),
+    await writeAudit(db, {
+      actorUserId: await userIdByEmail(db, "admin@test.dev"),
       workspaceId: "ws1",
       action: "key.create",
       target: "key1",
       detail: { name: "k", key_hash: "deadbeef", provider_secret: "sk-123" },
     });
     const res = await req(app, "/api/v1/audit?action=key.create", { cookie: adminCookie });
-    const rows = (await res.json()) as Array<{ detail: string }>;
-    const withSecret = rows.find((r) => r.detail?.includes("redacted"))!;
+    const rows = (await res.json()) as Array<{ detail: Record<string, unknown> | null }>;
+    const withSecret = rows.find((r) => JSON.stringify(r.detail ?? {}).includes("redacted"))!;
     expect(withSecret).toBeDefined();
-    expect(withSecret.detail).toContain("[redacted]");
-    expect(withSecret.detail).not.toContain("deadbeef");
-    expect(withSecret.detail).not.toContain("sk-123");
+    expect(JSON.stringify(withSecret.detail)).toContain("[redacted]");
+    expect(JSON.stringify(withSecret.detail)).not.toContain("deadbeef");
+    expect(JSON.stringify(withSecret.detail)).not.toContain("sk-123");
   });
 
   test("action prefix filter and limit", async () => {
@@ -113,10 +124,10 @@ describe("GET /api/v1/audit", () => {
     const { db, app } = await seed();
     // Second user: ws admin only.
     const wsAdminCookie = await signUp(app, "wsa@test.dev", "WS Admin");
-    const wsAdminId = userIdByEmail(db, "wsa@test.dev");
-    db.prepare(
-      "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ('ws1',?, 'admin')",
-    ).run(wsAdminId);
+    const wsAdminId = await userIdByEmail(db, "wsa@test.dev");
+    await db.execute(
+      sql`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ('ws1',${wsAdminId}, 'admin')`,
+    );
 
     const denied = await req(app, "/api/v1/audit", { cookie: wsAdminCookie });
     expect(denied.status).toBe(403);

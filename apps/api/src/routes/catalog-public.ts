@@ -3,8 +3,7 @@
 // no upstream model names, no mapping ids. Uses @hoborouter/catalog helpers —
 // no pricing logic here.
 import { Elysia, t } from "elysia";
-import type { Database } from "bun:sqlite";
-import type { BetterAuthInstance } from "../auth-types";
+import type { Db } from "@hoborouter/db";import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, jsonError } from "../authz";
 import {
   listPublicModels,
@@ -14,17 +13,8 @@ import {
   type PriceRow,
 } from "@hoborouter/catalog";
 
-/** capabilities is stored as a JSON string; raw bun:sqlite reads return it unparsed. */
 function parseCaps(v: unknown): string[] {
-  if (typeof v === "string") {
-    try {
-      const parsed = JSON.parse(v);
-      if (Array.isArray(parsed) && parsed.every((c) => typeof c === "string")) return parsed;
-    } catch {
-      // fall through
-    }
-  }
-  return Array.isArray(v) ? (v as string[]) : [];
+  return Array.isArray(v) && v.every((c) => typeof c === "string") ? (v as string[]) : [];
 }
 
 export const toCatalogItem = (model: ModelRow, price: PriceRow) => ({
@@ -43,7 +33,7 @@ export const toCatalogItem = (model: ModelRow, price: PriceRow) => ({
   },
 });
 
-export const catalogPublicRoutes = (db: Database, auth: BetterAuthInstance) =>
+export const catalogPublicRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "catalog-public" })
     .get(
       "/api/v1/catalog/models",
@@ -58,8 +48,10 @@ export const catalogPublicRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const rows = listPublicModels(db);
-        const data = rows.map((m) => toCatalogItem(m, getCurrentPrice(db, m.id)!));
+        const rows = await listPublicModels(db);
+        const data = await Promise.all(
+          rows.map(async (m) => toCatalogItem(m, (await getCurrentPrice(db, m.id))!)),
+        );
         return { data };
       },
     )
@@ -78,7 +70,7 @@ export const catalogPublicRoutes = (db: Database, auth: BetterAuthInstance) =>
         if ("error" in gate) return gate.error;
         // publicId may contain '/'; Elysia splits on '/' so rejoin all segments
         const publicId = Object.values(params).join("/");
-        const found = resolveModel(db, publicId);
+        const found = await resolveModel(db, publicId);
         if (!found) return jsonError(404, "NOT_FOUND", "Model not found");
         return toCatalogItem(found.model, found.price);
       },

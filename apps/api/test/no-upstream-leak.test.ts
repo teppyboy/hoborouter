@@ -4,7 +4,7 @@
 // JSON/SSE, CPA 400 errors, /v1/models, /api/v1/catalog/models.
 import { describe, expect, test, afterAll } from "bun:test";
 import { hashApiKey } from "@hoborouter/keys";
-import { makeApp, signUp, req, makeInstanceAdmin, userIdByEmail } from "./helpers";
+import { makeApp, signUp, req, makeInstanceAdmin, userIdByEmail, q } from "./helpers";
 
 const PLAINTEXT = "sk-hbr-noleak-test-key";
 const CPA_KEY = "test-cpa-secret";
@@ -114,7 +114,7 @@ afterAll(() => {
 async function setup() {
   const { db, app } = await makeApp();
   const cookie = await signUp(app, "noleak@example.com");
-  makeInstanceAdmin(db, userIdByEmail(db, "noleak@example.com"));
+  await makeInstanceAdmin(db, await userIdByEmail(db, "noleak@example.com"));
   const created = await req(app, "/api/v1/admin/catalog/models", {
     method: "POST",
     cookie,
@@ -156,18 +156,10 @@ async function setup() {
   ).toBe(201);
 
   const now = Date.now();
-  db.prepare(
-    "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-nl','nl','active',?)",
-  ).run(now);
-  db.prepare(
-    "INSERT INTO workspace_members (workspace_id, user_id, role) SELECT 'ws-nl', id, 'owner' FROM users WHERE email = 'noleak@example.com'",
-  ).run();
-  db.prepare(
-    "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-nl','ws-nl','VND',1000000000,0,0,?)",
-  ).run(now);
-  db.prepare(
-    "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key-nl','ws-nl',?,?,'nl','active',?)",
-  ).run(hashApiKey(PLAINTEXT), "sk-hbr-nl...", now);
+  await q(db, "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-nl','nl','active',?)", now);
+  await q(db, "INSERT INTO workspace_members (workspace_id, user_id, role) SELECT 'ws-nl', id, 'owner' FROM users WHERE email = 'noleak@example.com'");
+  await q(db, "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-nl','ws-nl','VND',1000000000,0,0,?)", now);
+  await q(db, "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key-nl','ws-nl',?,?,'nl','active',?)", hashApiKey(PLAINTEXT), "sk-hbr-nl...", now);
   return { app };
 }
 

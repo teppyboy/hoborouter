@@ -3,11 +3,11 @@
 // Money/token integers are schema-bounded to safe range -> returned as JSON numbers.
 // No secrets: key_prefix only (never key_hash), no raw provider payloads.
 import { Elysia, t } from "elysia";
-import type { Database } from "bun:sqlite";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole } from "../authz";
 import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
 import {
+  type Db,
   usageLogs,
   apiKeys,
   wallets,
@@ -15,7 +15,6 @@ import {
   billingReservations,
   payments,
   requests as requestsTable,
-  orm,
 } from "@hoborouter/db";
 
 // Same FX source billing uses: HBR_USD_VND_RATE, default 26000 (see v1-gateway/admin-extra).
@@ -33,7 +32,7 @@ function parseLimit(raw: unknown): number {
   return Math.min(n, MAX_LIMIT);
 }
 
-export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
+export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "dashboard" })
     .get(
       "/api/v1/workspaces/:id/usage-logs",
@@ -53,7 +52,7 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request, params, query }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireWsRole(db, params.id, gate.session.user.id, "member");
+        const denied = await requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
         const limit = parseLimit(query?.limit);
         const before = typeof query?.before === "string" ? parseInt(query.before, 10) : NaN;
@@ -77,7 +76,7 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
         // Admin-soft-deleted requests are hidden from the customer log list.
         const notDeleted = () => isNull(requestsTable.deleted_at);
         const rows = Number.isFinite(before)
-          ? orm(db)
+          ? await db
               .select(rowShape)
               .from(usageLogs)
               .leftJoin(apiKeys, eq(apiKeys.id, usageLogs.api_key_id))
@@ -91,16 +90,14 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
               )
               .orderBy(desc(usageLogs.created_at))
               .limit(limit)
-              .all()
-          : orm(db)
+          : await db
               .select(rowShape)
               .from(usageLogs)
               .leftJoin(apiKeys, eq(apiKeys.id, usageLogs.api_key_id))
               .leftJoin(requestsTable, eq(requestsTable.id, usageLogs.request_id))
               .where(and(eq(usageLogs.workspace_id, params.id), notDeleted()))
               .orderBy(desc(usageLogs.created_at))
-              .limit(limit)
-              .all();
+              .limit(limit);
         return { data: rows };
       },
     )
@@ -122,7 +119,7 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request, params, query }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireWsRole(db, params.id, gate.session.user.id, "member");
+        const denied = await requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
         const daysRaw = typeof query?.days === "string" ? parseInt(query.days, 10) : NaN;
         const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(daysRaw, 365) : 30;
@@ -140,55 +137,55 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
             gte(usageLogs.created_at, since),
             ...(model ? [eq(usageLogs.public_model, model)] : []),
           );
-        const errExpr = sql<number>`case when ${usageLogs.status} != 'ok' then 1 else 0 end`;
+        const errExpr = sql<number>`case when ${usageLogs.status} != 'ok' then 1 else 0 end`.mapWith(Number);
         // Visibility gate — mirrors web/src/pages/logs/filters.ts visibleRows:
         // hide rows with missing/blank public_model, or with both token counts 0.
         // Soft-deleted requests are excluded from visibility-gated counts only.
         // Financial totals (spend/tokens/requests) deliberately include them:
         // removing a log never moves money or rewrites spend history.
         const notDeletedSql = sql`not exists (select 1 from requests r where r.id = ${usageLogs.request_id} and r.deleted_at is not null)`;
-        const visibleExpr = sql<number>`case when ${usageLogs.public_model} is not null and trim(${usageLogs.public_model}) != '' and not (${usageLogs.input_tokens} = 0 and ${usageLogs.output_tokens} = 0) and ${notDeletedSql} then 1 else 0 end`;
-        const visibleErrExpr = sql<number>`case when ${usageLogs.status} != 'ok' and ${usageLogs.public_model} is not null and trim(${usageLogs.public_model}) != '' and not (${usageLogs.input_tokens} = 0 and ${usageLogs.output_tokens} = 0) and ${notDeletedSql} then 1 else 0 end`;
-        const totals = orm(db)
+        const visibleExpr = sql<number>`case when ${usageLogs.public_model} is not null and trim(${usageLogs.public_model}) != '' and not (${usageLogs.input_tokens} = 0 and ${usageLogs.output_tokens} = 0) and ${notDeletedSql} then 1 else 0 end`.mapWith(Number);
+        const visibleErrExpr = sql<number>`case when ${usageLogs.status} != 'ok' and ${usageLogs.public_model} is not null and trim(${usageLogs.public_model}) != '' and not (${usageLogs.input_tokens} = 0 and ${usageLogs.output_tokens} = 0) and ${notDeletedSql} then 1 else 0 end`.mapWith(Number);
+        const totalsRows = await db
           .select({
-            requests: sql<number>`count(*)`,
-            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`,
-            input_tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens}), 0)`,
-            output_tokens: sql<number>`coalesce(sum(${usageLogs.output_tokens}), 0)`,
-            errors: sql<number>`coalesce(sum(${errExpr}), 0)`,
-            visible_requests: sql<number>`coalesce(sum(${visibleExpr}), 0)`,
-            visible_errors: sql<number>`coalesce(sum(${visibleErrExpr}), 0)`,
+            requests: sql<number>`count(*)`.mapWith(Number),
+            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`.mapWith(Number),
+            input_tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens}), 0)`.mapWith(Number),
+            output_tokens: sql<number>`coalesce(sum(${usageLogs.output_tokens}), 0)`.mapWith(Number),
+            errors: sql<number>`coalesce(sum(${errExpr}), 0)`.mapWith(Number),
+            visible_requests: sql<number>`coalesce(sum(${visibleExpr}), 0)`.mapWith(Number),
+            visible_errors: sql<number>`coalesce(sum(${visibleErrExpr}), 0)`.mapWith(Number),
           })
           .from(usageLogs)
           .where(scope())
-          .get();
-        const daily = orm(db)
+          .limit(1);
+        const totals = totalsRows[0];
+        // UTC calendar-day buckets; to_char(to_timestamp(...)) keeps the exact
+        // UTC window semantics of the old SQLite date(...,'unixepoch').
+        const dayExpr = sql<string>`to_char(to_timestamp(${usageLogs.created_at} / 1000.0) at time zone 'UTC', 'YYYY-MM-DD')`;
+        const daily = await db
           .select({
-            day: sql<string>`date(${usageLogs.created_at} / 1000, 'unixepoch')`.as("day"),
-            requests: sql<number>`count(*)`,
-            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`,
-            tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`,
-            errors: sql<number>`coalesce(sum(${errExpr}), 0)`,
+            day: dayExpr.as("day"),
+            requests: sql<number>`count(*)`.mapWith(Number),
+            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`.mapWith(Number),
+            tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`.mapWith(Number),
+            errors: sql<number>`coalesce(sum(${errExpr}), 0)`.mapWith(Number),
           })
           .from(usageLogs)
           .where(scope())
-          .groupBy(sql`date(${usageLogs.created_at} / 1000, 'unixepoch')`)
-          .orderBy(sql`day`)
-          .all();
-        const by_model = orm(db)
+          .groupBy(dayExpr)
+          .orderBy(sql`day`);
+        const by_model = await db
           .select({
             public_model: usageLogs.public_model,
-            requests: sql<number>`count(*)`,
-            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`,
-            tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`,
+            requests: sql<number>`count(*)`.mapWith(Number),
+            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`.mapWith(Number),
+            tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`.mapWith(Number),
           })
           .from(usageLogs)
           .where(scope())
           .groupBy(usageLogs.public_model)
-          // ORDER BY must reference the aliased select column (SQLite has no
-          // bare "spend_vnd" — unaliased expression ordering was a 500).
-          .orderBy(sql`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0) desc`)
-          .all();
+          .orderBy(sql`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0) desc`);
         return { totals, daily, by_model };
       },
     )
@@ -206,9 +203,9 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request, params }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireWsRole(db, params.id, gate.session.user.id, "member");
+        const denied = await requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
-        const w = orm(db)
+        const w = await db
           .select({
             currency: wallets.currency,
             balance: wallets.balance,
@@ -216,14 +213,14 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
           })
           .from(wallets)
           .where(eq(wallets.workspace_id, params.id))
-          .get();
+          .limit(1);
         const rate = usdVndRate();
-        if (!w) return { currency: "VND", balance: 0, reserved: 0, available: 0, usd_vnd_rate: rate };
+        if (!w[0]) return { currency: "VND", balance: 0, reserved: 0, available: 0, usd_vnd_rate: rate };
         return {
-          currency: w.currency,
-          balance: w.balance,
-          reserved: w.reserved,
-          available: w.balance - w.reserved,
+          currency: w[0].currency,
+          balance: w[0].balance,
+          reserved: w[0].reserved,
+          available: w[0].balance - w[0].reserved,
           usd_vnd_rate: rate,
         };
       },
@@ -243,10 +240,10 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request, params, query }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireWsRole(db, params.id, gate.session.user.id, "member");
+        const denied = await requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
         const limit = parseLimit(query?.limit);
-        const rows = orm(db)
+        const rows = await db
           .select({
             id: ledgerEntries.id,
             created_at: ledgerEntries.created_at,
@@ -263,8 +260,7 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
           .leftJoin(billingReservations, eq(billingReservations.id, ledgerEntries.billing_reservation_id))
           .where(eq(wallets.workspace_id, params.id))
           .orderBy(desc(ledgerEntries.created_at))
-          .limit(limit)
-          .all();
+          .limit(limit);
         return { data: rows };
       },
     )
@@ -283,11 +279,11 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
       async ({ request, params, query }) => {
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
-        const denied = requireWsRole(db, params.id, gate.session.user.id, "member");
+        const denied = await requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
         const limit = parseLimit(query?.limit);
         // no checkout_url column exists on payments — omitted per spec
-        const rows = orm(db)
+        const rows = await db
           .select({
             id: payments.id,
             provider: payments.provider,
@@ -299,8 +295,7 @@ export const dashboardRoutes = (db: Database, auth: BetterAuthInstance) =>
           .from(payments)
           .where(eq(payments.workspace_id, params.id))
           .orderBy(desc(payments.created_at))
-          .limit(limit)
-          .all();
+          .limit(limit);
         return { data: rows };
       },
     );
