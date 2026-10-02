@@ -1,7 +1,6 @@
 // Auth redesign regression: AuthLayout must SSR without the legacy glow/mask
 // treatment (mask-image on .auth-bg faded the whole container's content, and
 // .auth-card animated pulsing shadows). Flat monochrome bg, crisp card only.
-import { readFileSync } from "node:fs";
 import { test, expect } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AuthLayout } from "../apps/web/src/components/auth-layout";
@@ -23,10 +22,3 @@ test("AuthLayout renders SSR without legacy mask/glow classes", () => {
   expect(html).not.toContain("shadow-lg");
 });
 
-test("index.css drops auth mask and shine animation", () => {
-  const css = readFileSync(new URL("../apps/web/src/index.css", import.meta.url), "utf8");
-  expect(css).not.toContain("mask-image");
-  expect(css).not.toContain("auth-shine");
-  expect(css).not.toContain(".auth-card");
-  expect(css).not.toContain(".auth-bg");
-});

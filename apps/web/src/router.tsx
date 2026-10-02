@@ -13,8 +13,6 @@ import { Button } from "./components/ui/button";
 import {
   adminModels,
   adminPayments,
-  adminPricing,
-  adminProviders,
   adminSystem,
   adminUsers,
   adminSettings,
@@ -104,6 +102,20 @@ function protectedRoute(path: string, PageComponent: React.ComponentType) {
   });
 }
 
+/** Legacy admin path -> new path, preserving query params (books). */
+function redirectRoute(path: string, to: string) {
+  return createRoute({
+    getParentRoute: () => protectedLayout,
+    path,
+    beforeLoad: ({ search }) => {
+      throw redirect({
+        to,
+        search: search as { [k: string]: string },
+      });
+    },
+  });
+}
+
 const publicRoutes = [
   createRoute({
     getParentRoute: () => rootRoute,
@@ -151,8 +163,9 @@ const protectedRoutes = [
   protectedRoute("/admin/users", adminUsers),
   protectedRoute("/admin/settings", adminSettings),
   protectedRoute("/admin/models", adminModels),
-  protectedRoute("/admin/providers", adminProviders),
-  protectedRoute("/admin/pricing", adminPricing),
+  // Obsolete pages: old URLs land on the unified Models page.
+  redirectRoute("/admin/providers", "/admin/models"),
+  redirectRoute("/admin/pricing", "/admin/models"),
   protectedRoute("/admin/payments", adminPayments),
   protectedRoute("/admin/system", adminSystem),
   protectedRoute("/admin/audit", AdminAudit),

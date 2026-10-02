@@ -1,18 +1,11 @@
-> Template — review with a lawyer before production.
-
-<!--
-Placeholders are filled from Vite env vars:
-  VITE_LEGAL_OPERATOR_NAME, VITE_LEGAL_CONTACT_EMAIL, VITE_LEGAL_EFFECTIVE_DATE
--->
-
 # Terms of Service
 
-**Operator:** {{OPERATOR_NAME}}
-**Contact:** {{CONTACT_EMAIL}}
-**Effective date:** {{EFFECTIVE_DATE}}
+**Operator:** Hoborouter Team
+**Contact:** hoborouter@june8th.me
+**Effective date:** 2026-10-02
 
 These Terms of Service ("Terms") govern your access to and use of Hoborouter, an
-OpenAI-compatible API gateway operated by {{OPERATOR_NAME}}. By creating an
+OpenAI-compatible API gateway operated by Hoborouter Team. By creating an
 account or using the service, you agree to these Terms.
 
 ## 1. Acceptance
@@ -103,7 +96,7 @@ provider outages may interrupt service.
 
 We may suspend or terminate your access if you breach these Terms, fail to
 maintain sufficient balance, or as required by law. You may stop using the
-service and request account deletion at any time via {{CONTACT_EMAIL}}.
+service and request account deletion at any time via hoborouter@june8th.me.
 On termination, remaining credits are non-refundable except as described in
 Section 6 or where required by law.
 
@@ -111,7 +104,7 @@ Section 6 or where required by law.
 
 The service (including all outputs and content) is provided "as is" and "as
 available" without warranties of any kind, to the maximum extent permitted by
-law. To the maximum extent permitted by applicable law, {{OPERATOR_NAME}}
+law. To the maximum extent permitted by applicable law, Hoborouter Team
 is not liable for indirect, incidental, special, consequential, or punitive
 damages, or for lost profits, data, or business opportunities. Our aggregate
 liability for any claim is limited to the amount you paid us for the service
@@ -130,4 +123,4 @@ the jurisdiction of the competent courts of Vietnam.
 
 ## 13. Contact
 
-Questions about these Terms: **{{CONTACT_EMAIL}}**.
+Questions about these Terms: **hoborouter@june8th.me**.

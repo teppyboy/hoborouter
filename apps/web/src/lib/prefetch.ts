@@ -23,8 +23,6 @@ export const payments = lazyRoute(() => import("../pages/billing/payments"));
 export const settings = lazyRoute(() => import("../pages/settings"));
 export const adminUsers = lazyRoute(() => import("../pages/admin/users"));
 export const adminModels = lazyRoute(() => import("../pages/admin/models"));
-export const adminProviders = lazyRoute(() => import("../pages/admin/providers"));
-export const adminPricing = lazyRoute(() => import("../pages/admin/pricing"));
 export const adminPayments = lazyRoute(() => import("../pages/admin/payments"));
 export const adminSystem = lazyRoute(() => import("../pages/admin/system"));
 export const adminSettings = lazyRoute(() => import("../pages/admin/settings"));

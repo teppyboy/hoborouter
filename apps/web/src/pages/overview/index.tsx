@@ -3,12 +3,21 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { formatTokens, formatVnd, formatUsdFromVnd, useUsdVndRate } from "../../lib/format";
 import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
+import { formatStatusLabel } from "../../lib/display";
 import { useUsageSummary } from "../logs/api";
 
-function StatTile({ label, value }: { label: string; value: string }) {
+function StatTile({
+  label,
+  value,
+  title,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+}) {
   return (
     <div className="rounded-md border border-border px-4 py-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-xs text-muted-foreground" title={title}>{label}</p>
       <p className="mt-1 font-mono text-xl tabular-nums">{value}</p>
     </div>
   );
@@ -45,7 +54,7 @@ function BarChart({ data, rate }: { data: { label: string; value: number }[]; ra
               }}
             />
             <span className="pointer-events-none absolute -top-6 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs group-hover:block">
-              {d.label}: {d.value}
+              {d.label}: {formatUsdFromVnd(d.value, rate) ?? formatVnd(d.value)}
             </span>
           </div>
         ))}
@@ -87,7 +96,16 @@ export default function OverviewPage() {
   }
 
   const t = summary.data.totals;
-  const errorRate = t.requests > 0 ? `${((t.errors / t.requests) * 100).toFixed(1)}%` : "0%";
+  // Success rate over visibility-gated rows only (same gate as RecentRequests):
+  // missing model or zero token rows are excluded. Errors stay in financial
+  // aggregates (spend/errors) — only the rate denominator/numerator is gated.
+  // Older backend without visible counts: honest em dash, no fabricated rate.
+  const successRate =
+    t.visible_requests == null || t.visible_errors == null
+      ? "—"
+      : t.visible_requests > 0
+        ? `${(((t.visible_requests - t.visible_errors) / t.visible_requests) * 100).toFixed(1)}%`
+        : "—";
 
   return (
     <div className="space-y-4">
@@ -99,7 +117,11 @@ export default function OverviewPage() {
         <StatTile label="Requests" value={String(t.requests)} />
         <StatTile label="Spend" value={formatUsdFromVnd(t.spend_vnd, rate) ?? formatVnd(t.spend_vnd)} />
         <StatTile label="Tokens" value={formatTokens(t.input_tokens + t.output_tokens)} />
-        <StatTile label="Error rate" value={errorRate} />
+        <StatTile
+          label="Success rate"
+          value={successRate}
+          title="Share of successful requests among eligible requests (requests with a model and token usage) in the last 30 days — not limited to the 10 recent rows below."
+        />
       </div>
       <div className="rounded-md border border-border p-4">
         <p className="mb-3 text-xs text-muted-foreground">Spend per day (USD)</p>
@@ -123,6 +145,7 @@ import {
   TableRow,
 } from "../../components/ui/table";
 import { useRequestLogs } from "../logs/api";
+import { visibleRows } from "../logs/filters";
 import { formatDate } from "../../lib/format";
 
 function RecentRequests({ workspaceId }: { workspaceId: string | null }) {
@@ -139,8 +162,8 @@ function RecentRequests({ workspaceId }: { workspaceId: string | null }) {
         ) : (
           <ErrorState message={(logs.error as ApiError).message} />
         )
-      ) : logs.data.length === 0 ? (
-        <EmptyState title="No requests yet" />
+      ) : visibleRows(logs.data).length === 0 ? (
+        <EmptyState title="No requests with usage" />
       ) : (
         <div className="rounded-lg border border-border">
           <Table>
@@ -154,13 +177,13 @@ function RecentRequests({ workspaceId }: { workspaceId: string | null }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {logs.data.map((r) => (
+              {visibleRows(logs.data).map((r) => (
                 <TableRow key={r.id}>
                   <TableCell className="font-mono text-xs">
                     {formatDate(new Date(r.created_at))}
                   </TableCell>
                   <TableCell className="font-mono text-xs">{r.public_model}</TableCell>
-                  <TableCell className="font-mono text-xs">{r.status}</TableCell>
+                  <TableCell className="font-mono text-xs">{formatStatusLabel(r.status)}</TableCell>
                   <TableCell className="text-right font-mono text-xs">
                     {formatTokens(r.input_tokens + r.output_tokens)}
                   </TableCell>

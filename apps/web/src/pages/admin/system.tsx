@@ -8,13 +8,18 @@ import { AdminGate, useAdminQuery } from "./shared";
 
 interface CpaHealth {
   status: string;
+  proxy_endpoint: { healthy: boolean; http_status: number };
+  management_api: { healthy: boolean; http_status: number };
+  latency_ms: number;
+  cpa_host: string;
+  checked_at: string;
 }
 
 interface AdminSystem {
   gateway_enabled: boolean;
   usd_vnd_rate: number;
   payos_configured: boolean;
-  dev_payments: boolean;
+  manual_payments: boolean;
   db: { wal: string };
   counts: { users: number; workspaces: number; models: number; requests: number };
 }
@@ -85,10 +90,10 @@ function SystemCard() {
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Dev payments</dt>
+              <dt className="text-muted-foreground">Manual payments</dt>
               <dd>
-                <Badge variant={query.data.dev_payments ? "secondary" : "outline"}>
-                  {query.data.dev_payments ? "enabled" : "disabled"}
+                <Badge variant={query.data.manual_payments ? "secondary" : "outline"}>
+                  {query.data.manual_payments ? "enabled" : "disabled"}
                 </Badge>
               </dd>
             </div>
@@ -126,10 +131,46 @@ function CpaHealthCard() {
             {query.error instanceof Error ? query.error.message : "Unreachable"}
           </p>
         ) : (
-          <p className="flex items-center gap-2 text-sm">
-            <CheckCircle2 className="size-4" /> {query.data.status}
-            <Badge variant="outline">ok</Badge>
-          </p>
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+            <div>
+              <dt className="text-muted-foreground">Management API</dt>
+              <dd className="flex items-center gap-1.5">
+                {query.data.management_api.healthy ? (
+                  <CheckCircle2 className="size-4" />
+                ) : (
+                  <XCircle className="size-4" />
+                )}
+                {query.data.management_api.healthy ? "Healthy" : "Unreachable"} ({
+                  query.data.management_api.http_status
+                })
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Proxy endpoint</dt>
+              <dd className="flex items-center gap-1.5">
+                {query.data.proxy_endpoint.healthy ? (
+                  <CheckCircle2 className="size-4" />
+                ) : (
+                  <XCircle className="size-4" />
+                )}
+                {query.data.proxy_endpoint.healthy ? "Healthy" : "Unreachable"} ({
+                  query.data.proxy_endpoint.http_status
+                })
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Check latency</dt>
+              <dd className="font-mono text-xs">{query.data.latency_ms} ms</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">CPA host</dt>
+              <dd className="font-mono text-xs">{query.data.cpa_host}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Last checked</dt>
+              <dd className="text-xs">{formatDate(new Date(query.data.checked_at))}</dd>
+            </div>
+          </dl>
         )}
       </CardContent>
     </Card>

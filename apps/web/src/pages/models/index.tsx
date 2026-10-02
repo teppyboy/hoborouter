@@ -14,6 +14,7 @@ import { formatUsdMicroPer1m } from "../../lib/format";
 import { useIsAdmin } from "../../components/app-shell";
 // Created by shell writer; route is splat "/models/$".
 import { modelHref } from "../../lib/models";
+import { formatProviderLabel } from "../../lib/display";
 import { allCapabilities, allProviders, useCatalogModels, type CatalogModel } from "./data";
 
 export default function ModelsPage() {
@@ -68,7 +69,7 @@ export default function ModelsPage() {
       accessorKey: "provider",
       header: "Provider",
       cell: ({ row }: { row: { original: CatalogModel } }) => (
-        <span className="font-mono text-sm">{row.original.provider}</span>
+        <span className="font-mono text-sm">{formatProviderLabel(row.original.provider)}</span>
       ),
     },
     {

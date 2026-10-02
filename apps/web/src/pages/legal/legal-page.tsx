@@ -1,4 +1,6 @@
 import { Link } from "@tanstack/react-router";
+import { Shuffle } from "lucide-react";
+import { ThemeToggle } from "../../components/theme-toggle";
 
 // Renders a small, safe subset of inline markdown: links, bold, code.
 function inline(text: string, keyBase: string) {
@@ -31,7 +33,8 @@ const slug = (s: string) =>
 
 /** Tiny safe markdown renderer: headings, paragraphs, lists, blockquotes, bold, links, code. No HTML injection. */
 export function renderMarkdown(md: string) {
-  const lines = md.split("\n");
+  // Strip HTML comments (including multi-line) so malformed comment syntax can never leak into rendered text.
+  const lines = md.replace(/<!--[\s\S]*?-->/g, "").replace(/<!--|-->/g, "").split("\n");
   const at = (n: number): string => lines[n] ?? "";
   const out: React.ReactNode[] = [];
   let i = 0;
@@ -72,7 +75,7 @@ export function renderMarkdown(md: string) {
         </blockquote>,
       );
       i++;
-    } else if (line.trim() === "" || line.trim() === "<!--" || line.trim() === "-->" || line.startsWith("  ") || line.startsWith("**Operator:**") || line.startsWith("**Contact:**") || line.startsWith("**Effective date:**")) {
+    } else if (line.trim() === "" || line.startsWith("  ") || line.startsWith("**Operator:**") || line.startsWith("**Contact:**") || line.startsWith("**Effective date:**")) {
       i++;
     } else {
       const para: string[] = [];
@@ -84,13 +87,7 @@ export function renderMarkdown(md: string) {
 }
 
 export function LegalPage({ title, md }: { title: string; md: string }) {
-  const operator = import.meta.env.VITE_LEGAL_OPERATOR_NAME || "Hoborouter Team";
-  const email = import.meta.env.VITE_LEGAL_CONTACT_EMAIL || "hoborouter@june8th.me";
-  const effective = import.meta.env.VITE_LEGAL_EFFECTIVE_DATE || "2026-10-02";
-  const content = md
-    .replaceAll("{{OPERATOR_NAME}}", operator)
-    .replaceAll("{{CONTACT_EMAIL}}", email)
-    .replaceAll("{{EFFECTIVE_DATE}}", effective);
+  const content = md;
   const headings = content
     .split("\n")
     .filter((l) => /^##\s/.test(l))
@@ -98,11 +95,15 @@ export function LegalPage({ title, md }: { title: string; md: string }) {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="mx-auto max-w-prose px-6 py-10">
-        <Link to="/" className="inline-block text-lg font-bold tracking-tight">
-          Hoborouter <span className="text-muted-foreground">Shuffle</span>
-        </Link>
+        <div className="flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-2">
+            <Shuffle className="size-5 shrink-0" aria-hidden />
+            <span className="text-lg font-bold tracking-tight">Hoborouter</span>
+          </Link>
+          <ThemeToggle />
+        </div>
         <h1 className="mt-6 text-3xl font-bold">{title}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Last updated: {effective}</p>
+        <p className="mt-1 text-sm text-muted-foreground">Last updated: 2026-10-02</p>
         {headings.length > 0 && (
           <nav className="mt-6 rounded-lg border bg-muted/40 p-4 text-sm">
             <p className="mb-2 font-medium">On this page</p>

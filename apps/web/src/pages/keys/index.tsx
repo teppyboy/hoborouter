@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatDate } from "../../lib/format";
+import { formatStatusLabel } from "../../lib/display";
 import { Button } from "../../components/ui/button";
 import { Badge } from "../../components/ui/badge";
 import {
@@ -136,7 +137,7 @@ export default function KeysPage() {
         const s = row.original.status;
         return (
           <Badge variant={s === "enabled" ? "default" : s === "disabled" ? "outline" : "secondary"}>
-            {s}
+            {formatStatusLabel(s)}
           </Badge>
         );
       },

@@ -1,5 +1,12 @@
 import { useMemo, useState } from "react";
-import type { ColumnDef } from "@tanstack/react-table";
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type ColumnDef,
+  type SortingState,
+} from "@tanstack/react-table";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
 import { Input } from "../../components/ui/input";
@@ -10,9 +17,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../components/ui/select";
-import { DataTable, PageHeader } from "../../components/page";
+import { PageHeader } from "../../components/page";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../../components/ui/table";
+import { Sheet, SheetContent, SheetTitle, SheetDescription } from "../../components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
-import { formatDate, formatVnd } from "../../lib/format";
+import { formatDate } from "../../lib/format";
 import { AdminGate, useAdminQuery } from "./shared";
 
 /** Enriched audit row from GET /api/v1/audit (server resolves labels). */
@@ -62,37 +78,6 @@ function humanizeAction(action: string): string {
   );
 }
 
-const MONEY_KEYS = /amount|price|charged|cost/i;
-
-/** Detail JSON -> readable chips. Money values formatted, ids shortened. */
-function detailChips(detail: string | null): Array<[string, string]> {
-  if (!detail) return [];
-  let obj: Record<string, unknown>;
-  try {
-    const parsed: unknown = JSON.parse(detail);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
-    obj = parsed as Record<string, unknown>;
-  } catch {
-    return [[detail.slice(0, 64), ""]];
-  }
-  return Object.entries(obj).map(([k, v]) => {
-    let text: string;
-    if (typeof v === "number" && MONEY_KEYS.test(k)) text = formatVnd(v);
-    else if (typeof v === "string" && v.length > 24) text = `${v.slice(0, 8)}…`;
-    else text = typeof v === "object" ? JSON.stringify(v) : String(v);
-    return [k, text];
-  });
-}
-
-function initials(name?: string | null, email?: string | null): string {
-  const s = name?.trim() || email?.split("@")[0] || "?";
-  return s
-    .split(/[\s._-]+/)
-    .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase() ?? "")
-    .join("");
-}
-
 function relativeTime(ms: number): string {
   const diff = Date.now() - ms;
   const mins = Math.floor(diff / 60_000);
@@ -121,6 +106,39 @@ function Hover({
   );
 }
 
+/** One-line, truncating cell content. The table row is whitespace-nowrap. */
+const truncate = "block max-w-full truncate";
+
+/** Detail JSON -> compact one-line summary (first key: value pair, else raw). */
+function detailSummary(detail: string | null): string {
+  if (!detail) return "—";
+  try {
+    const parsed: unknown = JSON.parse(detail);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const entries = Object.entries(parsed as Record<string, unknown>);
+      if (entries.length > 0 && entries[0]) {
+        const [k, v] = entries[0];
+        const text =
+          typeof v === "object" && v !== null ? JSON.stringify(v) : String(v);
+        return entries.length > 1 ? `${k}: ${text} (+${entries.length - 1})` : `${k}: ${text}`;
+      }
+    }
+  } catch {
+    // not JSON, fall through
+  }
+  return detail;
+}
+
+/** Key/value line for the detail sheet. */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="break-words font-mono text-xs">{children}</div>
+    </div>
+  );
+}
+
 const typeBadge = (t: string) => t.replace(" ", "-");
 
 const columns: ColumnDef<AuditEntry, unknown>[] = [
@@ -132,7 +150,7 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
       const iso = new Date(ms).toISOString();
       return (
         <Hover tip={<span className="font-mono">{iso} · {formatDate(ms)}</span>}>
-          <span className="font-mono text-xs">{relativeTime(ms)}</span>
+          <span className={`${truncate} font-mono text-xs`}>{relativeTime(ms)}</span>
         </Hover>
       );
     },
@@ -142,7 +160,7 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
     header: "Action",
     cell: (c) => (
       <Hover tip={<span className="font-mono">{c.getValue<string>()}</span>}>
-        <span className="text-xs">{humanizeAction(c.getValue<string>())}</span>
+        <span className={truncate}>{humanizeAction(c.getValue<string>())}</span>
       </Hover>
     ),
   },
@@ -151,28 +169,19 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
     header: "Actor",
     cell: (c) => {
       const actor = c.getValue<AuditEntry["actor"]>();
-      if (!actor)
-        return <span className="font-mono text-xs text-muted-foreground">—</span>;
-      const name = actor.name || actor.email || actor.id;
+      if (!actor?.email)
+        return <span className={`${truncate} font-mono text-muted-foreground`}>—</span>;
       return (
         <Hover
           tip={
             <div className="space-y-0.5">
               <div>{actor.name ?? "—"}</div>
-              <div className="text-muted-foreground">{actor.email ?? "—"}</div>
+              <div>{actor.email}</div>
               <div className="font-mono text-muted-foreground">{actor.id}</div>
             </div>
           }
         >
-          <span className="flex items-center gap-2">
-            <span className="flex size-5 items-center justify-center rounded-full border border-border text-[9px] font-medium">
-              {initials(actor.name, actor.email)}
-            </span>
-            <span className="text-xs">{name}</span>
-            {actor.email && actor.email !== name && (
-              <span className="text-xs text-muted-foreground">{actor.email}</span>
-            )}
-          </span>
+          <span className={`${truncate} text-xs`}>{actor.email}</span>
         </Hover>
       );
     },
@@ -183,29 +192,19 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
     cell: ({ row }) => {
       const r = row.original;
       if (!r.target)
-        return <span className="font-mono text-xs text-muted-foreground">—</span>;
+        return <span className={`${truncate} font-mono text-muted-foreground`}>—</span>;
       const label = r.target_label ?? r.target.slice(0, 8);
-      const meta = r.target_meta;
       return (
         <Hover
           tip={
             <div className="space-y-0.5">
               <div className="font-mono">{r.target}</div>
               {r.target_type && <div className="text-muted-foreground">{r.target_type}</div>}
-              {meta &&
-                Object.entries(meta)
-                  .filter(([k]) => k !== "id")
-                  .map(([k, v]) => (
-                    <div key={k} className="text-muted-foreground">
-                      {k}: {String(v)}
-                    </div>
-                  ))}
             </div>
           }
         >
-          <span className="flex items-center gap-1.5">
-            {r.target_type && <Badge variant="outline">{typeBadge(r.target_type)}</Badge>}
-            <span className="font-mono text-xs">{label}</span>
+          <span className={`${truncate} font-mono text-xs`}>
+            {r.target_type && <Badge variant="outline">{typeBadge(r.target_type)}</Badge>} {label}
           </span>
         </Hover>
       );
@@ -216,37 +215,18 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
     header: "Workspace",
     cell: (c) => {
       const ws = c.getValue<AuditEntry["workspace"]>();
-      return <span className="text-xs">{ws?.name ?? "—"}</span>;
+      return <span className={truncate}>{ws?.name ?? "—"}</span>;
     },
   },
   {
     accessorKey: "detail",
     header: "Details",
     enableSorting: false,
-    cell: ({ row }) => {
-      const chips = detailChips(row.original.detail);
-      if (chips.length === 0)
-        return <span className="font-mono text-xs text-muted-foreground">—</span>;
-      return (
-        <span className="flex flex-wrap gap-1">
-          {chips.map(([k, v]) => (
-            <span
-              key={k}
-              className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px]"
-            >
-              {v ? (
-                <>
-                  <span className="text-muted-foreground">{k}: </span>
-                  {v}
-                </>
-              ) : (
-                k
-              )}
-            </span>
-          ))}
-        </span>
-      );
-    },
+    cell: ({ row }) => (
+      <span className={`${truncate} font-mono text-xs text-muted-foreground`}>
+        {detailSummary(row.original.detail)}
+      </span>
+    ),
   },
 ];
 
@@ -254,6 +234,8 @@ export default function AdminAuditPage() {
   const query = useAdminQuery<AuditEntry[]>(["admin", "audit"], "/api/v1/audit?limit=200");
   const [search, setSearch] = useState("");
   const [actionFilter, setActionFilter] = useState("all");
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [selected, setSelected] = useState<AuditEntry | null>(null);
 
   const rows = query.data ?? [];
   const actions = useMemo(
@@ -271,12 +253,23 @@ export default function AdminAuditPage() {
     });
   }, [rows, search, actionFilter]);
 
+  const table = useReactTable({
+    data: filtered,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+
+  // 6rem = app shell header (h-12) + page padding (p-6 vertical). The list
+  // scrolls inside this bound so 200 entries never grow the page.
   return (
-    <div className="space-y-4">
+    <div className="flex h-[calc(100dvh-6rem)] min-h-80 flex-col gap-4 overflow-hidden">
       <PageHeader title="Audit log" description="Actions taken across the instance." />
       <AdminGate query={query}>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+        <Card className="flex min-h-0 flex-1 flex-col">
+          <CardHeader className="flex shrink-0 flex-row items-center justify-between gap-2 space-y-0">
             <CardTitle className="text-sm font-medium">Audit log</CardTitle>
             <div className="flex items-center gap-2">
               <Input
@@ -300,11 +293,145 @@ export default function AdminAuditPage() {
               </Select>
             </div>
           </CardHeader>
-          <CardContent>
-            <DataTable columns={columns} data={filtered} empty="No audit entries" />
+          <CardContent className="min-h-0 flex-1 overflow-hidden">
+            <div className="h-full overflow-auto">
+              <Table className="min-w-3xl">
+                <TableHeader className="sticky top-0 z-10 bg-background">
+                  <TableRow>
+                    {(table.getHeaderGroups()[0]?.headers ?? []).map((header) => (
+                      <TableHead key={header.id}>
+                        {header.column.getCanSort() ? (
+                          <button
+                            className="flex items-center gap-1 hover:text-foreground"
+                            onClick={header.column.getToggleSortingHandler()}
+                          >
+                            {flexRender(header.column.columnDef.header, header.getContext())}
+                            {header.column.getIsSorted() === "asc" && <span aria-hidden>↑</span>}
+                            {header.column.getIsSorted() === "desc" && <span aria-hidden>↓</span>}
+                          </button>
+                        ) : (
+                          flexRender(header.column.columnDef.header, header.getContext())
+                        )}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {table.getRowModel().rows.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={columns.length} className="text-center text-muted-foreground">
+                        No audit entries
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    table.getRowModel().rows.map((row) => {
+                      const entry = row.original;
+                      const open = () => setSelected(entry);
+                      return (
+                        <TableRow
+                          key={row.id}
+                          tabIndex={0}
+                          role="button"
+                          aria-haspopup="dialog"
+                          aria-label={`Audit event ${entry.action}`}
+                          onClick={open}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              open();
+                            }
+                          }}
+                          className="cursor-pointer whitespace-nowrap focus:bg-muted/50 focus:outline-none"
+                        >
+                          {row.getVisibleCells().map((cell) => (
+                            <TableCell key={cell.id} className="max-w-56">
+                              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
       </AdminGate>
+
+      <Sheet open={selected !== null} onOpenChange={(o) => !o && setSelected(null)}>
+        <SheetContent className="overflow-y-auto">
+          {selected && (
+            <div className="space-y-4">
+              <div>
+                <SheetTitle>{humanizeAction(selected.action)}</SheetTitle>
+                <SheetDescription>Audit event details</SheetDescription>
+              </div>
+              <div className="space-y-3">
+                <Field label="Time">
+                  {formatDate(selected.created_at)}{" "}
+                  ({new Date(selected.created_at).toISOString()})
+                </Field>
+                <Field label="Event ID">{selected.id}</Field>
+                <Field label="Action">{selected.action}</Field>
+                <Field label="Actor">
+                  {selected.actor ? (
+                    <>
+                      <div>{selected.actor.name ?? "—"}</div>
+                      <div>{selected.actor.email ?? "—"}</div>
+                      <div>{selected.actor.id}</div>
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </Field>
+                <Field label="Workspace">
+                  {selected.workspace ? (
+                    <>
+                      {selected.workspace.name}
+                      <div className="text-muted-foreground">{selected.workspace.id}</div>
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </Field>
+                <Field label="Target">
+                  {selected.target ? (
+                    <>
+                      {selected.target}
+                      {selected.target_type && (
+                        <div className="text-muted-foreground">{selected.target_type}</div>
+                      )}
+                      {selected.target_label && (
+                        <div className="text-muted-foreground">{selected.target_label}</div>
+                      )}
+                      {selected.target_meta &&
+                        Object.entries(selected.target_meta).map(([k, v]) => (
+                          <div key={k} className="text-muted-foreground">
+                            {k}: {String(v)}
+                          </div>
+                        ))}
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </Field>
+                <Field label="Detail">
+                  {selected.detail
+                    ? (() => {
+                        try {
+                          return JSON.stringify(JSON.parse(selected.detail), null, 2);
+                        } catch {
+                          return selected.detail;
+                        }
+                      })()
+                    : "—"}
+                </Field>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

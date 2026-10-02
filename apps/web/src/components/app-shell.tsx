@@ -14,12 +14,10 @@ import {
   Moon,
   PanelLeft,
   PanelLeftClose,
-  Plug,
   ScrollText,
   Settings,
   Shuffle,
   Sun,
-  Tags,
   Users,
   Wallet,
   type LucideIcon,
@@ -30,6 +28,7 @@ import { applyTheme, useThemeStore, type Theme } from "../lib/theme";
 import { useSidebarStore } from "../lib/sidebar";
 import { useWorkspaceStore } from "../lib/workspace";
 import { preloadChunk, preloadNavChunksOnIdle } from "../lib/prefetch";
+import { gravatarUrl } from "../lib/avatar";
 import { useCurrentWorkspaceId, useWorkspaces, type Workspace } from "../lib/workspace-queries";
 import { CreateWorkspace } from "./create-workspace";
 import { cn } from "../lib/utils";
@@ -77,8 +76,6 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
 const ADMIN_NAV: NavItem[] = [
   { label: "Users", to: "/admin/users", icon: Users },
   { label: "Models", to: "/admin/models", icon: Boxes },
-  { label: "Providers", to: "/admin/providers", icon: Plug },
-  { label: "Pricing", to: "/admin/pricing", icon: Tags },
   { label: "Payments", to: "/admin/payments", icon: CreditCard },
   { label: "Audit log", to: "/admin/audit", icon: ScrollText },
   { label: "System", to: "/admin/system", icon: Cpu },
@@ -112,7 +109,7 @@ function initials(name?: string | null, email?: string | null): string {
     .join("");
 }
 
-function InitialAvatar({ label, className }: { label: string; className?: string }) {
+export function InitialAvatar({ label, className }: { label: string; className?: string }) {
   return (
     <span
       className={cn(
@@ -182,6 +179,45 @@ function WorkspaceSwitcher() {
   );
 }
 
+/** Custom avatar image, falling back to Gravatar, then initials. */
+function UserAvatar({
+  name,
+  email,
+  image,
+}: {
+  name?: string | null;
+  email?: string | null;
+  image?: string | null;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const [gravatar, setGravatar] = useState<string | null>(null);
+  const [gravatarFailed, setGravatarFailed] = useState(false);
+  void gravatarUrl(email).then((u) => {
+    if (u) setGravatar(u);
+  });
+  if (image && !imageFailed) {
+    return (
+      <img
+        src={image}
+        alt=""
+        className="size-6 shrink-0 rounded-full object-cover"
+        onError={() => setImageFailed(true)}
+      />
+    );
+  }
+  if (gravatar && !gravatarFailed) {
+    return (
+      <img
+        src={gravatar}
+        alt=""
+        className="size-6 shrink-0 rounded-full object-cover"
+        onError={() => setGravatarFailed(true)}
+      />
+    );
+  }
+  return <InitialAvatar label={initials(name, email)} />;
+}
+
 function UserMenu() {
   const { data: session } = useSession();
   const queryClient = useQueryClient();
@@ -189,7 +225,11 @@ function UserMenu() {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="sm" aria-label="Account menu" className="max-w-48 gap-2">
-          <InitialAvatar label={initials(session?.user?.name, session?.user?.email)} />
+          <UserAvatar
+            name={session?.user?.name}
+            email={session?.user?.email}
+            image={session?.user?.image}
+          />
           <span className="truncate">{session?.user?.name ?? "Account"}</span>
         </Button>
       </DropdownMenuTrigger>

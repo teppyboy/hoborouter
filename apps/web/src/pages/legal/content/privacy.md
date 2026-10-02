@@ -1,17 +1,10 @@
-> Template — review with a lawyer before production.
-
-<!--
-Placeholders are filled from Vite env vars:
-  VITE_LEGAL_OPERATOR_NAME, VITE_LEGAL_CONTACT_EMAIL, VITE_LEGAL_EFFECTIVE_DATE
--->
-
 # Privacy Policy
 
-**Operator:** {{OPERATOR_NAME}}
-**Contact:** {{CONTACT_EMAIL}}
-**Effective date:** {{EFFECTIVE_DATE}}
+**Operator:** Hoborouter Team
+**Contact:** hoborouter@june8th.me
+**Effective date:** 2026-10-02
 
-This Privacy Policy explains how {{OPERATOR_NAME}} ("we") collects, uses,
+This Privacy Policy explains how Hoborouter Team ("we") collects, uses,
 and protects personal data when you use Hoborouter, our OpenAI-compatible API
 gateway.
 
@@ -109,7 +102,7 @@ rights regarding your personal data, which we support, including the right to:
 - **withdraw consent** to processing where processing is based on consent;
 - complain about data processing.
 
-To exercise any right, contact {{CONTACT_EMAIL}}. We may need to verify
+To exercise any right, contact hoborouter@june8th.me. We may need to verify
 your identity before acting on a request.
 
 ## 9. Children
@@ -131,4 +124,4 @@ updated effective date.
 
 ## 12. Contact
 
-Privacy questions and requests: **{{CONTACT_EMAIL}}**.
+Privacy questions and requests: **hoborouter@june8th.me**.

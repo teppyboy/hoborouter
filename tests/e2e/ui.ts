@@ -90,6 +90,17 @@ async function navigate(url: string) {
   await sleep(150);
 }
 
+// Gravatar is blocked (hermetic E2E: no real internet); requests to exactly
+// that host are excluded from the noise checks. Every other 4xx/5xx still fails.
+function isGravatarUrl(url: string): boolean {
+  try {
+    const h = new URL(url).hostname;
+    return h === "gravatar.com" || h.endsWith(".gravatar.com");
+  } catch {
+    return false;
+  }
+}
+
 // ---------- per-step evidence collection ----------
 type Evidence = { console: string[]; pageErrors: string[]; http: string[] };
 let current: Evidence = { console: [], pageErrors: [], http: [] };
@@ -100,7 +111,10 @@ onEvent((m) => {
     if (type === "error" || type === "warning") {
       const text = m.params.args.map((a: any) => a.value ?? a.description ?? "").join(" ");
       // Vite/devtools noise that isn't a product problem.
-      if (!/Download the React DevTools|\[vite\]|WebSocket.*(close|error)/i.test(text))
+      if (
+        !/Download the React DevTools|\[vite\]|WebSocket.*(close|error)/i.test(text) &&
+        !isGravatarUrl(text)
+      )
         current.console.push(`${type}: ${text}`);
     }
   } else if (m.method === "Runtime.exceptionThrown") {
@@ -108,7 +122,7 @@ onEvent((m) => {
     current.pageErrors.push(d.exception?.description ?? d.text ?? "unknown exception");
   } else if (m.method === "Network.responseReceived") {
     const { status, url } = m.params.response;
-    if (status >= 400 && !url.includes("/_vite")) {
+    if (status >= 400 && !url.includes("/_vite") && !isGravatarUrl(url)) {
       // useIsAdmin() probes GET /admin/system; 403 is the app's designed
       // "not an instance admin" signal, not an error.
       if (status === 403 && url.includes("/api/v1/admin/system")) return;
@@ -422,6 +436,11 @@ async function main() {
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Network.enable");
+  // Hermetic: never hit the real internet. Blocking fails the avatar <img>,
+  // which exercises the intended initials fallback.
+  await send("Network.setBlockedURLs", {
+    urls: ["*://gravatar.com/*", "*://*.gravatar.com/*"],
+  });
   await send("Emulation.setDeviceMetricsOverride", {
     width: 1440,
     height: 900,
@@ -454,6 +473,14 @@ async function main() {
     await page.waitForText("Privacy Policy");
     const body = await page.body();
     assert(!body.includes("{{") && !body.includes("[operator"), "no template placeholders render");
+    assert(!body.includes("VITE_"), "no raw VITE_ env leakage");
+    // Real Shuffle icon artwork rendered (not a placeholder glyph).
+    assert(
+      await evaluate<boolean>(
+        `!!document.querySelector('svg.lucide-shuffle')`,
+      ),
+      "Shuffle SVG icon rendered on legal page",
+    );
   });
 
   // --- signup admin ---
@@ -477,6 +504,16 @@ async function main() {
 
   // --- second user signup (logout via UI first) ---
   await step("logout", async () => {
+    // Avatar falls back to initials once the blocked gravatar.com request fails.
+    await waitForExpr(
+      `(() => {
+        const img = document.querySelector('img[src*="gravatar.com"]');
+        const init = [...document.querySelectorAll('span[aria-hidden="true"]')].find(
+          (s) => window.__hbr.visible(s) && s.textContent.trim() === 'EA');
+        return !img && !!init;
+      })()`,
+      "avatar initials fallback (no gravatar img)",
+    );
     await page.clickAria('[aria-label="Account menu"]'); // trigger now shows name
     await page.waitForText("Sign out");
     await page.click("Sign out");
@@ -572,26 +609,28 @@ async function main() {
   });
 
   await step("admin add provider mapping to fake-model", async () => {
-    await goto("/admin/providers");
-    await page.waitForText("Select a model");
-    await selectOption("#model-select", MODEL_ID);
-    await page.waitForText("Add mapping to");
-    await page.setInput("Provider", "fake");
+    // Providers page was removed; routing now lives in the model sheet's Routing tab.
+    await goto("/admin/models");
+    await page.waitForText(MODEL_ID);
+    await page.clickRowAction(MODEL_ID, "Open");
+    // Sheet opens on the Details tab; switch to Routing FIRST, then wait for
+    // its content (the upstream field only exists on that tab).
+    await page.click("Routing");
+    await page.waitForText("Upstream model (sent to CPA)");
+    await page.setInput("Provider label (optional)", "fake");
     await page.setInput("Upstream model (sent to CPA)", "fake-model");
-    await page.click("Add mapping");
-    await page.waitForText("Mapping added");
+    await page.click("Save");
+    await page.waitForText("Route saved");
   });
 
   await step("admin add price", async () => {
-    await goto("/admin/pricing");
-    await page.waitForText("Add price");
-    await selectOption("#pricing-model", MODEL_ID);
-    await page.click("Add price");
-    await page.waitForText("Add price row");
-    await page.setInputById("input_usd_micro_per_1m", "1");
-    await page.setInputById("output_usd_micro_per_1m", "2");
-    await page.setInputById("cached_input_usd_micro_per_1m", "0.5");
-    await page.setInputById("reasoning_usd_micro_per_1m", "0");
+    // Pricing page was removed; prices now live in the model sheet's Pricing tab.
+    await page.click("Pricing");
+    await page.waitForText("Input USD / 1M tokens");
+    await page.setInput("Input USD / 1M tokens", "1");
+    await page.setInput("Output USD / 1M tokens", "2");
+    await page.setInput("Cached input USD / 1M tokens", "0.5");
+    await page.setInput("Reasoning USD / 1M tokens", "0");
     await page.click("Add price");
     await page.waitForText("Price row added");
   });
@@ -638,7 +677,8 @@ async function main() {
     await goto("/billing/credits");
     await page.waitForText("Top up");
     await page.click("Create payment");
-    await page.waitForText("pending");
+    // Navigates to the payment status view; status badge uses the human label.
+    await page.waitForText("Pending");
     assert((await page.has("Complete (dev)")) || true, "payment status view shown");
   });
 
@@ -648,7 +688,7 @@ async function main() {
     await page.click("Mark paid");
     await page.waitForText("Mark payment as paid?");
     await page.clickDialog("Confirm");
-    await page.waitForText("succeeded");
+    await page.waitForText("Succeeded");
   });
 
   await step("credits balance + ledger updated", async () => {
@@ -658,13 +698,17 @@ async function main() {
     assert(/100\.000\s*₫/.test(body), "balance shows 100.000 ₫");
     assert(/\$[0-9]/.test(body), "balance shows USD primary amount");
     assert(!body.includes("No ledger entries yet"), "ledger has entries");
-    assert(body.includes("payment"), "ledger shows payment entry");
+    assert(body.includes("Top-up"), "ledger shows top-up entry with human label");
+    assert(!body.includes("mock"), "no raw 'mock' enum on ledger");
   });
 
   await step("billing payments list", async () => {
     await goto("/billing/payments");
     await page.waitForText("Payments");
-    await page.waitForText("succeeded");
+    await page.waitForText("Succeeded");
+    // Canonical display labels: mock provider renders as Manual.
+    assert(await page.has("Manual"), "mock provider shown as Manual");
+    assert(!(await page.has("mock")), "no raw 'mock' on payments list");
   });
 
   // --- gateway calls (Bun fetch, not UI) ---
@@ -718,10 +762,149 @@ async function main() {
     assert(!(await page.has("No requests yet")), "logs not empty");
   });
 
+  await step("logs filters + details + pagination", async () => {
+    await goto("/logs");
+    await page.waitForText(MODEL_ID);
+    // Pagination honesty: with only a handful of rows there is exactly one page
+    // and the range line must not claim unloaded rows.
+    const body = await page.body();
+    // Footer wording has oscillated; accept both variants without weakening the
+    // honesty assert: visible page range must equal fully-loaded total.
+    const rngA = body.match(/Showing (\d+)\u2013(\d+) of (\d+) loaded requests/);
+    const rngB = body.match(/Showing (\d+)\u2013(\d+) of (\d+) visible \(of (\d+) loaded\)/);
+    const rng = rngA ?? rngB;
+    assert(rng, "pagination range line rendered");
+    const visibleCount = rngA ? rngA[3] : rngB?.[3];
+    const loadedCount = rngA ? rngA[3] : rngB?.[4];
+    assert(visibleCount === loadedCount, "visible rows equal loaded rows (single page)");
+    // Status filter uses the human label option.
+    await selectOption('[aria-label="Statuses"]', "Succeeded");
+    await page.waitForText(MODEL_ID);
+    assert(!(await page.has("No matching requests")), "succeeded filter keeps rows");
+    await selectOption('[aria-label="Statuses"]', "Error");
+    await page.waitForText("No matching requests");
+    await selectOption('[aria-label="Statuses"]', "Succeeded");
+    await page.waitForText(MODEL_ID);
+    // Model filter via its trigger aria-label.
+    await selectOption('[aria-label="Models"]', MODEL_ID);
+    await page.waitForText(MODEL_ID);
+    // Copy request ID inside the row must NOT open the detail sheet (no bubbling).
+    // Headless CDP cannot write the real clipboard (unfocused document), so stub
+    // writeText for this interaction check only — the assertion is that the copy
+    // action does not open the sheet, not about clipboard contents.
+    await evaluate(
+      `(() => { Object.defineProperty(navigator, 'clipboard', { value: { writeText: async () => {} }, configurable: true }); return true })()`,
+    );
+    const firstId = await evaluate<string>(
+      `document.querySelector('[aria-label^="Open request"]').getAttribute('aria-label').replace('Open request ', '')`,
+    );
+    await page.clickAria('[aria-label="Copy request ID"]');
+    assert(!(await page.has("Time to first token")), "copy click did not open the sheet");
+    // Keyboard: focusing the named row and pressing Enter opens the detail sheet.
+    // Some engines omit keyCode on synthetic events; send the full key info and
+    // a Space fallback (both are real row activations per role="button").
+    await evaluate(
+      `(() => { const r = document.querySelector('[aria-label="Open request ${firstId}"]'); r.focus(); const init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }; r.dispatchEvent(new KeyboardEvent('keydown', init)); r.dispatchEvent(new KeyboardEvent('keyup', init)); return document.activeElement === r })()`,
+    );
+    try {
+      await page.waitForText("Time to first token", 3000);
+    } catch (e) {
+      // Diagnose: did the dispatch land at all, is a dialog mounted, is the row present?
+      const diag = await evaluate<string>(
+        `(() => { const r = document.querySelector('[aria-label="Open request ${firstId}"]'); return JSON.stringify({ row: !!r, focused: document.activeElement === r, dialog: !!document.querySelector('[role="dialog"]'), bodyHasTime: document.body.innerText.includes('Time to first token') }) })()`,
+      );
+      throw new Error(`keyboard detail open failed, diag=${diag} (orig: ${e})`);
+    }
+    // Named sheet title carries the full request id.
+    const title = await evaluate<string>(
+      `document.querySelector('[data-slot="sheet-title"]')?.textContent ?? document.querySelector('[role="dialog"] h2, [role="dialog"] [class*=break-all]')?.textContent ?? ''`,
+    );
+    assert(title.includes(firstId), "sheet title shows full request id");
+    // Close the keyboard-opened sheet: the modal overlay would swallow the row
+    // press below (pointerdown outside closes the Radix sheet instead of opening).
+    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await page.waitForGone("Time to first token");
+    // Detail sheet: open the first request row.
+    await page.clickAria('[aria-label^="Open request"]');
+    await page.waitForText("Time to first token");
+    const detail = await page.body();
+    for (const field of ["Input tokens", "Output tokens", "Cost", "Status"])
+      assert(detail.includes(field), `detail sheet shows ${field}`);
+    assert(detail.includes("Succeeded"), "detail status uses human label");
+  });
+
   await step("usage shows breakdown", async () => {
     await goto("/usage");
     await page.waitForText(MODEL_ID);
     assert(!(await page.has("No requests yet")), "usage not empty");
+  });
+
+  await step("usage KPIs + model filter", async () => {
+    const body = await page.body();
+    for (const kpi of ["Requests", "Tokens", "Cost (USD)", "Errors"])
+      assert(body.includes(kpi), `KPI ${kpi} present`);
+    // Read the Requests KPI semantically from the card structure instead of
+    // guessing bodyText line breaks.
+    const reqs = Number(
+      await evaluate<string>(
+        `(() => { const t = [...document.querySelectorAll('[data-slot="card-title"]')].find(e => e.textContent.trim() === 'Requests'); return t?.closest('[data-slot="card"]')?.querySelector('[data-slot="card-content"] p')?.textContent ?? '' })()`,
+      ),
+    );
+    assert(reqs >= 3, `requests KPI >= 3, got ${reqs}`);
+    // Model metric filter narrows to fake/test-model without emptying the page.
+    await selectOption('[aria-label="Filter by model"]', MODEL_ID);
+    await page.waitForText(MODEL_ID);
+    assert(!(await page.has("No requests yet")), "model filter keeps data");
+    const filtered = await page.body();
+    assert(/Errors\n/.test(filtered), "errors KPI rendered after filter");
+    // Chart semantics: named group role, Y-axis labels, period buttons, metric tabs.
+    const chartOk = await evaluate<boolean>(
+      `(() => {
+        const g = document.querySelector('[role="group"][aria-label^="Daily "]');
+        if (!g) return false;
+        const periods = [...document.querySelectorAll('[role="group"][aria-label="Time period"] button')].map(b => b.textContent.trim());
+        const tabs = [...document.querySelectorAll('[role="tablist"][aria-label="Chart metric"] [role="tab"]')].map(t => t.textContent.trim());
+        return periods.join(',') === '7d,30d,90d' &&
+          tabs.join(',') === 'Requests,Tokens,Cost,Errors';
+      })()`,
+    );
+    assert(chartOk, "named chart group + period buttons + metric tabs");
+    assert(await page.has("Token share"), "per-model token share column present");
+  });
+
+  await step("credits usage deductions vs top-up history", async () => {
+    await goto("/billing/credits");
+    await page.waitForText("Top-up history");
+    assert(await page.has("Usage deductions"), "deductions section present");
+    assert(
+      !(await page.has("No usage yet — deductions appear after the first request.")),
+      "usage deductions non-empty after billed requests",
+    );
+    assert(!(await page.has("No top-ups yet.")), "top-up history non-empty");
+    // Request column shows the full unique gateway request UUID (enrichment was
+    // removed) — never the model name. Scoped to the Usage deductions section.
+    const reqCells = await evaluate<string[]>(
+      `(() => {
+        const h3 = [...document.querySelectorAll('h3')].find(e => e.textContent.startsWith('Usage deductions'));
+        if (!h3) return [];
+        const section = h3.parentElement;
+        const cells = [...section.querySelectorAll('tbody tr')].map(r => {
+          const th = [...r.closest('table').querySelectorAll('thead th')];
+          const idx = th.findIndex(t => t.textContent.trim() === 'Request');
+          return r.children[idx]?.textContent.trim() ?? '';
+        });
+        return cells;
+      })()`,
+    );
+    assert(reqCells.length >= 3, `>=3 deduction rows with request ids, got ${reqCells.length}`);
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    for (const c of reqCells)
+      assert(UUID_RE.test(c), `request cell is a full unique UUID, got "${c}"`);
+    assert(
+      !reqCells.some((c) => c.includes(MODEL_ID)),
+      "request cell never shows the model name",
+    );
+    assert(new Set(reqCells).size === reqCells.length, "request ids are unique per row");
   });
 
   await step("overview shows requests and spend", async () => {
@@ -762,6 +945,8 @@ async function main() {
   await step("admin users page renders", async () => {
     await goto("/admin/users");
     await page.waitForText("Instance users");
+    // Rows load async after the header; wait for the actual row.
+    await page.waitForText(ADMIN_EMAIL);
     assert(await page.has(ADMIN_EMAIL), "admin email listed");
   });
 
@@ -771,6 +956,22 @@ async function main() {
     assert(
       (await page.has("gateway_enabled")) || (await page.has("Gateway")),
       "system info present",
+    );
+  });
+
+  await step("removed providers/pricing pages redirect", async () => {
+    await goto("/admin/providers");
+    await page.waitForText("Models");
+    assert(!(await page.has("Select a model")), "legacy providers UI gone");
+    await goto("/admin/pricing");
+    await page.waitForText("Models");
+    assert(!(await page.has("Add price row")), "legacy pricing UI gone");
+    const hrefs = await evaluate<string>(
+      `[...document.querySelectorAll('a')].map(a => a.getAttribute('href')).join('|')`,
+    );
+    assert(
+      !hrefs.includes("/admin/providers") && !hrefs.includes("/admin/pricing"),
+      "nav has no links to removed pages",
     );
   });
 
@@ -804,6 +1005,16 @@ async function main() {
       `window.__hbr.attr('button[aria-label^="Theme:"]','aria-label')`,
     );
     assert(before !== after, `theme changed from ${before} to ${after}`);
+    // Persistence: reload and confirm the toggled theme class survives.
+    const darkAfterToggle = await evaluate<boolean>(
+      `document.documentElement.classList.contains('dark')`,
+    );
+    await goto("/");
+    await page.waitForText("Overview");
+    const darkReloaded = await evaluate<boolean>(
+      `document.documentElement.classList.contains('dark')`,
+    );
+    assert(darkAfterToggle === darkReloaded, "theme class persists across reload");
   });
 
   // --- unknown route 404 ---
@@ -843,7 +1054,11 @@ async function main() {
   });
 
   // ---------- screenshots (after sweep: admin logged in, seeded data) ----------
-  if (SHOTS) {
+  // Screenshot failures must never mask or swallow test results: report is
+  // always emitted in the finally block below.
+  let shotsOk = true;
+  try {
+    if (SHOTS) {
     mkdirSync(SHOT_DIR, { recursive: true });
     // dark, sidebar expanded (set explicitly; default theme may be light)
     await setTheme("dark");
@@ -880,6 +1095,10 @@ async function main() {
     await page.waitForText("Sign out");
     await shot("usermenu-open.png");
     await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
+    }
+  } catch (e) {
+    shotsOk = false;
+    console.error(`screenshot phase failed (results still reported): ${e}`);
   }
 
   // ---------- report ----------
@@ -899,7 +1118,7 @@ async function main() {
     results,
   };
   await Bun.write(REPORT, JSON.stringify(report, null, 2));
-  console.log(`report: ${REPORT}`);
+  console.log(`report: ${REPORT}${shotsOk ? "" : " (screenshots failed; see log)"}`);
   process.exit(failed.length);
 }
 

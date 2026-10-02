@@ -8,6 +8,13 @@ import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatVnd, formatUsdFromVnd, formatDate } from "../../lib/format";
+import {
+  formatLedgerKindLabel,
+} from "../../lib/display";
+import {
+  partitionLedger,
+  signedLedgerAmount,
+} from "./ledger-display";
 import { PageHeader, EmptyState, ErrorState, DataTable } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -34,7 +41,7 @@ interface Wallet {
 interface LedgerEntry {
   id: string;
   created_at: number | string;
-  direction: number | string;
+  direction: "debit" | "credit";
   kind: string;
   amount: number;
   balance_after: number;
@@ -99,24 +106,30 @@ export default function BillingCreditsPage() {
     },
   });
 
+  // Canonical ledger rows carry a positive amount; the sign comes from
+  // `direction` and is applied exactly once via signedLedgerAmount.
   const columns: ColumnDef<LedgerEntry>[] = [
     { accessorKey: "created_at", header: "Time", cell: (c) => formatDate(c.getValue<string>()) },
     {
       accessorKey: "kind",
       header: "Kind",
-      cell: (c) => <span className="font-mono text-xs">{c.getValue<string>()}</span>,
+      cell: (c) => (
+        <span className="font-mono text-xs">{formatLedgerKindLabel(c.getValue<string>())}</span>
+      ),
     },
     {
       accessorKey: "amount",
       header: "Amount",
       cell: (c) => {
-        const v = c.getValue<number>();
-        const usd = formatUsdFromVnd(v, rate);
+        const signed = signedLedgerAmount(c.row.original);
+        // Both formatters render the sign themselves (formatUsdFromVnd keeps
+        // '-', formatVnd keeps '-' via Intl); never re-add it manually.
+        const usd = formatUsdFromVnd(signed, rate);
         return (
           <span className="font-mono text-xs">
-            {v < 0 ? `-${usd ?? formatVnd(-v)}` : (usd ?? formatVnd(v))}
-            {usd != null && v !== 0 && (
-              <span className="ml-1 text-muted-foreground">{formatVnd(v)}</span>
+            {usd ?? formatVnd(signed)}
+            {usd != null && signed !== 0 && (
+              <span className="ml-1 text-muted-foreground">{formatVnd(signed)}</span>
             )}
           </span>
         );
@@ -141,7 +154,15 @@ export default function BillingCreditsPage() {
     {
       accessorKey: "request_id",
       header: "Request",
-      cell: (c) => c.getValue<string | null>() ?? "—",
+      cell: (c) => {
+        const requestId = c.getValue<string | null>();
+        if (requestId == null) return "—";
+        return (
+          <span className="font-mono text-xs" title={requestId}>
+            {requestId}
+          </span>
+        );
+      },
     },
   ];
 
@@ -178,7 +199,31 @@ export default function BillingCreditsPage() {
               description="Not available yet — entries appear after the first top-up or usage."
             />
           ) : (
-            <DataTable columns={columns} data={ledger.data.data} empty="No ledger entries" />
+            (() => {
+              const sections = partitionLedger(ledger.data.data);
+              return (
+                <>
+                  <LedgerSection
+                    title="Usage deductions"
+                    entries={sections.usage}
+                    columns={columns}
+                    empty="No usage yet — deductions appear after the first request."
+                  />
+                  <LedgerSection
+                    title="Top-up history"
+                    entries={sections.topups}
+                    columns={columns}
+                    empty="No top-ups yet."
+                  />
+                  <LedgerSection
+                    title="Adjustments & refunds"
+                    entries={sections.adjustments}
+                    columns={columns}
+                    empty="No adjustments or refunds."
+                  />
+                </>
+              );
+            })()
           )}
         </div>
 
@@ -240,6 +285,31 @@ export default function BillingCreditsPage() {
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function LedgerSection({
+  title,
+  entries,
+  columns,
+  empty,
+}: {
+  title: string;
+  entries: LedgerEntry[];
+  columns: ColumnDef<LedgerEntry>[];
+  empty: string;
+}) {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-xs font-medium text-muted-foreground">
+        {title} ({entries.length})
+      </h3>
+      {entries.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{empty}</p>
+      ) : (
+        <DataTable columns={columns} data={entries} empty={empty} />
+      )}
     </div>
   );
 }

@@ -28,7 +28,7 @@ export function formatUsdFromVnd(vnd: number | null | undefined, rate: number | 
     const s = Math.abs(usd).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
     return `${usd < 0 ? "-" : ""}$${s}`;
   }
-  return `${usd < 0 ? "-" : ""}$${usd.toLocaleString("en-US", {
+  return `${usd < 0 ? "-" : ""}$${Math.abs(usd).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;

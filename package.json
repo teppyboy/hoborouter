@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "test": "vp run bun-test",
-    "bun-test": "bun test",
+    "bun-test": "bun test --parallel=4",
     "check": "vp check",
     "lint": "vp lint",
     "fmt": "vp fmt",

@@ -41,11 +41,11 @@ import {
   useAdminQuery,
 } from "./shared";
 
-// Matches backend PUBLIC_ID_RE: '<provider>/<name>' lowercase slug chars.
-const PUBLIC_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+// Matches backend PUBLIC_ID_RE: bare lowercase slug or '<provider>/<name>'.
+const PUBLIC_ID_RE = /^(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)?[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 const schema = z.object({
-  public_id: z.string().regex(PUBLIC_ID_RE, "Must be 'provider/name' of lowercase slug chars"),
+  public_id: z.string().regex(PUBLIC_ID_RE, "Must be a lowercase slug or 'provider/name'"),
   display_name: z.string().min(1, "Required"),
   provider: z.string().min(1, "Required"),
   description: z.string().optional(),
@@ -438,7 +438,7 @@ function DetailsSection({
       return api(`/api/v1/admin/catalog/models/${model.id}`, {
         method: "PUT",
         body: JSON.stringify({
-          slug: v.public_id.split("/")[1],
+          slug: v.public_id.split("/").pop(),
           display_name: v.display_name,
           provider: v.provider,
           description: v.description || null,
@@ -610,7 +610,7 @@ function CreateModelDialog({
         method: "POST",
         body: JSON.stringify({
           public_id: v.public_id,
-          slug: v.public_id.split("/")[1],
+          slug: v.public_id.split("/").pop(),
           display_name: v.display_name,
           provider: v.provider,
           description: v.description || null,
