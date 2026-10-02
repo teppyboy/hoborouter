@@ -103,7 +103,6 @@ describe("POST /api/v1/admin/catalog/models", () => {
 
   test("bad public_id variants → 400", async () => {
     for (const public_id of [
-      "gpt",
       "OpenAI/gpt",
       "openai/GPT",
       "openai/",
@@ -113,6 +112,26 @@ describe("POST /api/v1/admin/catalog/models", () => {
     ]) {
       const { res } = await createModel({ public_id });
       expect(res.status, public_id).toBe(400);
+    }
+  });
+
+  test("public_id accepts bare slug or provider/name; slug derives correctly", async () => {
+    for (const [public_id, expectedSlug] of [
+      ["auto", "auto"],
+      ["my-model", "my-model"],
+      ["provider/my-model", "my-model"],
+    ] as const) {
+      const { res, id } = await createModel({
+        public_id,
+        slug: expectedSlug,
+        provider: "p",
+      });
+      expect(res.status, public_id).toBe(201);
+      const row = db
+        .prepare("SELECT public_id, slug FROM models WHERE id = ?")
+        .get(id) as { public_id: string; slug: string };
+      expect(row.public_id).toBe(public_id);
+      expect(row.slug).toBe(expectedSlug);
     }
   });
 

@@ -9,8 +9,8 @@ import { requireSession, requireInstanceAdmin, writeAudit, jsonError } from "../
 import { MAX_SAFE_INTEGER_MONEY } from "@hoborouter/db";
 import { getCurrentPrice, listPublicModels } from "@hoborouter/catalog";
 
-// `provider/name`, lowercase slug chars ([a-z0-9-]) on both sides.
-const PUBLIC_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+// Bare lowercase slug, or `provider/name`, lowercase slug chars ([a-z0-9-]).
+const PUBLIC_ID_RE = /^(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)?[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PRICE_FIELDS = [
   "input_usd_micro_per_1m",
@@ -46,7 +46,7 @@ function isMoney(v: unknown): v is number {
 
 function validateModelBody(b: Record<string, unknown>): string | null {
   if (typeof b.public_id !== "string" || !PUBLIC_ID_RE.test(b.public_id))
-    return "public_id must be '<provider>/<name>' of lowercase slug chars";
+    return "public_id must be a lowercase slug or '<provider>/<name>'";
   if (!isSlug(b.slug)) return "slug must be lowercase slug chars";
   if (typeof b.display_name !== "string" || !b.display_name.trim())
     return "display_name is required";
