@@ -7,7 +7,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@hoborouter/db": "workspace:"
+    "@hoborouter/db": "workspace:",
+    "drizzle-orm": "0.45.3"
   },
   "devDependencies": {
     "bun-types": "^1.4.2"
