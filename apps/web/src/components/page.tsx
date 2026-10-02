@@ -8,7 +8,7 @@ import {
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, Check, Copy, type LucideIcon } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, Inbox, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -151,9 +151,11 @@ export function DataTable<TData>({
             <TableRow>
               <TableCell
                 colSpan={columns.length}
-                className="py-8 text-center text-muted-foreground"
+                className="p-0 text-center text-muted-foreground"
               >
-                {empty ?? "No data"}
+                <div className="py-2">
+                  <EmptyState icon={Inbox} title={typeof empty === "string" ? empty : "No data"} />
+                </div>
               </TableCell>
             </TableRow>
           ) : (

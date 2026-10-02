@@ -20,7 +20,7 @@ function BarChart({ data }: { data: { label: string; value: number }[] }) {
   return (
     <div className="flex h-32 items-end gap-1">
       {data.map((d) => (
-        <div key={d.label} className="group relative flex-1">
+        <div key={d.label} className="group relative h-full flex-1">
           <div
             className="w-full rounded-sm bg-foreground/70 group-hover:bg-foreground"
             style={{ height: `${Math.max((d.value / max) * 100, d.value > 0 ? 2 : 0)}%` }}
