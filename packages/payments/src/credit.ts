@@ -6,6 +6,8 @@
 // payments.status=succeeded -> COMMIT. Replay hits the UNIQUE constraint and
 // is answered 2xx with no second credit; any failure rolls back everything.
 import type { Database } from "bun:sqlite";
+import { and, eq, sql } from "drizzle-orm";
+import { orm, paymentEvents, payments, wallets } from "@hoborouter/db";
 import { creditWallet, runInImmediate, WalletError } from "@hoborouter/wallet";
 
 export type MockPaymentErrorCode =
@@ -39,13 +41,11 @@ export type ProcessMockEventResult =
 export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs) {
   const provider = args.provider ?? "mock";
   return runInImmediate(db, () => {
-    const payment = db
-      .prepare(
-        "SELECT id, amount, status, workspace_id FROM payments WHERE provider = ? AND provider_order_code = ?",
-      )
-      .get(provider, args.orderCode) as
-      | { id: string; amount: number; status: string; workspace_id: string }
-      | undefined;
+    const payment = orm(db)
+      .select({ id: payments.id, amount: payments.amount, status: payments.status, workspace_id: payments.workspace_id })
+      .from(payments)
+      .where(and(sql`${payments.provider} = ${provider}`, eq(payments.provider_order_code, args.orderCode)))
+      .get();
     if (!payment) throw new MockPaymentError("not_found", `unknown order ${args.orderCode}`);
     if (payment.status !== "pending" && payment.status !== "succeeded") {
       throw new MockPaymentError("invalid", `payment ${payment.id} is ${payment.status}`);
@@ -69,23 +69,30 @@ export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs
     // to already_processed / cross-payment 400 — every other insert failure
     // propagates so the txn rolls back and the provider retries.
     try {
-      db.prepare(
-        "INSERT INTO payment_events (id, payment_id, provider, provider_reference, raw_payload, signature_valid, processed_at) VALUES (?,?,?,?,?,1,?)",
-      ).run(
-        crypto.randomUUID(),
-        payment.id,
-        provider,
-        args.providerReference,
-        args.rawPayload,
-        Date.now(),
-      );
+      orm(db)
+        .insert(paymentEvents)
+        .values({
+          id: crypto.randomUUID(),
+          payment_id: payment.id,
+          provider,
+          provider_reference: args.providerReference,
+          raw_payload: args.rawPayload,
+          signature_valid: true,
+          processed_at: Date.now(),
+        })
+        .run();
     } catch (err) {
       if ((err as { code?: string })?.code !== "SQLITE_CONSTRAINT_UNIQUE") throw err;
-      const existing = db
-        .prepare(
-          "SELECT payment_id FROM payment_events WHERE provider = ? AND provider_reference = ?",
+      const existing = orm(db)
+        .select({ payment_id: paymentEvents.payment_id })
+        .from(paymentEvents)
+        .where(
+          and(
+            sql`${paymentEvents.provider} = ${provider}`,
+            eq(paymentEvents.provider_reference, args.providerReference),
+          ),
         )
-        .get(provider, args.providerReference) as { payment_id: string } | undefined;
+        .get();
       if (existing && existing.payment_id !== payment.id) {
         throw new MockPaymentError(
           "invalid",
@@ -114,9 +121,11 @@ export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs
     }
 
     // Wallet for the payment's workspace (workspace_id UNIQUE on wallets).
-    const wallet = db
-      .prepare("SELECT id FROM wallets WHERE workspace_id = ?")
-      .get(payment.workspace_id) as { id: string } | undefined;
+    const wallet = orm(db)
+      .select({ id: wallets.id })
+      .from(wallets)
+      .where(eq(wallets.workspace_id, payment.workspace_id))
+      .get();
     if (!wallet)
       throw new MockPaymentError("not_found", `no wallet for workspace ${payment.workspace_id}`);
 
@@ -128,7 +137,7 @@ export function processMockPaymentEvent(db: Database, args: ProcessMockEventArgs
       memo: `${provider} topup ${args.providerReference}`,
     });
 
-    db.prepare("UPDATE payments SET status = 'succeeded' WHERE id = ?").run(payment.id);
+    orm(db).update(payments).set({ status: "succeeded" }).where(eq(payments.id, payment.id)).run();
     return {
       outcome: "credited",
       paymentId: payment.id,
