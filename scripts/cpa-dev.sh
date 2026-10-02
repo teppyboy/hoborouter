@@ -20,14 +20,14 @@ case "$1" in
     if [ ! -f "$ROOT/deploy/cpa/config.yaml" ]; then
       sh "$ROOT/deploy/cpa/render-config.sh" >/dev/null
     fi
-    sh -c "$COMPOSE up -d --wait"
+    sh -c "$COMPOSE up -d --wait cpa"
     curl -fsS -m 3 http://127.0.0.1:8317/healthz >/dev/null
     ;;
   down)
-    sh -c "$COMPOSE down"
+    sh -c "$COMPOSE stop cpa"; sh -c "$COMPOSE rm -f cpa"
     ;;
   status)
-    sh -c "$COMPOSE ps"
+    sh -c "$COMPOSE ps cpa"
     ;;
   key)
     if [ ! -f "$ENV" ]; then

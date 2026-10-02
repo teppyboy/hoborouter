@@ -17,7 +17,17 @@ RUN bun install --frozen-lockfile
 
 FROM oven/bun:1.4 AS build
 WORKDIR /app
+# bun workspaces put per-package deps in each workspace's node_modules,
+# which .dockerignore excludes — copy them from the deps stage.
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/apps/api/node_modules ./apps/api/node_modules
+COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
+COPY --from=deps /app/packages/db/node_modules ./packages/db/node_modules
+COPY --from=deps /app/packages/catalog/node_modules ./packages/catalog/node_modules
+COPY --from=deps /app/packages/keys/node_modules ./packages/keys/node_modules
+COPY --from=deps /app/packages/payments/node_modules ./packages/payments/node_modules
+COPY --from=deps /app/packages/usage/node_modules ./packages/usage/node_modules
+COPY --from=deps /app/packages/wallet/node_modules ./packages/wallet/node_modules
 COPY . .
 RUN cd apps/web && bunx vp build
 
@@ -28,6 +38,13 @@ ENV NODE_ENV=production \
     HBR_DB_PATH=/data/hoborouter.db \
     HBR_WEB_DIST=/app/apps/web/dist
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/apps/api/node_modules ./apps/api/node_modules
+COPY --from=deps /app/packages/db/node_modules ./packages/db/node_modules
+COPY --from=deps /app/packages/catalog/node_modules ./packages/catalog/node_modules
+COPY --from=deps /app/packages/keys/node_modules ./packages/keys/node_modules
+COPY --from=deps /app/packages/payments/node_modules ./packages/payments/node_modules
+COPY --from=deps /app/packages/usage/node_modules ./packages/usage/node_modules
+COPY --from=deps /app/packages/wallet/node_modules ./packages/wallet/node_modules
 COPY package.json bun.lock ./
 COPY packages ./packages
 COPY apps/api/package.json apps/api/
