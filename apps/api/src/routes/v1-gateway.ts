@@ -75,6 +75,7 @@ function settleFromTap(
         upstreamModel: meta.upstreamModel,
         provider: meta.provider,
         publicModel: meta.publicModel,
+        ...(billable.assumed ? { metadata: { assumed_splits: billable.assumed } } : {}),
       } as never,
       done,
     );
@@ -82,7 +83,12 @@ function settleFromTap(
     settle(
       db,
       requestId,
-      { kind: "full_hold", reason: "unknown", metadata: { reason: billable.reason } },
+      {
+        kind: "full_hold",
+        reason: "unknown",
+        metadata: { reason: billable.reason },
+        publicModel: meta.publicModel,
+      } as never,
       done,
     );
   }
@@ -101,7 +107,7 @@ function scrubJsonStrings(
   upstreamModel: string,
   publicModel: string,
   extra: readonly (readonly [string, string])[] = [],
-): unknown {
+): JsonValue {
   const scrubString = (s: string): string => {
     let out = s.split(upstreamModel).join(publicModel);
     for (const [from, to] of extra) out = out.split(from).join(to);
@@ -110,12 +116,12 @@ function scrubJsonStrings(
   if (typeof value === "string") return scrubString(value);
   if (Array.isArray(value)) return value.map((v) => scrubJsonStrings(v, upstreamModel, publicModel, extra));
   if (typeof value === "object" && value !== null) {
-    const out: Record<string, unknown> = {};
+    const out: JsonValue = {};
     for (const [k, v] of Object.entries(value))
       out[k] = scrubJsonStrings(v, upstreamModel, publicModel, extra);
     return out;
   }
-  return value;
+  return value as JsonValue; // number | boolean | null
 }
 
 /** Rewrite upstream model ids in a JSON response body. */

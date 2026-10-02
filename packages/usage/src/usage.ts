@@ -20,7 +20,7 @@ export type SplitRates = {
 };
 
 export type BillableUsage =
-  | { billable: true; usage: UsageTokens }
+  | { billable: true; usage: UsageTokens; assumed?: string[] }
   | { billable: false; reason: string };
 
 const defaultMaxLineBytes = 1024 * 1024;
@@ -343,33 +343,30 @@ export function createUsageTap(options: {
 
 /**
  * Resolve a tap result into a full UsageTokens for calculateCharge. A missing
- * split is treated as 0 only when its rate equals the base rate; differing
- * rates fail closed.
+ * split (provider omitted the details object) never fails a complete response:
+ * choose the value that yields the HIGHER charge (never undercharge). Cached
+ * input is a subset of input; reasoning a subset of output. Assumptions are
+ * returned so they can be recorded.
  */
 export function resolveBillableUsage(result: UsageResult, price: SplitRates): BillableUsage {
   if (!result.complete) return { billable: false, reason: result.reason };
   const { usage } = result;
+  const assumed: string[] = [];
   let cachedInputTokens = usage.cachedInputTokens;
   if (cachedInputTokens === null) {
-    if (price.cachedInput !== price.input) {
-      return { billable: false, reason: "missing_split_differing_rate" };
-    }
-    cachedInputTokens = 0n;
+    cachedInputTokens = price.cachedInput > price.input ? usage.inputTokens : 0n;
+    assumed.push("cached_input");
   }
   let reasoningTokens = usage.reasoningTokens;
   if (reasoningTokens === null) {
-    if (price.reasoning !== price.output) {
-      return { billable: false, reason: "missing_split_differing_rate" };
-    }
-    reasoningTokens = 0n;
+    reasoningTokens = price.reasoning > price.output ? usage.outputTokens : 0n;
+    assumed.push("reasoning");
   }
-  return {
-    billable: true,
-    usage: {
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-      cachedInputTokens,
-      reasoningTokens,
-    },
+  const resolved = {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cachedInputTokens,
+    reasoningTokens,
   };
+  return assumed.length === 0 ? { billable: true, usage: resolved } : { billable: true, usage: resolved, assumed };
 }

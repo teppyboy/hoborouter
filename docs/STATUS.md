@@ -4,4 +4,5 @@
 - Security audit: done (Sentry security-review skill) across gateway, container, dev payments, auth, docs, compose — 0 critical/high, 3 medium found and fixed (gateway body cap 413 pre-buffer + upstream headers timeout; Docker runtime non-root user + cap_drop/no-new-privileges + .dockerignore env/DB exclusions; dev-payments allowlist gate + admin-complete 409 + BETTER_AUTH_SECRET ≥32-char production assertion).
 - Accepted residuals: SameSite=Lax cookies without explicit CSRF token; full-cap charge on client abort by design; CPA error bodies passed through; CPA image runs as root upstream.
 - QA: 382 pass / 0 fail whole repo, 5392 expect() calls across 33 files; tsc clean apps/api; web build clean. Regression tests added: oversized gateway body → 413 with no requests row; admin complete on cancelled payment → 409.
+- Fix: missing usage splits (provider omits `*_tokens_details`) now bill conservatively (higher-charge assumption, `assumed_splits` recorded in usage_logs.raw_payload) instead of full-hold; full_hold usage_logs now record public_model.
 - Next steps: VietQR/payOS integration later; revisit CSRF token and CPA rootless image if threat model changes.

@@ -278,11 +278,15 @@ export type SettleOutcome =
       ttftMs?: number;
       httpStatus?: number;
       rawPayload?: string;
+      /** Recorded into raw_payload when rawPayload is absent (e.g. assumed splits). */
+      metadata?: unknown;
     }
   | {
       kind: "full_hold";
       reason: "client_abort" | "upstream_error" | "unknown";
       metadata?: unknown;
+      /** Customer-facing model id; '' when unknown. Upstream never recorded. */
+      publicModel?: string;
     };
 
 export type SettleResult = {
@@ -422,7 +426,8 @@ export function settleRequest(
         row.usd_vnd_exchange_rate,
         row.markup_ppm,
         charge,
-        outcome.rawPayload ?? null,
+        outcome.rawPayload ??
+          (outcome.metadata === undefined ? null : JSON.stringify(outcome.metadata)),
         now,
       );
     } else {
@@ -430,13 +435,14 @@ export function settleRequest(
         `INSERT INTO usage_logs (id, idempotency_key, request_id, api_key_id, workspace_id, provider, public_model, upstream_model,
           input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, status, failure, latency_ms, ttft_ms,
           upstream_cost_usd_micro, usd_vnd_exchange_rate, markup_ppm, charged_vnd, raw_payload, created_at)
-         VALUES (?, ?, ?, ?, ?, '', '', '', 0, 0, 0, 0, 'full_hold', ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, '', ?, '', 0, 0, 0, 0, 'full_hold', ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
       ).run(
         usageLogId,
         requestId,
         requestId,
         row.api_key_id,
         row.workspace_id,
+        outcome.publicModel ?? "",
         reason,
         outcome.metadata === undefined ? null : JSON.stringify(outcome.metadata),
         now,
