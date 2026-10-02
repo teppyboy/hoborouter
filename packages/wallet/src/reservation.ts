@@ -1,6 +1,17 @@
 // Task 8: reservation core — createReservation, releaseHold.
 // No settlement, no refund, no dispatch. Holds only.
 import type { Database } from "bun:sqlite";
+import { and, eq, gte, inArray, sql } from "drizzle-orm";
+import {
+  apiKeys,
+  modelBindings,
+  orm,
+  priceSnapshots,
+  requests,
+  reservations,
+  runChanges,
+  wallets,
+} from "@hoborouter/db";
 import { WalletError, requirePositiveSafeInteger } from "./wallet";
 export { WalletError } from "./wallet";
 
@@ -58,10 +69,13 @@ export function createReservation(
 
   try {
     return beginImmediate(db, () => {
+      const db0 = orm(db);
       // 1. Authenticated key: exists, active, workspace matches.
-      const key = db
-        .prepare("SELECT workspace_id, status FROM api_keys WHERE id = ?")
-        .get(args.apiKeyId) as { workspace_id: string; status: string } | undefined;
+      const key = db0
+        .select({ workspace_id: apiKeys.workspace_id, status: apiKeys.status })
+        .from(apiKeys)
+        .where(eq(apiKeys.id, args.apiKeyId))
+        .get();
       if (!key || key.status !== "active" || key.workspace_id !== args.workspaceId) {
         throw new WalletError(
           "ownership",
@@ -69,9 +83,11 @@ export function createReservation(
         );
       }
       // 2. Wallet: exists, belongs to workspace.
-      const wallet = db
-        .prepare("SELECT id, workspace_id FROM wallets WHERE id = ?")
-        .get(args.walletId) as { id: string; workspace_id: string } | undefined;
+      const wallet = db0
+        .select({ id: wallets.id, workspace_id: wallets.workspace_id })
+        .from(wallets)
+        .where(eq(wallets.id, args.walletId))
+        .get();
       if (!wallet || wallet.workspace_id !== args.workspaceId) {
         throw new WalletError(
           "ownership",
@@ -79,11 +95,11 @@ export function createReservation(
         );
       }
       // 4. Model binding: exists, published, global or owned by workspace.
-      const binding = db
-        .prepare("SELECT id, workspace_id, status FROM model_bindings WHERE id = ?")
-        .get(args.modelBindingId) as
-        | { id: string; workspace_id: string | null; status: string }
-        | undefined;
+      const binding = db0
+        .select({ id: modelBindings.id, workspace_id: modelBindings.workspace_id, status: modelBindings.status })
+        .from(modelBindings)
+        .where(eq(modelBindings.id, args.modelBindingId))
+        .get();
       if (!binding || binding.status !== "published") {
         throw new WalletError("ownership", `model binding ${args.modelBindingId} not published`);
       }
@@ -94,9 +110,11 @@ export function createReservation(
         );
       }
       // 5. Snapshot must be a snapshot OF the named binding.
-      const snap = db
-        .prepare("SELECT id, binding_id FROM price_snapshots WHERE id = ?")
-        .get(args.priceSnapshotId) as { id: string; binding_id: string } | undefined;
+      const snap = db0
+        .select({ id: priceSnapshots.id, binding_id: priceSnapshots.binding_id })
+        .from(priceSnapshots)
+        .where(eq(priceSnapshots.id, args.priceSnapshotId))
+        .get();
       if (!snap || snap.binding_id !== args.modelBindingId) {
         throw new WalletError(
           "ownership",
@@ -104,7 +122,7 @@ export function createReservation(
         );
       }
       // 6. gatewayRequestId uniqueness → conflict.
-      if (db.prepare("SELECT 1 FROM requests WHERE id = ?").get(args.gatewayRequestId)) {
+      if (db0.select({ x: requests.id }).from(requests).where(eq(requests.id, args.gatewayRequestId)).get()) {
         throw new WalletError(
           "conflict",
           `conflict: request id ${args.gatewayRequestId} already exists`,
@@ -113,41 +131,52 @@ export function createReservation(
 
       // Insert request (pending, pre-dispatch) then reservation, then canonical
       // conditional wallet update — one transaction, all or nothing.
-      db.prepare(
-        "INSERT INTO requests (id, workspace_id, api_key_id, model_binding_id, endpoint, mode, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
-      ).run(
-        args.gatewayRequestId,
-        args.workspaceId,
-        args.apiKeyId,
-        args.modelBindingId,
-        args.endpoint,
-        args.mode,
-        args.now,
-      );
+      db0
+        .insert(requests)
+        .values({
+          id: args.gatewayRequestId,
+          workspace_id: args.workspaceId,
+          api_key_id: args.apiKeyId,
+          model_binding_id: args.modelBindingId,
+          endpoint: args.endpoint,
+          mode: args.mode,
+          status: "pending",
+          created_at: args.now,
+        })
+        .run();
 
       const reservationId = crypto.randomUUID();
       try {
-        db.prepare(
-          "INSERT INTO reservations (id, wallet_id, gateway_request_id, api_key_id, price_snapshot_id, status, cap_amount, estimated_input_tokens, created_at) VALUES (?, ?, ?, ?, ?, 'held', ?, ?, ?)",
-        ).run(
-          reservationId,
-          wallet.id,
-          args.gatewayRequestId,
-          args.apiKeyId,
-          args.priceSnapshotId,
-          capAmount,
-          args.estimatedInputTokens,
-          args.now,
-        );
+        db0
+          .insert(reservations)
+          .values({
+            id: reservationId,
+            wallet_id: wallet.id,
+            gateway_request_id: args.gatewayRequestId,
+            api_key_id: args.apiKeyId,
+            price_snapshot_id: args.priceSnapshotId,
+            status: "held",
+            cap_amount: capAmount,
+            estimated_input_tokens: args.estimatedInputTokens,
+            created_at: args.now,
+          })
+          .run();
       } catch (err) {
         throw new WalletError("conflict", `reservation insert failed: ${String(err)}`);
       }
 
-      const updated = db
-        .prepare(
-          "UPDATE wallets SET reserved = reserved + ?, version = version + 1 WHERE id = ? AND balance - reserved >= ?",
-        )
-        .run(capAmount, wallet.id, capAmount);
+      // Canonical conditional hold: available balance must cover the cap.
+      const updated = runChanges(
+        db0
+          .update(wallets)
+          .set({ reserved: sql`${wallets.reserved} + ${capAmount}`, version: sql`${wallets.version} + 1` })
+          .where(
+            and(
+              eq(wallets.id, wallet.id),
+              gte(sql`${wallets.balance} - ${wallets.reserved}`, capAmount),
+            ),
+          ),
+      );
       if (updated.changes !== 1) {
         throw new WalletError("insufficient", "insufficient: available balance below cap");
       }
@@ -165,25 +194,21 @@ export function releaseHold(
 ): void {
   beginImmediate(db, () => {
     // Ownership: reservation joined to its request and wallet, all in caller scope.
-    const row = db
-      .prepare(
-        `SELECT r.id, r.wallet_id, r.api_key_id, r.status, r.cap_amount, w.workspace_id AS wallet_ws, rq.workspace_id AS request_ws
-         FROM reservations r
-         JOIN wallets w ON w.id = r.wallet_id
-         LEFT JOIN requests rq ON rq.id = r.gateway_request_id
-         WHERE r.id = ?`,
-      )
-      .get(opts.reservationId) as
-      | {
-          id: string;
-          wallet_id: string;
-          api_key_id: string | null;
-          status: string;
-          cap_amount: number;
-          wallet_ws: string;
-          request_ws: string | null;
-        }
-      | undefined;
+    const row = orm(db)
+      .select({
+        id: reservations.id,
+        wallet_id: reservations.wallet_id,
+        api_key_id: reservations.api_key_id,
+        status: reservations.status,
+        cap_amount: reservations.cap_amount,
+        wallet_ws: wallets.workspace_id,
+        request_ws: requests.workspace_id,
+      })
+      .from(reservations)
+      .innerJoin(wallets, eq(wallets.id, reservations.wallet_id))
+      .leftJoin(requests, eq(requests.id, reservations.gateway_request_id))
+      .where(eq(reservations.id, opts.reservationId))
+      .get();
     if (
       !row ||
       row.wallet_ws !== opts.workspaceId ||
@@ -196,23 +221,31 @@ export function releaseHold(
       );
     }
     // Terminal CAS: held|unknown → released.
-    const cas = db
-      .prepare(
-        "UPDATE reservations SET status = 'released', resolved_at = ? WHERE id = ? AND status IN ('held','unknown')",
-      )
-      .run(opts.now, row.id);
+    const cas = runChanges(
+      orm(db)
+        .update(reservations)
+        .set({ status: "released", resolved_at: opts.now })
+        .where(and(eq(reservations.id, row.id), inArray(reservations.status, ["held", "unknown"]))),
+    );
     if (cas.changes !== 1) {
       throw new WalletError(
         "terminal",
         `reservation ${row.id} already terminal (status ${row.status})`,
       );
     }
-    // Decrease reserved; precondition reserved >= cap.
-    const updated = db
-      .prepare(
-        "UPDATE wallets SET reserved = reserved - ?, version = version + 1 WHERE id = ? AND reserved >= ? AND balance - (reserved - ?) >= 0",
-      )
-      .run(row.cap_amount, row.wallet_id, row.cap_amount, row.cap_amount);
+    // Decrease reserved; precondition reserved >= cap and balance stays non-negative.
+    const updated = runChanges(
+      orm(db)
+        .update(wallets)
+        .set({ reserved: sql`${wallets.reserved} - ${row.cap_amount}`, version: sql`${wallets.version} + 1` })
+        .where(
+          and(
+            eq(wallets.id, row.wallet_id),
+            gte(wallets.reserved, row.cap_amount),
+            gte(sql`${wallets.balance} - (${wallets.reserved} - ${row.cap_amount})`, 0),
+          ),
+        ),
+    );
     if (updated.changes !== 1) {
       throw new WalletError(
         "terminal",
