@@ -169,12 +169,16 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
             id: users.id,
             email: users.email,
             name: users.name,
-            // timestamp_ms mode returns Date; raw column value is epoch millis.
-            created_at: sql<number>`${users.createdAt}`,
+            // Raw bigint comes back as a STRING from Bun SQL/PG; mapWith(Number)
+            // keeps created_at a JSON epoch-ms number (web formatDate needs it).
+            created_at: sql<number>`${users.createdAt}`.mapWith(Number),
             is_instance_admin:
               sql<number>`exists(select 1 from instance_admins ia where ia.user_id = ${users.id})`,
+            // count(*) is bigint → string on PG; same mapWith(Number) treatment.
             workspace_count:
-              sql<number>`(select count(*) from workspace_members wm where wm.user_id = ${users.id})`,
+              sql<number>`(select count(*) from workspace_members wm where wm.user_id = ${users.id})`.mapWith(
+                Number,
+              ),
           })
           .from(users)
           .orderBy(desc(users.createdAt));
