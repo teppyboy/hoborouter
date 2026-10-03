@@ -77,7 +77,6 @@ up() {
     CPA_ACCESS_KEY="$CPA_ACCESS_KEY" \
     CPA_MANAGEMENT_KEY="$CPA_MANAGEMENT_KEY" \
     HBR_DEV_ADMIN_EMAIL="$HBR_DEV_ADMIN_EMAIL" \
-    HBR_DEV_PAYMENTS=1 \
     HBR_GATEWAY_ENABLED=1 \
     bun "$ROOT/apps/api/src/index.ts"
   start_one web "$DIR/web.log" env \
