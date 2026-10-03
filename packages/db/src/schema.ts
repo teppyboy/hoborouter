@@ -176,7 +176,7 @@ export const payments = pgTable(
       .references(() => workspaces.id),
     amount: big("amount").notNull(),
     status: text("status", {
-      enum: ["pending", "succeeded", "failed", "expired"],
+      enum: ["pending", "succeeded", "failed", "expired", "rejected"],
     }).notNull(),
     provider: text("provider", { enum: ["manual", "mock", "vietqr_manual", "payos"] }).notNull(),
     provider_order_code: text("provider_order_code").notNull(),

@@ -20,6 +20,8 @@ import { mockWebhookRoutes } from "./routes/webhooks-mock";
 import { payosWebhookRoutes } from "./routes/webhooks-payos";
 import { dashboardRoutes } from "./routes/dashboard";
 import { adminExtraRoutes } from "./routes/admin-extra";
+import { adminPaymentRejectRoutes } from "./routes/admin-payment-reject";
+import { adminUserEditRoutes } from "./routes/admin-user-edit";
 import { adminSettingsRoutes } from "./routes/admin-settings";
 import { adminRequestsRoutes } from "./routes/admin-requests";
 import { catalogPublicRoutes } from "./routes/catalog-public";
@@ -108,6 +110,8 @@ export const buildApp = async (deps: AppDeps = {}) => {
     .use(adminCatalogRoutes(db, auth))
     .use(dashboardRoutes(db, auth))
     .use(adminExtraRoutes(db, auth))
+    .use(adminPaymentRejectRoutes(db, auth))
+    .use(adminUserEditRoutes(db, auth))
     .use(adminSettingsRoutes(db, auth))
     .use(adminRequestsRoutes(db, auth))
     .use(catalogPublicRoutes(db, auth))

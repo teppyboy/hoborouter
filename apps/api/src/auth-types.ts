@@ -11,8 +11,18 @@ export interface AuthSession {
   session: { id: string; userId: string };
 }
 
+/** Subset of the Better Auth $context used by admin user-edit routes. */
+export interface BetterAuthPasswordContext {
+  hash(password: string): Promise<string>;
+}
+
 export interface BetterAuthInstance {
   handler: (request: Request) => Promise<Response>;
+  /**
+   * Resolves to the Better Auth context (password hash etc.). Required by the
+   * admin password-reset route; optional so mock-auth tests still satisfy this type.
+   */
+  $context?: Promise<{ password: BetterAuthPasswordContext }>;
   api: {
     getSession(args: { headers: Headers }): Promise<AuthSession | null>;
     /** Required by admin user-create; optional so mock-auth tests still satisfy this type. */

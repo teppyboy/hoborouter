@@ -6,7 +6,7 @@ import { APIError } from "better-auth";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, isInstanceAdmin, jsonError, writeAudit } from "../authz";
 import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments";
-import { and, desc, eq, ne, notExists, sql, count } from "drizzle-orm";
+import { and, desc, eq, ne, notExists, sql, count, inArray } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import {
   type Db,
@@ -215,7 +215,43 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
           .innerJoin(workspaces, eq(workspaces.id, payments.workspace_id))
           .orderBy(desc(payments.created_at))
           .limit(200);
-        return json({ data: rows });
+        // Creator comes ONLY from payment.create audits (the create route
+        // writes one atomically with the payment insert); never from workspace
+        // ownership or the approving admin. One batched query for the whole
+        // page; earliest audit (created_at, then id) wins on duplicates —
+        // a null actor on that earliest audit yields initiator null.
+        const ids = rows.map((r) => r.id);
+        const wsOf = new Map(rows.map((r) => [r.id, r.workspace_id]));
+        const initiators = new Map<
+          string,
+          { id: string; name: string | null; email: string | null } | null
+        >();
+        if (ids.length > 0) {
+          const audits = await db
+            .select({
+              target: auditLog.target,
+              workspace_id: auditLog.workspace_id,
+              actor_id: auditLog.actor_user_id,
+              name: users.name,
+              email: users.email,
+            })
+            .from(auditLog)
+            .leftJoin(users, eq(users.id, auditLog.actor_user_id))
+            .where(and(eq(auditLog.action, "payment.create"), inArray(auditLog.target, ids)))
+            .orderBy(auditLog.created_at, auditLog.id);
+          for (const a of audits) {
+            if (initiators.has(a.target)) continue;
+            // The audit must belong to the payment's own workspace.
+            if (a.workspace_id !== wsOf.get(a.target)) continue;
+            initiators.set(
+              a.target,
+              a.actor_id ? { id: a.actor_id, name: a.name, email: a.email } : null,
+            );
+          }
+        }
+        return json({
+          data: rows.map((r) => ({ ...r, initiator: initiators.get(r.id) ?? null })),
+        });
       },
     )
     .get(

@@ -53,7 +53,10 @@ export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEven
           eq(payments.provider, provider as "mock"),
           eq(payments.provider_order_code, args.orderCode),
         ),
-      );
+      )
+      // Lock the payment row so concurrent approve/reject/webhook paths
+      // serialize on the same row (e.g. admin reject vs admin complete).
+      .for("update");
     const payment = paymentRows[0];
     if (!payment) throw new MockPaymentError("not_found", `unknown order ${args.orderCode}`);
     if (payment.status !== "pending" && payment.status !== "succeeded") {
