@@ -25,6 +25,11 @@ describe("deploy/docker-compose.yml", () => {
     }
   });
 
+  it("hoborouter points CPA_BASE_URL at the compose cpa service", () => {
+    const env = (svc as { environment: Record<string, string> }).environment;
+    expect(env.CPA_BASE_URL).toBe("http://cpa:8317");
+  });
+
   it("db requires POSTGRES_PASSWORD", () => {
     const env = (compose.services.db as { environment: Record<string, string> }).environment;
     expect(env.POSTGRES_PASSWORD).toContain("?POSTGRES_PASSWORD");
