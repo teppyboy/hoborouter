@@ -27,6 +27,7 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   pending: "secondary",
   failed: "destructive",
   cancelled: "destructive",
+  rejected: "destructive",
 };
 
 export default function BillingPaymentsPage() {

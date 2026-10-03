@@ -31,7 +31,7 @@ import { ApiError, api } from "../../lib/api";
 import { formatDate } from "../../lib/format";
 import { AdminGate, useAdminQuery } from "./shared";
 
-interface AdminUser {
+export interface AdminUser {
   id: string;
   email: string;
   name: string;
@@ -52,6 +52,23 @@ const createSchema = z.object({
   instance_admin: z.boolean(),
 });
 type CreateValues = z.infer<typeof createSchema>;
+
+const editSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  email: z.string().trim().toLowerCase().email(),
+});
+type EditValues = z.infer<typeof editSchema>;
+
+const resetSchema = z
+  .object({
+    newPassword: z.string().min(8, "At least 8 characters").max(200, "At most 200 characters"),
+    confirmPassword: z.string().min(8, "At least 8 characters").max(200, "At most 200 characters"),
+  })
+  .refine((v) => v.newPassword === v.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+type ResetValues = z.infer<typeof resetSchema>;
 
 /** Removes a user; returns workspaces list on 409 SOLE_OWNER so UI can name them. */
 async function removeUser(id: string): Promise<void> {
@@ -120,7 +137,7 @@ export default function AdminUsersPage() {
   );
 }
 
-function UsersTable({
+export function UsersTable({
   users,
   currentUserId,
 }: {
@@ -129,6 +146,8 @@ function UsersTable({
 }) {
   const [toRemove, setToRemove] = useState<AdminUser | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [toEdit, setToEdit] = useState<AdminUser | null>(null);
+  const [toReset, setToReset] = useState<AdminUser | null>(null);
 
   const columns: ColumnDef<AdminUser, unknown>[] = [
     { accessorKey: "email", header: "Email" },
@@ -162,11 +181,37 @@ function UsersTable({
       header: "",
       cell: (c) => {
         const user = c.row.original;
-        if (user.id === currentUserId) return null;
+        // Removal stays self-hidden (server also rejects it); edit and reset
+        // are allowed on the admin's own account.
         return (
-          <Button variant="destructive" size="sm" onClick={() => setToRemove(user)}>
-            Remove
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label={`Edit ${user.email}`}
+              onClick={() => setToEdit(user)}
+            >
+              Edit
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label={`Reset password for ${user.email}`}
+              onClick={() => setToReset(user)}
+            >
+              Reset password
+            </Button>
+            {user.id !== currentUserId && (
+              <Button
+                variant="destructive"
+                size="sm"
+                aria-label={`Remove ${user.email}`}
+                onClick={() => setToRemove(user)}
+              >
+                Remove
+              </Button>
+            )}
+          </div>
         );
       },
     },
@@ -207,7 +252,233 @@ function UsersTable({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {toEdit && (
+        <EditUserDialog
+          user={toEdit}
+          currentUserId={currentUserId}
+          onClose={() => setToEdit(null)}
+        />
+      )}
+      {toReset && <ResetPasswordDialog user={toReset} onClose={() => setToReset(null)} />}
     </>
+  );
+}
+
+function EditUserDialog({
+  user,
+  currentUserId,
+  onClose,
+}: {
+  user: AdminUser;
+  currentUserId: string | null;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const { refetch: refetchSession } = useSession();
+  const [formError, setFormError] = useState<string | null>(null);
+  const form = useForm<EditValues>({
+    resolver: zodResolver(editSchema),
+    defaultValues: { name: user.name, email: user.email },
+  });
+
+  const save = useMutation({
+    mutationFn: (values: EditValues) =>
+      api<{ user: { id: string; name: string; email: string } }>(
+        `/api/v1/admin/users/${user.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            name: values.name.trim(),
+            email: values.email.trim().toLowerCase(),
+          }),
+        },
+      ),
+    onSuccess: (data) => {
+      toast.success(`Updated ${data.user.name}`);
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      // An email change revokes the target's sessions server-side; if the
+      // admin edited their own email, refresh the local session store.
+      if (data.user.email !== user.email && user.id === currentUserId) void refetchSession();
+      onClose();
+    },
+    onError: (err) => {
+      // Duplicate email maps onto the email field; everything else inline.
+      if (err instanceof ApiError && err.code === "EMAIL_TAKEN") {
+        form.setError("email", { message: "A user with this email already exists." });
+      } else {
+        setFormError(err instanceof Error ? err.message : "Request failed");
+      }
+    },
+  });
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) {
+          form.reset();
+          onClose();
+        }
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit user</DialogTitle>
+          <DialogDescription>
+            Change the name or email of {user.name} ({user.email}). Changing the email revokes all
+            of their sessions and they must sign in again.
+          </DialogDescription>
+        </DialogHeader>
+        <Form {...form}>
+          <form
+            className="space-y-4"
+            onSubmit={form.handleSubmit((values) => save.mutate(values))}
+          >
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Name</FormLabel>
+                  <FormControl>
+                    <Input {...field} placeholder="Ada Lovelace" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="email"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Email</FormLabel>
+                  <FormControl>
+                    <Input {...field} type="email" placeholder="ada@example.com" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            {formError && <p className="text-destructive text-sm">{formError}</p>}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  form.reset();
+                  onClose();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={save.isPending}>
+                {save.isPending ? "Saving…" : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </Form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ResetPasswordDialog({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const { refetch: refetchSession } = useSession();
+  const [formError, setFormError] = useState<string | null>(null);
+  const form = useForm<ResetValues>({
+    resolver: zodResolver(resetSchema),
+    defaultValues: { newPassword: "", confirmPassword: "" },
+  });
+
+  const reset = useMutation({
+    mutationFn: (values: ResetValues) =>
+      api<{ success: boolean }>(`/api/v1/admin/users/${user.id}/reset-password`, {
+        method: "POST",
+        body: JSON.stringify({ newPassword: values.newPassword }),
+      }),
+    onSuccess: () => {
+      // The toast never contains the password.
+      toast.success(`Password reset for ${user.name}; all their sessions were signed out`);
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      // The reset revokes sessions server-side; if the admin reset their own
+      // password, refresh the local session store.
+      void refetchSession();
+      onClose();
+    },
+    onError: (err) => setFormError(err instanceof Error ? err.message : "Request failed"),
+  });
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) {
+          form.reset();
+          onClose();
+        }
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Reset password</DialogTitle>
+          <DialogDescription>
+            Set a new password for {user.name} ({user.email}). No old password is needed. This
+            signs the user out of all their sessions and they must sign in again.
+          </DialogDescription>
+        </DialogHeader>
+        <Form {...form}>
+          <form
+            className="space-y-4"
+            onSubmit={form.handleSubmit((values) => reset.mutate(values))}
+          >
+            <FormField
+              control={form.control}
+              name="newPassword"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>New password</FormLabel>
+                  <FormControl>
+                    <Input {...field} type="password" autoComplete="new-password" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="confirmPassword"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Confirm new password</FormLabel>
+                  <FormControl>
+                    <Input {...field} type="password" autoComplete="new-password" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            {formError && <p className="text-destructive text-sm">{formError}</p>}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  form.reset();
+                  onClose();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={reset.isPending}>
+                {reset.isPending ? "Resetting…" : "Reset password"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </Form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

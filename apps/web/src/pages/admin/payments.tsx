@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 import { CopyButton, DataTable, PageHeader } from "../../components/page";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -24,9 +25,10 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
   pending: "secondary",
   failed: "destructive",
   cancelled: "destructive",
+  rejected: "destructive",
 };
 
-interface AdminPayment {
+export interface AdminPayment {
   id: string;
   workspace_id: string;
   workspace_name: string;
@@ -36,7 +38,12 @@ interface AdminPayment {
   provider_order_code: string;
   created_at: number;
   expires_at: number | null;
+  /** Actual creator, resolved server-side from the payment.create audit entry. */
+  initiator: { id: string; name: string | null; email: string | null } | null;
 }
+
+/** One-line, truncating cell content. The table row is whitespace-nowrap. */
+const truncate = "block max-w-full truncate";
 
 export default function AdminPaymentsPage() {
   const query = useAdminQuery<{ data: AdminPayment[] }>(
@@ -53,9 +60,22 @@ export default function AdminPaymentsPage() {
   );
 }
 
-function PaymentsTable({ payments }: { payments: AdminPayment[] }) {
+export function PaymentsTable({
+  payments,
+  search,
+  onSearchChange,
+}: {
+  payments: AdminPayment[];
+  /** Optional controlled search; falls back to internal state. */
+  search?: string;
+  onSearchChange?: (v: string) => void;
+}) {
+  const [fallbackSearch, setFallbackSearch] = useState("");
+  const value = onSearchChange ? (search ?? "") : fallbackSearch;
+  const setSearch = onSearchChange ?? setFallbackSearch;
   const queryClient = useQueryClient();
   const [toComplete, setToComplete] = useState<AdminPayment | null>(null);
+  const [toReject, setToReject] = useState<AdminPayment | null>(null);
 
   const complete = useMutation({
     mutationFn: (id: string) => api(`/api/v1/admin/payments/${id}/complete`, { method: "POST" }),
@@ -67,6 +87,27 @@ function PaymentsTable({ payments }: { payments: AdminPayment[] }) {
     onError: (err) => toast(err instanceof ApiError ? err.message : "Failed to complete payment"),
   });
 
+  const reject = useMutation({
+    mutationFn: (id: string) => api(`/api/v1/admin/payments/${id}/reject`, { method: "POST" }),
+    onSuccess: () => {
+      toast("Payment rejected");
+      void queryClient.invalidateQueries({ queryKey: ["admin", "payments"] });
+      // Customer-facing history lives under ["payments", workspaceId] per workspace.
+      void queryClient.invalidateQueries({ queryKey: ["payments"] });
+      // Mounted payment detail (billing/payments.tsx uses ["payment", workspaceId, paymentId]).
+      void queryClient.invalidateQueries({ queryKey: ["payment"] });
+      setToReject(null);
+    },
+    onError: (err) =>
+      toast(
+        err instanceof ApiError && err.code === "INVALID_STATE"
+          ? "This payment is no longer pending — it was already processed. Refresh to update."
+          : err instanceof ApiError
+            ? err.message
+            : "Failed to reject payment",
+      ),
+  });
+
   const columns: ColumnDef<AdminPayment, unknown>[] = [
     {
       accessorKey: "created_at",
@@ -76,6 +117,34 @@ function PaymentsTable({ payments }: { payments: AdminPayment[] }) {
       ),
     },
     { accessorKey: "workspace_name", header: "Workspace" },
+    {
+      id: "user",
+      // Sorting/search must match the email string, not the initiator object.
+      accessorFn: (row) => row.initiator?.email ?? "",
+      header: "User",
+      cell: (c) => {
+        const email = c.getValue<string>();
+        if (!email)
+          return <span className={`${truncate} font-mono text-muted-foreground`}>—</span>;
+        const ini = c.row.original.initiator;
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span tabIndex={0} className={`${truncate} text-xs`}>
+                {email}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              <div className="space-y-0.5">
+                <div>{ini?.name ?? "—"}</div>
+                <div>{email}</div>
+                <div className="font-mono text-muted-foreground">{ini?.id ?? "—"}</div>
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        );
+      },
+    },
     {
       accessorKey: "amount",
       header: "Amount",
@@ -114,9 +183,14 @@ function PaymentsTable({ payments }: { payments: AdminPayment[] }) {
         const p = c.row.original;
         if (p.status !== "pending") return null;
         return (
-          <Button size="sm" variant="outline" onClick={() => setToComplete(p)}>
-            Mark paid
-          </Button>
+          <span className="flex items-center gap-1">
+            <Button size="sm" variant="outline" onClick={() => setToComplete(p)}>
+              Mark paid
+            </Button>
+            <Button size="sm" variant="destructive" onClick={() => setToReject(p)}>
+              Reject
+            </Button>
+          </span>
         );
       },
     },
@@ -124,7 +198,13 @@ function PaymentsTable({ payments }: { payments: AdminPayment[] }) {
 
   return (
     <>
-      <DataTable columns={columns} data={payments} empty="No payments" />
+      <DataTable
+        columns={columns}
+        data={payments}
+        globalFilter={value}
+        onGlobalFilterChange={setSearch}
+        empty="No payments"
+      />
       <Dialog open={toComplete !== null} onOpenChange={(open) => !open && setToComplete(null)}>
         <DialogContent>
           <DialogHeader>
@@ -147,6 +227,33 @@ function PaymentsTable({ payments }: { payments: AdminPayment[] }) {
               onClick={() => toComplete && complete.mutate(toComplete.id)}
             >
               {complete.isPending ? "Confirming…" : "Confirm"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={toReject !== null} onOpenChange={(open) => !open && setToReject(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject payment?</DialogTitle>
+            <DialogDescription>
+              {toReject && (
+                <>
+                  {formatVnd(toReject.amount)} for workspace “{toReject.workspace_name}”. The
+                  payment is marked rejected and no balance will be credited. This cannot be undone.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setToReject(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={reject.isPending}
+              onClick={() => toReject && reject.mutate(toReject.id)}
+            >
+              {reject.isPending ? "Rejecting…" : "Reject"}
             </Button>
           </DialogFooter>
         </DialogContent>
