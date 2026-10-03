@@ -131,10 +131,16 @@ describe("POST /api/v1/admin/catalog/models", () => {
     }
   });
 
-  test("duplicate public_id → 400", async () => {
+  test("duplicate public_id → 409", async () => {
     await createModel({ slug: "dup1" });
-    const { res } = await createModel({ slug: "dup2" });
-    expect(res.status).toBe(400);
+    const res = await req(app, "/api/v1/admin/catalog/models", {
+      method: "POST",
+      cookie: iadmin,
+      body: { ...MODEL, slug: "dup2" },
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("DUPLICATE");
   });
 
   test("bad context_window / capabilities → 400", async () => {

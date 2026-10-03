@@ -173,7 +173,7 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
           context_window?: number | null;
         };
         const dup = await rawRows(db, sql`SELECT 1 FROM models WHERE public_id = ${m.public_id}`);
-        if (dup.length) return jsonError(400, "DUPLICATE", "public_id already exists");
+        if (dup.length) return jsonError(409, "DUPLICATE", "public_id already exists");
         const id = crypto.randomUUID();
         const now = Date.now();
         try {
