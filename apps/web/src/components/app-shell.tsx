@@ -10,6 +10,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  MessageSquare,
   Monitor,
   Moon,
   PanelLeft,
@@ -59,6 +60,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { label: "Models", to: "/models", icon: Boxes },
       { label: "API Keys", to: "/keys", icon: KeyRound },
+      { label: "Chat", to: "/chat", icon: MessageSquare },
       { label: "Logs", to: "/logs", icon: ScrollText },
       { label: "Usage", to: "/usage", icon: BarChart3 },
     ],

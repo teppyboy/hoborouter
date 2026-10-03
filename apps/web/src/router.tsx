@@ -25,10 +25,16 @@ import {
   payments,
   settings,
   usage,
+  lazyRoute,
 } from "./lib/prefetch";
 import { queryClient } from "./lib/query-client";
 
 const AdminAudit = lazy(() => import("./pages/admin/audit"));
+
+// Chat page exports a named component; remap to default for lazyRoute.
+const Chat = lazyRoute(() =>
+  import("./pages/chat").then((m) => ({ default: m.ChatPage })),
+);
 
 // Public auth pages (not part of nav prefetching).
 const Login = lazy(() => import("./pages/auth/login"));
@@ -149,6 +155,7 @@ const publicRoutes = [
 
 const protectedRoutes = [
   protectedRoute("/", overview),
+  protectedRoute("/chat", Chat),
   protectedRoute("/models", models),
   // Detail path uses a dedicated prefix so the splat cannot also match the
   // empty /models path (which would collide with the models index route).
