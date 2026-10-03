@@ -23,6 +23,7 @@ would point at the app container itself). `DATABASE_URL` is built in compose fro
 
    No `flush_interval -1` tuning is needed: streamed gateway responses send
    `x-accel-buffering: no`, so Caddy does not buffer SSE.
+
 5. First admin: set `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL` in `deploy/.env`
    before the first start, then sign up in the web UI with that exact email —
    it becomes the instance admin. Applies only while the instance has zero
@@ -54,9 +55,102 @@ docker compose exec -T db pg_restore -U hoborouter --clean --dbname hoborouter <
 
 The `hoborouter` service drops all Linux capabilities (`cap_drop: [ALL]`), sets `no-new-privileges`, and caps processes (`pids_limit: 512`) and memory (`mem_limit: 1g`). Uploaded avatars live in the `hoborouter-data` volume at `/data/avatars` (the image sets `HBR_AVATAR_DIR=/data/avatars`).
 
-## payOS webhook URL
+## payOS top-ups (optional, webhook-credited)
 
-Point the payOS dashboard webhook at `https://<your-domain>/webhooks/payments/payos` (confirm the exact path in `apps/api/src/routes/webhooks-payos.ts` before going live). The URL must be publicly reachable over HTTPS.
+payOS adds self-service instant top-ups next to the manual flow. Everything
+below assumes a working production deploy (reverse proxy + public HTTPS per
+"First deploy").
+
+### Environment variables
+
+All three go into gitignored `deploy/.env`, copied from
+`deploy/.env.example`:
+
+| Variable | Meaning |
+| --- | --- |
+| `PAYOS_CLIENT_ID` | payOS client ID from the payOS dashboard |
+| `PAYOS_API_KEY` | payOS API key from the payOS dashboard |
+| `PAYOS_CHECKSUM_KEY` | payOS checksum key; signs checkout requests and verifies webhooks (HMAC-SHA256) |
+
+payOS is enabled **only when all three are set**; any one missing leaves
+manual as the only payment method (`payosConfigFromEnv()` in
+`packages/payments/src/provider.ts`).
+
+### Required public URL
+
+`BETTER_AUTH_URL` (or fallback `HBR_BASE_URL`) must be the instance's public
+HTTPS base URL — production startup fails without one, and the payOS
+return/cancel redirects are built from it. The app is published on
+`127.0.0.1:3000` only; TLS terminates in the reverse proxy.
+
+### payOS dashboard webhook URL
+
+Point the payOS dashboard webhook at:
+
+```text
+https://<your-domain>/webhooks/payments/payos
+```
+
+The URL must be publicly reachable over HTTPS (payOS calls it server-side).
+The route is live only while the three `PAYOS_*` vars are set — it returns
+404 otherwise. Incoming payloads are signature-verified with
+`PAYOS_CHECKSUM_KEY`; a valid webhook is the **sole credit path** for payOS
+payments (idempotent replays return 200 without a second credit; bad
+signature, unknown order, or amount mismatch return 400 with no wallet
+change). Route implementation: `apps/api/src/routes/webhooks-payos.ts`.
+
+### Return / cancel URLs
+
+Both are set by the backend to the same display-only page:
+`<BETTER_AUTH_URL>/billing/payments?payment=<id>`. The browser redirect back
+from payOS is informational only — status is never read from query
+parameters; the billing UI polls the backend, and only the webhook credits
+the wallet.
+
+### Secret (checksum/API) key handling
+
+Treat `PAYOS_CHECKSUM_KEY`, `PAYOS_API_KEY`, and `PAYOS_CLIENT_ID` like the
+other deploy secrets:
+
+- live only in gitignored `deploy/.env` (see `scripts/generate-secrets.sh`
+  conventions); never in the repo, Dockerfiles, or CI logs;
+- never in API responses — `GET /api/v1/payment-methods` exposes only the
+  boolean `payos: true/false`, and a failed checkout returns a generic 502
+  with no upstream body or credential material;
+- rotate in the payOS dashboard, then update `deploy/.env` and restart the
+  container (below).
+
+### Local testing with the fake server
+
+No payOS account, webhook tunnel, or live charge is needed to develop or
+CI-test the payOS path:
+
+1. `bun run db:test:up` (test Postgres on 127.0.0.1:55432).
+2. `PORT=3998 bun run test` —
+   `apps/api/test/payments-payos.test.ts` injects a fake payOS `fetch`
+   (no network, no real credentials) and asserts the signed checkout
+   request, return/cancel URLs, 502-on-failure, and that creating never
+   moves the wallet; `apps/api/test/webhooks-payos.test.ts` posts locally
+   HMAC-signed webhook payloads and asserts credit, idempotent replays, and
+   no wallet change on bad signature/amount mismatch;
+   `tests/credits-payos-ui.test.tsx` covers the UI provider gating.
+3. `POST /webhooks/payments/payos` is 404 when the `PAYOS_*` env is unset,
+   so unconfigured dev instances never expose the route.
+
+### Production restart
+
+After adding the three `PAYOS_*` vars (and confirming `BETTER_AUTH_URL`) to
+`deploy/.env`, recreate the container from inside `deploy/` so compose picks
+up the new env:
+
+```sh
+docker compose up -d
+```
+
+Editing `.env` does not affect a running container; `up -d` recreates
+`hoborouter` only when its environment changed. Then set the webhook URL in
+the payOS dashboard and run one small test top-up through the billing UI to
+confirm the webhook credits the wallet.
 
 ## Paid gateway
 
@@ -68,7 +162,7 @@ Point the payOS dashboard webhook at `https://<your-domain>/webhooks/payments/pa
 
 ## Payments: manual top-ups, admin-completed
 
-Top-ups are provider `manual` in every environment: a workspace member creates a pending payment via `POST /api/v1/workspaces/:id/payments`, and an INSTANCE ADMIN (only) completes it with `POST /api/v1/admin/payments/:id/complete` after confirming the money out-of-band (Admin → Payments → mark paid). There is no customer self-completion path and no dev-only completion endpoint. payOS stays optional — set all of `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY` to use it. Legacy provider `mock` rows are still readable and admin-completable; the legacy signed webhook route is gated by `HBR_MOCK_PAYMENTS` and only enabled when `HBR_MOCK_PAYMENTS_WEBHOOK_KEY` is set.
+Top-ups are provider `manual` in every environment: a workspace member creates a pending payment via `POST /api/v1/workspaces/:id/payments`, and an INSTANCE ADMIN (only) completes it with `POST /api/v1/admin/payments/:id/complete` after confirming the money out-of-band (Admin → Payments → mark paid). There is no customer self-completion path and no dev-only completion endpoint. payOS setup (credentials, dashboard webhook URL, local fake-server testing, production restart) is covered in "payOS top-ups" above. Legacy provider `mock` rows are still readable and admin-completable; the legacy signed webhook route is gated by `HBR_MOCK_PAYMENTS` and only enabled when `HBR_MOCK_PAYMENTS_WEBHOOK_KEY` is set.
 
 ## Upgrade / migration policy
 

@@ -39,6 +39,7 @@ CPA runs on `127.0.0.1:8317` with a generated 256-bit management key. Add provid
 - `DATABASE_URL` — PostgreSQL URL, required everywhere (dev, tests, production).
 - `HBR_WEB_DIST` — web build directory override.
 - `HBR_MOCK_PAYMENTS` / `HBR_MOCK_PAYMENTS_WEBHOOK_KEY` — legacy signed mock webhook only; new top-ups are provider `manual` and never use it.
+- `PAYOS_CLIENT_ID` / `PAYOS_API_KEY` / `PAYOS_CHECKSUM_KEY` — optional payOS instant top-ups; all three (from the payOS dashboard) or payOS stays off. Webhook URL `https://<your-domain>/webhooks/payments/payos` is set in the payOS dashboard; return/cancel redirects come from `BETTER_AUTH_URL`/`HBR_BASE_URL`. Setup: `docs/deployment.md` → "payOS top-ups".
 - `CPA_MANAGEMENT_KEY` — CPA management API key.
 - `CPA_ACCESS_KEY` — CPA access key.
 - `HBR_IDLE_TIMEOUT_S` — API idle timeout, 1–255 s (default 255).
