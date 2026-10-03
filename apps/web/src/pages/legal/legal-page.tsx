@@ -12,10 +12,19 @@ function inline(text: string, keyBase: string) {
   while ((m = re.exec(text))) {
     if (m.index > last) parts.push(text.slice(last, m.index));
     if (m[1] !== undefined) {
+      // Untrusted markdown (Chat pipes model output here): only http(s) and
+      // same-origin relative paths may become anchors. "//host" is protocol-relative
+      // and can point off-origin, so it is excluded.
+      const href = m[2] ?? "";
+      const safe = /^(https?:\/\/|\/(?!\/))/.test(href);
       parts.push(
-        <a key={`${keyBase}-${i++}`} href={m[2]} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">
-          {m[1]}
-        </a>,
+        safe ? (
+          <a key={`${keyBase}-${i++}`} href={href} target={href.startsWith("/") ? undefined : "_blank"} rel={href.startsWith("/") ? undefined : "noopener noreferrer"} className="text-primary underline underline-offset-2">
+            {m[1]}
+          </a>
+        ) : (
+          <span key={`${keyBase}-${i++}`} className="text-primary underline underline-offset-2">{m[1]}</span>
+        ),
       );
     } else if (m[3] !== undefined) {
       parts.push(<strong key={`${keyBase}-${i++}`}>{m[3]}</strong>);
