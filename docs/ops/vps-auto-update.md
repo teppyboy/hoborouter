@@ -56,11 +56,12 @@ actual backup path.
 
 `/etc/systemd/system/hoborouter-update.service`:
 `ExecStart=/opt/hoborouter/deploy/vps-deploy.sh`,
-`WorkingDirectory=/opt/hoborouter/deploy`. User with docker-group membership;
-no root.
+`WorkingDirectory=/opt/hoborouter/deploy`, `Type=oneshot`,
+`TimeoutStartSec=600` (bounds one deploy run). User with docker-group
+membership; no root.
 
-`hoborouter-update.timer`: `OnCalendar=hourly`, `Persistent=true`,
-`RandomizedDelaySec=300`.
+`hoborouter-update.timer`: `OnCalendar=*:0/15` (every 15 minutes),
+`Persistent=true`, `RandomizedDelaySec=120`.
 
 ## Secrets handling
 

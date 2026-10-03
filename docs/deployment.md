@@ -13,7 +13,21 @@ would point at the app container itself). `DATABASE_URL` is built in compose fro
 1. `scripts/generate-secrets.sh` — creates gitignored `deploy/.env` with `CPA_MANAGEMENT_KEY` and `CPA_ACCESS_KEY`. Add `POSTGRES_PASSWORD` (required — compose refuses to start without it), `BETTER_AUTH_SECRET` (`openssl rand -hex 32`, min 32 chars), and `BETTER_AUTH_URL` (public URL; `HBR_BASE_URL` is also accepted — `apps/api/src/auth.ts` throws at startup in production without one). payOS credentials are optional. Names are documented in `deploy/.env.example`.
 2. Ensure `deploy/cpa/config.yaml` exists (`sh deploy/cpa/render-config.sh`).
 3. From `deploy/`: `docker compose up -d --wait`.
-4. `hoborouter` is published on `127.0.0.1:3000` only. Terminate TLS in a reverse proxy (Caddy/nginx) that forwards to `127.0.0.1:3000`; never expose the port directly.
+4. `hoborouter` is published on `127.0.0.1:3000` only. Terminate TLS in a reverse proxy (Caddy/nginx) that forwards to `127.0.0.1:3000`; never expose the port directly. Minimal Caddyfile:
+
+   ```
+   example.com {
+     reverse_proxy 127.0.0.1:3000
+   }
+   ```
+
+   No `flush_interval -1` tuning is needed: streamed gateway responses send
+   `x-accel-buffering: no`, so Caddy does not buffer SSE.
+5. First admin: set `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL` in `deploy/.env`
+   before the first start, then sign up in the web UI with that exact email —
+   it becomes the instance admin. Applies only while the instance has zero
+   admins (any `NODE_ENV`); if the user already exists it is granted at the
+   next startup. The image contains no `scripts/` directory.
 
 ### Pulling the image
 

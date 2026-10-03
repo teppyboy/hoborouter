@@ -42,7 +42,7 @@ CPA runs on `127.0.0.1:8317` with a generated 256-bit management key. Add provid
 - `CPA_MANAGEMENT_KEY` — CPA management API key.
 - `CPA_ACCESS_KEY` — CPA access key.
 - `HBR_IDLE_TIMEOUT_S` — API idle timeout, 1–255 s (default 255).
-- `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL` — bootstrap instance-admin email, when configured.
+- `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL` — first admin: the user who signs up with this email becomes instance admin; ignored once an admin exists.
 - `NODE_ENV` — top-ups complete only via the instance admin (`POST /api/v1/admin/payments/:id/complete`); there is no dev self-complete path.
 
 See `deploy/.env.example` for the full annotated list.
