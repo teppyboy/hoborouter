@@ -1,0 +1,44 @@
+# Research: New API — model naming, mapping, and rename semantics
+
+Primary sources: repo `github.com/QuantumNous/new-api` (shallow-cloned to /tmp, main branch, read directly) and `docs.newapi.pro`. Repo file paths cited below are relative to repo root. No AGPL code copied; behavior/design only.
+
+## 1. Channel 'model mapping' (model redirect)
+
+- Storage: a column on the channels table — `model/channel.go:42` `ModelMapping *string \`json:"model_mapping" gorm:"type:text"\`` — a JSON object `{"public-name": "upstream-name"}` stored as text. Confidence: high (direct source).
+- Application point: per-request in the relay path, not persisted. `middleware/distributor.go:616` (`SetupContextForSelectedChannel`) puts the raw JSON into the gin context key `model_mapping` (`constant/context_key.go:37`); every relay handler then calls `ModelMappedHelper` (`relay/helper/model_mapped.go`) at entry — `relay/compatible_handler.go:42`, `claude_handler.go:37`, `embedding_handler.go:32`, `audio_handler.go:31`, `rerank_handler.go:33`, `alpha_search_handler.go:47`, `relay/relay_task.go:227,244`, responses websocket `relay/responses_websocket.go:591`. Confidence: high.
+- Semantics (`relay/helper/model_mapped.go`): unmarshal to `map[string]string`; walks chains (`a→b→c` uses the chain tail, "支持链式模型重定向"); falls back to the base model name (modifier suffixes like `-thinking` stripped via `setting/reasoning.BaseModelName`); cycle detection returns error "model mapping contains cycle"; self-map (`a→a`) is a no-op. Sets `info.IsModelMapped` + `UpstreamModelName` and rewrites the request model (`request.SetModelName`). Confidence: high.
+- Effect on selection: mapping is applied AFTER channel selection — routing (`abilities` table, `model/ability.go` — PK `(group, model, channel_id)`, name-keyed) matches the public name; mapping only rewrites what is sent upstream. Edits take effect on the next request (channel cache `model/channel_cache.go`). Confidence: high.
+
+## 2. Models management page (metadata)
+
+- Backing table `models` (`model/model_meta.go` `Model` struct): `ModelName` (unique index with `deleted_at`), `Description`, `Icon` (varchar 128), `Tags` (varchar 255), `VendorID` (FK-ish, validated by `validateModelVendor`), `Endpoints` (text), `Status` (1=enabled/0=disabled), `SyncOfficial`, `NameRule` (enum `NameRuleExact/Prefix/Suffix/Contains`), soft delete. Confidence: high.
+- Name-matching: `MatchesName` (exact/HasPrefix/HasSuffix/Contains); resolution precedence exact → prefix → suffix → contains, first match wins (`resolveModelMetadata`). Metadata is a display/catalog overlay: it never creates routes; routing uses `channels.models` + `abilities`, both name-keyed. Non-exact rows aggregate `MatchedModels`/`MatchedCount` for concrete channel names. Confidence: high.
+- Visibility policy: `FillModelSquareStates` — square states visible/unavailable/hidden/partial derived from enabled abilities vs metadata status. Confidence: high.
+- API/validation (`controller/model_meta.go`): CRUD at `/api/models*`; create/update require non-empty name + duplicate check (`IsModelNameDuplicated`, scoped by `id <> ?` and soft-deleted rows excluded via gorm) + `ValidateMetadataValues` (endpoints/status/name_rule); `?status_only=true` updates just the toggle; delete supports `remove_from_channels` (exact-rule only; rewrites `channels.models` + abilities in one tx) and `remove_pricing` (root-only, deletes pricing option entries); both audited via `recordManageAudit`. Confidence: high.
+- UI: React pages `web/src/features/models/` (zod schema with `icon`, `vendor_id`, `endpoints`, `name_rule`: `web/src/features/models/types.ts:272-275`) and channel-side redirect editor `web/src/features/channels/components/model-redirect-panel.tsx` + `model-mapping-editor.tsx`; channel form validation "Model mapping must be a JSON object with string values" (`web/src/features/channels/lib/channel-form.ts:216`). Docs page is thin: https://docs.newapi.pro/en/docs/guide/feature-guide/admin/model (add/edit models, sync upstream lists with Added/Changed/Deleted preview); channel docs https://docs.newapi.pro/en/docs/guide/console/channel-management document param override incl. `original_model`/`upstream_model` condition variables (zh version). Confidence: high for source, medium for docs completeness.
+
+## 3. What a name change / mapping edit does (and does not) touch
+
+- Token allowlists: `tokens.model_limits` (comma list, `model/token.go:25,338-346`) checked against the ORIGIN public model name before channel selection (`middleware/distributor.go:57-71`, `TokenModelLimitAllows` at :513 with formatted/routing-name normalization). Mapping edits never affect allowlists; renaming a public name breaks them — everything is keyed by name, there is NO rename cascade. Confidence: high.
+- Pricing/billing: ratio/price/billing-expression entries are keyed by model name. Billing identity is `GetBillingModelName()` (`relay/common/relay_info.go:837`): defaults to the ORIGIN (public) name; `resolveBillingModelName` (`relay/helper/price.go:312`) tries origin → canonical modifier variants → base name, first with a configured price/ratio entry wins. Mapping changes the upstream name but NOT the billed name (billed name only re-resolves via the base-model fallback, e.g. `gpt-4o-2024-08-13` bills as `gpt-4o` if only that has an entry). Confidence: high.
+- Logs/stats: `logs.model_name` is a plain indexed text column (`model/log.go:67`); daily stats table also keyed by `model_name` (`model/usedata.go:17`). When mapped, the log records the origin/billed name plus `is_model_mapped` and `upstream_model_name` in the `other` JSON (`service/log_info_generate.go:115-146`). Historical rows keep the name used at request time; renaming does not rewrite history. Confidence: high.
+- Metadata rename: `Model.Update()` updates only metadata columns (`model/model_meta.go` Update — model_name, description, icon, tags, vendor_id, endpoints, status, sync_official, name_rule). No cascade to channels, abilities, tokens, pricing, or logs; metadata just re-matches by rule afterwards. The only cascades in the codebase are the opt-in delete ones above. Confidence: high.
+
+## 4. Alias / multiple-names-per-model support
+
+- No first-class alias table. Achieved via: (a) channel `model_mapping` chains (any public name → one upstream name, per channel); (b) the same public name served by many channels; (c) metadata `NameRule` prefix/suffix/contains so one metadata row covers a family of names; (d) billing base-name fallback (one pricing entry covers dated variants). Task plugins additionally derive alias targets from mappings with a 60s cached view (`model/task_model_alias.go`, `ResolveTaskModelAlias`). Confidence: high (source), docs silent.
+
+## 5. Recommendation for Hoborouter
+
+Our model: `models.id` uuid + `models.public_id` (unique, currently immutable), `api_key_model_permissions` keyed by model_id, usage logs store `public_model` text snapshots, `provider_model_mappings` route public → upstream. New API's key lesson: names are strings everywhere upstream of the DB; renames need app-level care. We are better positioned because keys and mappings are id-keyed. Minimal design:
+
+1. Make `public_id` editable: admin update endpoint accepts a new public_id, checks uniqueness (case-preserved, trimmed) in the same transaction as the update, writes an audit log entry (old → new). Keep FK integrity — nothing else references public_id.
+2. History is already safe: usage/requests store `public_model` text snapshots at request time, so old logs/statistics keep billing and attribution under the old name (matches New API's append-only log behavior). Do NOT rewrite history.
+3. Optional old-name alias: add `models.aliases` (text[], or a `model_aliases` table) so requests using a retired name still route and bill under the same model id; resolve alias → model_id early in the relay path (equivalent of New API's origin-name resolution), log the requested alias in the request snapshot. Ship only if rename-with-continuity is actually needed; an editable public_id alone covers the main gap.
+4. Keep `provider_model_mappings` and `api_key_model_permissions` keyed by model_id (already true) — renames and mapping edits then never orphan allowlists, unlike New API's name-keyed tokens. Mapping edits should be per-provider, applied at dispatch (same point as New API's per-request helper), and validated as a JSON map with uniqueness/cycle checks.
+5. Validation surface: non-empty, unique, charset/length rule for public_id; provider mapping entries must be non-empty strings; audit both rename and mapping edits.
+
+## Confidence summary
+
+- All source-cited claims: high (read directly from a fresh shallow clone of main).
+- Docs pages: high for existence/content quoted, medium for completeness (model-mapping itself is undocumented; source is authoritative).

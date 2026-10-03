@@ -12,6 +12,8 @@ const ADMIN_EMAIL = (process.env.HBR_DEV_ADMIN_EMAIL ?? "admin@e2e.test").toLowe
 const USER2_EMAIL = "user2@e2e.test";
 const PASSWORD = "correct horse battery staple";
 const MODEL_ID = "fake/test-model";
+// Temporary public ID used only by the rename step (renamed back afterwards).
+const NEW_MODEL_ID = "fake/test-model-2";
 const REPORT = "/tmp/hbr-e2e/report.json";
 const SHOTS = process.env.E2E_SHOTS === "1";
 const SHOT_DIR = "/tmp/hbr-e2e/shots";
@@ -795,6 +797,72 @@ async function main() {
     assert(json.usage?.input_tokens > 0, "usage present");
   });
 
+  // --- admin renames a model public ID (after the funded gateway steps: the
+  // wallet must have balance for the NEW-id 200; renamed back so the log and
+  // usage steps below keep using the original public ID) ---
+  await step("admin renames a model public ID", async () => {
+    const renameTo = async (from: string, to: string) => {
+      await page.clickRowAction(from, "Open");
+      // Sheet opens on the Details tab.
+      await page.setInput("Public ID (what clients send)", to);
+      // First Save with a changed ID only arms the confirm row.
+      await page.click("Save");
+      await page.waitForText("will stop working");
+      await page.waitForText("Confirm rename");
+      await page.click("Confirm rename");
+      await page.waitForText("Model updated");
+      await evaluate(
+        `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`,
+      );
+      await page.waitForGone("Confirm rename");
+    };
+    await goto("/admin/models");
+    await page.waitForText(MODEL_ID);
+    await renameTo(MODEL_ID, NEW_MODEL_ID);
+    // The table now shows the new public ID, still Listed (Details saves must
+    // not silently disable/unpublish the model). Poll: the invalidate refetch
+    // re-renders async after the sheet closes.
+    await waitForExpr(
+      `[...document.querySelectorAll('tbody tr')].some(r => r.textContent.includes(${JSON.stringify(NEW_MODEL_ID)}))`,
+      "models table shows the renamed public ID",
+    );
+    const rowNew = await evaluate<string>(
+      `[...document.querySelectorAll('tbody tr')].find(r => r.textContent.includes(${JSON.stringify(NEW_MODEL_ID)}))?.textContent ?? ''`,
+    );
+    assert(
+      rowNew.includes("Listed") && !rowNew.includes("Hidden"),
+      `renamed model still Listed, got "${rowNew.slice(0, 120)}"`,
+    );
+    // Gateway resolves the NEW id (200) and 404s the OLD one.
+    const call = (model: string) =>
+      fetch(`${BASE}/v1/chat/completions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: "hi" }],
+          stream: false,
+        }),
+      });
+    const newRes = await call(NEW_MODEL_ID);
+    assert(newRes.status === 200, `renamed id should be 200, got ${newRes.status}`);
+    const oldRes = await call(MODEL_ID);
+    assert(oldRes.status === 404, `old id should be 404, got ${oldRes.status}`);
+    // Rename back so later steps keep using the original public ID.
+    await renameTo(NEW_MODEL_ID, MODEL_ID);
+    await waitForExpr(
+      `[...document.querySelectorAll('tbody tr')].some(r => r.textContent.includes(${JSON.stringify(MODEL_ID)}) && !r.textContent.includes(${JSON.stringify(NEW_MODEL_ID)}))`,
+      "models table shows the original public ID again",
+    );
+    const rowOld = await evaluate<string>(
+      `[...document.querySelectorAll('tbody tr')].find(r => r.textContent.includes(${JSON.stringify(MODEL_ID)}) && !r.textContent.includes(${JSON.stringify(NEW_MODEL_ID)}))?.textContent ?? ''`,
+    );
+    assert(
+      rowOld.includes("Listed") && !rowOld.includes("Hidden"),
+      "model still Listed after rename-back",
+    );
+  });
+
   // --- logs, usage, overview show requests/spend ---
   await step("logs show gateway requests", async () => {
     await goto("/logs");
@@ -988,6 +1056,20 @@ async function main() {
     // Rows load async after the header; wait for the actual row.
     await page.waitForText(ADMIN_EMAIL);
     assert(await page.has(ADMIN_EMAIL), "admin email listed");
+    // Joined column must show a real formatted date, not the "—" placeholder.
+    const joined = await evaluate<string | null>(
+      `(() => {
+        const row = [...document.querySelectorAll('tbody tr')].find(r => r.textContent.includes(${JSON.stringify(ADMIN_EMAIL)}));
+        if (!row) return null;
+        const th = [...row.closest('table').querySelectorAll('thead th')];
+        const idx = th.findIndex(t => t.textContent.trim() === 'Joined');
+        return row.children[idx]?.textContent.trim() ?? null;
+      })()`,
+    );
+    assert(
+      !!joined && joined !== "—" && /\d/.test(joined),
+      `Joined cell shows a real date, got "${joined}"`,
+    );
   });
 
   await step("admin system page renders", async () => {
