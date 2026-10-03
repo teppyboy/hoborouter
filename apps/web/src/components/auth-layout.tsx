@@ -15,7 +15,7 @@ export function AuthLayout({ children }: { children: ReactNode }) {
         </div>
       </div>
       <div className="flex flex-1 items-center justify-center p-6">
-        <div className="w-full max-w-[360px] rounded-lg border bg-card p-6">{children}</div>
+        <div className="w-full max-w-[360px] rounded-lg border border-border bg-card p-6">{children}</div>
       </div>
     </div>
   );
