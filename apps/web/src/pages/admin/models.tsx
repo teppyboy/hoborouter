@@ -31,7 +31,7 @@ import {
   SelectValue,
 } from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
-import { api } from "../../lib/api";
+import { api, ApiError } from "../../lib/api";
 import { formatDate, formatUsdMicroPer1m } from "../../lib/format";
 import {
   AdminGate,
@@ -42,10 +42,26 @@ import {
 } from "./shared";
 
 // Matches backend PUBLIC_ID_RE: bare lowercase slug or '<provider>/<name>'.
-const PUBLIC_ID_RE = /^(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)?[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const PUBLIC_ID_RE = /^(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)?[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-const schema = z.object({
-  public_id: z.string().regex(PUBLIC_ID_RE, "Must be a lowercase slug or 'provider/name'"),
+export const RENAME_WARNING = (oldPublicId: string) =>
+  `Clients and API keys' saved configs using ${oldPublicId} will stop working; usage history keeps the old name.`;
+
+export const slugFromPublicId = (publicId: string) => publicId.split("/").pop() ?? publicId;
+
+/** Map a rename failure to a field error; null means show it at form root. */
+export function renameFieldError(
+  code: string,
+  message: string,
+): { field: "public_id"; message: string } | null {
+  if (code === "DUPLICATE")
+    return { field: "public_id", message: "Another model already uses this ID" };
+  if (code === "INVALID") return { field: "public_id", message };
+  return null;
+}
+
+export const schema = z.object({
+  public_id: z.string().trim().regex(PUBLIC_ID_RE, "Must be a lowercase slug or 'provider/name'"),
   display_name: z.string().min(1, "Required"),
   provider: z.string().min(1, "Required"),
   description: z.string().optional(),
@@ -56,6 +72,27 @@ const schema = z.object({
   prompt_caching: z.enum(["inherit", "on", "off"]),
 });
 type Values = z.infer<typeof schema>;
+
+/**
+ * Details-form defaults. The Postgres-backed API returns real booleans here;
+ * truthy coercion (never `=== 1`) also tolerates legacy 1/0 rows.
+ */
+export function detailsDefaults(model: AdminModel): Values {
+  return {
+    public_id: model.public_id,
+    display_name: model.display_name,
+    provider: model.provider,
+    description: model.description ?? "",
+    capabilities: model.capabilities ? JSON.parse(model.capabilities).join(", ") : "",
+    context_window: model.context_window == null ? "" : String(model.context_window),
+    enabled: !!model.enabled,
+    published: !!model.published,
+    prompt_caching:
+      model.prompt_caching === "on" || model.prompt_caching === "off"
+        ? model.prompt_caching
+        : "inherit",
+  };
+}
 
 /** Price history row from GET /models/:id/prices. */
 interface PriceRow {
@@ -74,7 +111,7 @@ interface MappingRow {
   id?: string;
   provider: string;
   upstream_model: string;
-  enabled: number;
+  enabled: boolean;
   created_at: number;
 }
 
@@ -242,8 +279,8 @@ function RoutingSection({ model }: { model: AdminModel }) {
   );
   const cpaIds = (cpaModels.data?.data ?? []).map((m) => m.id);
   const rows = mappings.data ?? [];
-  const enabled = rows.filter((r) => r.enabled === 1);
-  const history = rows.filter((r) => r.enabled !== 1);
+  const enabled = rows.filter((r) => r.enabled);
+  const history = rows.filter((r) => !r.enabled);
   const current = enabled[0] ?? null;
   const [provider, setProvider] = useState(current?.provider ?? "");
   const [upstreamModel, setUpstreamModel] = useState(current?.upstream_model ?? "");
@@ -412,22 +449,10 @@ function DetailsSection({
   onSaved: () => void;
 }) {
   const qc = useQueryClient();
+  const [confirmRename, setConfirmRename] = useState(false);
   const form = useForm<Values>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      public_id: model.public_id,
-      display_name: model.display_name,
-      provider: model.provider,
-      description: model.description ?? "",
-      capabilities: model.capabilities ? JSON.parse(model.capabilities).join(", ") : "",
-      context_window: model.context_window == null ? "" : String(model.context_window),
-      enabled: model.enabled === 1,
-      published: model.published === 1,
-      prompt_caching:
-        model.prompt_caching === "on" || model.prompt_caching === "off"
-          ? model.prompt_caching
-          : "inherit",
-    },
+    defaultValues: detailsDefaults(model),
   });
 
   const mutation = useMutation({
@@ -438,7 +463,8 @@ function DetailsSection({
       return api(`/api/v1/admin/catalog/models/${model.id}`, {
         method: "PUT",
         body: JSON.stringify({
-          slug: v.public_id.split("/").pop(),
+          public_id: v.public_id.trim(),
+          slug: slugFromPublicId(v.public_id.trim()),
           display_name: v.display_name,
           provider: v.provider,
           description: v.description || null,
@@ -452,14 +478,54 @@ function DetailsSection({
     },
     onSuccess: () => {
       toast("Model updated");
+      setConfirmRename(false);
       void qc.invalidateQueries({ queryKey: ["admin", "models"] });
+      void qc.invalidateQueries({ queryKey: ["admin", "model", model.id] });
       onSaved();
     },
-    onError: (e) => form.setError("root", { message: e.message }),
+    onError: (e) => {
+      const mapped = e instanceof ApiError ? renameFieldError(e.code, e.message) : null;
+      if (mapped) form.setError(mapped.field, { message: mapped.message });
+      else form.setError("root", { message: e.message });
+    },
+  });
+
+  const publicId = form.watch("public_id").trim();
+  const renamed = publicId !== model.public_id;
+  const submit = form.handleSubmit((v) => {
+    // Confirm step: first Save with a changed ID arms the confirm row instead
+    // of saving, so an accidental rename can't happen in one click.
+    if (renamed && !confirmRename) {
+      setConfirmRename(true);
+      return;
+    }
+    mutation.mutate(v);
   });
 
   return (
-    <form onSubmit={form.handleSubmit((v) => mutation.mutate(v))} className="grid gap-3">
+    <form onSubmit={submit} className="grid gap-3">
+      <div className="grid gap-1.5">
+        <Label htmlFor="public_id">Public ID (what clients send)</Label>
+        <Input
+          id="public_id"
+          className="font-mono"
+          {...form.register("public_id", { onChange: () => setConfirmRename(false) })}
+        />
+        {form.formState.errors.public_id && (
+          <p className="text-xs text-destructive">{form.formState.errors.public_id.message}</p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Slug: <span className="font-mono">{slugFromPublicId(publicId)}</span>
+        </p>
+        {renamed && (
+          <div className="rounded-md border border-destructive/50 bg-destructive/5 p-3 text-sm">
+            <p className="flex items-center gap-1 font-medium text-destructive">
+              <AlertTriangle className="size-3" /> Renaming this model
+            </p>
+            <p className="mt-1 text-destructive">{RENAME_WARNING(model.public_id)}</p>
+          </div>
+        )}
+      </div>
       <div className="grid gap-1.5">
         <Label htmlFor="display_name">Display name</Label>
         <Input id="display_name" {...form.register("display_name")} />
@@ -527,11 +593,33 @@ function DetailsSection({
       {form.formState.errors.root && (
         <p className="text-xs text-destructive">{form.formState.errors.root.message}</p>
       )}
-      <div>
-        <Button type="submit" disabled={mutation.isPending}>
-          Save
-        </Button>
-      </div>
+      {renamed && confirmRename ? (
+        <div className="flex items-center gap-2">
+          <span className="text-sm">
+            Rename to <span className="font-mono">{publicId}</span>?
+          </span>
+          <Button type="submit" size="sm" disabled={mutation.isPending}>
+            Confirm rename
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setConfirmRename(false);
+              form.setValue("public_id", model.public_id);
+            }}
+          >
+            Keep {model.public_id}
+          </Button>
+        </div>
+      ) : (
+        <div>
+          <Button type="submit" disabled={mutation.isPending}>
+            Save
+          </Button>
+        </div>
+      )}
     </form>
   );
 }
@@ -777,8 +865,7 @@ export default function AdminModelsPage() {
       header: "Status",
       cell: ({ row }) => {
         const m = row.original;
-        // SAFETY: older API responses sent listed as 1/0; accept both shapes.
-        const listed = m.listed === true || (m.listed as unknown as number) === 1;
+        const listed = !!m.listed;
         const hiddenText: Record<NonNullable<AdminModel["hidden_reason"]>, string> = {
           disabled: "Hidden: disabled",
           not_published: "Hidden: not published",

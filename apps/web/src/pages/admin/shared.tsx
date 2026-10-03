@@ -3,7 +3,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { EmptyState, ErrorState } from "../../components/page";
 import { ApiError, api } from "../../lib/api";
 
-/** Raw model row from GET /api/v1/admin/catalog/models (bun:sqlite, capabilities is JSON string). */
+/** Raw model row from GET /api/v1/admin/catalog/models (Postgres: real booleans; capabilities is a JSON string). */
 export interface AdminModel {
   id: string;
   public_id: string;
@@ -13,12 +13,12 @@ export interface AdminModel {
   description: string | null;
   capabilities: string | null;
   context_window: number | null;
-  enabled: number;
-  published: number;
+  enabled: boolean;
+  published: boolean;
   /** 'inherit' (follows global flag) | 'on' | 'off'. */
   prompt_caching?: string;
-  has_price: number;
-  has_mapping: number;
+  has_price: boolean;
+  has_mapping: boolean;
   created_at: number;
   updated_at: number;
   /** First enabled mapping (backend may not populate yet — treat as optional). */
@@ -26,7 +26,7 @@ export interface AdminModel {
     id: string;
     provider: string;
     upstream_model: string;
-    enabled: number;
+    enabled: boolean;
   } | null;
   /** Active price row (optional for the same reason). */
   current_price?: {

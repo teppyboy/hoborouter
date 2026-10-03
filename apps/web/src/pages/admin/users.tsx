@@ -36,7 +36,8 @@ interface AdminUser {
   email: string;
   name: string;
   created_at: number;
-  is_instance_admin: number;
+  // EXISTS(...) over Postgres → real boolean.
+  is_instance_admin: boolean;
   workspace_count: number;
 }
 
