@@ -304,7 +304,7 @@ describe("GET /v1/models (canonical)", () => {
 });
 
 describe("PUT public_id collision + /v1/models/:id gating", () => {
-  test("PUT to a colliding public_id → 400, no row change, no audit", async () => {
+  test("PUT to a colliding public_id → 409 DUPLICATE, no row change, no audit", async () => {
     const a = await createModel({ slug: "col-a", public_id: "openai/col-a" });
     await createModel({ slug: "col-b", public_id: "openai/col-b" });
     const auditsBefore = Number(
@@ -315,7 +315,10 @@ describe("PUT public_id collision + /v1/models/:id gating", () => {
       cookie: iadmin,
       body: { public_id: "openai/col-b" },
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(409);
+    expect(
+      ((await res.json()) as { error: { code: string } }).error,
+    ).toMatchObject({ code: "DUPLICATE" });
     const row = (await q<{ public_id: string }>(db, "SELECT public_id FROM models WHERE id = ?", a.id))[0]!;
     expect(row.public_id).toBe("openai/col-a");
     const auditsAfter = Number(
@@ -324,29 +327,26 @@ describe("PUT public_id collision + /v1/models/:id gating", () => {
     expect(auditsAfter).toBe(auditsBefore);
   });
 
-  test("PUT with changed public_id → 400 INVALID immutable, no write, no audit", async () => {
+  test("PUT with changed public_id → 200 rename, new slug, rename audit, same id", async () => {
     const m = await createModel({ slug: "immutable-id", public_id: "openai/immutable-id" });
-    const auditsBefore = Number(
-      (await q<{ c: string }>(db, "SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'"))[0]!.c,
-    );
     const res = await req(app, `/api/v1/admin/catalog/models/${m.id}`, {
       method: "PUT",
       cookie: iadmin,
       body: { public_id: "openai/renamed-id" },
     });
-    expect(res.status).toBe(400);
-    expect(
-      ((await res.json()) as { error: { code: string; message: string } }).error,
-    ).toMatchObject({
-      code: "INVALID",
-      message: "public_id is immutable",
+    expect(res.status).toBe(200);
+    const row = (await q<{ public_id: string; slug: string }>(db, "SELECT public_id, slug FROM models WHERE id = ?", m.id))[0]!;
+    expect(row.public_id).toBe("openai/renamed-id");
+    expect(row.slug).toBe("renamed-id");
+    const audit = (await q<{ detail: string }>(
+      db,
+      "SELECT detail FROM audit_log WHERE target = ? AND action = 'catalog.model.rename'",
+      m.id,
+    ))[0]!;
+    expect(JSON.parse(audit.detail)).toMatchObject({
+      from: "openai/immutable-id",
+      to: "openai/renamed-id",
     });
-    const row = (await q<{ public_id: string }>(db, "SELECT public_id FROM models WHERE id = ?", m.id))[0]!;
-    expect(row.public_id).toBe("openai/immutable-id");
-    const auditsAfter = Number(
-      (await q<{ c: string }>(db, "SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'"))[0]!.c,
-    );
-    expect(auditsAfter).toBe(auditsBefore);
   });
 
   test("/v1/models/:id → 404 for unpublished model", async () => {

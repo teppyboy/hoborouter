@@ -5,7 +5,7 @@
 import { Elysia, t } from "elysia";
 import type { Db, Tx } from "@hoborouter/db";import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, writeAudit, jsonError } from "../authz";
-import { MAX_SAFE_INTEGER_MONEY } from "@hoborouter/db";
+import { MAX_SAFE_INTEGER_MONEY, isUniqueViolation } from "@hoborouter/db";
 import { sql, type SQL } from "drizzle-orm";
 import { getCurrentPrice, listPublicModels } from "@hoborouter/catalog";
 
@@ -176,18 +176,25 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
         if (dup.length) return jsonError(400, "DUPLICATE", "public_id already exists");
         const id = crypto.randomUUID();
         const now = Date.now();
-        await db.transaction(async (tx) => {
-          await tx.execute(
-            sql`INSERT INTO models (id, public_id, slug, display_name, provider, description, capabilities, context_window, enabled, published, prompt_caching, created_at, updated_at) VALUES (${id}, ${m.public_id}, ${m.slug}, ${m.display_name}, ${m.provider}, ${m.description ?? null}, ${m.capabilities === undefined || m.capabilities === null ? null : JSON.stringify(m.capabilities)}, ${m.context_window ?? null}, ${b.enabled === false ? false : true}, ${b.published === true ? true : false}, ${(b.prompt_caching as string | undefined) ?? "inherit"}, ${now}, ${now})`,
-          );
-          await writeAudit(tx, {
-            actorUserId: userId,
-            workspaceId: null,
-            action: "catalog.model.create",
-            target: id,
-            detail: { public_id: m.public_id, slug: m.slug, provider: m.provider },
+        try {
+          await db.transaction(async (tx) => {
+            await tx.execute(
+              sql`INSERT INTO models (id, public_id, slug, display_name, provider, description, capabilities, context_window, enabled, published, prompt_caching, created_at, updated_at) VALUES (${id}, ${m.public_id}, ${m.slug}, ${m.display_name}, ${m.provider}, ${m.description ?? null}, ${m.capabilities === undefined || m.capabilities === null ? null : JSON.stringify(m.capabilities)}, ${m.context_window ?? null}, ${b.enabled === false ? false : true}, ${b.published === true ? true : false}, ${(b.prompt_caching as string | undefined) ?? "inherit"}, ${now}, ${now})`,
+            );
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "catalog.model.create",
+              target: id,
+              detail: { public_id: m.public_id, slug: m.slug, provider: m.provider },
+            });
           });
-        });
+        } catch (e) {
+          // Concurrent create with the same public_id passes the pre-check; the
+          // unique index on models.public_id rejects the loser mid-transaction.
+          if (isUniqueViolation(e)) return jsonError(409, "DUPLICATE", "public_id already exists");
+          throw e;
+        }
         return new Response(JSON.stringify({ id, public_id: b.public_id }), {
           status: 201,
           headers: { "content-type": "application/json" },
@@ -289,13 +296,27 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
         const existing = existingRows[0];
         if (!existing) return jsonError(404, "NOT_FOUND", "Model not found");
         const b = (body ?? {}) as Record<string, unknown>;
-        // public_id is the stable public identifier and never mutable (P2).
-        if (b.public_id !== undefined && b.public_id !== existing.public_id) {
-          return jsonError(400, "INVALID", "public_id is immutable");
+        // public_id is renameable; old names stay only in history snapshots
+        // (usage_logs.public_model), never as an alias — old name 404s.
+        let renamedPublicId: string | null = null;
+        if (b.public_id !== undefined) {
+          if (typeof b.public_id !== "string")
+            return jsonError(400, "INVALID", "public_id must be a lowercase slug or '<provider>/<name>'");
+          const trimmed = b.public_id.trim();
+          if (trimmed !== existing.public_id) {
+            if (!PUBLIC_ID_RE.test(trimmed))
+              return jsonError(400, "INVALID", "public_id must be a lowercase slug or '<provider>/<name>'");
+            const dup = await rawRows(
+              db,
+              sql`SELECT 1 FROM models WHERE public_id = ${trimmed} AND id <> ${params.id}`,
+            );
+            if (dup.length) return jsonError(409, "DUPLICATE", "public_id already exists");
+            renamedPublicId = trimmed;
+          }
         }
         const merged = {
-          public_id: b.public_id ?? existing.public_id,
-          slug: b.slug ?? (existing.slug as string),
+          public_id: renamedPublicId ?? (existing.public_id as string),
+          slug: renamedPublicId ? (renamedPublicId.split("/").pop() as string) : (b.slug ?? (existing.slug as string)),
           display_name: b.display_name ?? (existing.display_name as string),
           provider: b.provider ?? (existing.provider as string),
           capabilities: b.capabilities ?? parseCaps(existing.capabilities),
@@ -304,18 +325,33 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
         };
         const invalid = validateModelBody(merged as Record<string, unknown>);
         if (invalid) return jsonError(400, "INVALID", invalid);
-        await db.transaction(async (tx) => {
-          await tx.execute(
-            sql`UPDATE models SET slug = ${merged.slug as string}, display_name = ${merged.display_name as string}, provider = ${merged.provider as string}, description = ${b.description !== undefined ? (b.description as string | null) : (existing.description as string | null)}, capabilities = ${b.capabilities !== undefined ? (b.capabilities === null ? null : JSON.stringify(b.capabilities)) : (existing.capabilities == null ? null : JSON.stringify(existing.capabilities))}, context_window = ${b.context_window !== undefined ? ((b.context_window as number | null) ?? null) : ((existing.context_window as number | null) ?? null)}, enabled = ${b.enabled !== undefined ? !!b.enabled : !!existing.enabled}, published = ${b.published !== undefined ? !!b.published : !!existing.published}, prompt_caching = ${(b.prompt_caching as string | undefined) ?? (existing.prompt_caching as string)}, updated_at = ${Date.now()} WHERE id = ${params.id}`,
-          );
-          await writeAudit(tx, {
-            actorUserId: userId,
-            workspaceId: null,
-            action: "catalog.model.update",
-            target: params.id,
-            detail: b as Record<string, unknown>,
+        try {
+          await db.transaction(async (tx) => {
+            await tx.execute(
+              sql`UPDATE models SET public_id = ${merged.public_id}, slug = ${merged.slug as string}, display_name = ${merged.display_name as string}, provider = ${merged.provider as string}, description = ${b.description !== undefined ? (b.description as string | null) : (existing.description as string | null)}, capabilities = ${b.capabilities !== undefined ? (b.capabilities === null ? null : JSON.stringify(b.capabilities)) : (existing.capabilities == null ? null : JSON.stringify(existing.capabilities))}, context_window = ${b.context_window !== undefined ? ((b.context_window as number | null) ?? null) : ((existing.context_window as number | null) ?? null)}, enabled = ${b.enabled !== undefined ? !!b.enabled : !!existing.enabled}, published = ${b.published !== undefined ? !!b.published : !!existing.published}, prompt_caching = ${(b.prompt_caching as string | undefined) ?? (existing.prompt_caching as string)}, updated_at = ${Date.now()} WHERE id = ${params.id}`,
+            );
+            if (renamedPublicId)
+              await writeAudit(tx, {
+                actorUserId: userId,
+                workspaceId: null,
+                action: "catalog.model.rename",
+                target: params.id,
+                detail: { from: existing.public_id, to: renamedPublicId },
+              });
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "catalog.model.update",
+              target: params.id,
+              detail: b as Record<string, unknown>,
+            });
           });
-        });
+        } catch (e) {
+          // Concurrent rename to the same public_id passes the pre-check; the
+          // unique index on models.public_id rejects the loser mid-transaction.
+          if (isUniqueViolation(e)) return jsonError(409, "DUPLICATE", "public_id already exists");
+          throw e;
+        }
         return new Response(JSON.stringify({ id: params.id }), {
           headers: { "content-type": "application/json" },
         });
