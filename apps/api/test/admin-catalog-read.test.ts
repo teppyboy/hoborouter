@@ -217,16 +217,30 @@ describe("GET /api/v1/admin/cpa/models mapped_public_ids", () => {
   test("admin: maps upstream model to mapped public ids, keeps mapped flag", async () => {
     const { db, app, cookie } = await setup();
     await seedModel(db, "cat@example.com", { mapping: true });
+    // Prior values restored (not deleted) so parallel/isolated runs keep any
+    // ambient env intact; key is a test dummy, never logged.
+    const prevBase = process.env.CPA_BASE_URL;
+    const prevKey = process.env.CPA_ACCESS_KEY;
+    let fakeRequests = 0;
     const fake = Bun.serve({
       port: 0,
-      fetch: () =>
-        Response.json({ data: [{ id: "up-1", owned_by: "z-ai" }, { id: "other" }] }),
+      fetch: () => {
+        fakeRequests++;
+        return Response.json({ data: [{ id: "up-1", owned_by: "z-ai" }, { id: "other" }] });
+      },
     });
     process.env.CPA_BASE_URL = `http://127.0.0.1:${fake.port}`;
     process.env.CPA_ACCESS_KEY = "k";
     try {
       const res = await req(app, "/api/v1/admin/cpa/models", { cookie });
-      expect(res.status).toBe(200);
+      if (res.status !== 200) {
+        // Surface the route's error payload (code/message only; no secrets) so
+        // a flaky 502 is diagnosable from CI logs.
+        const body = await res.text();
+        throw new Error(
+          `GET /api/v1/admin/cpa/models -> ${res.status}; body=${body}; fakeRequests=${fakeRequests}`,
+        );
+      }
       const rows = (await res.json()) as {
         data: { id: string; owned_by: string | null; mapped: boolean; mapped_public_ids: string[] }[];
       };
@@ -245,8 +259,10 @@ describe("GET /api/v1/admin/cpa/models mapped_public_ids", () => {
       });
     } finally {
       fake.stop(true);
-      delete process.env.CPA_BASE_URL;
-      delete process.env.CPA_ACCESS_KEY;
+      if (prevBase === undefined) delete process.env.CPA_BASE_URL;
+      else process.env.CPA_BASE_URL = prevBase;
+      if (prevKey === undefined) delete process.env.CPA_ACCESS_KEY;
+      else process.env.CPA_ACCESS_KEY = prevKey;
     }
   });
 });
