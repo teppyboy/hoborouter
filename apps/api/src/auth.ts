@@ -7,6 +7,7 @@ import { betterAuth } from "better-auth";
 import { captcha } from "better-auth/plugins";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import type { Db } from "@hoborouter/db";
+import { bootstrapFirstInstanceAdmin } from "./instance-admin";
 import { schema, instanceAdmins } from "@hoborouter/db";
 
 /** Swap localhost<->127.0.0.1 host of an origin string; null if not one of them. */
@@ -64,6 +65,16 @@ export function createAuth(db: Db) {
       user: {
         create: {
           after: async (user) => {
+            // Production bootstrap: the configured email becomes instance admin
+            // in ANY environment, but only while the instance has zero admins.
+            const bootstrapEmail = process.env.HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL;
+            if (
+              bootstrapEmail &&
+              typeof user.email === "string" &&
+              user.email.toLowerCase() === bootstrapEmail.toLowerCase()
+            ) {
+              await bootstrapFirstInstanceAdmin(db, user.email);
+            }
             // Dev/test-only convenience: auto-grant instance admin to the
             // configured bootstrap email at signup. Production never lands here.
             const adminEmail = process.env.HBR_DEV_ADMIN_EMAIL;

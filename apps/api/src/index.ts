@@ -1,11 +1,18 @@
 import { buildApp } from "./app";
-import { bootstrapInstanceAdmin } from "./instance-admin";
+import { bootstrapFirstInstanceAdmin } from "./instance-admin";
 import { createDb, migrate, closeDb } from "@hoborouter/db";
 
-export { buildApp, bootstrapInstanceAdmin };
+export { buildApp } from "./app";
+export { bootstrapInstanceAdmin } from "./instance-admin";
 
 const db = createDb();
 await migrate(db);
+// Production bootstrap: if the configured email already signed up before this
+// env var was set, grant it now (no-op when an admin already exists or the
+// user hasn't signed up yet).
+if (process.env.HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL) {
+  await bootstrapFirstInstanceAdmin(db, process.env.HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL);
+}
 const app = await buildApp({ db });
 const port = Number(process.env.PORT ?? 3000);
 const idleRaw = Number(process.env.HBR_IDLE_TIMEOUT_S);
