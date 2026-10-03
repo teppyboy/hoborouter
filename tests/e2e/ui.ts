@@ -109,6 +109,13 @@ function isGravatarUrl(url: string): boolean {
 // ---------- per-step evidence collection ----------
 type Evidence = { console: string[]; pageErrors: string[]; http: string[] };
 let current: Evidence = { console: [], pageErrors: [], http: [] };
+// Deliberate 4xx probes (e.g. an expected 401 on a wrong-password sign-in):
+// whitelist one (status, url substring) match so the step's noise gate does not
+// fail on it. Consumed once; anything else still fails the step.
+let expect4xx: { status: number; urlPart: string }[] = [];
+const expectOne4xx = (status: number, urlPart: string) => {
+  expect4xx.push({ status, urlPart });
+};
 
 onEvent((m) => {
   if (m.method === "Runtime.consoleAPICalled") {
@@ -131,6 +138,13 @@ onEvent((m) => {
       // useIsAdmin() probes GET /admin/system; 403 is the app's designed
       // "not an instance admin" signal, not an error.
       if (status === 403 && url.includes("/api/v1/admin/system")) return;
+      const expected = expect4xx.findIndex(
+        (e) => status === e.status && url.includes(e.urlPart),
+      );
+      if (expected >= 0) {
+        expect4xx.splice(expected, 1);
+        return;
+      }
       current.http.push(`${status} ${url}`);
     }
   }
@@ -337,6 +351,14 @@ const page = {
     evaluate<string | null>(`window.__hbr.text(${JSON.stringify(selector)})`),
 };
 
+// Same-origin fetch from the page: the browser session (cookies) authorizes
+// it, so wallet/payment reads never touch the DB directly from the harness.
+async function browserFetchJson<T = unknown>(path: string): Promise<T> {
+  return evaluate<T>(
+    `fetch(${JSON.stringify(path)}).then(r => { if (!r.ok) throw new Error('fetch ' + r.status + ' ' + ${JSON.stringify(path)}); return r.json() })`,
+  );
+}
+
 /** Radix Select: click trigger (by selector), then the option with the text. */
 async function selectOption(triggerSelector: string, optionText: string) {
   await evaluateWhenPresent(
@@ -393,6 +415,7 @@ const ONLY = process.env.E2E_ONLY ? new RegExp(process.env.E2E_ONLY) : null;
 async function step(name: string, run: () => Promise<void>) {
   if (ONLY && !ONLY.test(name)) return;
   current = { console: [], pageErrors: [], http: [] };
+  expect4xx = [];
   try {
     await run();
     if (current.console.length || current.pageErrors.length || current.http.length) {
@@ -687,6 +710,62 @@ async function main() {
     assert((await page.has("Complete (dev)")) || true, "payment status view shown");
   });
 
+  await step("admin payments user column + tooltip", async () => {
+    await goto("/admin/payments");
+    await page.waitForText("Mark paid");
+    // The table row must carry the initiator identity resolved server-side:
+    // User column shows the email of who created the payment, Workspace stays.
+    const rowText = await evaluate<string>(
+      `[...document.querySelectorAll('tbody tr')].find(r => r.textContent.includes(${JSON.stringify(ADMIN_EMAIL)}))?.textContent ?? ''`,
+    );
+    assert(rowText.includes(ADMIN_EMAIL), "User column shows initiator email");
+    assert(rowText.includes(wsName), "Workspace column still shows the workspace");
+    // Keyboard focus: Radix Tooltip ignores programmatic .focus(), so move
+    // real (trusted) focus with Tab key events through the CDP Input domain
+    // until the User cell is active; then the tooltip must show name/email/id.
+    const beforeUserCell = await evaluate<boolean>(`(() => {
+      const els = [...document.querySelectorAll('a[href], button:not([disabled]), [tabindex="0"]')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+      const span = [...document.querySelectorAll('td span[tabindex="0"]')][0];
+      const idx = els.indexOf(span);
+      if (idx < 1) return false;
+      els[idx - 1].focus();
+      return document.activeElement === els[idx - 1];
+    })()`);
+    assert(beforeUserCell, "focusable element before the user cell found");
+    const tabKey = async (type: string) =>
+      send("Input.dispatchKeyEvent", {
+        type,
+        key: "Tab",
+        code: "Tab",
+        windowsVirtualKeyCode: 9,
+        nativeVirtualKeyCode: 9,
+      });
+    let tip: string | null = null;
+    for (let i = 0; i < 6 && !tip; i++) {
+      await tabKey("keyDown");
+      await tabKey("keyUp");
+      const deadline = Date.now() + 1200;
+      for (;;) {
+        const got = await evaluate<string | null>(`(() => {
+          const span = [...document.querySelectorAll('td span[tabindex="0"]')][0];
+          if (!span || document.activeElement !== span) return null;
+          const t = [...document.querySelectorAll('[role="tooltip"]')].at(-1);
+          return t ? t.textContent : null;
+        })()`);
+        if (got) {
+          // textContent concatenates the three tooltip lines: name, email, id.
+          const rest = got.split(ADMIN_EMAIL).join("").split("E2E Admin").join("").trim();
+          if (rest.length >= 8 && rest !== "—") tip = got;
+        }
+        if (tip || Date.now() > deadline) break;
+        await sleep(150);
+      }
+    }
+    assert(tip, "keyboard focus on User cell opens tooltip with name/email/id");
+    assert(tip!.includes("E2E Admin"), "tooltip shows initiator name");
+    assert(tip!.includes(ADMIN_EMAIL), "tooltip shows initiator email");
+  });
+
   await step("admin payments mark paid", async () => {
     await goto("/admin/payments");
     await page.waitForText("Mark paid");
@@ -716,6 +795,65 @@ async function main() {
     // Canonical display labels: mock provider renders as Manual.
     assert(await page.has("Manual"), "mock provider shown as Manual");
     assert(!(await page.has("mock")), "no raw 'mock' on payments list");
+  });
+
+  // --- reject a fresh pending top-up: wallet untouched, customer sees Rejected ---
+  await step("rejected topup: wallet unchanged, no actions, customer Rejected", async () => {
+    // Wallet read through the browser session (same-origin cookies), not the DB.
+    const wsId = await browserFetchJson<{ id: string; name: string }[]>(
+      "/api/v1/workspaces",
+    ).then((list) => list.find((w) => w.name === wsName)?.id);
+    assert(!!wsId, "main workspace id resolved via session");
+    const walletBefore = await browserFetchJson<{ balance: number; reserved: number }>(
+      `/api/v1/workspaces/${wsId}/wallet`,
+    );
+    // Create an additional pending top-up through the real UI.
+    await goto("/billing/credits");
+    await page.waitForText("Top up");
+    await page.click("Create payment");
+    await page.waitForText("Pending");
+    // Admin rejects it. Only pending rows render actions, and the original
+    // payment is already Succeeded — exactly one Reject button must exist.
+    await goto("/admin/payments");
+    await page.waitForText("Reject");
+    const pending = await evaluate<number>(
+      `[...document.querySelectorAll('button')].filter(b => window.__hbr.visible(b) && b.textContent.trim() === 'Reject').length`,
+    );
+    assert(pending === 1, `exactly one pending payment to reject, got ${pending}`);
+    await page.click("Reject");
+    await page.waitForText("Reject payment?");
+    await page.clickDialog("Reject");
+    await page.waitForText("Rejected");
+    // No actions remain: only pending rows render Mark paid / Reject, and the
+    // refetch after rejection must leave zero of both.
+    await waitForExpr(
+      `[...document.querySelectorAll('button')].filter(b => window.__hbr.visible(b) && (b.textContent.trim() === 'Mark paid' || b.textContent.trim() === 'Reject')).length === 0`,
+      "no payment actions left",
+    );
+    // Customer-facing history: the payment appears with status rejected.
+    const history = await browserFetchJson<{ data: { id: string; status: string }[] }>(
+      `/api/v1/workspaces/${wsId}/payments?limit=50`,
+    );
+    const rejected = history.data.find((p) => p.status === "rejected");
+    assert(!!rejected, "customer payment history shows a rejected payment");
+    // Customer detail view for the rejected payment id.
+    await goto(`/billing/payments?payment=${rejected!.id}`);
+    await page.waitForText("Rejected");
+    const detailBody = await page.body();
+    assert(detailBody.includes(rejected!.id), "payment detail shows the rejected payment id");
+    assert(
+      !detailBody.includes("Waiting for admin confirmation"),
+      "rejected detail is not pending",
+    );
+    // Wallet balance unchanged: rejection credits nothing.
+    const walletAfter = await browserFetchJson<{ balance: number; reserved: number }>(
+      `/api/v1/workspaces/${wsId}/wallet`,
+    );
+    assert(
+      walletAfter.balance === walletBefore.balance &&
+        walletAfter.reserved === walletBefore.reserved,
+      `wallet unchanged after rejection (before ${JSON.stringify(walletBefore)} after ${JSON.stringify(walletAfter)})`,
+    );
   });
 
   // --- gateway calls (Bun fetch, not UI) ---
@@ -1072,6 +1210,70 @@ async function main() {
       !!joined && joined !== "—" && /\d/.test(joined),
       `Joined cell shows a real date, got "${joined}"`,
     );
+  });
+
+  // --- admin users: throwaway lifecycle (create, edit, reset, remove) ---
+  await step("admin users throwaway create/edit/reset/remove", async () => {
+    const email = "throwaway@e2e.test";
+    const newName = "E2E Throwaway Edited";
+    const newEmail = "throwaway-edited@e2e.test";
+    const oldPassword = "throwaway old password 1";
+    const newPassword = "throwaway new password 2";
+    await goto("/admin/users");
+    await page.waitForText("Add user");
+    await page.waitForText(ADMIN_EMAIL);
+    // Create via the existing Add user dialog.
+    await page.click("Add user");
+    await page.waitForText("Create a user with an initial password.");
+    await page.setInput("Name", "E2E Throwaway");
+    await page.setInput("Email", email);
+    await page.setInput("Password", oldPassword);
+    await page.click("Create");
+    await page.waitForText(email);
+    // Edit name + email via the Edit dialog; table must reflect the change.
+    await page.clickAria(`[aria-label="Edit ${email}"]`);
+    await page.waitForText("Edit user");
+    await page.setInput("Name", newName);
+    await page.setInput("Email", newEmail);
+    await page.click("Save");
+    await page.waitForText(`Updated ${newName}`);
+    await page.waitForText(newEmail);
+    // Reset password through the UI's two password fields.
+    await page.clickAria(`[aria-label="Reset password for ${newEmail}"]`);
+    await page.waitForText("Set a new password");
+    await page.setInput("New password", newPassword);
+    await page.setInput("Confirm new password", newPassword);
+    await page.click("Reset password");
+    await page.waitForText(`Password reset for ${newName}`);
+    await waitForDialogClosed();
+    // Isolated sign-in probes: credentials 'omit' so Set-Cookie from the
+    // response is never stored in this browser profile — the admin session
+    // must survive untouched.
+    const signIn = (emailStr: string, password: string) =>
+      evaluate<{ status: number; body: { user?: { email?: string }; token?: string } | null }>(
+        `fetch('/api/auth/sign-in/email', { method: 'POST', credentials: 'omit', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: ${JSON.stringify(emailStr)}, password: ${JSON.stringify(password)} }) }).then(async r => ({ status: r.status, body: await r.json().catch(() => null) }))`,
+      );
+    // Old password must fail narrowly: exactly 401 on the sign-in endpoint.
+    expectOne4xx(401, "/api/auth/sign-in/email");
+    const oldRes = await signIn(newEmail, oldPassword);
+    assert(oldRes.status === 401, `old password must fail with 401, got ${oldRes.status}`);
+    const newRes = await signIn(newEmail, newPassword);
+    assert(newRes.status === 200, `new password sign-in must be 200, got ${newRes.status}`);
+    assert(newRes.body?.user?.email === newEmail, "sign-in resolves the throwaway user");
+    assert(!!newRes.body?.token, "sign-in issued a session token");
+    // Cookie-less probes stored nothing: the browser session is still the admin.
+    const session = await browserFetchJson<{ user?: { email?: string } } | null>(
+      "/api/auth/get-session",
+    );
+    assert(
+      session?.user?.email === ADMIN_EMAIL,
+      `admin browser session intact after isolated sign-ins, got ${session?.user?.email ?? "null"}`,
+    );
+    // Remove: throwaway owns no workspaces, so removal must succeed cleanly.
+    await page.clickAria(`[aria-label="Remove ${newEmail}"]`);
+    await page.waitForText("Remove user?");
+    await page.clickDialog("Remove");
+    await page.waitForGone(newEmail);
   });
 
   await step("admin system page renders", async () => {
