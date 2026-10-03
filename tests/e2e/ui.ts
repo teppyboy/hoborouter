@@ -699,6 +699,8 @@ async function main() {
   await step("credits balance + ledger updated", async () => {
     await goto("/billing/credits");
     await page.waitForText("Ledger");
+    // Ledger sections load via a separate query; wait for the top-up section, not just the heading.
+    await page.waitForText("Top-up history");
     const body = await page.body();
     assert(/100\.000\s*₫/.test(body), "balance shows 100.000 ₫");
     assert(/\$[0-9]/.test(body), "balance shows USD primary amount");
