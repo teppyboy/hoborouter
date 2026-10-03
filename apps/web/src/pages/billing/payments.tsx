@@ -24,6 +24,7 @@ interface Payment {
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   paid: "default",
+  succeeded: "default",
   pending: "secondary",
   failed: "destructive",
   cancelled: "destructive",
@@ -66,7 +67,9 @@ export default function BillingPaymentsPage() {
     {
       accessorKey: "provider",
       header: "Provider",
-      cell: (c) => <span className="font-mono text-xs">{formatProviderLabel(c.getValue<string>())}</span>,
+      cell: (c) => (
+        <span className="font-mono text-xs">{formatProviderLabel(c.getValue<string>())}</span>
+      ),
     },
     {
       accessorKey: "status",
@@ -134,7 +137,9 @@ function PaymentStatus({ workspaceId, paymentId }: { workspaceId: string; paymen
       <div className="flex items-center justify-between gap-4">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <Badge variant={STATUS_VARIANT[p.status] ?? "outline"}>{formatStatusLabel(p.status)}</Badge>
+            <Badge variant={STATUS_VARIANT[p.status] ?? "outline"}>
+              {formatStatusLabel(p.status)}
+            </Badge>
             <span className="font-mono text-sm font-semibold">
               {formatUsdFromVnd(p.amount, rate) ?? formatVnd(p.amount)}
             </span>
@@ -149,7 +154,11 @@ function PaymentStatus({ workspaceId, paymentId }: { workspaceId: string; paymen
             <span className="font-mono">{p.provider_order_code}</span> · {formatDate(p.created_at)}
           </p>
           {p.status === "pending" && (
-            <p className="text-xs text-muted-foreground">Waiting for admin confirmation…</p>
+            <p className="text-xs text-muted-foreground">
+              {p.provider === "payos"
+                ? "Waiting for PayOS confirmation…"
+                : "Waiting for admin confirmation…"}
+            </p>
           )}
         </div>
       </div>
