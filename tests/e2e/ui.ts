@@ -138,9 +138,7 @@ onEvent((m) => {
       // useIsAdmin() probes GET /admin/system; 403 is the app's designed
       // "not an instance admin" signal, not an error.
       if (status === 403 && url.includes("/api/v1/admin/system")) return;
-      const expected = expect4xx.findIndex(
-        (e) => status === e.status && url.includes(e.urlPart),
-      );
+      const expected = expect4xx.findIndex((e) => status === e.status && url.includes(e.urlPart));
       if (expected >= 0) {
         expect4xx.splice(expected, 1);
         return;
@@ -504,9 +502,7 @@ async function main() {
     assert(!body.includes("VITE_"), "no raw VITE_ env leakage");
     // Real Shuffle icon artwork rendered (not a placeholder glyph).
     assert(
-      await evaluate<boolean>(
-        `!!document.querySelector('svg.lucide-shuffle')`,
-      ),
+      await evaluate<boolean>(`!!document.querySelector('svg.lucide-shuffle')`),
       "Shuffle SVG icon rendered on legal page",
     );
   });
@@ -800,9 +796,9 @@ async function main() {
   // --- reject a fresh pending top-up: wallet untouched, customer sees Rejected ---
   await step("rejected topup: wallet unchanged, no actions, customer Rejected", async () => {
     // Wallet read through the browser session (same-origin cookies), not the DB.
-    const wsId = await browserFetchJson<{ id: string; name: string }[]>(
-      "/api/v1/workspaces",
-    ).then((list) => list.find((w) => w.name === wsName)?.id);
+    const wsId = await browserFetchJson<{ id: string; name: string }[]>("/api/v1/workspaces").then(
+      (list) => list.find((w) => w.name === wsName)?.id,
+    );
     assert(!!wsId, "main workspace id resolved via session");
     const walletBefore = await browserFetchJson<{ balance: number; reserved: number }>(
       `/api/v1/workspaces/${wsId}/wallet`,
@@ -836,8 +832,10 @@ async function main() {
     );
     const rejected = history.data.find((p) => p.status === "rejected");
     assert(!!rejected, "customer payment history shows a rejected payment");
-    // Customer detail view for the rejected payment id.
+    // Customer detail view for the rejected payment id. The detail content
+    // loads async after the route renders, so wait for the id itself.
     await goto(`/billing/payments?payment=${rejected!.id}`);
+    await page.waitForText(rejected!.id);
     await page.waitForText("Rejected");
     const detailBody = await page.body();
     assert(detailBody.includes(rejected!.id), "payment detail shows the rejected payment id");
@@ -853,6 +851,102 @@ async function main() {
       walletAfter.balance === walletBefore.balance &&
         walletAfter.reserved === walletBefore.reserved,
       `wallet unchanged after rejection (before ${JSON.stringify(walletBefore)} after ${JSON.stringify(walletAfter)})`,
+    );
+  });
+
+  // --- chat page: pasted key, model picker, streamed reply, new chat ---
+  await step("chat: paste key, pick model, streamed reply, new chat clears", async () => {
+    await goto("/chat");
+    await page.waitForText("Start a conversation");
+    assert(await page.has("Open API keys"), "empty state links to the API keys page");
+    // Trusted CDP clicks: the page loads models on blur, and synthetic focus
+    // games do not reach React's onBlur — a real focus change does.
+    const clickAt = async (x: number, y: number) => {
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        await send("Input.dispatchMouseEvent", {
+          type,
+          x,
+          y,
+          button: "left",
+          clickCount: 1,
+          buttons: type === "mousePressed" ? 1 : 0,
+        });
+      }
+    };
+    const centerOf = (selector: string) =>
+      evaluate<{ x: number; y: number }>(`(() => {
+        const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      })()`);
+    // Paste the run key (memory-only by default; never in sessionStorage).
+    const keyAt = await centerOf("#chat-api-key");
+    await clickAt(keyAt.x, keyAt.y);
+    await send("Input.insertText", { text: apiKey });
+    await sleep(300);
+    // Clicking the textarea moves focus for real: blur fires, models load.
+    const taAt = await centerOf('textarea[aria-label="Message"]');
+    await clickAt(taAt.x, taAt.y);
+    try {
+      await waitForExpr(
+        `(() => { const t = document.getElementById('chat-model')?.textContent ?? ''; return t.includes('fake') && !t.includes('Loading'); })()`,
+        "model picker loaded from /v1/models",
+      );
+    } catch (e) {
+      const diag = await evaluate<string>(`(() => JSON.stringify({
+        trig: document.getElementById('chat-model')?.textContent ?? null,
+        errState: document.body.innerText.includes('Models:'),
+        resources: performance.getEntriesByType('resource').filter(r => r.name.includes('/v1/')).map(r => r.name),
+        keyVal: (document.getElementById('chat-api-key') ?? {}).value,
+      }))()`);
+      throw new Error(`model picker wait failed, diag=${diag} (orig: ${e})`);
+    }
+    assert(
+      (await evaluate<string>(`sessionStorage.getItem('hbr-chat-key')`)) === null,
+      "key is memory-only unless remember is toggled",
+    );
+    await selectOption("#chat-model", MODEL_ID);
+    // Real typing into the (now focused) message textarea.
+    await clickAt(taAt.x, taAt.y);
+    await send("Input.insertText", { text: "hi" });
+    await page.clickAria('[aria-label="Send message"]');
+    // Streamed reply from the fake CPA (the gateway echoes the public model id).
+    try {
+      await page.waitForText("Hello from fake/test-model: hi");
+    } catch (e) {
+      const diag = await evaluate<string>(`(() => JSON.stringify({
+        log: document.querySelector('[aria-label="Conversation"]')?.innerText ?? null,
+        err: [...document.querySelectorAll('[role="alert"], [class*=destructive]')].map(e2 => e2.textContent.trim()).slice(0,3),
+        ta: document.querySelector('textarea[aria-label="Message"]')?.value,
+        chatReqs: performance.getEntriesByType('resource').filter(r => r.name.includes('/v1/chat/completions')).length,
+        sendDisabled: [...document.querySelectorAll('button')].some(b => b.getAttribute('aria-label') === 'Send message' && b.disabled),
+        body: document.body.innerText.slice(0, 300),
+      }))()`);
+      throw new Error(`reply wait failed, diag=${diag} (orig: ${e})`);
+    }
+    const conv = await evaluate<{
+      n: number;
+      first?: string;
+      last?: string;
+    } | null>(`(() => {
+      const log = document.querySelector('[aria-label="Conversation"]');
+      if (!log) return null;
+      return { n: log.children.length,
+        first: log.children[0]?.textContent,
+        last: log.children[log.children.length - 1]?.textContent };
+    })()`);
+    assert(!!conv, "conversation log rendered");
+    assert(conv!.n === 2, `two bubbles (user + assistant), got ${conv!.n}`);
+    assert(conv!.first === "hi", "user bubble shows the sent message");
+    assert(
+      conv!.last!.includes("Hello from fake/test-model: hi"),
+      `assistant bubble has streamed reply, got "${conv!.last!.slice(0, 120)}"`,
+    );
+    // New chat clears the conversation back to the empty state.
+    await page.click("New chat");
+    await page.waitForText("Start a conversation");
+    assert(
+      !(await evaluate<boolean>(`!!document.querySelector('[aria-label="Conversation"]')`)),
+      "conversation log cleared after New chat",
     );
   });
 
@@ -1070,7 +1164,9 @@ async function main() {
     assert(title.includes(firstId), "sheet title shows full request id");
     // Close the keyboard-opened sheet: the modal overlay would swallow the row
     // press below (pointerdown outside closes the Radix sheet instead of opening).
-    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await evaluate(
+      `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`,
+    );
     await page.waitForGone("Time to first token");
     // Detail sheet: open the first request row.
     await page.clickAria('[aria-label^="Open request"]');
@@ -1148,10 +1244,7 @@ async function main() {
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     for (const c of reqCells)
       assert(UUID_RE.test(c), `request cell is a full unique UUID, got "${c}"`);
-    assert(
-      !reqCells.some((c) => c.includes(MODEL_ID)),
-      "request cell never shows the model name",
-    );
+    assert(!reqCells.some((c) => c.includes(MODEL_ID)), "request cell never shows the model name");
     assert(new Set(reqCells).size === reqCells.length, "request ids are unique per row");
   });
 
@@ -1385,42 +1478,44 @@ async function main() {
   let shotsOk = true;
   try {
     if (SHOTS) {
-    mkdirSync(SHOT_DIR, { recursive: true });
-    // dark, sidebar expanded (set explicitly; default theme may be light)
-    await setTheme("dark");
-    await goto("/");
-    await page.waitForText("Requests");
-    await shot("overview-dark-expanded.png");
-    // collapse sidebar, then restore
-    await page.clickAria('[aria-label="Collapse sidebar"]');
-    await page.waitForText("Overview");
-    await shot("overview-dark-collapsed.png");
-    await page.clickAria('[aria-label="Expand sidebar"]');
-    await page.waitForText("Requests");
-    // light theme
-    await setTheme("light");
-    await shot("overview-light-expanded.png");
-    await goto("/models");
-    await page.waitForText(MODEL_ID);
-    await shot("models-light.png");
-    // back to dark
-    await setTheme("dark");
-    // keys page: the sweep revoked its key, so create one for the table row
-    await goto("/keys");
-    await page.waitForText("Create key");
-    await page.click("Create key");
-    await page.setInputById("key-name", "shot-key");
-    await page.click("Create");
-    await page.waitForText("Copy your API key");
-    await page.click("Done");
-    await waitForDialogClosed();
-    await page.waitForText("shot-key");
-    await shot("keys-dark.png");
-    // account menu open
-    await page.clickAria('[aria-label="Account menu"]');
-    await page.waitForText("Sign out");
-    await shot("usermenu-open.png");
-    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
+      mkdirSync(SHOT_DIR, { recursive: true });
+      // dark, sidebar expanded (set explicitly; default theme may be light)
+      await setTheme("dark");
+      await goto("/");
+      await page.waitForText("Requests");
+      await shot("overview-dark-expanded.png");
+      // collapse sidebar, then restore
+      await page.clickAria('[aria-label="Collapse sidebar"]');
+      await page.waitForText("Overview");
+      await shot("overview-dark-collapsed.png");
+      await page.clickAria('[aria-label="Expand sidebar"]');
+      await page.waitForText("Requests");
+      // light theme
+      await setTheme("light");
+      await shot("overview-light-expanded.png");
+      await goto("/models");
+      await page.waitForText(MODEL_ID);
+      await shot("models-light.png");
+      // back to dark
+      await setTheme("dark");
+      // keys page: the sweep revoked its key, so create one for the table row
+      await goto("/keys");
+      await page.waitForText("Create key");
+      await page.click("Create key");
+      await page.setInputById("key-name", "shot-key");
+      await page.click("Create");
+      await page.waitForText("Copy your API key");
+      await page.click("Done");
+      await waitForDialogClosed();
+      await page.waitForText("shot-key");
+      await shot("keys-dark.png");
+      // account menu open
+      await page.clickAria('[aria-label="Account menu"]');
+      await page.waitForText("Sign out");
+      await shot("usermenu-open.png");
+      await evaluate(
+        `document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`,
+      );
     }
   } catch (e) {
     shotsOk = false;
