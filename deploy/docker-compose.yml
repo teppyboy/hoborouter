@@ -43,11 +43,10 @@ services:
       - ./cpa/auths:/root/.cli-proxy-api
 
   hoborouter:
-    # Deployed image tag; build: kept for local dev, VPS uses the pulled image.
+    # Pulled from ghcr.io; the VPS only needs deploy/, never the repo. For a
+    # local build: docker build -t ghcr.io/teppyboy/hoborouter:local . then
+    # set HBR_IMAGE_TAG=local in .env.
     image: ghcr.io/teppyboy/hoborouter:${HBR_IMAGE_TAG:-latest}
-    build:
-      context: ..
-      dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
       cpa:

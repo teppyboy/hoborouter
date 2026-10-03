@@ -11,8 +11,8 @@ would point at the app container itself). `DATABASE_URL` is built in compose fro
 ## First deploy
 
 1. `scripts/generate-secrets.sh` — creates gitignored `deploy/.env` with `CPA_MANAGEMENT_KEY` and `CPA_ACCESS_KEY`. Add `POSTGRES_PASSWORD` (required — compose refuses to start without it), `BETTER_AUTH_SECRET` (`openssl rand -hex 32`, min 32 chars), and `BETTER_AUTH_URL` (public URL; `HBR_BASE_URL` is also accepted — `apps/api/src/auth.ts` throws at startup in production without one). payOS credentials are optional. Names are documented in `deploy/.env.example`.
-2. Ensure `deploy/cpa/config.yaml` exists (`sh deploy/cpa/render-config.sh`).
-3. From `deploy/`: `docker compose up -d --wait`.
+2. Ensure `deploy/cpa/config.yaml` exists (`sh deploy/cpa/render-config.sh`) — this MUST happen before `up`. If it's missing, Docker creates an empty **directory** at that bind-mount path and CPA fails to start.
+3. Run compose from inside `deploy/`: `docker compose up -d --wait`. The VPS needs only the `deploy/` files (`docker-compose.yml`, `.env`, `cpa/config.yaml`, `cpa/auths/`, `vps-deploy.sh`, `systemd/`) — never the repo, since the compose file only pulls the published image.
 4. `hoborouter` is published on `127.0.0.1:3000` only. Terminate TLS in a reverse proxy (Caddy/nginx) that forwards to `127.0.0.1:3000`; never expose the port directly. Minimal Caddyfile:
 
    ```
@@ -77,11 +77,13 @@ Top-ups are provider `manual` in every environment: a workspace member creates a
 - Never auto-run destructive migrations. Any `DROP`/column-type change is a reviewed, manually executed step with a verified backup and a documented rollback plan (restore backup + previous image tag).
 - On a VPS with the systemd timer (`docs/ops/vps-auto-update.md`), updates pull the new image, take a `pg_dump` backup, recreate the container, and gate on `/healthz` with image rollback.
 
-## Rebuild
+## Local build
+
+The compose file has no `build:` block: production only ever pulls the published GHCR image, so a VPS holding just `deploy/` never fails trying to build. To test a locally built image instead:
 
 ```sh
-docker compose build hoborouter
-docker compose up -d hoborouter
+docker build -t ghcr.io/teppyboy/hoborouter:local .   # from the repo root (multi-stage Dockerfile: oven/bun:1.4; web built with vp build; runtime bun apps/api/src/index.ts)
+HBR_IMAGE_TAG=local docker compose up -d hoborouter   # from deploy/, after adding HBR_IMAGE_TAG=local to .env
 ```
 
-The image is built from the repo-root multi-stage `Dockerfile` (oven/bun:1.4; web built with `vp build`; runtime `bun apps/api/src/index.ts`). Production normally pulls the published GHCR image instead of building locally.
+Tag push (`v*`) publishes real images via `.github/workflows/release.yml`; revert `.env` to `HBR_IMAGE_TAG=latest` (or delete the line) afterwards.

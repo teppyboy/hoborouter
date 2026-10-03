@@ -5,6 +5,11 @@ systemd timer running `deploy/vps-deploy.sh`: pull → Postgres backup →
 recreate → health gate → rollback on failure. CPA stays pinned and is updated
 manually.
 
+The VPS only needs the `deploy/` files (`docker-compose.yml`, `.env`,
+`cpa/config.yaml`, `cpa/auths/`, `vps-deploy.sh`, `systemd/`); compose is run
+from inside `deploy/` and only pulls the published image — no repo checkout,
+no `Dockerfile`, no build step.
+
 ## Publish flow
 
 `.github/workflows/release.yml` on tag push (`v*`): runs tests (against a
