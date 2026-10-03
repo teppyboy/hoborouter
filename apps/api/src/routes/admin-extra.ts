@@ -4,7 +4,13 @@
 import { Elysia, t } from "elysia";
 import { APIError } from "better-auth";
 import type { BetterAuthInstance } from "../auth-types";
-import { requireSession, requireInstanceAdmin, isInstanceAdmin, jsonError, writeAudit } from "../authz";
+import {
+  requireSession,
+  requireInstanceAdmin,
+  isInstanceAdmin,
+  jsonError,
+  writeAudit,
+} from "../authz";
 import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments";
 import { and, desc, eq, ne, notExists, sql, count, inArray } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
@@ -80,16 +86,12 @@ async function removeUserIdentity(db: Db | Tx, userId: string) {
     // try-delete/catch-anonymize pattern cannot work: pre-check remaining FK
     // references (money/history tables) and anonymize instead of deleting.
     const refCount =
+      (await tx.select({ n: count() }).from(auditLog).where(eq(auditLog.actor_user_id, userId)))[0]!
+        .n +
       (
         await tx
           .select({ n: count() })
-          .from(auditLog)
-          .where(eq(auditLog.actor_user_id, userId))
-      )[0]!.n +
-      (
-        await tx
-          .select({ n: count() })
-            .from(unknownResolutions)
+          .from(unknownResolutions)
           .where(eq(unknownResolutions.actor_user_id, userId))
       )[0]!.n +
       (
@@ -172,8 +174,7 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
             // Raw bigint comes back as a STRING from Bun SQL/PG; mapWith(Number)
             // keeps created_at a JSON epoch-ms number (web formatDate needs it).
             created_at: sql<number>`${users.createdAt}`.mapWith(Number),
-            is_instance_admin:
-              sql<number>`exists(select 1 from instance_admins ia where ia.user_id = ${users.id})`,
+            is_instance_admin: sql<number>`exists(select 1 from instance_admins ia where ia.user_id = ${users.id})`,
             // count(*) is bigint → string on PG; same mapWith(Number) treatment.
             workspace_count:
               sql<number>`(select count(*) from workspace_members wm where wm.user_id = ${users.id})`.mapWith(
@@ -376,9 +377,19 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
         const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
         const password = typeof body.password === "string" ? body.password : "";
         const instanceAdmin = body.instance_admin === true;
-        if (!name || name.length > 80 || !EMAIL_RE.test(email) || password.length < 8 ||
-          password.length > 200 || email.length > 254) {
-          return jsonError(400, "INVALID", "name (1..80), valid email, and password (min 8) required");
+        if (
+          !name ||
+          name.length > 80 ||
+          !EMAIL_RE.test(email) ||
+          password.length < 8 ||
+          password.length > 200 ||
+          email.length > 254
+        ) {
+          return jsonError(
+            400,
+            "INVALID",
+            "name (1..80), valid email, and password (min 8) required",
+          );
         }
         let created: { user: { id: string; email: string; name: string } };
         try {
@@ -398,7 +409,11 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
         if (instanceAdmin) {
           await db
             .insert(instanceAdmins)
-            .values({ user_id: created.user.id, created_at: Date.now(), added_by: g.session.user.id })
+            .values({
+              user_id: created.user.id,
+              created_at: Date.now(),
+              added_by: g.session.user.id,
+            })
             .onConflictDoNothing();
         }
         await writeAudit(db, {
@@ -447,9 +462,7 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
         let violation: Response | undefined;
         await db.transaction(async (tx) => {
           if (await isInstanceAdmin(tx, params.id)) {
-            const adminCount = await tx
-              .select({ n: sql<number>`count(*)` })
-              .from(instanceAdmins);
+            const adminCount = await tx.select({ n: sql<number>`count(*)` }).from(instanceAdmins);
             if (Number(adminCount[0]?.n ?? 0) <= 1) {
               violation = jsonError(409, "LAST_ADMIN", "Cannot remove the last instance admin");
               return;
@@ -519,6 +532,19 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
           .limit(1);
         if (!payment[0]) return jsonError(404, "NOT_FOUND", "Payment not found");
         const p = payment[0];
+        // payOS payments are credited ONLY by the verified webhook: an admin
+        // 'complete' would credit without any verified provider confirmation.
+        if (p.provider === "payos") {
+          return json(
+            {
+              error: {
+                code: "INVALID_STATE",
+                message: "payOS payments complete only via the payOS webhook",
+              },
+            },
+            409,
+          );
+        }
         try {
           const result = await processMockPaymentEvent(db, {
             provider: p.provider,

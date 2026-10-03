@@ -26,7 +26,7 @@ import { adminSettingsRoutes } from "./routes/admin-settings";
 import { adminRequestsRoutes } from "./routes/admin-requests";
 import { catalogPublicRoutes } from "./routes/catalog-public";
 import { accountRoutes } from "./routes/account";
-import { payosConfigFromEnv } from "@hoborouter/payments";
+import { payosConfigFromEnv, type PayosConfig } from "@hoborouter/payments";
 import { mockWebhookConfig } from "./mock-config";
 import { createAuth } from "./auth";
 
@@ -72,6 +72,11 @@ const openapiDocumentation = {
 export interface AppDeps {
   db?: Db;
   auth?: BetterAuthInstance;
+  /** Test injection: payOS config + fetch for the member create route. */
+  payos?: {
+    cfg: PayosConfig;
+    fetch?: (input: string | URL, init?: RequestInit) => Promise<Response>;
+  };
 }
 
 // Async: startup reconciliation (recoverPending) is awaited so tests and boot
@@ -102,7 +107,7 @@ export const buildApp = async (deps: AppDeps = {}) => {
     .use(membersRoutes(db, auth))
     .use(auditRoutes(db, auth))
     .use(keysRoutes(db, auth))
-    .use(paymentsRoutes(db, auth))
+    .use(paymentsRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch))
     .use(mockWebhookRoutes(db, mockPayments))
     .use(payosWebhookRoutes(db, payosConfigFromEnv()))
     .use(cpaHealthRoutes(db, auth))

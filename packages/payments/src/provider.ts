@@ -111,6 +111,15 @@ export interface PayosWebhookConfig {
 
 export const PAYOS_API_BASE = "https://api-merchant.payos.vn";
 
+/**
+ * Random numeric orderCode within payOS integer bounds. The caller persists it
+ * before the remote create; UNIQUE(provider, provider_order_code) at insert
+ * catches the (astronomically unlikely) collision.
+ */
+export function payosNextOrderCode(): number {
+  return 1_000_000_000 + Math.floor(Math.random() * 8_999_999_999);
+}
+
 export class PayOSProvider implements PaymentProvider {
   readonly name = "payos";
   constructor(
@@ -122,9 +131,7 @@ export class PayOSProvider implements PaymentProvider {
   ) {}
 
   private nextOrderCode(): number {
-    // ponytail: random 9-digit orderCode; UNIQUE(provider, provider_order_code)
-    // at insert catches the (astronomically unlikely) collision with a retry.
-    return 1_000_000_000 + Math.floor(Math.random() * 8_999_999_999);
+    return payosNextOrderCode();
   }
 
   async createPayment(args: PaymentRequestArgs): Promise<CreatedPayment> {

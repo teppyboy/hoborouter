@@ -7,6 +7,7 @@ export {
 export { processMockPaymentEvent, MockPaymentError } from "./credit";
 export type { ProcessMockEventArgs, ProcessMockEventResult, MockPaymentErrorCode } from "./credit";
 export {
+  payosNextOrderCode,
   PayOSProvider,
   MockProvider,
   PayosWebhookError,
