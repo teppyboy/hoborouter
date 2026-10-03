@@ -8,8 +8,9 @@ Run from repo root. Bun 1.4+ required.
 
 ```sh
 bun install                        # install (Bun workspaces: apps/*, packages/*, tests)
+bun run db:test:up                 # start the test Postgres (hbr-test-pg, 127.0.0.1:55432)
 PORT=3998 bun run test             # unit/integration = bun test --parallel=4; PORT avoids the dev backend on :3000
-E2E_CPA_PORT=8499 bun run e2e      # full E2E UI sweep, isolated stack (fake CPA, API :3099, vite :5199, Chrome :9399)
+E2E_CPA_PORT=8499 bun run e2e      # full E2E UI sweep, isolated stack (hbr-e2e-pg :55434, fake CPA, API :3099, vite :5199, Chrome :9399)
 E2E_CPA_PORT=8499 bun run e2e:up   # E2E stack only; then: bun tests/e2e/ui.ts; E2E_ONLY='<regex>' for one area
 bun run e2e:down                   # tear E2E stack down
 bun run check                      # vp check (typecheck/lint gate)
@@ -27,7 +28,7 @@ cd apps/web && node_modules/.bin/tsc -b
 
 Ports:
 
-- Dev: `HBR_DEV_ADMIN_EMAIL=you@example.com bun run dev` runs backend :3000, vite :5173, fake CPA :8399. Do not restart a running dev stack.
+- Dev: Docker required. `HBR_DEV_ADMIN_EMAIL=you@example.com bun run dev` runs the dev Postgres (`hbr-dev-pg`, 127.0.0.1:55433), backend :3000, vite :5173, fake CPA :8399. Do not restart a running dev stack.
 - E2E: the fake CPA defaults to :8399, which collides with the dev stack. Always set `E2E_CPA_PORT=8499`.
 - Real CLIProxyAPI (Docker, `deploy/`) listens on :8317. Tests never call it or any real provider.
 
@@ -37,15 +38,15 @@ Ports:
 - `apps/web/`: React 19 + Vite+ frontend (static build, no SSR), TanStack Router/Query/Table, shadcn/ui + Tailwind 4.
 - `packages/catalog|db|keys|payments|shared|usage|wallet/`: shared domain packages. DB access via Drizzle.
 - `tests/`: behavior tests (`*.test.ts(x)`) and `tests/e2e/` UI sweep. `tests/fake-cpa.ts` is the fake CLIProxyAPI.
-- `deploy/`: production Docker Compose + CPA config. Dev needs no Docker.
+- `deploy/`: production Docker Compose + CPA config. Dev also needs Docker for its Postgres container.
 - `docs/`: `requirements.md` is the source of truth; also `development.md`, `architecture/`, `ops/`, `superpowers/plans/`.
 
 ## Database
 
-- Local dev and tests: SQLite (WAL) via `bun:sqlite` + Drizzle. Zero setup.
-- Production: PostgreSQL is the target. Follow `docs/superpowers/plans/2026-10-02-postgres-production.md`; selection is by `DATABASE_URL`.
+- PostgreSQL everywhere (drizzle-orm/bun-sql). `DATABASE_URL` (a `postgres://...` URL) is required; `createDb` refuses anything else. Dev: container `hbr-dev-pg` on 127.0.0.1:55433 (started by `bun run dev`). Tests: `bun run db:test:up` (hbr-test-pg, 127.0.0.1:55432) before `PORT=3998 bun run test`. E2E: `hbr-e2e-pg` on 55434 (started by `bun run e2e`).
+- Legacy SQLite data is migrated once with `bun run db:copy-from-sqlite` (`scripts/sqlite-to-pg.ts`); that script is the only place `bun:sqlite` remains.
 - Migrations are forward-only. Never edit an applied migration; add a new one and register it in `packages/db/drizzle/meta/_journal.json`.
-- Do not use dialect-specific SQL (`PRAGMA`, `typeof()`, `date(..., 'unixepoch')`) in new code paths that must run on both.
+- Do not use dialect-specific SQL (`PRAGMA`, `typeof()`, `date(..., 'unixepoch')`) in code paths that must run on the deployment database.
 - Never delete money history. Hidden/removed rows use soft delete (`deleted_at`).
 
 ## Code style

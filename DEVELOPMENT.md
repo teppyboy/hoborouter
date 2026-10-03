@@ -1,54 +1,66 @@
 # Development
 
-Prereqs: [Bun](https://bun.sh) 1.4+, `openssl`. No Docker needed for development (Docker Compose in `deploy/` is production only — see `docs/deployment.md`).
+Prereqs: [Bun](https://bun.sh) 1.4+, Docker, `openssl`.
 
 ## Run it
 
-One command (backend + frontend + fake CPA, persistent dev data in `.dev/`):
+One command (backend + frontend + fake CPA, dev Postgres in container `hbr-dev-pg`):
 
 ```sh
 bun install
 HBR_DEV_ADMIN_EMAIL=you@example.com bun run dev
 ```
 
-Then sign up at http://localhost:5173 with that exact email — you're instance admin. Ctrl-C stops everything (backend, vite, fake CPA). Sessions survive restarts (fixed secret + `./.dev/hoborouter.sqlite`). Set `CPA_BASE_URL` (e.g. in `.env`) to use a real CPA instead of the fake.
+`scripts/dev.sh` starts the dev Postgres (`hbr-dev-pg`, named volume, `127.0.0.1:55433`, password `postgres`, database `hoborouter`) and exports `DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55433/hoborouter` unless already set. Then sign up at http://localhost:5173 with that exact email — you're instance admin. Ctrl-C stops everything (backend, vite, fake CPA). Sessions survive restarts (fixed secret in gitignored `.dev/secret`). Set `CPA_BASE_URL` (e.g. in `.env`) to use a real CPA instead of the fake.
 
 ### Manual
 
-1. Terminal 1 — backend (API on http://localhost:3000, auto-restarts on file changes):
+1. Terminal 0 — dev Postgres (`scripts/dev.sh` does this idempotently):
+
+   ```sh
+   docker run -d --name hbr-dev-pg -p 127.0.0.1:55433:5432 \
+     -e POSTGRES_PASSWORD=postgres -v hbr-dev-pgdata:/var/lib/postgresql/data \
+     postgres:17-alpine
+   ```
+
+2. Terminal 1 — backend (API on http://localhost:3000, auto-restarts on file changes):
 
    ```sh
    NODE_ENV=development \
    BETTER_AUTH_URL=http://localhost:5173 \
    BETTER_AUTH_SECRET="$(openssl rand -hex 32)" \
+   DATABASE_URL="postgres://postgres:postgres@127.0.0.1:55433/hoborouter" \
    bun --watch apps/api/src/index.ts
    ```
 
-2. Terminal 2 — frontend (Vite dev server; proxies `/api`, `/v1`, `/webhooks` to :3000):
+3. Terminal 2 — frontend (Vite dev server; proxies `/api`, `/v1`, `/webhooks` to :3000):
 
    ```sh
    bun run --cwd apps/web dev --host 127.0.0.1 --port 5173 --strictPort
    ```
 
-3. Open http://localhost:5173 and sign up.
+4. Open http://localhost:5173 and sign up.
    - API docs: http://localhost:3000/docs · spec: `/openapi.json` · health: `/healthz`
 
 Why `BETTER_AUTH_URL=http://localhost:5173`: the browser talks to the frontend origin; Better Auth checks the request origin against it.
 
 ## Database
 
-- Default: in-memory SQLite. Accounts vanish on every backend restart — including `--watch` restarts when you edit files.
-- Persist: add `HBR_DB_PATH=./hoborouter-dev.sqlite` (gitignored; migrations run automatically).
-- Never point `HBR_DB_PATH` at a production DB.
+- PostgreSQL everywhere. `DATABASE_URL` (a `postgres://...` URL) is required; `createDb` refuses anything else (`packages/db/src/client.ts`).
+- Dev: container `hbr-dev-pg` on `127.0.0.1:55433` (above). Tests: `hbr-test-pg` on `127.0.0.1:55432` (`bun run db:test:up`). E2E: `hbr-e2e-pg` on `127.0.0.1:55434`.
 - Secret: a fresh `BETTER_AUTH_SECRET` each start invalidates sessions on restart. For persistent dev, export a fixed one once per shell (`export BETTER_AUTH_SECRET=$(openssl rand -hex 32)`) and omit the inline one.
+- Migrating from an old SQLite file (read-only source; verifies counts, money bounds, and wallet/ledger consistency before committing):
+
+  ```sh
+  DATABASE_URL=postgres://... bun run db:copy-from-sqlite --from <sqlite file>
+  ```
 
 ## Instance admin
 
-Needed for admin pages and marking payments paid. Sign up first, then (backend may be stopped or running — SQLite WAL; requires a persistent DB file):
+Needed for admin pages and marking payments paid. Two paths:
 
-```sh
-bun -e 'import {Database} from "bun:sqlite"; import {bootstrapInstanceAdmin} from "./apps/api/src/instance-admin.ts"; console.log(bootstrapInstanceAdmin(new Database("hoborouter-dev.sqlite"), "you@example.com"))'
-```
+- Dev convenience: start the backend with `HBR_DEV_ADMIN_EMAIL=you@example.com` and `NODE_ENV=development`, then sign up with that exact email — the account is created as instance admin.
+- Any environment: `scripts/bootstrap-instance-admin.ts` upserts the email from `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL` into `instance_admins` (uses `DATABASE_URL`).
 
 ## AI gateway (optional)
 
@@ -96,11 +108,11 @@ Requests are sent to the provider identically either way (`cache_control` marker
 
 ## Payments in dev
 
-Mock top-ups are on by default. As owner, self-mark paid: add `HBR_DEV_PAYMENTS=1` (only works with `NODE_ENV=development` or `test`).
+Top-ups are provider `manual` in every environment: a workspace member creates a pending top-up, and an INSTANCE ADMIN marks it paid (Admin → Payments) after confirming the money out-of-band. There is no dev self-complete endpoint and no env gate for creating top-ups. The legacy signed mock webhook is still readable/completable via the admin endpoint (`HBR_MOCK_PAYMENTS` only gates the legacy `/webhooks/payments/mock` route).
 
 ## Become admin in dev
 
-Start the backend with `HBR_DEV_ADMIN_EMAIL=you@example.com` and `NODE_ENV=development`, then sign up in the UI with that exact email — the account is created as an instance admin.
+See [Instance admin](#instance-admin): `HBR_DEV_ADMIN_EMAIL=you@example.com` + `NODE_ENV=development`, then sign up with that exact email.
 
 ## Fake CPA for local AI calls
 
@@ -114,7 +126,7 @@ Start the backend with `CPA_BASE_URL=http://127.0.0.1:8399 CPA_ACCESS_KEY=<any>`
 
 ## E2E UI check
 
-Isolated stack (fake CPA :8399, API :3099, vite :5199, fresh SQLite each up):
+Isolated stack (fake CPA :8399, API :3099, vite :5199, throwaway Postgres `hbr-e2e-pg` on 55434, fresh database each up):
 
 ```sh
 bun run e2e                   # up, full sweep, down (one command)
@@ -129,15 +141,17 @@ Iterate on one area only: `E2E_ONLY='gateway|overview' bun tests/e2e/ui.ts` (reg
 ## Tests & type check
 
 ```sh
-bun run test                                  # stop your dev backend first (port 3000 conflict)
-bunx tsc -p apps/api/tsconfig.json --noEmit   # API type check
-cd apps/web && bunx tsc -b                    # web type check
+bun run db:test:up                            # start the test Postgres (hbr-test-pg, 127.0.0.1:55432)
+PORT=3998 bun run test                        # stop your dev backend first (port 3000 conflict)
+node_modules/.bin/tsc -p apps/api/tsconfig.json --noEmit   # API type check
+cd apps/web && node_modules/.bin/tsc -b                    # web type check
 ```
 
 ## Troubleshooting
 
 - Port 3000 in use: `lsof -nP -iTCP:3000 -sTCP:LISTEN`
 - 403 "invalid origin" on signup: `BETTER_AUTH_URL` must equal the URL in the browser bar.
+- Postgres container not ready: `docker logs hbr-dev-pg` (tests: `docker logs hbr-test-pg`).
 
 ## Cloudflare Turnstile (optional, off by default)
 
@@ -150,4 +164,4 @@ When either is unset, auth behaves exactly as before. The frontend widget is ski
 
 ## Legal pages
 
-Terms of Service (`/terms`) and Privacy Policy (`/privacy`) are public pages rendered from the markdown source of truth at `apps/web/src/pages/legal/content/`. Operator-specific facts (`{{OPERATOR_NAME}}`, `{{CONTACT_EMAIL}}`, `{{EFFECTIVE_DATE}}`) come from `VITE_LEGAL_OPERATOR_NAME`, `VITE_LEGAL_CONTACT_EMAIL`, and `VITE_LEGAL_EFFECTIVE_DATE` (build-time for the web image; defaults to "Hoborouter Team" / "hoborouter@june8th.me" / "2026-10-02" when unset).
+Terms of Service (`/terms`) and Privacy Policy (`/privacy`) are public pages rendered from the markdown source of truth at `apps/web/src/pages/legal/content/`. Operator-specific facts (operator name, contact email, effective date) are written directly in those markdown files — there are no build-time `VITE_LEGAL_*` variables.

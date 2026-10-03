@@ -1,38 +1,44 @@
 # Deployment
 
-Docker Compose runs two services: `hoborouter` (this app: API + web dist, Bun runtime) and `cpa` (the CLIProxyAPI / cliproxyapi container the app proxies through at `http://cpa:8317`).
+Docker Compose runs three services: `db` (postgres:17-alpine, named volume
+`hbr-pgdata`), `hoborouter` (this app: API + web dist, Bun runtime, image
+`ghcr.io/teppyboy/hoborouter:${HBR_IMAGE_TAG:-latest}`), and `cpa` (the
+CLIProxyAPI container the app proxies through; compose sets
+`CPA_BASE_URL=http://cpa:8317`, the service name on the compose network; `127.0.0.1`
+would point at the app container itself). `DATABASE_URL` is built in compose from
+`POSTGRES_PASSWORD`: `postgres://hoborouter:${POSTGRES_PASSWORD}@db:5432/hoborouter`.
 
 ## First deploy
 
-1. `scripts/generate-secrets.sh` — creates gitignored `deploy/.env` with `CPA_MANAGEMENT_KEY` and `CPA_ACCESS_KEY`. Add `BETTER_AUTH_SECRET` (`openssl rand -hex 32`), `BETTER_AUTH_URL` (public URL, required when `NODE_ENV=production`), and payOS credentials if using real payments. Names are documented in `deploy/.env.example`.
+1. `scripts/generate-secrets.sh` — creates gitignored `deploy/.env` with `CPA_MANAGEMENT_KEY` and `CPA_ACCESS_KEY`. Add `POSTGRES_PASSWORD` (required — compose refuses to start without it), `BETTER_AUTH_SECRET` (`openssl rand -hex 32`, min 32 chars), and `BETTER_AUTH_URL` (public URL; `HBR_BASE_URL` is also accepted — `apps/api/src/auth.ts` throws at startup in production without one). payOS credentials are optional. Names are documented in `deploy/.env.example`.
 2. Ensure `deploy/cpa/config.yaml` exists (`sh deploy/cpa/render-config.sh`).
 3. From `deploy/`: `docker compose up -d --wait`.
 4. `hoborouter` is published on `127.0.0.1:3000` only. Terminate TLS in a reverse proxy (Caddy/nginx) that forwards to `127.0.0.1:3000`; never expose the port directly.
 
+### Pulling the image
+
+The GHCR package is private like the repo. Pulling needs `docker login
+ghcr.io` with a token that has `read:packages`, or make the package public in
+GitHub package settings. Tag pushes (`v*`) publish `ghcr.io/teppyboy/hoborouter:<tag>`
+and `:latest` via `.github/workflows/release.yml`.
+
 ## Backups
 
-SQLite lives in the named volume `hoborouter-data` at `/data/hoborouter.db` (WAL mode). Copy safely with the `.backup` command, not `cp`, so WAL frames are checkpointed:
+Postgres lives in the named volume `hbr-pgdata`. Back up with `pg_dump`:
 
 ```sh
-docker compose exec hoborouter bun -e '
-const {Database} = require("bun:sqlite");
-new Database("/data/hoborouter.db").exec("VACUUM INTO \"/tmp/backup.db\"");
-' && docker compose cp hoborouter:/tmp/backup.db ./backup-$(date +%F).db
+docker compose exec -T db pg_dump -U hoborouter -Fc hoborouter > backup-$(date +%F).dump
 ```
 
-Alternative from a host with sqlite3 against a stopped container's volume: `sqlite3 /path/hoborouter.db ".backup '/path/backup.db'"`. Schedule daily; verify restore into a scratch volume quarterly.
-
-### Volume ownership
-
-The container runs as the non-root `bun` user (uid 1000). If the `hoborouter-data` volume was first created by an older root-running image, fix ownership once:
+Schedule daily; verify a restore into a scratch volume quarterly:
 
 ```sh
-docker compose run --rm --user root hoborouter chown -R bun:bun /data
+docker compose exec -T db pg_restore -U hoborouter --clean --dbname hoborouter < backup-<date>.dump
 ```
 
 ### Hardening
 
-The `hoborouter` service drops all Linux capabilities (`cap_drop: [ALL]`), sets `no-new-privileges`, and caps processes (`pids_limit: 512`) and memory (`mem_limit: 1g`).
+The `hoborouter` service drops all Linux capabilities (`cap_drop: [ALL]`), sets `no-new-privileges`, and caps processes (`pids_limit: 512`) and memory (`mem_limit: 1g`). Uploaded avatars live in the `hoborouter-data` volume at `/data/avatars` (the image sets `HBR_AVATAR_DIR=/data/avatars`).
 
 ## payOS webhook URL
 
@@ -42,19 +48,20 @@ Point the payOS dashboard webhook at `https://<your-domain>/webhooks/payments/pa
 
 `HBR_GATEWAY_ENABLED` defaults to ON. Set `HBR_GATEWAY_ENABLED=0` in `deploy/.env` and `docker compose up -d` to disable paid traffic. Before relying on it in production:
 
-4. Billing audit: verify wallet debit, USD→VND rate (`HBR_USD_VND_RATE`), and per-request max-output-token cap (`HBR_DEFAULT_MAX_OUTPUT_TOKENS`) behave correctly against a staging instance.
-5. Confirm CPA credentials rotate cleanly and `CPA_BASE_URL` resolves inside the compose network.
-6. QA gates: key auth, insufficient-credit path, and audit log entries all verified end to end.
+1. Billing audit: verify wallet debit, USD→VND rate (`HBR_USD_VND_RATE`), and per-request max-output-token cap (`HBR_DEFAULT_MAX_OUTPUT_TOKENS`) behave correctly against a staging instance.
+2. Confirm CPA credentials rotate cleanly and `CPA_BASE_URL` resolves from the `hoborouter` container.
+3. QA gates: key auth, insufficient-credit path, and audit log entries all verified end to end.
 
-## Payments: mock provider is the default
+## Payments: manual top-ups, admin-completed
 
-Top-ups use the built-in mock provider by default: users create a mock payment via `POST /api/v1/workspaces/:id/payments`; an INSTANCE ADMIN (only) completes it with `POST /api/v1/admin/payments/:id/complete` after confirming the money out-of-band. payOS stays optional — set all of `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY` to use it instead. The signed mock webhook (`HBR_MOCK_PAYMENTS_WEBHOOK_KEY`) is optional; without it the route 404s and startup is unaffected. Set `HBR_MOCK_PAYMENTS=off` to disable mock top-up creation. `/api/v1/dev/payments/:id/complete` self-completion exists ONLY when `NODE_ENV !== 'production'` and `HBR_DEV_PAYMENTS=1`.
+Top-ups are provider `manual` in every environment: a workspace member creates a pending payment via `POST /api/v1/workspaces/:id/payments`, and an INSTANCE ADMIN (only) completes it with `POST /api/v1/admin/payments/:id/complete` after confirming the money out-of-band (Admin → Payments → mark paid). There is no customer self-completion path and no dev-only completion endpoint. payOS stays optional — set all of `PAYOS_CLIENT_ID`, `PAYOS_API_KEY`, `PAYOS_CHECKSUM_KEY` to use it. Legacy provider `mock` rows are still readable and admin-completable; the legacy signed webhook route is gated by `HBR_MOCK_PAYMENTS` and only enabled when `HBR_MOCK_PAYMENTS_WEBHOOK_KEY` is set.
 
 ## Upgrade / migration policy
 
 - Forward-only: schema migrations never roll back. Ship additive migrations; deprecate before removing.
 - Preflight: before `docker compose up` with a new image, back up the DB (above) and run the migration against a copy of the volume.
 - Never auto-run destructive migrations. Any `DROP`/column-type change is a reviewed, manually executed step with a verified backup and a documented rollback plan (restore backup + previous image tag).
+- On a VPS with the systemd timer (`docs/ops/vps-auto-update.md`), updates pull the new image, take a `pg_dump` backup, recreate the container, and gate on `/healthz` with image rollback.
 
 ## Rebuild
 
@@ -63,4 +70,4 @@ docker compose build hoborouter
 docker compose up -d hoborouter
 ```
 
-The image is built from the repo-root multi-stage `Dockerfile` (oven/bun:1.4; web built with `bunx vp build`; runtime `bun apps/api/src/index.ts`).
+The image is built from the repo-root multi-stage `Dockerfile` (oven/bun:1.4; web built with `vp build`; runtime `bun apps/api/src/index.ts`). Production normally pulls the published GHCR image instead of building locally.

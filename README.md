@@ -1,8 +1,12 @@
 # Hoborouter
 
-PAID AI TRAFFIC DISABLED — Phase 0 probe does not authorize it; see architecture.md §8 open human decisions.
+Self-hosted AI gateway and control plane: users, workspaces, API keys, model
+catalog, VND wallet billing, payments, usage logs, and a dashboard, proxying
+through CLIProxyAPI (CPA).
 
 ## Setup
+
+Requires Bun 1.4+ and Docker (dev/test databases run as Postgres containers).
 
 ```sh
 bun install
@@ -14,20 +18,31 @@ Set secrets in `deploy/.env` before starting CPA. Never commit `deploy/.env`.
 ## Run and test
 
 ```sh
-bun run dev
-bun test
-bunx tsc --noEmit -p apps/api
+HBR_DEV_ADMIN_EMAIL=you@example.com bun run dev   # dev stack + dev Postgres (hbr-dev-pg, 127.0.0.1:55433)
+bun run db:test:up                                # test Postgres (hbr-test-pg, 127.0.0.1:55432)
+PORT=3998 bun run test                            # unit/integration against the test Postgres
+E2E_CPA_PORT=8499 bun run e2e                     # E2E UI sweep (hbr-e2e-pg, 127.0.0.1:55434)
+node_modules/.bin/tsc -p apps/api/tsconfig.json --noEmit
 ```
 
-CPA runs on `127.0.0.1:8317` with a generated 256-bit management key. Add providers: `scripts/cpa-dev.sh up`, `scripts/cpa-dev.sh key`, then open http://127.0.0.1:8317/management.html and paste the key. API-key providers save directly; OAuth providers require the local callback ports. Paid AI traffic remains disabled; production use requires explicit approval.
+`DATABASE_URL` (a `postgres://...` URL) is required; the DB layer refuses
+anything else. One-time copy of an old SQLite database into Postgres:
+
+```sh
+DATABASE_URL=postgres://... bun run db:copy-from-sqlite --from <sqlite file>
+```
+
+CPA runs on `127.0.0.1:8317` with a generated 256-bit management key. Add providers: `scripts/cpa-dev.sh up`, `scripts/cpa-dev.sh key`, then open http://127.0.0.1:8317/management.html and paste the key. API-key providers save directly; OAuth providers require the local callback ports.
 
 ## Environment
 
-- `HBR_DB_PATH` — SQLite database path; defaults to `:memory:`.
+- `DATABASE_URL` — PostgreSQL URL, required everywhere (dev, tests, production).
 - `HBR_WEB_DIST` — web build directory override.
-- `HBR_MOCK_PAYMENTS` — mock top-ups are the default provider; set to `off` to disable mock creation.
-- `HBR_MOCK_PAYMENTS_WEBHOOK_KEY` — non-empty mock webhook key when mock payments are enabled.
+- `HBR_MOCK_PAYMENTS` / `HBR_MOCK_PAYMENTS_WEBHOOK_KEY` — legacy signed mock webhook only; new top-ups are provider `manual` and never use it.
 - `CPA_MANAGEMENT_KEY` — CPA management API key.
 - `CPA_ACCESS_KEY` — CPA access key.
+- `HBR_IDLE_TIMEOUT_S` — API idle timeout, 1–255 s (default 255).
 - `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL` — bootstrap instance-admin email, when configured.
-- `NODE_ENV` — mock payments are not disabled by production mode; payments complete only via the instance admin (`POST /api/v1/admin/payments/:id/complete`), or self-complete on dev endpoints only when `NODE_ENV=development` (or `test`) and `HBR_DEV_PAYMENTS=1`.
+- `NODE_ENV` — top-ups complete only via the instance admin (`POST /api/v1/admin/payments/:id/complete`); there is no dev self-complete path.
+
+See `deploy/.env.example` for the full annotated list.

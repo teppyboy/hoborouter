@@ -1,8 +1,26 @@
 # STATUS
 
-- Current state: paid gateway ON by default (`HBR_GATEWAY_ENABLED=0` to disable). Control-plane under `/api/v1`, OpenAPI at `/openapi.json`, docs UI at `/docs`. Dashboard frontend merged. Mock top-ups are the default payment provider; completion only by instance admin via `/api/v1/admin/payments/:id/complete` (dev self-complete gated to `HBR_DEV_PAYMENTS=1` + NODE_ENV in {development, test}). payOS provider optional, not wired to live credentials.
-- Security audit: done (Sentry security-review skill) across gateway, container, dev payments, auth, docs, compose — 0 critical/high, 3 medium found and fixed (gateway body cap 413 pre-buffer + upstream headers timeout; Docker runtime non-root user + cap_drop/no-new-privileges + .dockerignore env/DB exclusions; dev-payments allowlist gate + admin-complete 409 + BETTER_AUTH_SECRET ≥32-char production assertion).
-- Accepted residuals: SameSite=Lax cookies without explicit CSRF token; full-cap charge on client abort by design; CPA error bodies passed through; CPA image runs as root upstream.
-- QA: 382 pass / 0 fail whole repo, 5392 expect() calls across 33 files; tsc clean apps/api; web build clean. Regression tests added: oversized gateway body → 413 with no requests row; admin complete on cancelled payment → 409.
-- Fix: missing usage splits (provider omits `*_tokens_details`) now bill conservatively (higher-charge assumption, `assumed_splits` recorded in usage_logs.raw_payload) instead of full-hold; full_hold usage_logs now record public_model.
-- Next steps: VietQR/payOS integration later; revisit CSRF token and CPA rootless image if threat model changes.
+Updated 2026-10 at commit 70d23b3 (release v0.1.0, image ghcr.io/teppyboy/hoborouter:v0.1.0).
+
+## Shipped
+
+- PostgreSQL everywhere (drizzle-orm/bun-sql, `DATABASE_URL` required); dev/test/E2E Postgres containers (`hbr-dev-pg` :55433, `hbr-test-pg` :55432, `hbr-e2e-pg` :55434); one-time SQLite copy via `bun run db:copy-from-sqlite`.
+- Paid AI gateway `/v1/chat/completions` + `/v1/responses` (auth, reservations, idempotent settlement, streaming with TTFT/latency capture, unbuffered SSE, `HBR_IDLE_TIMEOUT_S` up to 255 s), prompt caching, success rate.
+- VND wallet/ledger/billing invariants; manual top-ups credited only by instance admin (Admin → Payments); payOS provider optional.
+- Dashboard: overview, models/keys/logs/usage, billing, account settings (name/email/password/avatar with Gravatar fallback, 1 MiB upload), admin users add/remove, admin soft-delete of request logs (financial totals unchanged), compact audit log, CPA health detail.
+- Production compose (Postgres + CPA + GHCR image), healthcheck, VPS auto-update timer with pg_dump backup and image rollback; release workflow publishes GHCR images on `v*` tags.
+
+## QA
+
+- 489 unit/integration tests + 40 E2E steps, all green at 70d23b3.
+
+## Accepted residuals (still true)
+
+- SameSite=Lax cookies without an explicit CSRF token.
+- Full-hold charge on client abort after dispatch (by design).
+- CPA image (`eceasy/cli-proxy-api`) runs as root upstream.
+
+## Next steps
+
+- payOS/VietQR integration when live credentials exist.
+- Revisit CSRF token and CPA rootless image if the threat model changes.

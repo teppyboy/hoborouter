@@ -65,8 +65,7 @@ no root.
 ## Secrets handling
 
 - Runtime secrets stay in `deploy/.env` (gitignored), loaded via `env_file`.
-- GHCR pull on the VPS: `docker login ghcr.io` with a fine-grained PAT
-  read:packages (or keep the image public — prefer that).
+- GHCR pull on the VPS: the package is private like the repo, so `docker login ghcr.io` with a PAT that has `read:packages` — or make the package public in GitHub package settings.
 - CI needs no VPS credentials: only the built-in `GITHUB_TOKEN` for GHCR push.
 - Backup dir `/var/lib/hoborouter/backups`: `chmod 700`; dumps may contain
   API keys.

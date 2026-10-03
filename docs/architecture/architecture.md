@@ -11,7 +11,8 @@ OAuth, protocol conversion, routing, retry/failover, and provider calls. Do
 not build provider adapters or a second router.
 
 Stack: Bun runtime, Elysia 2, React 19 static SPA, Vite+ (`vp`) build/test/
-lint/check, Drizzle + `bun:sqlite` WAL, Better Auth, Docker Compose. Frontend
+lint/check, Drizzle + PostgreSQL (`drizzle-orm/bun-sql`, selected by
+`DATABASE_URL`; non-postgres URLs are refused), Better Auth, Docker Compose. Frontend
 uses TanStack Router/Query/Table, Zustand, React Hook Form, Zod, shadcn/ui,
 Tailwind 4, Geist, Lucide. No SSR or separate worker service; background work
 runs in-process and is idempotent.
@@ -20,10 +21,10 @@ runs in-process and is idempotent.
 
 ```text
 clients/browser -> hoborouter (Elysia + static SPA) -> cliproxyapi:8317
-                                             SQLite WAL
+                                            PostgreSQL (compose service `db`)
 ```
 
-Compose services are exactly `hoborouter` and `cliproxyapi`. CPA is reachable
+Compose services are exactly `db` (Postgres), `hoborouter`, and `cpa`. CPA is reachable
 by Hoborouter on the private Compose network. Publish CPA only as
 `127.0.0.1:8317:8317` for the single owner's debugging; it is not a tenant
 API. CPA management key stays server-side.
@@ -126,14 +127,17 @@ remains full-hold.
 
 ## Payments and security
 
-`PaymentService` depends on `PaymentProvider`; `MockPaymentProvider` exists,
-and payOS is in scope now but not yet implemented. The
-interface is
+`PaymentService` depends on `PaymentProvider`; the interface is
 `createPayment`, `getPayment`, `verifyWebhook`, and optional `cancelPayment`.
-Payment state transitions and webhook replay/idempotency credit the wallet only
-once. `POST /api/v1/dev/payments/:id/complete` is development/demo-only and
-replaces the old mock webhook route. payOS uses signature fixtures, so tests
-need no merchant credentials.
+New top-ups are provider `manual`: any workspace member creates a pending
+payment, and only an instance admin credits the wallet
+(`POST /api/v1/admin/payments/:id/complete`) after out-of-band confirmation —
+there is no dev self-completion endpoint. payOS is optional when its three
+credentials are set. Payment state transitions and webhook replay/idempotency
+credit the wallet only once. payOS uses signature fixtures, so tests
+need no merchant credentials. Legacy `mock` payment rows remain readable and
+admin-completable; the legacy signed mock webhook route is gated by
+`HBR_MOCK_PAYMENTS` and enabled only when its webhook key is set.
 
 API secrets are 32 random bytes encoded base64url; plaintext is shown once and
 only its hash is stored. Display first 4 and last 6 secret characters around
@@ -165,7 +169,7 @@ check.
 | 6 Public gateway       | No gateway routes                                                    | Both endpoints, stream/non-stream, auth/model checks, reserve/forward/settle. Test streaming passthrough and CPA private reachability.                                                                  |
 | 7 Usage                | Partial legacy usage tables                                          | `usage_logs`, extractor, idempotency, captured paths; provider-event identity remains open. Test duplicate usage does not duplicate settlement.                                                         |
 | 8 Wallet/billing       | Wallet/reservation primitives exist                                  | Catalog migration, formula, FX/markup snapshots, settlement/refund invariants. Test concurrent reservation, integer formula, no double charge.                                                          |
-| 9 Mock payment + payOS | Mock credit path partial; payOS in scope now but not yet implemented | Provider interface and dev completion endpoint; implement payOS provider, verified webhook, and fixtures. Test pending→paid, replay, one ledger top-up, invalid signature; no merchant secret in tests. |
+| 9 Mock payment + payOS | Provider interface, manual admin-completed top-ups; payOS implemented behind optional credentials                       | Acceptance: pending→paid, replay, one ledger top-up, invalid signature; no merchant secret in tests.                                     |
 | 10 Dashboard           | Vite starter only                                                    | Required IA and data-backed states. Test key, log, billing happy paths plus loading/error/empty states.                                                                                                 |
 | 11 VietQR static demo  | Not implemented                                                      | Implement static VietQR demo. Test QR generation and manual/mock settlement.                                                                                                                            |
 | 12 Hardening           | Basic request IDs/errors partial                                     | Rate limits, headers/CORS/CSRF, audit, graceful shutdown, health checks, backups, concurrency and payment hardening. Test security controls and Docker health.                                          |

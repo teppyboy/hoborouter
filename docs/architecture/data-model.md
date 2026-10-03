@@ -1,6 +1,7 @@
 # Hoborouter data model
 
-SQLite WAL via Drizzle; epoch milliseconds; IDs are UUIDs. All money is
+PostgreSQL via Drizzle (`drizzle-orm/bun-sql`, selected by `DATABASE_URL`);
+epoch milliseconds; IDs are UUIDs. All money is
 integer VND. Migration is forward-only. `packages/db/src/migrate.ts` must preflight before
 schema mutation; populated incompatible data requires explicit owner approval.
 Never assume no production data; never drop foundation data.
@@ -130,7 +131,10 @@ provider_reference UNIQUE per provider, raw_payload, signature_valid,
 processed_at)`. `PaymentService` depends on
 `PaymentProvider { createPayment, getPayment, verifyWebhook, cancelPayment? }`.
 `MockPaymentProvider` exercises pending→paid→verified event→top-up ledger.
-`POST /api/v1/dev/payments/:id/complete` is development/demo-only. payOS uses
+New top-ups are provider `manual`: a workspace member creates the pending
+payment and only an instance admin credits the wallet
+(`POST /api/v1/admin/payments/:id/complete`) — there is no dev
+self-completion endpoint. payOS uses
 signature fixtures and webhook replay/idempotency; tests require no merchant
 credentials.
 
