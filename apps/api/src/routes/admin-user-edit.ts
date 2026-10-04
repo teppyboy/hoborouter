@@ -16,6 +16,7 @@
 import { Elysia, t } from "elysia";
 import { and, eq, ne, sql } from "drizzle-orm";
 import { type Db, type Tx, account, isUniqueViolation, users } from "@hoborouter/db";
+import { checkPassword } from "@hoborouter/shared";
 import type { BetterAuthInstance } from "../auth-types";
 import { jsonError, requireInstanceAdmin, requireSession, writeAudit } from "../authz";
 
@@ -99,6 +100,10 @@ export const adminUserEditRoutes = (db: Db, auth: BetterAuthInstance) =>
           return jsonError(400, "INVALID", "email must be valid and at most 254 characters");
 
         let resp: Response | undefined;
+        // The email change is only "real" when it differs from the target's
+        // current address; tracked outside the tx so the post-commit
+        // notification knows whether anything moved.
+        let emailChangedTo: string | undefined;
         try {
           await db.transaction(async (tx) => {
             const target = await lockTarget(tx, params.id);
@@ -107,6 +112,7 @@ export const adminUserEditRoutes = (db: Db, auth: BetterAuthInstance) =>
               return;
             }
             const emailChanged = email !== undefined && email !== target.email;
+            if (emailChanged) emailChangedTo = email!;
             if (emailChanged) {
               // Precheck the unique constraint (better error than a raw 23505).
               const dup = await tx
@@ -152,6 +158,17 @@ export const adminUserEditRoutes = (db: Db, auth: BetterAuthInstance) =>
           if (isUniqueViolation(err)) return jsonError(409, "EMAIL_TAKEN", "Email already registered");
           throw err;
         }
+        // Committed: notify the target's NEW address (never the admin's session
+        // context — headers omitted so the admin session can't hijack the
+        // recipient). Notification only: a delivery failure leaves the change
+        // in place and is swallowed; the user can still request a resend.
+        if (emailChangedTo && auth.api.sendVerificationEmail) {
+          try {
+            await auth.api.sendVerificationEmail({ body: { email: emailChangedTo } });
+          } catch {
+            // Best-effort notification; the committed change must not 500.
+          }
+        }
         return resp!;
       },
     )
@@ -172,8 +189,16 @@ export const adminUserEditRoutes = (db: Db, auth: BetterAuthInstance) =>
         if ("error" in g) return g.error;
         const body = await readJsonBody(request);
         const newPassword = body?.newPassword;
-        if (typeof newPassword !== "string" || newPassword.length < 8 || newPassword.length > 200)
-          return jsonError(400, "INVALID", "newPassword (8..200 characters) is required");
+        if (typeof newPassword !== "string")
+          return jsonError(400, "INVALID", "newPassword is required");
+        // Same shared policy as signup/change-password (see auth.ts hooks).
+        const pwProblems = checkPassword(newPassword);
+        if (pwProblems.length > 0)
+          return jsonError(
+            400,
+            "INVALID",
+            `Password does not meet the requirements: ${pwProblems.join("; ")}`,
+          );
         // Initial validity check (no lock) before hashing; the locked target
         // is rechecked inside the transaction before any account write.
         const initial = (

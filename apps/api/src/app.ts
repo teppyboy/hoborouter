@@ -9,6 +9,7 @@ import { workspacesRoutes } from "./routes/workspaces";
 import { membersRoutes } from "./routes/members";
 import { auditRoutes } from "./routes/audit";
 import { keysRoutes } from "./routes/keys";
+import { chatsRoutes } from "./routes/chats";
 import { cpaHealthRoutes } from "./routes/cpahealth";
 import { adminModelsRoutes } from "./routes/admin-models";
 import { adminCatalogRoutes } from "./routes/admin-catalog";
@@ -25,6 +26,7 @@ import { adminUserEditRoutes } from "./routes/admin-user-edit";
 import { adminSettingsRoutes } from "./routes/admin-settings";
 import { adminRequestsRoutes } from "./routes/admin-requests";
 import { catalogPublicRoutes } from "./routes/catalog-public";
+import { publicConfigRoutes } from "./routes/public-config";
 import { accountRoutes } from "./routes/account";
 import { payosConfigFromEnv, type PayosConfig } from "@hoborouter/payments";
 import { mockWebhookConfig } from "./mock-config";
@@ -107,6 +109,7 @@ export const buildApp = async (deps: AppDeps = {}) => {
     .use(membersRoutes(db, auth))
     .use(auditRoutes(db, auth))
     .use(keysRoutes(db, auth))
+    .use(chatsRoutes(db, auth))
     .use(paymentsRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch))
     .use(mockWebhookRoutes(db, mockPayments))
     .use(payosWebhookRoutes(db, payosConfigFromEnv()))
@@ -120,6 +123,7 @@ export const buildApp = async (deps: AppDeps = {}) => {
     .use(adminSettingsRoutes(db, auth))
     .use(adminRequestsRoutes(db, auth))
     .use(catalogPublicRoutes(db, auth))
+    .use(publicConfigRoutes())
     .use(accountRoutes(db, auth))
     .use(v1ModelsRoutes(db))
     .use(gatewayRoutes(db))

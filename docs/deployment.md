@@ -37,6 +37,72 @@ ghcr.io` with a token that has `read:packages`, or make the package public in
 GitHub package settings. Tag pushes (`v*`) publish `ghcr.io/teppyboy/hoborouter:<tag>`
 and `:latest` via `.github/workflows/release.yml`.
 
+## Auth: password policy, optional email verification, Turnstile
+
+### Password policy
+
+A password must have 8–200 characters with at least one lowercase letter, one
+uppercase letter, one digit, and one special character
+(`packages/shared/src/password-policy.ts`). The policy is enforced server-side
+only when a password is SET: signup, change-password (which also requires the
+current password), and admin create/reset. Existing passwords are never
+re-checked — users with older passwords keep signing in.
+
+### Email verification (optional; plain SMTP)
+
+Verification mail is enabled only when **both** `SMTP_HOST` and
+`HBR_EMAIL_FROM` are set in `deploy/.env`; otherwise the feature is off and
+nothing changes. There is no third-party email provider: the app ships a
+minimal SMTP client (`apps/api/src/email.ts`, `node:net`/`node:tls` only) with
+`AUTH PLAIN`/`AUTH LOGIN` and STARTTLS/implicit SSL.
+
+| Variable | Meaning |
+| --- | --- |
+| `SMTP_HOST` | SMTP server hostname; half of the on-switch |
+| `SMTP_PORT` | Default 587; when unset, port 465 implies `ssl` mode |
+| `SMTP_USER` / `SMTP_PASSWORD` | AUTH credentials; must be set together or both omitted |
+| `HBR_SMTP_SECURE` | `starttls` (default, mandatory), `ssl` (implicit TLS, e.g. 465), or `none` (cleartext, dev/local testing only — refused in production) |
+| `HBR_EMAIL_FROM` | Bare address or display form (`Hoborouter <no-reply@example.com>`); the envelope `MAIL FROM` uses the bare address |
+
+Security behavior: in the default `starttls` mode a send fails **before AUTH**
+if the server does not offer STARTTLS; TLS certificate verification is always
+on (`rejectUnauthorized: true`), so self-signed or private-CA certificates are
+rejected — use a publicly trusted certificate on the SMTP server. Delivery
+failures are logged with the recipient redacted and never fail signup or
+sign-in.
+
+Verification is a **notification, not a gate**: the equivalent of
+`requireEmailVerification` is deliberately never set, unverified users can
+sign in and use every feature, and there is no strict-mode variable to change
+that. Users can retry delivery via `POST /api/auth/send-verification-email`
+(Better Auth rate-limits it to 3/60s and answers identically for unknown or
+already-verified addresses).
+
+Sender setup: publish SPF and DKIM DNS records for the sending domain, or
+recipient providers are likely to junk or reject the mail.
+
+Tested scope: the SMTP client is covered by unit tests (message building,
+STARTTLS mandatory-before-AUTH, `none`-in-production refusal, and TLS
+certificate **rejection**). No live-trusted-TLS send and no real provider
+delivery test has been run — expect to validate actual delivery against your
+own SMTP server during setup.
+
+After adding or changing these variables, recreate the container from inside
+`deploy/` (`docker compose up -d`) so compose picks up the new env.
+
+### Cloudflare Turnstile (optional captcha)
+
+Set `TURNSTILE_SECRET_KEY` (server-side secret, never leaves the server) and
+`TURNSTILE_SITE_KEY` (published to the SPA at runtime via
+`/api/v1/public-config`) in `deploy/.env`. With both set, sign-in/sign-up
+require a Turnstile token; with neither, the widget is skipped (also skipped
+automatically on localhost). The legacy `VITE_TURNSTILE_SITE_KEY` is still
+accepted as a fallback for older web builds but is otherwise unused. If the
+secret is set without a site key, `/api/v1/public-config` answers 503
+(fail-closed) instead of silently dropping protection. Test keys that always
+pass: site `1x00000000000000000000AA`, secret
+`1x0000000000000000000000000000000AA`.
+
 ## Backups
 
 Postgres lives in the named volume `hbr-pgdata`. Back up with `pg_dump`:

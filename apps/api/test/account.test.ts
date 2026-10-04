@@ -39,13 +39,13 @@ describe("Better Auth updateUser + changePassword", () => {
       body: { name: "New Name" },
     });
     expect(upd.status).toBe(200);
-    const oldPw = "correct horse battery staple";
+    const oldPw = "Correct-Horse-Battery-Staple-1";
     const ch = await req(ctx.app, "/api/auth/change-password", {
       method: "POST",
       cookie,
       body: {
         currentPassword: oldPw,
-        newPassword: "newer horse battery staple",
+        newPassword: "Newer-Horse-Battery-Staple-2",
         revokeOtherSessions: true,
       },
     });
@@ -58,7 +58,7 @@ describe("Better Auth updateUser + changePassword", () => {
     expect(rej.status).toBe(401);
     const ok = await req(ctx.app, "/api/auth/sign-in/email", {
       method: "POST",
-      body: { email: "rename@example.com", password: "newer horse battery staple" },
+      body: { email: "rename@example.com", password: "Newer-Horse-Battery-Staple-2" },
     });
     expect(ok.status).toBe(200);
   });
@@ -102,7 +102,7 @@ describe("POST /api/v1/account/email", () => {
       cookie,
       body: {
         email: "TAKEN@example.com",
-        currentPassword: "correct horse battery staple",
+        currentPassword: "Correct-Horse-Battery-Staple-1",
       },
     });
     expect(res.status).toBe(409);
@@ -114,7 +114,7 @@ describe("POST /api/v1/account/email", () => {
     const res = await req(ctx.app, "/api/v1/account/email", {
       method: "POST",
       cookie,
-      body: { email: "not-an-email", currentPassword: "correct horse battery staple" },
+      body: { email: "not-an-email", currentPassword: "Correct-Horse-Battery-Staple-1" },
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("INVALID");
@@ -127,7 +127,7 @@ describe("POST /api/v1/account/email", () => {
       cookie,
       body: {
         email: "  Email4-New@EXAMPLE.com  ",
-        currentPassword: "correct horse battery staple",
+        currentPassword: "Correct-Horse-Battery-Staple-1",
       },
     });
     expect(res.status).toBe(200);

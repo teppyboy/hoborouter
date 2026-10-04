@@ -49,7 +49,7 @@ export async function signUp(
     new Request("http://localhost/api/auth/sign-up/email", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password: "correct horse battery staple", name }),
+      body: JSON.stringify({ email, password: "Correct-Horse-Battery-Staple-1", name }),
     }),
   );
   if (!res.ok) throw new Error(`signup failed ${res.status}: ${await res.text()}`);

@@ -43,7 +43,7 @@ beforeAll(async () => {
 async function signUpLocal(email: string, name: string): Promise<string> {
   const res = await req(app, "/api/auth/sign-up/email", {
     method: "POST",
-    body: { email, password: "correct horse battery staple", name },
+    body: { email, password: "Correct-Horse-Battery-Staple-1", name },
   });
   if (!res.ok) throw new Error(`signup failed ${res.status}`);
   return res.headers

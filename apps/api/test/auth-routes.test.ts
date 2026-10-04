@@ -12,7 +12,7 @@ describe("Better Auth mounted at /api/auth/*", () => {
   test("sign-up sets session cookie", async () => {
     const res = await req(ctx.app, "/api/auth/sign-up/email", {
       method: "POST",
-      body: { email: "a@example.com", password: "correct horse battery staple", name: "A" },
+      body: { email: "a@example.com", password: "Correct-Horse-Battery-Staple-1", name: "A" },
     });
     expect(res.status).toBe(200);
     expect(res.headers.getSetCookie().some((c) => c.startsWith("better-auth.session_token="))).toBe(
@@ -24,7 +24,7 @@ describe("Better Auth mounted at /api/auth/*", () => {
     await signUp(ctx.app, "b@example.com", "B");
     const res = await req(ctx.app, "/api/auth/sign-in/email", {
       method: "POST",
-      body: { email: "b@example.com", password: "correct horse battery staple" },
+      body: { email: "b@example.com", password: "Correct-Horse-Battery-Staple-1" },
     });
     expect(res.status).toBe(200);
     expect(cookieOf(res)).toContain("better-auth.session_token=");

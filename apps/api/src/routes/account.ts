@@ -95,7 +95,8 @@ export const accountRoutes = (db: Db, auth: BetterAuthInstance) =>
           .where(sql`lower(${users.email}) = ${email}`)
           .limit(1);
         if (taken[0]) return jsonError(409, "EMAIL_TAKEN", "Email already in use");
-        await db.update(users).set({ email }).where(eq(users.id, user.id));
+        // Nobody verified the new address: reset verified-ness along with it.
+        await db.update(users).set({ email, emailVerified: false }).where(eq(users.id, user.id));
         await writeAudit(db, {
           actorUserId: user.id,
           workspaceId: null,
@@ -103,6 +104,20 @@ export const accountRoutes = (db: Db, auth: BetterAuthInstance) =>
           target: user.id,
           detail: { to: email },
         });
+        // Committed: notify the NEW address. Better Auth's server API mails
+        // the signed verify link through the configured SMTP option; when SMTP
+        // is off (or the send fails) this is a notification only — the change
+        // and session stay valid, so any failure is swallowed here.
+        if (auth.api.sendVerificationEmail) {
+          try {
+            await auth.api.sendVerificationEmail({
+              body: { email },
+              headers: request.headers,
+            });
+          } catch {
+            // Delivery is best-effort; the committed change must not 500.
+          }
+        }
         const fresh = await getUser(db, user.id);
         return { user: publicUser(fresh!) };
       },

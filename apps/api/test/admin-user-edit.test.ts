@@ -9,8 +9,8 @@ import { createAuth } from "../src/auth";
 import { adminUserEditRoutes } from "../src/routes/admin-user-edit";
 import { cookieOf, q } from "./helpers";
 
-const PASSWORD = "correct horse battery staple";
-const NEW_PASSWORD = "fresh correct horse staple 42";
+const PASSWORD = "Correct-Horse-Battery-Staple-1";
+const NEW_PASSWORD = "Fresh-Correct-Horse-Staple-42";
 
 let drops: (() => Promise<void>)[] = [];
 afterEach(async () => {

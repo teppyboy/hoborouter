@@ -617,6 +617,47 @@ export const refundOperations = pgTable(
   ],
 );
 
+// --- chat history (context storage only — never billed, no wallet/ledger coupling) ---
+export const chatConversations = pgTable(
+  "chat_conversations",
+  {
+    id: text("id").primaryKey(),
+    user_id: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    workspace_id: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    title: text("title").notNull(),
+    model: text("model"),
+    // Message-shape validation lives app-side (Zod at the API boundary);
+    // the column stays a plain jsonb array of plain-text messages.
+    messages: jsonb("messages").notNull().default([]),
+    version: integer("version").notNull().default(1),
+    created_at: big("created_at").notNull(),
+    updated_at: big("updated_at").notNull(),
+    archived_at: big("archived_at"),
+  },
+  (t) => [
+    // Covers the conversation-list query: active-or-archived slice per
+    // (user, workspace), ordered by updated_at DESC, id for the cursor.
+    index("chat_conversations_list_idx").on(
+      t.user_id,
+      t.workspace_id,
+      t.archived_at,
+      t.updated_at,
+      t.id,
+    ),
+    check("chat_conversations_version", sql`${t.version} >= 1`),
+    check("chat_conversations_created_at", intBounded(t.created_at)),
+    check("chat_conversations_updated_at", intBounded(t.updated_at)),
+    check(
+      "chat_conversations_archived_at",
+      sql`${t.archived_at} IS NULL OR ${intBounded(t.archived_at)}`,
+    ),
+  ],
+);
+
 // --- audit ---
 export const auditLog = pgTable("audit_log", {
   id: text("id").primaryKey(),

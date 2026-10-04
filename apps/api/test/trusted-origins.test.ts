@@ -15,7 +15,7 @@ const signUpWithOrigin = async (app: Awaited<ReturnType<typeof makeApp>>["app"],
       headers: { "content-type": "application/json", origin, cookie: "better-auth.session_data=x" },
       body: JSON.stringify({
         email: `u${Math.random().toString(36).slice(2)}@e2e.test`,
-        password: "correct horse battery staple",
+        password: "Correct-Horse-Battery-Staple-1",
         name: "U",
       }),
     }),
@@ -45,7 +45,7 @@ describe("trusted origins (loopback swap)", () => {
       const res = await auth.handler(new Request("http://localhost/api/auth/sign-up/email", {
         method: "POST",
         headers: { "content-type": "application/json", origin: "http://127.0.0.1:5199", cookie: "x=1" },
-        body: JSON.stringify({ email: "a@b.test", password: "correct horse battery staple", name: "U" }),
+        body: JSON.stringify({ email: "a@b.test", password: "Correct-Horse-Battery-Staple-1", name: "U" }),
       }));
       console.log("STATUS " + res.status);
       await t.drop();

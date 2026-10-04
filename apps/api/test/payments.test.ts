@@ -180,7 +180,7 @@ describe("GET /api/v1/workspaces/:id/payments/:paymentId", () => {
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               email: "pay-owner-b@test.dev",
-              password: "correct horse battery staple",
+              password: "Correct-Horse-Battery-Staple-1",
             }),
           }),
         ),

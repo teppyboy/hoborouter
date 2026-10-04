@@ -12,6 +12,7 @@ import {
   writeAudit,
 } from "../authz";
 import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments";
+import { checkPassword } from "@hoborouter/shared";
 import { and, desc, eq, ne, notExists, sql, count, inArray } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import {
@@ -171,6 +172,7 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
             id: users.id,
             email: users.email,
             name: users.name,
+            email_verified: users.emailVerified,
             // Raw bigint comes back as a STRING from Bun SQL/PG; mapWith(Number)
             // keeps created_at a JSON epoch-ms number (web formatDate needs it).
             created_at: sql<number>`${users.createdAt}`.mapWith(Number),
@@ -377,19 +379,17 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
         const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
         const password = typeof body.password === "string" ? body.password : "";
         const instanceAdmin = body.instance_admin === true;
-        if (
-          !name ||
-          name.length > 80 ||
-          !EMAIL_RE.test(email) ||
-          password.length < 8 ||
-          password.length > 200 ||
-          email.length > 254
-        ) {
+        // Same shared policy as signup/change-password (see auth.ts hooks).
+        const pwProblems = checkPassword(password);
+        if (pwProblems.length > 0) {
           return jsonError(
             400,
             "INVALID",
-            "name (1..80), valid email, and password (min 8) required",
+            `Password does not meet the requirements: ${pwProblems.join("; ")}`,
           );
+        }
+        if (!name || name.length > 80 || !EMAIL_RE.test(email) || email.length > 254) {
+          return jsonError(400, "INVALID", "name (1..80) and a valid email are required");
         }
         let created: { user: { id: string; email: string; name: string } };
         try {

@@ -14,7 +14,7 @@ import {
   userIdByEmail,
 } from "./helpers";
 
-const PASSWORD = "correct horse battery staple";
+const PASSWORD = "Correct-Horse-Battery-Staple-1";
 
 // Close each test's pool after the test: Bun SQL pools hold connections until
 // closed and the test Postgres has a finite connection budget.

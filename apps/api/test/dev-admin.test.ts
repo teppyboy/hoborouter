@@ -18,7 +18,7 @@ const signupViaAuth = async (app: Awaited<ReturnType<typeof makeApp>>, email: st
     new Request("http://localhost/api/auth/sign-up/email", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, password: "correct horse battery staple", name: "U" }),
+      body: JSON.stringify({ email, password: "Correct-Horse-Battery-Staple-1", name: "U" }),
     }),
   );
   if (!res.ok) console.error("signup failed", res.status, await res.text());

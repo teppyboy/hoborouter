@@ -4,6 +4,7 @@
 export interface AuthUser {
   id: string;
   email?: string;
+  emailVerified?: boolean;
 }
 
 export interface AuthSession {
@@ -33,6 +34,15 @@ export interface BetterAuthInstance {
     verifyPassword?(args: {
       body: { password: string };
       headers: Headers;
+    }): Promise<{ status: boolean }>;
+    /**
+     * Optional: Better Auth's /send-verification-email server API. Present on
+     * real instances; the email-change routes call it (when defined) to mail a
+     * verification link after the address change has been committed.
+     */
+    sendVerificationEmail?(args: {
+      body: { email: string; callbackURL?: string };
+      headers?: Headers;
     }): Promise<{ status: boolean }>;
   };
 }
