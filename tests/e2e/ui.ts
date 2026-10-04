@@ -1096,6 +1096,28 @@ async function main() {
     // Streamed reply from the fake CPA (the gateway echoes the public model id).
     await page.waitForText("Hello from fake/test-model: hi");
     await replyDone();
+    // Viewport contract after a send: the page itself never scrolls (the log
+    // is the only scroller) and the composer stays visible at the bottom.
+    const chatLayout = await evaluate<{
+      composerBottom: number;
+      scrollHeight: number;
+      innerHeight: number;
+    }>(`(() => {
+      const ta = document.querySelector('textarea[aria-label="Message"]');
+      return {
+        composerBottom: ta ? ta.getBoundingClientRect().bottom : -1,
+        scrollHeight: document.documentElement.scrollHeight,
+        innerHeight: window.innerHeight,
+      };
+    })()`);
+    assert(
+      chatLayout.composerBottom > 0 && chatLayout.composerBottom <= chatLayout.innerHeight,
+      `composer bottom within viewport, got ${chatLayout.composerBottom} vs ${chatLayout.innerHeight}`,
+    );
+    assert(
+      chatLayout.scrollHeight <= chatLayout.innerHeight + 1,
+      `page does not scroll: scrollHeight ${chatLayout.scrollHeight} vs innerHeight ${chatLayout.innerHeight}`,
+    );
     const conv = await convLog();
     assert(!!conv, "conversation log rendered");
     assert(conv!.n === 2, `two bubbles (user + assistant), got ${conv!.n}`);

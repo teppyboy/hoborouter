@@ -50,7 +50,20 @@ export function renderMarkdown(md: string) {
   let k = 0;
   while (i < lines.length) {
     const line = at(i);
-    if (/^#{1,4}\s/.test(line)) {
+    if (line.startsWith("```")) {
+      // Fenced code block: ``` with optional language, until a closing fence
+      // or end of text (a still-streaming reply may not have closed yet).
+      // Content renders as a raw text node — no inline markdown, no HTML.
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !at(i).startsWith("```")) buf.push(at(i++));
+      if (i < lines.length) i++; // consume the closing fence
+      out.push(
+        <pre key={k++} className="my-3 max-w-full overflow-x-auto rounded-md bg-muted p-3 font-mono text-sm leading-6">
+          <code>{buf.join("\n")}</code>
+        </pre>,
+      );
+    } else if (/^#{1,4}\s/.test(line)) {
       const level = line.match(/^#+/)![0].length;
       const text = line.replace(/^#+\s*/, "");
       const id = slug(text);
@@ -88,7 +101,7 @@ export function renderMarkdown(md: string) {
       i++;
     } else {
       const para: string[] = [];
-      while (i < lines.length && at(i).trim() !== "" && !/^([#>-]|\d+\.\s)/.test(at(i))) para.push(at(i++));
+      while (i < lines.length && at(i).trim() !== "" && !/^([#>-]|\d+\.\s|```)/.test(at(i))) para.push(at(i++));
       out.push(<p key={k++} className="my-3 leading-7">{inline(para.join(" "), `p${k}`)}</p>);
     }
   }

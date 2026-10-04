@@ -124,6 +124,11 @@ export function ChatPage() {
   const [remember, setRemember] = React.useState(false);
 
   const abortRef = React.useRef<AbortController | null>(null);
+  // Sticky-bottom follow for the conversation log: ref to the scroll element
+  // plus whether the user is near the bottom. While streaming, the log only
+  // auto-scrolls when the user hasn't scrolled up to read history.
+  const logRef = React.useRef<HTMLDivElement | null>(null);
+  const followLogRef = React.useRef(true);
   // Last user prompt for the explicit Retry button. Retrying re-runs the same
   // paid gateway call — it is never fired automatically.
   const lastUserRef = React.useRef<string | null>(null);
@@ -478,8 +483,17 @@ export function ChatPage() {
         ...baseMessages.map(({ role, content }) => ({ role, content })),
         { role: "user", content: text },
       ];
+      // A deliberate send (fresh or retry) always re-engages sticky-bottom
+      // follow: the user must see their own message and the streaming reply,
+      // even if they had scrolled up, and even if a late scroll event during
+      // layout of the previous turn latched followLogRef off.
+      followLogRef.current = true;
+      // The view keeps each prior message's reasoning (the Reasoning section
+      // stays visible across sends); only the paid request body above strips
+      // it to role+content.
       setMessages([
-        ...history.map((m) => ({ ...m, reasoning: "" })),
+        ...baseMessages,
+        { role: "user", content: text, reasoning: "" },
         { role: "assistant", content: "", reasoning: "" },
       ]);
       lastUserRef.current = text;
@@ -558,6 +572,19 @@ export function ChatPage() {
     });
   }
 
+  // New content arrived (stream delta or sent message): pin the log to the
+  // bottom only while the user is still following. useLayoutEffect, not a
+  // passive effect: a passive pin runs after the browser's rendering steps,
+  // leaving a frame where the log sits unscrolled with the distance already
+  // grown past the 80px threshold — the onScroll handler then latches
+  // followLogRef off (and scroll anchoring can fight the late pin), so the
+  // log never followed the new message or the stream and stayed at scrollTop
+  // 0. Pinning synchronously before paint removes that window.
+  React.useLayoutEffect(() => {
+    const el = logRef.current;
+    if (el && followLogRef.current) el.scrollTop = el.scrollHeight;
+  }, [messages]);
+
   const autoEligible = Boolean(userId && workspaceId);
   const canSend = Boolean(
     input.trim() && model && !streaming && !conflict && (manualKey || autoEligible),
@@ -607,7 +634,11 @@ export function ChatPage() {
   );
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1">
+    <div className="-m-4 flex h-[calc(100dvh-3rem)] min-h-0 min-w-0 flex-1 overflow-hidden sm:-m-6">
+      {/* Fixed viewport height below the 48px sticky app header, with the
+        router Page wrapper's p-4 sm:p-6 cancelled by the negative margins,
+        so the log (flex-1 min-h-0 overflow-y-auto) is the only scroller and
+        the composer stays pinned; the page itself never scrolls. */}
       {/* Desktop: conversation history lives inside the chat pane. */}
       <aside className="hidden w-64 shrink-0 flex-col border-r border-border px-2 py-2 lg:flex">
         {historyList}
@@ -730,10 +761,16 @@ export function ChatPage() {
           </div>
         ) : (
           <div
-            className="min-h-0 flex-1 overflow-y-auto"
+            className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
             role="log"
             aria-live="polite"
             aria-label="Conversation"
+            onScroll={() => {
+              const el = logRef.current;
+              if (!el) return;
+              followLogRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+            }}
+            ref={logRef}
           >
             <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-4">
               {messages.map((m, i) =>
