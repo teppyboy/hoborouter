@@ -93,6 +93,20 @@ body {
   @apply bg-background text-foreground font-sans antialiased;
 }
 
+/* Safe-area helpers for shell/overlay layers (requires viewport-fit=cover). */
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@utility pl-safe {
+  padding-left: env(safe-area-inset-left);
+}
+@utility pr-safe {
+  padding-right: env(safe-area-inset-right);
+}
+
 /* Route transitions (enabled via viewTransition on nav links; graceful no-op
    where the View Transitions API is unsupported). */
 @media (prefers-reduced-motion: no-preference) {

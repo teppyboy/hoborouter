@@ -278,21 +278,24 @@ export default function AdminAuditPage() {
   // 6rem = app shell header (h-12) + page padding (p-6 vertical). The list
   // scrolls inside this bound so 200 entries never grow the page.
   return (
-    <div className="flex h-[calc(100dvh-6rem)] min-h-80 flex-col gap-4 overflow-hidden">
+    // min-h-0: on short landscape screens (100dvh-6rem < 320px) a fixed min-height
+    // would force the outer overflow-hidden to clip the card; the inner scroller
+    // keeps the list usable at any height.
+    <div className="flex h-[calc(100dvh-6rem)] min-h-0 flex-col gap-4 overflow-hidden">
       <PageHeader title="Audit log" description="Actions taken across the instance." />
       <AdminGate query={query}>
         <Card className="flex min-h-0 flex-1 flex-col">
-          <CardHeader className="flex shrink-0 flex-row items-center justify-between gap-2 space-y-0">
+          <CardHeader className="flex shrink-0 flex-row flex-wrap items-center justify-between gap-2 space-y-0">
             <CardTitle className="text-sm font-medium">Audit log</CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex w-full items-center gap-2 sm:w-auto">
               <Input
                 placeholder="Search…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="h-8 w-48 text-xs"
+                className="h-8 w-full text-xs sm:w-48"
               />
               <Select value={actionFilter} onValueChange={setActionFilter}>
-                <SelectTrigger className="h-8 w-40 text-xs">
+                <SelectTrigger className="h-8 w-40 flex-1 text-xs sm:w-40">
                   <SelectValue placeholder="All actions" />
                 </SelectTrigger>
                 <SelectContent>

@@ -183,7 +183,7 @@ export function PaymentsTable({
         const p = c.row.original;
         if (p.status !== "pending") return null;
         return (
-          <span className="flex items-center gap-1">
+          <span className="flex flex-wrap items-center gap-1">
             <Button size="sm" variant="outline" onClick={() => setToComplete(p)}>
               Mark paid
             </Button>

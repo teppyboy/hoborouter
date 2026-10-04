@@ -93,7 +93,7 @@ function DailyChart({
                 }`}
                 style={{ height: d.value > 0 ? `${Math.max((d.value / max) * 100, 2)}%` : "2px" }}
               />
-              <span className="pointer-events-none absolute -top-6 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs group-hover:block group-focus-visible:block">
+              <span className="pointer-events-none absolute -top-6 left-1/2 z-10 hidden max-w-[90vw] -translate-x-1/2 truncate whitespace-nowrap rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs group-hover:block group-focus-visible:block">
                 {d.label}: {fmt(d.value)}
               </span>
             </button>

@@ -287,17 +287,17 @@ export default function LogsPage() {
                   <TableHead>Time</TableHead>
                   <TableHead>Request</TableHead>
                   <TableHead>Model</TableHead>
-                  <TableHead>Key</TableHead>
+                  <TableHead className="hidden md:table-cell">Key</TableHead>
                   <TableHead className="text-right">Tokens</TableHead>
                   <TableHead className="text-right">Cost</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead
-                    className="text-right"
+                    className="hidden text-right md:table-cell"
                     title="Time to first token (streaming requests only)"
                   >
                     TTFT
                   </TableHead>
-                  <TableHead className="text-right">Latency</TableHead>
+                  <TableHead className="hidden text-right md:table-cell">Latency</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -348,7 +348,7 @@ export default function LogsPage() {
                         </span>
                       </TableCell>
                       <TableCell className="font-mono text-xs">{r.public_model}</TableCell>
-                      <TableCell className="font-mono text-xs">{r.key_prefix ?? "—"}</TableCell>
+                      <TableCell className="hidden font-mono text-xs md:table-cell">{r.key_prefix ?? "—"}</TableCell>
                       <TableCell className="text-right font-mono text-xs whitespace-nowrap">
                         {formatTokens(r.input_tokens)} → {formatTokens(r.output_tokens)}
                       </TableCell>
@@ -357,12 +357,12 @@ export default function LogsPage() {
                         <StatusBadge status={r.status} />
                       </TableCell>
                       <TableCell
-                        className="text-right font-mono text-xs whitespace-nowrap"
+                        className="hidden whitespace-nowrap text-right font-mono text-xs md:table-cell"
                         title="Time to first token (streaming requests only)"
                       >
                         {formatDuration(r.ttft_ms)}
                       </TableCell>
-                      <TableCell className="text-right font-mono text-xs whitespace-nowrap">
+                      <TableCell className="hidden whitespace-nowrap text-right font-mono text-xs md:table-cell">
                         {formatDuration(r.latency_ms)}
                       </TableCell>
                     </TableRow>
@@ -371,12 +371,12 @@ export default function LogsPage() {
               </TableBody>
             </Table>
           </div>
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>
               Showing {rangeStart}–{rangeEnd} of {filtered.length} loaded requests
               {hiddenCount > 0 && ` — ${hiddenCount} hidden (no model or no token usage)`}
             </span>
-            <span className="flex gap-1">
+            <span className="flex flex-wrap gap-1">
               <Button
                 variant="outline"
                 size="sm"

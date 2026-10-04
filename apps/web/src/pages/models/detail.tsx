@@ -164,7 +164,7 @@ export default function ModelDetailPage() {
       </div>
 
       <div className="rounded-lg border border-border">
-        <div className="flex items-center justify-between border-b border-border px-4 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-1 border-b border-border px-4 py-2">
           <span className="text-sm font-medium">Quickstart</span>
           <span className="font-mono text-xs text-muted-foreground">base URL: {origin}/v1</span>
         </div>

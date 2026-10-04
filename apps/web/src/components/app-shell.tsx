@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
   BarChart3,
@@ -10,6 +11,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  Menu,
   MessageSquare,
   Monitor,
   Moon,
@@ -30,6 +32,8 @@ import { useSidebarStore } from "../lib/sidebar";
 import { useWorkspaceStore } from "../lib/workspace";
 import { preloadChunk, preloadNavChunksOnIdle } from "../lib/prefetch";
 import { gravatarUrl } from "../lib/avatar";
+import { resendVerification, type SessionUser } from "../lib/auth";
+import { usePublicConfig } from "./turnstile";
 import { useCurrentWorkspaceId, useWorkspaces, type Workspace } from "../lib/workspace-queries";
 import { CreateWorkspace } from "./create-workspace";
 import { cn } from "../lib/utils";
@@ -46,6 +50,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from "./ui/select";
 import { Separator } from "./ui/separator";
 import { Badge } from "./ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+  SheetTrigger,
+} from "./ui/sheet";
 
 interface NavItem {
   label: string;
@@ -232,7 +243,7 @@ function UserMenu() {
             email={session?.user?.email}
             image={session?.user?.image}
           />
-          <span className="truncate">{session?.user?.name ?? "Account"}</span>
+          <span className="hidden truncate sm:inline">{session?.user?.name ?? "Account"}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
@@ -267,10 +278,13 @@ function NavLink({
   item,
   active,
   collapsed,
+  onNavigate,
 }: {
   item: NavItem;
   active: boolean;
   collapsed: boolean;
+  /** Called on link selection; the mobile sheet uses it to close itself. */
+  onNavigate?: () => void;
 }) {
   const Icon = item.icon;
   const link = (
@@ -280,6 +294,7 @@ function NavLink({
       viewTransition
       onMouseEnter={() => preloadChunk(item.to)}
       onFocus={() => preloadChunk(item.to)}
+      onClick={onNavigate}
       aria-label={collapsed ? item.label : undefined}
       className={cn(
         "relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors duration-150",
@@ -302,6 +317,108 @@ function NavLink({
   );
 }
 
+/**
+ * Optional email verification is a notification, not a gate: the banner shows
+ * only when the backend actually sends mail (SMTP configured, advertised via
+ * public-config) and the signed-in user's Better Auth flag says unverified.
+ * No SMTP → no banner. Unverified users can use the app normally.
+ */
+export function UnverifiedEmailBanner({ user }: { user: SessionUser | null }) {
+  const [dismissed, setDismissed] = useState(false);
+  const { data: config } = usePublicConfig();
+  const [sending, setSending] = useState(false);
+  if (
+    dismissed ||
+    !config?.emailVerification.enabled ||
+    !user ||
+    user.emailVerified !== false ||
+    !user.email
+  ) {
+    return null;
+  }
+  const resend = async () => {
+    setSending(true);
+    const { ok, rateLimited } = await resendVerification(user.email as string);
+    setSending(false);
+    if (ok) toast.success("Verification email sent — check your inbox");
+    else if (rateLimited) toast.error("Too many emails requested; try again in a minute");
+    else toast.error("Could not send the verification email; try again later");
+  };
+  return (
+    <div
+      role="status"
+      className="flex flex-wrap items-center gap-2 border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm"
+    >
+      <span>Please verify your email address ({user.email}).</span>
+      <span className="ml-auto flex items-center gap-1">
+        <Button variant="outline" size="sm" onClick={() => void resend()} disabled={sending}>
+          {sending ? "Sending…" : "Resend"}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setDismissed(true)}>
+          Dismiss
+        </Button>
+      </span>
+    </div>
+  );
+}
+
+/** Shared nav body for the desktop aside and the mobile sheet. */
+function NavLinks({
+  pathname,
+  collapsed,
+  isAdmin,
+  onNavigate,
+}: {
+  pathname: string;
+  collapsed: boolean;
+  isAdmin: boolean | null;
+  onNavigate?: () => void;
+}) {
+  return (
+    <>
+      {NAV_GROUPS.map((group, gi) => (
+        <div key={gi} className={cn(gi > 0 && "mt-4")}>
+          {group.label && !collapsed && (
+            <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">
+              {group.label}
+            </p>
+          )}
+          {group.items.map((item) => (
+            <NavLink
+              key={item.to}
+              item={item}
+              active={pathname === item.to}
+              collapsed={collapsed}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </div>
+      ))}
+      {isAdmin === true && (
+        <div className="mt-4">
+          {!collapsed && (
+            <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">Admin</p>
+          )}
+          {ADMIN_NAV.map((item) => (
+            <NavLink
+              key={item.to}
+              item={item}
+              active={pathname === item.to}
+              collapsed={collapsed}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </div>
+      )}
+      {isAdmin === null && !collapsed && (
+        <div className="mt-4 px-2">
+          <Badge variant="secondary">Checking admin…</Badge>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   // Warm main nav route chunks once the app has painted.
@@ -315,13 +432,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { data: workspaces, isSuccess: wsLoaded } = useWorkspaces();
   const emptyWorkspaces = wsLoaded && workspaces?.length === 0;
   const ToggleIcon = collapsed ? PanelLeft : PanelLeftClose;
+  const { data: session } = useSession();
+  // Mobile drawer: closed on route change and on link selection (Escape and
+  // focus return are handled by the Radix dialog primitives underneath Sheet).
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // Render-time adjustment instead of an effect: no extra render pass.
+  const [lastPathname, setLastPathname] = useState(pathname);
+  if (lastPathname !== pathname) {
+    setLastPathname(pathname);
+    setMobileNavOpen(false);
+  }
 
   return (
     <TooltipProvider>
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen pb-safe">
         <aside
           className={cn(
-            "flex shrink-0 flex-col border-r border-border transition-[width] duration-200",
+            "hidden shrink-0 flex-col border-r border-border transition-[width] duration-200 md:flex",
             collapsed ? "w-14" : "w-52",
           )}
         >
@@ -346,43 +473,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <nav className="flex-1 overflow-y-auto p-2 text-sm">
-            {NAV_GROUPS.map((group, gi) => (
-              <div key={gi} className={cn(gi > 0 && "mt-4")}>
-                {group.label && !collapsed && (
-                  <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">
-                    {group.label}
-                  </p>
-                )}
-                {group.items.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    item={item}
-                    active={pathname === item.to}
-                    collapsed={collapsed}
-                  />
-                ))}
-              </div>
-            ))}
-            {isAdmin === true && (
-              <div className="mt-4">
-                {!collapsed && (
-                  <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">Admin</p>
-                )}
-                {ADMIN_NAV.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    item={item}
-                    active={pathname === item.to}
-                    collapsed={collapsed}
-                  />
-                ))}
-              </div>
-            )}
-            {isAdmin === null && !collapsed && (
-              <div className="mt-4 px-2">
-                <Badge variant="secondary">Checking admin…</Badge>
-              </div>
-            )}
+            <NavLinks pathname={pathname} collapsed={collapsed} isAdmin={isAdmin} />
           </nav>
           {collapsed && (
             <div className="flex justify-center border-t border-border p-2">
@@ -399,8 +490,36 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur">
-            <div className="w-44">
+          <header className="sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-border bg-background/80 pr-4 pl-[max(1rem,env(safe-area-inset-left))] backdrop-blur">
+            <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+              <SheetTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Open navigation"
+                  className="size-11 md:hidden"
+                >
+                  <Menu className="size-5" />
+                </Button>
+              </SheetTrigger>
+              {/* SheetContent owns the safe-area insets; no extra padding here. */}
+              <SheetContent side="left">
+                <SheetTitle className="flex items-center gap-2 px-1 text-sm font-semibold">
+                  <Shuffle className="size-4 shrink-0" aria-hidden />
+                  Hoborouter
+                </SheetTitle>
+                <SheetDescription className="sr-only">Main navigation</SheetDescription>
+                <nav className="flex-1 overflow-y-auto p-2 text-sm">
+                  <NavLinks
+                    pathname={pathname}
+                    collapsed={false}
+                    isAdmin={isAdmin}
+                    onNavigate={() => setMobileNavOpen(false)}
+                  />
+                </nav>
+              </SheetContent>
+            </Sheet>
+            <div className="min-w-0 flex-1 sm:w-44 sm:flex-none">
               <WorkspaceSwitcher />
             </div>
             <div className="flex-1" />
@@ -408,7 +527,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Separator orientation="vertical" className="h-4" />
             <UserMenu />
           </header>
-          <main className="min-w-0 flex-1">{emptyWorkspaces ? <CreateWorkspace /> : children}</main>
+          <main className="min-w-0 flex-1">
+            <UnverifiedEmailBanner user={session?.user ?? null} />
+            {emptyWorkspaces ? <CreateWorkspace /> : children}
+          </main>
         </div>
       </div>
     </TooltipProvider>

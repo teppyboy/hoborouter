@@ -66,7 +66,8 @@ function PromptCachingCard({
 export default function AdminSettingsPage() {
   const query = useAdminQuery<AdminSettings>(["admin", "settings"], "/api/v1/admin/settings");
   return (
-    <div className="mx-auto w-full max-w-4xl p-6">
+    // No p-6: router wrapper already pads the page; double padding starves 375px phones.
+    <div className="mx-auto w-full max-w-4xl">
       <PageHeader title="Instance settings" description="Global platform settings." />
       <AdminGate query={query}>
         <div className="mt-6">

@@ -17,10 +17,11 @@ const buttonVariants = cva(
         link: "text-foreground underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-8 px-3",
-        sm: "h-7 rounded-md px-2 text-xs",
-        lg: "h-9 px-4",
-        icon: "size-8",
+        // 32px dense desktop; 44px on touch devices for tap-target comfort.
+        default: "h-8 px-3 pointer-coarse:h-11 pointer-coarse:px-4",
+        sm: "h-7 rounded-md px-2 text-xs pointer-coarse:h-9",
+        lg: "h-9 px-4 pointer-coarse:h-11",
+        icon: "size-8 pointer-coarse:size-11",
       },
     },
     defaultVariants: { variant: "default", size: "default" },

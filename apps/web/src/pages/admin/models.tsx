@@ -594,9 +594,9 @@ function DetailsSection({
         <p className="text-xs text-destructive">{form.formState.errors.root.message}</p>
       )}
       {renamed && confirmRename ? (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm">
-            Rename to <span className="font-mono">{publicId}</span>?
+            Rename to <span className="break-all font-mono">{publicId}</span>?
           </span>
           <Button type="submit" size="sm" disabled={mutation.isPending}>
             Confirm rename

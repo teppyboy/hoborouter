@@ -216,7 +216,7 @@ function InviteForm({ workspaceId, onInvited }: { workspaceId: string; onInvited
     <Form {...form}>
       <form
         onSubmit={form.handleSubmit((v) => invite.mutateAsync(v).catch(() => undefined))}
-        className="flex items-start gap-2"
+        className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-2"
       >
         <FormField
           control={form.control}
@@ -239,7 +239,7 @@ function InviteForm({ workspaceId, onInvited }: { workspaceId: string; onInvited
               <FormLabel>Role</FormLabel>
               <Select value={field.value} onValueChange={field.onChange}>
                 <FormControl>
-                  <SelectTrigger className="w-28">
+                  <SelectTrigger className="w-full sm:w-28">
                     <SelectValue />
                   </SelectTrigger>
                 </FormControl>
@@ -253,7 +253,7 @@ function InviteForm({ workspaceId, onInvited }: { workspaceId: string; onInvited
             </FormItem>
           )}
         />
-        <Button type="submit" size="sm" disabled={invite.isPending} className="mt-8">
+        <Button type="submit" size="sm" disabled={invite.isPending} className="sm:mt-8">
           Add
         </Button>
       </form>

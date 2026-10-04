@@ -20,14 +20,25 @@ function SheetContent({
       <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50" />
       <DialogPrimitive.Content
         className={cn(
-          "fixed inset-y-0 z-50 flex h-full w-72 flex-col gap-2 border-border bg-card p-4 shadow-lg transition",
-          side === "right" ? "right-0 border-l" : "left-0 border-r",
+          // Outer-edge + vertical padding follows the display cutout so sheet
+          // content never sits under the notch/home indicator.
+          "fixed inset-y-0 z-50 flex h-full w-72 flex-col gap-2 border-border bg-card pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] shadow-lg transition",
+          side === "right"
+            ? "right-0 border-l p-4 pr-[max(1rem,env(safe-area-inset-right))]"
+            : "left-0 border-r p-4 pl-[max(1rem,env(safe-area-inset-left))]",
           className,
         )}
         {...props}
       >
         {children}
-        <DialogPrimitive.Close className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground hover:bg-accent">
+        <DialogPrimitive.Close
+          className={cn(
+            "absolute top-[max(0.75rem,env(safe-area-inset-top))] rounded-md p-1 text-muted-foreground hover:bg-accent",
+            side === "right"
+              ? "right-[max(0.75rem,env(safe-area-inset-right))]"
+              : "left-[max(0.75rem,env(safe-area-inset-left))]",
+          )}
+        >
           <X className="size-4" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>

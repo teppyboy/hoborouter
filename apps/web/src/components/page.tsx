@@ -25,7 +25,7 @@ export function PageHeader({
   actions?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
+    <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
       <div>
         <h1 className="text-lg font-semibold">{title}</h1>
         {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
@@ -69,7 +69,8 @@ export function CopyButton({ value, label }: { value: string; label?: string }) 
     <Button
       variant="ghost"
       size="icon"
-      className="size-6"
+      // Hit area 44px on touch; the glyph itself stays small.
+      className="size-6 pointer-coarse:size-11"
       aria-label={label ?? "Copy"}
       onClick={async () => {
         await navigator.clipboard.writeText(value);
@@ -128,10 +129,13 @@ export function DataTable<TData>({
           {table.getHeaderGroups().map((hg) => (
             <TableRow key={hg.id}>
               {hg.headers.map((header) => (
-                <TableHead key={header.id}>
+                <TableHead key={header.id} className={cn(header.column.columnDef.meta as string)}>
+                  {/* header mirrors the cell meta string (e.g. responsive hide classes) */}
                   {header.isPlaceholder ? null : header.column.getCanSort() ? (
                     <button
-                      className="flex items-center gap-1 hover:text-foreground"
+                      // Negative margins extend the tap target to ~44px
+                      // without changing the header row's visual height.
+                      className="-mx-1 -my-3 flex items-center gap-1 px-1 py-3 hover:text-foreground"
                       onClick={header.column.getToggleSortingHandler()}
                     >
                       {flexRender(header.column.columnDef.header, header.getContext())}
