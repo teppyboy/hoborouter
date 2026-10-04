@@ -5,6 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { toast } from "sonner";
+import { checkPassword } from "@hoborouter/shared";
 import { CopyButton, DataTable, PageHeader } from "../../components/page";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -38,6 +39,8 @@ export interface AdminUser {
   created_at: number;
   // EXISTS(...) over Postgres → real boolean.
   is_instance_admin: boolean;
+  /** Better Auth emailVerified flag; absent on pre-email-verification payloads. */
+  email_verified?: boolean;
   workspace_count: number;
 }
 
@@ -48,7 +51,9 @@ interface SoleOwnerWorkspaces {
 const createSchema = z.object({
   name: z.string().trim().min(1).max(80),
   email: z.string().trim().toLowerCase().email(),
-  password: z.string().min(8, "At least 8 characters"),
+  password: z.string().refine((v) => checkPassword(v).length === 0, {
+    message: "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
+  }),
   instance_admin: z.boolean(),
 });
 type CreateValues = z.infer<typeof createSchema>;
@@ -61,7 +66,9 @@ type EditValues = z.infer<typeof editSchema>;
 
 const resetSchema = z
   .object({
-    newPassword: z.string().min(8, "At least 8 characters").max(200, "At most 200 characters"),
+    newPassword: z.string().refine((v) => checkPassword(v).length === 0, {
+      message: "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
+    }),
     confirmPassword: z.string().min(8, "At least 8 characters").max(200, "At most 200 characters"),
   })
   .refine((v) => v.newPassword === v.confirmPassword, {
@@ -151,6 +158,22 @@ export function UsersTable({
 
   const columns: ColumnDef<AdminUser, unknown>[] = [
     { accessorKey: "email", header: "Email" },
+    {
+      accessorKey: "email_verified",
+      header: "Email status",
+      cell: (c) => {
+        const verified = c.getValue() as boolean | undefined;
+        // Undefined means the backend payload predates the flag: report
+        // honestly instead of guessing.
+        return verified === undefined ? (
+          <Badge variant="secondary">Unavailable</Badge>
+        ) : verified ? (
+          <Badge variant="default">Verified</Badge>
+        ) : (
+          <Badge variant="outline">Unverified</Badge>
+        );
+      },
+    },
     { accessorKey: "name", header: "Name" },
     {
       accessorKey: "created_at",
@@ -184,7 +207,7 @@ export function UsersTable({
         // Removal stays self-hidden (server also rejects it); edit and reset
         // are allowed on the admin's own account.
         return (
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1">
             <Button
               variant="outline"
               size="sm"

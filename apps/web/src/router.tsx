@@ -39,12 +39,13 @@ const Chat = lazyRoute(() =>
 // Public auth pages (not part of nav prefetching).
 const Login = lazy(() => import("./pages/auth/login"));
 const Signup = lazy(() => import("./pages/auth/signup"));
+const VerifyEmail = lazy(() => import("./pages/auth/verify-email"));
 // Public legal pages.
 const Terms = lazy(() => import("./pages/legal/terms"));
 const Privacy = lazy(() => import("./pages/legal/privacy"));
 
 function Page({ children }: { children: React.ReactNode }) {
-  return <div className="p-6">{children}</div>;
+  return <div className="p-4 sm:p-6">{children}</div>;
 }
 
 const rootRoute = createRootRoute({
@@ -138,6 +139,15 @@ const publicRoutes = [
     component: () => (
       <Page>
         <Signup />
+      </Page>
+    ),
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/verify-email",
+    component: () => (
+      <Page>
+        <VerifyEmail />
       </Page>
     ),
   }),

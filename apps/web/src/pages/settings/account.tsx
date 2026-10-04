@@ -3,6 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
+import { checkPassword } from "@hoborouter/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSession } from "../../lib/auth";
 import { authClient } from "../../lib/auth";
@@ -36,7 +37,9 @@ const emailSchema = z.object({
 const passwordSchema = z
   .object({
     currentPassword: z.string().min(1, "Current password is required"),
-    newPassword: z.string().min(8, "At least 8 characters"),
+    newPassword: z.string().refine((v) => checkPassword(v).length === 0, {
+      message: "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
+    }),
     confirmPassword: z.string().min(1, "Confirm your new password"),
   })
   .refine((v) => v.newPassword === v.confirmPassword, {

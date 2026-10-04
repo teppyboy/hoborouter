@@ -1,6 +1,10 @@
-// Cloudflare Turnstile widget, ready but off by default. Renders nothing and
-// the form works normally when no site key is configured or on localhost.
+// Cloudflare Turnstile wiring for auth forms. The site key is NOT a build-time
+// constant: it comes from GET /api/v1/public-config so a published image can
+// enable captcha purely via TURNSTILE_SITE_KEY / TURNSTILE_SECRET_KEY env.
+// When the config says captcha is off (siteKey null) the widget renders
+// nothing and the form works normally.
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 declare global {
   interface Window {
@@ -12,9 +16,26 @@ declare global {
   }
 }
 
-const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined;
-const isLocal = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
-export const turnstileEnabled = Boolean(siteKey) && !isLocal;
+export interface PublicConfig {
+  turnstileSiteKey: string | null;
+  emailVerification: { enabled: boolean; required: boolean };
+}
+
+/**
+ * Same-origin public config, cached by the shared queryClient. Exported for
+ * the upcoming email-verification UI; auth forms consume turnstileSiteKey.
+ */
+export function usePublicConfig() {
+  return useQuery<PublicConfig>({
+    queryKey: ["public-config"],
+    queryFn: async () => {
+      const res = await fetch("/api/v1/public-config");
+      if (!res.ok) throw new Error(`public config ${res.status}`);
+      return (await res.json()) as PublicConfig;
+    },
+    staleTime: 60_000,
+  });
+}
 
 let scriptPromise: Promise<void> | null = null;
 function loadTurnstile(): Promise<void> {
@@ -24,17 +45,46 @@ function loadTurnstile(): Promise<void> {
     s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
     s.async = true;
     s.onload = () => resolve();
-    s.onerror = () => reject(new Error("turnstile script failed"));
+    s.onerror = () => {
+      // Drop the failed tag and cached promise so an explicit retry can
+      // reload the script instead of rejecting forever.
+      s.remove();
+      scriptPromise = null;
+      reject(new Error("turnstile script failed"));
+    };
     document.head.appendChild(s);
   });
   return scriptPromise;
 }
 
-export function Turnstile({ onToken }: { onToken: (token: string | null) => void }) {
+/**
+ * Renders a fresh widget whenever the widget identity changes (siteKey,
+ * theme, or a parent-driven resetKey after a failed auth attempt). Every
+ * re-render invalidates the previous token: Turnstile tokens are one-shot.
+ */
+export function Turnstile({
+  siteKey,
+  onToken,
+  resetKey = 0,
+  onScriptError,
+}: {
+  siteKey: string;
+  onToken: (token: string | null) => void;
+  resetKey?: number;
+  onScriptError?: () => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const widgetId = useRef<string | null>(null);
-  const [theme, setTheme] = useState<"light" | "dark">(
-    document.documentElement.classList.contains("dark") ? "dark" : "light",
+  // Ref keeps the render callback stable so parent keystrokes never re-render
+  // the widget (which would reset a solved challenge).
+  const onTokenRef = useRef(onToken);
+  onTokenRef.current = onToken;
+  const onScriptErrorRef = useRef(onScriptError);
+  onScriptErrorRef.current = onScriptError;
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    typeof document === "undefined" || document.documentElement.classList.contains("dark")
+      ? "dark"
+      : "light",
   );
 
   useEffect(() => {
@@ -46,7 +96,8 @@ export function Turnstile({ onToken }: { onToken: (token: string | null) => void
   }, []);
 
   useEffect(() => {
-    if (!siteKey) return;
+    // New widget instance: any token from the previous one is stale.
+    onTokenRef.current(null);
     let cancelled = false;
     loadTurnstile()
       .then(() => {
@@ -54,19 +105,22 @@ export function Turnstile({ onToken }: { onToken: (token: string | null) => void
         widgetId.current = window.turnstile.render(ref.current, {
           sitekey: siteKey,
           theme,
-          callback: (token: string) => onToken(token),
+          callback: (token: string) => onTokenRef.current(token),
           "error-callback": () => {
-            onToken(null);
+            onTokenRef.current(null);
             window.turnstile?.reset(widgetId.current ?? undefined);
             return true;
           },
           "expired-callback": () => {
-            onToken(null);
+            onTokenRef.current(null);
             window.turnstile?.reset(widgetId.current ?? undefined);
           },
         });
       })
-      .catch(() => onToken(null));
+      .catch(() => {
+        onTokenRef.current(null);
+        onScriptErrorRef.current?.();
+      });
     return () => {
       cancelled = true;
       if (widgetId.current) {
@@ -74,9 +128,7 @@ export function Turnstile({ onToken }: { onToken: (token: string | null) => void
         widgetId.current = null;
       }
     };
-    // theme re-render is handled by re-rendering the widget on theme change
-  }, [theme, onToken]);
+  }, [siteKey, theme, resetKey]);
 
-  if (!siteKey) return null;
   return <div ref={ref} className="min-h-16" />;
 }

@@ -9,7 +9,7 @@ import { authClient } from "../../lib/auth";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { AuthLayout } from "../../components/auth-layout";
-import { Turnstile, turnstileEnabled } from "../../components/turnstile";
+import { Turnstile, usePublicConfig } from "../../components/turnstile";
 import {
   Form,
   FormControl,
@@ -27,8 +27,15 @@ type Values = z.infer<typeof schema>;
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  // Captcha is required only when the backend advertises a Turnstile site
+  // key. While the config is pending or failed the submit stays disabled:
+  // silently skipping captcha on a load error would fail the server check.
+  const { data: config, isPending, isError, refetch } = usePublicConfig();
+  const siteKey = config?.turnstileSiteKey ?? null;
+  const captchaRequired = siteKey !== null;
   const [token, setToken] = useState<string | null>(null);
-  const onToken = setToken;
+  const [resetKey, setResetKey] = useState(0);
+  const [scriptError, setScriptError] = useState(false);
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: { email: "", password: "" },
@@ -36,10 +43,15 @@ export default function LoginPage() {
 
   const handleValid = async (values: Values) => {
     const { error } = await authClient.signIn.email(values, {
-      headers: turnstileEnabled && token ? { "x-captcha-response": token } : undefined,
+      headers: captchaRequired && token ? { "x-captcha-response": token } : undefined,
     });
     if (error) {
       form.setError("password", { message: error.message ?? "Sign in failed" });
+      // Tokens are one-shot: reset so the next attempt gets a fresh one.
+      if (captchaRequired) {
+        setToken(null);
+        setResetKey((k) => k + 1);
+      }
       return;
     }
     toast("Signed in");
@@ -83,10 +95,49 @@ export default function LoginPage() {
               )}
             />
           ))}
-          {turnstileEnabled && <Turnstile onToken={onToken} />}
+          {isPending && (
+            <p className="text-sm text-muted-foreground">Checking security options…</p>
+          )}
+          {isError && (
+            <p role="alert" className="text-sm text-destructive">
+              Could not load security options. {" "}
+              <button type="button" className="underline" onClick={() => void refetch()}>
+                Retry
+              </button>
+            </p>
+          )}
+          {scriptError && (
+            <p role="alert" className="text-sm text-destructive">
+              Could not load the captcha check. {" "}
+              <button
+                type="button"
+                className="underline"
+                onClick={() => {
+                  setScriptError(false);
+                  setResetKey((k) => k + 1);
+                }}
+              >
+                Retry
+              </button>
+            </p>
+          )}
+          {siteKey && (
+            <Turnstile
+              siteKey={siteKey}
+              onToken={setToken}
+              resetKey={resetKey}
+              onScriptError={() => setScriptError(true)}
+            />
+          )}
           <Button
             type="submit"
-            disabled={form.formState.isSubmitting || (turnstileEnabled && !token)}
+            disabled={
+              isPending ||
+              isError ||
+              scriptError ||
+              form.formState.isSubmitting ||
+              (captchaRequired && !token)
+            }
           >
             Sign in
           </Button>
