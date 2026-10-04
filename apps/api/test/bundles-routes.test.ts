@@ -124,6 +124,82 @@ describe("admin bundle & plan CRUD", () => {
     expect(missing.status).toBe(404);
   });
 
+  test("plans: rate_limit_per_minute default 15, create validates 1..600", async () => {
+    const { res, body } = await createPlan({ name: "Limited" });
+    expect(res.status).toBe(201);
+    expect(body.rate_limit_per_minute).toBe(15);
+    for (const rate_limit_per_minute of [0, -1, 601]) {
+      const bad = await createPlan({ rate_limit_per_minute });
+      expect(bad.res.status).toBe(400);
+    }
+    const nonInt = await createPlan({ rate_limit_per_minute: 1.5 });
+    expect(nonInt.res.status).toBe(400);
+    const custom = await createPlan({ name: "Fast", rate_limit_per_minute: 120 });
+    expect(custom.res.status).toBe(201);
+    expect(custom.body.rate_limit_per_minute).toBe(120);
+    // Deactivate so the member-catalog snapshot below stays ["Visible"] only.
+    for (const id of [body.id, custom.body.id]) {
+      await req(app, `/api/v1/admin/subscription-plans/${id}`, {
+        method: "PATCH",
+        cookie: adminCookie,
+        body: { active: false },
+      });
+    }
+  });
+
+  test("plans: PATCH rate_limit_per_minute changes it; money amounts still 400", async () => {
+    const { body: plan } = await createPlan({ name: "RateEdit", rate_limit_per_minute: 30 });
+    const id = String(plan.id);
+    const patch = await req(app, `/api/v1/admin/subscription-plans/${id}`, {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: { rate_limit_per_minute: 600 },
+    });
+    expect(patch.status).toBe(200);
+    expect(((await patch.json()) as { rate_limit_per_minute: number }).rate_limit_per_minute).toBe(600);
+    const row = (
+      await q(db, "SELECT rate_limit_per_minute, price_vnd, credit_per_period_vnd FROM subscription_plans WHERE id = ?", id)
+    )[0]!;
+    expect(row.rate_limit_per_minute).toBe(600);
+    for (const body of [
+      { rate_limit_per_minute: 0 },
+      { rate_limit_per_minute: 601 },
+      { rate_limit_per_minute: 2.5 },
+    ]) {
+      const bad = await req(app, `/api/v1/admin/subscription-plans/${id}`, {
+        method: "PATCH",
+        cookie: adminCookie,
+        body,
+      });
+      expect(bad.status).toBe(400);
+    }
+    // Money amounts and period stay immutable on PATCH.
+    for (const body of [
+      { price_vnd: 1 },
+      { credit_per_period_vnd: 1 },
+      { period_days: 7 },
+    ]) {
+      const money = await req(app, `/api/v1/admin/subscription-plans/${id}`, {
+        method: "PATCH",
+        cookie: adminCookie,
+        body,
+      });
+      expect(money.status).toBe(400);
+    }
+    const unchanged = (
+      await q(db, "SELECT rate_limit_per_minute, price_vnd, credit_per_period_vnd, period_days FROM subscription_plans WHERE id = ?", id)
+    )[0]!;
+    expect(unchanged.rate_limit_per_minute).toBe(600);
+    expect(unchanged.price_vnd).toBe(200000);
+    expect(unchanged.credit_per_period_vnd).toBe(250000);
+    expect(unchanged.period_days).toBe(30);
+    await req(app, `/api/v1/admin/subscription-plans/${id}`, {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: { active: false },
+    });
+  });
+
   test("plans: create validates, PATCH amounts rejected, audited", async () => {
     const badPrice = await createPlan({ price_vnd: 0 });
     expect(badPrice.res.status).toBe(400);

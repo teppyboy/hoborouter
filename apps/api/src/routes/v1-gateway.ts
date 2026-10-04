@@ -17,9 +17,20 @@ import {
   WalletError,
 } from "@hoborouter/wallet";
 import { injectChatUsageOption, createUsageTap, resolveBillableUsage } from "@hoborouter/usage";
-import { eq } from "drizzle-orm";
-import { apiKeys, requests, instanceSettings } from "@hoborouter/db";
+import { and, eq, gt } from "drizzle-orm";
+import {
+  apiKeys,
+  requests,
+  instanceSettings,
+  subscriptionPlans,
+  subscriptions,
+} from "@hoborouter/db";
 import { jsonError } from "../authz";
+import {
+  checkSubscriptionRateLimit,
+  rateLimitNow,
+  uncountSubscriptionRateLimit,
+} from "../rate-limit";
 
 const MAX_BODY_BYTES = 1024 * 1024; // 1 MiB inbound JSON body limit
 
@@ -400,11 +411,53 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
       throw err;
     }
 
-    // 5. Reserve -> markDispatching (committed) -> exactly one fetch.
+    // 5. Funding selection (O3) + reserve -> markDispatching (committed) -> exactly one fetch.
+    // Subscription wallet only when the workspace has an active unexpired
+    // subscription (plan's per-minute limit applies) and the limiter says
+    // underLimit; reserveRequest re-checks availability inside the txn and
+    // falls back to the topup wallet otherwise (no limit). A request counts
+    // toward the limit only when it is actually funded by the subscription
+    // wallet, so the tentative slot is returned on fallback/failure.
+    const limNow = rateLimitNow();
+    const subPlans = await db
+      .select({ rate: subscriptionPlans.rate_limit_per_minute })
+      .from(subscriptions)
+      .innerJoin(subscriptionPlans, eq(subscriptions.plan_id, subscriptionPlans.id))
+      .where(
+        and(
+          eq(subscriptions.workspace_id, key.workspace_id),
+          eq(subscriptions.status, "active"),
+          gt(subscriptions.current_period_end, limNow),
+        ),
+      )
+      .limit(1);
+    const limit = subPlans[0]?.rate ?? null;
+    const limiter =
+      limit !== null
+        ? checkSubscriptionRateLimit(key.workspace_id, limit, limNow)
+        : null;
+    const rateLimited = (retryAfterSec: number) =>
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "Subscription rate limit exceeded. Retry after the window ends or use top-up credit.",
+            type: "rate_limit_error",
+            code: "subscription_rate_limited",
+          },
+        }),
+        {
+          status: 429,
+          headers: {
+            "content-type": "application/json",
+            "retry-after": String(retryAfterSec),
+          },
+        },
+      );
+
     const requestId = crypto.randomUUID();
     const stream = body.stream === true;
     try {
-      await reserveRequest(db, {
+      const reserved = await reserveRequest(db, {
         requestId,
         workspaceId: key.workspace_id,
         apiKeyId: key.api_key_id,
@@ -415,11 +468,25 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
         mode: stream ? "stream" : "non-stream",
         fxRate,
         capVnd,
+        ...(limiter ? { funding: { underLimit: limiter.underLimit } } : {}),
         now: Date.now(),
       });
+      // Return the tentative slot ONLY when the ticket actually counted
+      // (underLimit): over-limit requests never incremented, so uncounting
+      // them would erode quota already used by under-limit requests. The
+      // ticket's windowStart guards against subtracting a newer window.
+      if (limiter?.underLimit && reserved.walletKind !== "subscription") {
+        uncountSubscriptionRateLimit(key.workspace_id, limiter.windowStart);
+      }
     } catch (err) {
-      if (err instanceof WalletError && err.code === "insufficient") {
-        return jsonError(402, "insufficient_balance", "Insufficient wallet balance");
+      if (err instanceof WalletError) {
+        if (limiter?.underLimit) uncountSubscriptionRateLimit(key.workspace_id, limiter.windowStart);
+        if (err.code === "insufficient") {
+          // Over the limit and the topup wallet cannot fund it -> 429 (O3);
+          // a 429 writes no rows. Otherwise 402 as today.
+          if (limiter && !limiter.underLimit) return rateLimited(limiter.retryAfterSec);
+          return jsonError(402, "insufficient_balance", "Insufficient wallet balance");
+        }
       }
       throw err;
     }

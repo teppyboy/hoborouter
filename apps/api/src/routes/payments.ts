@@ -20,9 +20,10 @@ import {
   type PayosConfig,
 } from "@hoborouter/payments";
 
-/** Bundle FK column carried on a bundle purchase; undefined = plain top-up. */
+/** Purchase FK columns carried on a bundle/plan purchase; both absent = plain top-up. */
 export interface PayosPurchase {
   bundleId?: string;
+  subscriptionPlanId?: string;
 }
 
 // payOS branch of payment creation: persist pending + audit atomically, then
@@ -55,6 +56,7 @@ export const makePayosPaymentCreator = (
         provider_order_code: String(orderCode),
         created_at: now,
         bundle_id: purchase?.bundleId,
+        subscription_plan_id: purchase?.subscriptionPlanId,
       });
       await writeAudit(tx, {
         actorUserId: userId,
@@ -65,6 +67,9 @@ export const makePayosPaymentCreator = (
           amount,
           provider: "payos",
           ...(purchase?.bundleId ? { bundle_id: purchase.bundleId } : {}),
+          ...(purchase?.subscriptionPlanId
+            ? { subscription_plan_id: purchase.subscriptionPlanId }
+            : {}),
         },
       });
     });

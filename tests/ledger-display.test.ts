@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { formatVnd, formatUsdFromVnd } from "../apps/web/src/lib/format";
 import {
+  formatLedgerSourceLabel,
   isUsageDebit,
   partitionLedger,
   signedLedgerAmount,
@@ -37,6 +38,14 @@ describe("ledger classification and sign", () => {
     expect(s.usage.map((e) => e.amount)).toEqual([2500, 100]);
     expect(s.topups.map((e) => e.amount)).toEqual([100000]);
     expect(s.adjustments.map((e) => e.kind)).toEqual(["refund", "adjustment", "mystery"]);
+  });
+
+  test("source labels: subscription credit vs top-up credit, unknown falls back to top-up", () => {
+    expect(formatLedgerSourceLabel("subscription")).toBe("Subscription credit");
+    expect(formatLedgerSourceLabel("topup")).toBe("Top-up credit");
+    // Older backends omit wallet_kind — display still works.
+    expect(formatLedgerSourceLabel(undefined)).toBe("Top-up credit");
+    expect(formatLedgerSourceLabel(null)).toBe("Top-up credit");
   });
 
   // Rendered formatter evidence: both display paths render the sign

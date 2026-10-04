@@ -10,7 +10,7 @@ import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatVnd, formatUsdFromVnd, formatDate } from "../../lib/format";
 import { formatLedgerKindLabel, formatLedgerMemoLabel } from "../../lib/display";
-import { partitionLedger, signedLedgerAmount } from "./ledger-display";
+import { partitionLedger, signedLedgerAmount, formatLedgerSourceLabel } from "./ledger-display";
 import { PageHeader, EmptyState, ErrorState, DataTable } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -32,6 +32,16 @@ interface Wallet {
   reserved: number;
   available: number;
   usd_vnd_rate?: number;
+  subscription?: SubscriptionInfo | null;
+}
+
+interface SubscriptionInfo {
+  balance: number;
+  available: number;
+  period_end: number;
+  plan_name: string;
+  rate_limit_per_minute: number;
+  expired: boolean;
 }
 
 interface LedgerEntry {
@@ -44,6 +54,8 @@ interface LedgerEntry {
   memo: string | null;
   payment_id: string | null;
   request_id: string | null;
+  /** Source wallet of the row (topup | subscription); older backends may omit it. */
+  wallet_kind?: string;
 }
 
 const schema = z.object({
@@ -91,6 +103,17 @@ export default function BillingCreditsPage() {
   // `direction` and is applied exactly once via signedLedgerAmount.
   const columns: ColumnDef<LedgerEntry>[] = [
     { accessorKey: "created_at", header: "Time", cell: (c) => formatDate(c.getValue<string>()) },
+    {
+      accessorKey: "wallet_kind",
+      header: "Source",
+      // balance_after (and amount) belong to this row's source wallet, never
+      // an aggregate across wallets — the column makes that explicit.
+      cell: (c) => (
+        <span className="font-mono text-xs">
+          {formatLedgerSourceLabel(c.getValue<string | undefined>())}
+        </span>
+      ),
+    },
     {
       accessorKey: "kind",
       header: "Kind",
@@ -168,6 +191,9 @@ export default function BillingCreditsPage() {
 
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-4">
+          {wallet.data?.subscription ? (
+            <SubscriptionCard subscription={wallet.data.subscription} rate={rate} />
+          ) : null}
           {wallet.isPending ? (
             <Skeleton className="h-24 w-full" />
           ) : wallet.isError ? (
@@ -393,6 +419,40 @@ export function TopUpForm({
         </p>
       </form>
     </Form>
+  );
+}
+
+/**
+ * Subscription credit card. Extracted for render tests; display-only.
+ */
+export function SubscriptionCard({
+  subscription,
+  rate,
+}: {
+  subscription: SubscriptionInfo;
+  rate: number | undefined;
+}) {
+  const usd = formatUsdFromVnd(subscription.balance, rate);
+  return (
+    <div className="min-w-0 rounded-lg border border-border p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-sm font-semibold">Subscription credit</p>
+        <p className="text-xs text-muted-foreground">{subscription.plan_name}</p>
+      </div>
+      <p className={`mt-1 font-mono text-2xl font-semibold ${subscription.expired ? "text-muted-foreground" : ""}`}>
+        {usd ?? formatVnd(subscription.balance)}
+      </p>
+      <p className="mt-1 text-sm">
+        Period ends <span className="font-mono">{formatDate(subscription.period_end)}</span>
+        {subscription.expired ? " (expired)" : ""}
+      </p>
+      <p className="text-sm text-muted-foreground">
+        {subscription.rate_limit_per_minute} requests per minute
+      </p>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Unused subscription credit is lost when the period ends without a renewal.
+      </p>
+    </div>
   );
 }
 

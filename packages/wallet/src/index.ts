@@ -21,3 +21,12 @@ export type {
   RecoverCounts,
   RefundResult,
 } from "./billing";
+export {
+  applySubscriptionExpiry,
+  ensureSubscriptionWallet,
+  extendOrCreateSubscription,
+  getActiveUnexpiredSubscription,
+  getSubscriptionWallet,
+  MEMO_SUBSCRIPTION_EXPIRED,
+} from "./subscription";
+export type { SubscriptionRow, WalletRow } from "./subscription";

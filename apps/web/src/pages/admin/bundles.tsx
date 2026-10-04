@@ -36,6 +36,7 @@ interface Plan {
   price_vnd: number;
   credit_per_period_vnd: number;
   period_days: number;
+  rate_limit_per_minute: number;
   active: boolean;
   created_at: number;
 }
@@ -70,7 +71,13 @@ function useCatalogMutation(path: string, key: readonly unknown[]) {
     onError,
   });
   const update = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: { name?: string; active?: boolean } }) =>
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: string;
+      body: { name?: string; active?: boolean; rate_limit_per_minute?: number };
+    }) =>
       api<CatalogRow>(`${path}/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: key }),
     onError,
@@ -110,10 +117,13 @@ function RenameDialog({
   row,
   onRename,
   onClose,
+  extra,
 }: {
   row: CatalogRow | null;
   onRename: (id: string, name: string) => void;
   onClose: () => void;
+  /** Optional second editable field (plans: rate limit). */
+  extra?: { label: string; value: string; onChange: (v: string) => void; invalid: boolean };
 }) {
   const [name, setName] = useState<string | null>(null);
   const value = name ?? row?.name ?? "";
@@ -138,12 +148,24 @@ function RenameDialog({
           aria-label="New name"
           autoFocus
         />
+        {extra && (
+          <div className="grid gap-1">
+            <Label>{extra.label}</Label>
+            <Input
+              value={extra.value}
+              onChange={(e) => extra.onChange(e.target.value)}
+              inputMode="numeric"
+              aria-invalid={extra.invalid}
+              className={extra.invalid ? "border-destructive" : undefined}
+            />
+          </div>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
           <Button
-            disabled={value.trim().length === 0}
+            disabled={value.trim().length === 0 || (extra?.invalid ?? false)}
             onClick={() => {
               if (row) onRename(row.id, value.trim());
               setName(null);
@@ -165,6 +187,7 @@ function CatalogTable<T extends CatalogRow>({
   onSetActive,
   renaming,
   setRenaming,
+  renameExtra,
 }: {
   data: T[];
   detailLabel: string;
@@ -173,6 +196,8 @@ function CatalogTable<T extends CatalogRow>({
   onSetActive: (row: T, active: boolean) => void;
   renaming: CatalogRow | null;
   setRenaming: (row: CatalogRow | null) => void;
+  /** Optional second editable field in the rename dialog (plans: rate limit). */
+  renameExtra?: { label: string; value: string; onChange: (v: string) => void; invalid: boolean };
 }) {
   const columns: ColumnDef<T, unknown>[] = [
     { accessorKey: "name", header: "Name" },
@@ -232,7 +257,12 @@ function CatalogTable<T extends CatalogRow>({
         empty={`No ${detailLabel.toLowerCase()} yet`}
         globalFilter=""
       />
-      <RenameDialog row={renaming} onRename={onRename} onClose={() => setRenaming(null)} />
+      <RenameDialog
+        row={renaming}
+        onRename={onRename}
+        onClose={() => setRenaming(null)}
+        extra={renameExtra}
+      />
     </>
   );
 }
@@ -324,12 +354,17 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
   const [price, setPrice] = useState("");
   const [credit, setCredit] = useState("");
   const [period, setPeriod] = useState("30");
+  const [rateLimit, setRateLimit] = useState("15");
+  const [renameLimit, setRenameLimit] = useState("");
   const [renaming, setRenaming] = useState<CatalogRow | null>(null);
   const priceN = parseIntVnd(price);
   const creditN = parseIntVnd(credit);
   const periodN = parseIntVnd(period);
+  const rateN = parseIntVnd(rateLimit);
+  const rateInvalid = (v: number | null) => v === null || v < 1 || v > 600;
   const valid = name.trim().length > 0 && priceN !== null && priceN > 0 &&
-    creditN !== null && creditN >= 0 && (period === "" || (periodN !== null && periodN >= 1));
+    creditN !== null && creditN >= 0 && (period === "" || (periodN !== null && periodN >= 1)) &&
+    (rateLimit === "" || !rateInvalid(rateN));
   const submit = () => {
     const body: Record<string, number | string> = {
       name: name.trim(),
@@ -337,12 +372,14 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
       credit_per_period_vnd: creditN!,
     };
     if (period !== "") body.period_days = periodN!;
+    if (rateLimit !== "") body.rate_limit_per_minute = rateN!;
     create.mutate(body, {
       onSuccess: () => {
         setName("");
         setPrice("");
         setCredit("");
         setPeriod("30");
+        setRateLimit("15");
       },
     });
   };
@@ -381,6 +418,13 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
             placeholder="30"
             invalid={period !== "" && (periodN === null || periodN < 1)}
           />
+          <CreateField
+            label="Rate limit (req/min)"
+            value={rateLimit}
+            onChange={setRateLimit}
+            placeholder="15"
+            invalid={rateLimit !== "" && rateInvalid(rateN)}
+          />
           <Button type="submit" disabled={!valid || create.isPending}>
             {create.isPending ? "Creating…" : "Create plan"}
           </Button>
@@ -388,11 +432,27 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
         <CatalogTable
           data={query.data?.data ?? []}
           detailLabel="Credit/period"
-          detail={(p) => `${formatVnd(p.credit_per_period_vnd)} / ${p.period_days}d`}
-          onRename={(id, n) => update.mutate({ id, body: { name: n } })}
+          detail={(p) =>
+            `${formatVnd(p.credit_per_period_vnd)} / ${p.period_days}d · ${p.rate_limit_per_minute}/min`
+          }
+          onRename={(id, n) =>
+            update.mutate({
+              id,
+              body: { name: n, rate_limit_per_minute: parseIntVnd(renameLimit) ?? undefined },
+            })
+          }
           onSetActive={(row, active) => update.mutate({ id: row.id, body: { active } })}
           renaming={renaming}
-          setRenaming={setRenaming}
+          setRenaming={(row) => {
+            setRenaming(row);
+            setRenameLimit(row ? String((row as Plan).rate_limit_per_minute) : "");
+          }}
+          renameExtra={{
+            label: "Rate limit (req/min)",
+            value: renameLimit,
+            onChange: setRenameLimit,
+            invalid: rateInvalid(parseIntVnd(renameLimit)),
+          }}
         />
       </CardContent>
     </Card>

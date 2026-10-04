@@ -1,0 +1,2 @@
+ALTER TABLE "subscription_expiries" DROP CONSTRAINT "subscription_expiries_pkey";--> statement-breakpoint
+ALTER TABLE "subscription_expiries" ADD CONSTRAINT "subscription_expiries_subscription_id_period_end_pk" PRIMARY KEY("subscription_id","period_end");

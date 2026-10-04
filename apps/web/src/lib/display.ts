@@ -76,6 +76,7 @@ const MEMO_LABELS: Record<string, string> = {
   "bundle bonus": "Bundle bonus",
   "first topup bonus": "First top-up bonus",
   "subscription credit": "Subscription credit",
+  "subscription expired": "Subscription expired",
 };
 
 /** Human label for a ledger adjustment memo; unknown memos fall back to readable text. */

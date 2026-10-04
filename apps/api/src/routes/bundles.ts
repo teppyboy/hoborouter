@@ -30,12 +30,12 @@ export const bundlesRoutes = (
   };
 
   // Manual (admin-approved) pending purchase; mirrors the top-up manual
-  // branch in payments.ts but carries the bundle FK on the payment row.
+  // branch in payments.ts but carries the bundle/plan FK on the payment row.
   const createManualPurchase = async (
     workspaceId: string,
     userId: string,
     amount: number,
-    purchase: { bundleId?: string },
+    purchase: { bundleId?: string; subscriptionPlanId?: string },
   ) => {
     const id = crypto.randomUUID();
     await db.transaction(async (tx) => {
@@ -48,6 +48,7 @@ export const bundlesRoutes = (
         provider_order_code: `MANUAL-${id}`,
         created_at: Date.now(),
         bundle_id: purchase.bundleId,
+        subscription_plan_id: purchase.subscriptionPlanId,
       });
       await writeAudit(tx, {
         actorUserId: userId,
@@ -58,6 +59,9 @@ export const bundlesRoutes = (
           amount,
           provider: "manual",
           ...(purchase.bundleId ? { bundle_id: purchase.bundleId } : {}),
+          ...(purchase.subscriptionPlanId
+            ? { subscription_plan_id: purchase.subscriptionPlanId }
+            : {}),
         },
       });
     });
@@ -123,6 +127,7 @@ export const bundlesRoutes = (
               price_vnd: subscriptionPlans.price_vnd,
               credit_per_period_vnd: subscriptionPlans.credit_per_period_vnd,
               period_days: subscriptionPlans.period_days,
+              rate_limit_per_minute: subscriptionPlans.rate_limit_per_minute,
             })
             .from(subscriptionPlans)
             .where(eq(subscriptionPlans.active, true))
@@ -171,6 +176,48 @@ export const bundlesRoutes = (
           }
           return createManualPurchase(params.id, userId, bundle.price_vnd, {
             bundleId: bundle.id,
+          });
+        },
+      )
+      .post(
+        "/api/v1/workspaces/:id/subscription-plans/:planId/purchase",
+        {
+          params: t.Object({ id: t.String(), planId: t.String() }),
+          body: t.Object({
+            provider: t.Optional(t.Union([t.Literal("manual"), t.Literal("payos")])),
+          }),
+          detail: {
+            tags: ["Billing"],
+            summary: "Purchase a subscription plan",
+            description:
+              "Creates a pending payment at the server-side plan price; provider=payos returns a checkout_url. Credit is applied only on settlement (subscription wallet + active period).",
+            security: [{ cookieAuth: [] }],
+          },
+        },
+        async ({ request, params, body }) => {
+          const gate = await requireSession(auth, request);
+          if (gate.error) return gate.error;
+          const userId = gate.session.user.id;
+          const denied = await requireWsMember(params.id, userId);
+          if (denied) return denied;
+          const rows = await db
+            .select()
+            .from(subscriptionPlans)
+            .where(eq(subscriptionPlans.id, params.planId))
+            .limit(1);
+          const plan = rows[0];
+          if (!plan) return jsonError(404, "NOT_FOUND", "Subscription plan not found");
+          if (!plan.active) return jsonError(409, "INACTIVE", "Subscription plan is not available");
+          const provider = (body as { provider?: string } | null)?.provider;
+          if (provider === "payos") {
+            if (!payos.available)
+              return jsonError(503, "PROVIDER_UNAVAILABLE", "payOS is not configured");
+            return createPayosPayment(params.id, userId, plan.price_vnd, {
+              subscriptionPlanId: plan.id,
+            });
+          }
+          return createManualPurchase(params.id, userId, plan.price_vnd, {
+            subscriptionPlanId: plan.id,
           });
         },
       )

@@ -106,13 +106,17 @@ export const wallets = pgTable(
       .notNull()
       .references(() => workspaces.id),
     currency: text("currency").notNull().default("VND"),
+    kind: text("kind", { enum: ["topup", "subscription"] }).notNull().default("topup"),
     balance: big("balance").notNull(),
     reserved: big("reserved").notNull(),
     version: integer("version").notNull().default(0),
     created_at: big("created_at").notNull(),
   },
   (t) => [
-    uniqueIndex("wallets_workspace_id").on(t.workspace_id),
+    // One wallet row per funding source: 'topup' (existing, all pre-kind rows)
+    // and 'subscription' (created lazily at first plan settlement).
+    uniqueIndex("wallets_workspace_kind").on(t.workspace_id, t.kind),
+    check("wallets_kind", sql`${t.kind} IN ('topup','subscription')`),
     check("wallets_currency", sql`${t.currency} = 'VND'`),
     check("wallets_balance_type", intBounded(t.balance)),
     check("wallets_reserved_type", intBounded(t.reserved)),
@@ -249,6 +253,9 @@ export const subscriptionPlans = pgTable(
     credit_per_period_vnd: big("credit_per_period_vnd").notNull(),
     // Fixed period length; renewal extends from max(now, period_end).
     period_days: integer("period_days").notNull().default(30),
+    // Per-minute gateway request cap for subscription-funded traffic;
+    // admin-editable on existing plans (not a money amount).
+    rate_limit_per_minute: integer("rate_limit_per_minute").notNull().default(15),
     // Deactivated, never deleted.
     active: boolean("active").notNull().default(true),
     created_at: big("created_at").notNull(),
@@ -257,6 +264,7 @@ export const subscriptionPlans = pgTable(
     check("sp_price_vnd", sql`${t.price_vnd} > 0 AND ${t.price_vnd} <= ${MAX_BOUND}`),
     check("sp_credit_per_period_vnd", intBounded(t.credit_per_period_vnd)),
     check("sp_period_days", sql`${t.period_days} >= 1`),
+    check("sp_rate_limit_per_minute", sql`${t.rate_limit_per_minute} >= 1 AND ${t.rate_limit_per_minute} <= 600`),
     check("sp_created_at", intBounded(t.created_at)),
   ],
 );
@@ -286,6 +294,30 @@ export const subscriptions = pgTable(
     check("subscriptions_current_period_start", intBounded(t.current_period_start)),
     check("subscriptions_current_period_end", intBounded(t.current_period_end)),
     check("subscriptions_created_at", intBounded(t.created_at)),
+  ],
+);
+
+/**
+ * Expiry idempotency gate (O5): one forfeit of unused subscription credit per
+ * (subscription, period end). Inserted in the same txn as the forfeiture
+ * adjustment debit, so replays are impossible without deleting ledger rows.
+ */
+export const subscriptionExpiries = pgTable(
+  "subscription_expiries",
+  {
+    subscription_id: text("subscription_id")
+      .notNull()
+      .references(() => subscriptions.id),
+    period_end: big("period_end").notNull(),
+    ledger_entry_id: text("ledger_entry_id")
+      .notNull()
+      .references(() => ledgerEntries.id),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.subscription_id, t.period_end] }),
+    check("se_period_end", intBounded(t.period_end)),
+    check("se_created_at", intBounded(t.created_at)),
   ],
 );
 

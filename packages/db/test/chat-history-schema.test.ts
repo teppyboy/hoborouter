@@ -202,15 +202,10 @@ describe("additive migration from pre-0001 baseline", () => {
 
   test("seed user/workspace/wallet/payment/ledger before 0001", async () => {
     await seedChatOwner(db);
-    await db.insert(wallets).values({
-      id: "w-pre",
-      workspace_id: "ws-chat",
-      currency: "VND",
-      balance: 50000,
-      reserved: 0,
-      version: 0,
-      created_at: 1,
-    });
+    // Raw SQL with explicit pre-0001 columns: the drizzle schema object now
+    // carries post-0003 wallet columns (kind) that the baseline table lacks.
+    await db.execute(sql`INSERT INTO "wallets" ("id", "workspace_id", "currency", "balance", "reserved", "version", "created_at")
+      VALUES ('w-pre', 'ws-chat', 'VND', 50000, 0, 0, 1)`);
     // Raw SQL with explicit pre-0001 columns: the drizzle schema object now
     // carries post-0002 payment columns that the baseline table lacks.
     await db.execute(sql`INSERT INTO "payments" ("id", "workspace_id", "amount", "status", "provider", "provider_order_code", "created_at")

@@ -3,7 +3,7 @@
 import { Elysia, t } from "elysia";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, writeAudit, jsonError } from "../authz";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { type Db, workspaces, workspaceMembers, wallets, auditLog } from "@hoborouter/db";
 
 export const workspacesRoutes = (db: Db, auth: BetterAuthInstance) =>
@@ -180,7 +180,7 @@ export const workspacesRoutes = (db: Db, auth: BetterAuthInstance) =>
             const wallet = await tx
               .select({ id: wallets.id, balance: wallets.balance, reserved: wallets.reserved })
               .from(wallets)
-              .where(eq(wallets.workspace_id, params.id))
+              .where(and(eq(wallets.workspace_id, params.id), eq(wallets.kind, "topup")))
               .for("update")
               .limit(1);
             if (wallet[0] && wallet[0].balance === 0 && wallet[0].reserved === 0) {

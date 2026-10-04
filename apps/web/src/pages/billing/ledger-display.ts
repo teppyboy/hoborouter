@@ -36,7 +36,6 @@ export interface LedgerSections<T extends LedgerLike> {
   /** Manual adjustments and refunds — always visible, never dropped. */
   adjustments: T[];
 }
-
 /**
  * Partition ledger entries into display sections. Every entry lands in
  * exactly one section; unknown kinds fall into `adjustments` so no row is
@@ -50,4 +49,9 @@ export function partitionLedger<T extends LedgerLike>(entries: T[]): LedgerSecti
     else sections.adjustments.push(e);
   }
   return sections;
+}
+
+/** Human label for the source wallet of a ledger row (API wallet_kind). */
+export function formatLedgerSourceLabel(walletKind: string | null | undefined): string {
+  return walletKind === "subscription" ? "Subscription credit" : "Top-up credit";
 }

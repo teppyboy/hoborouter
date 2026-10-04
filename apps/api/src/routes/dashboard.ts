@@ -15,7 +15,10 @@ import {
   billingReservations,
   payments,
   requests as requestsTable,
+  subscriptionPlans,
+  subscriptions,
 } from "@hoborouter/db";
+import { applySubscriptionExpiry, runInImmediate } from "@hoborouter/wallet";
 
 // Same FX source billing uses: HBR_USD_VND_RATE, default 26000 (see v1-gateway/admin-extra).
 const usdVndRate = () => {
@@ -212,16 +215,61 @@ export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
             reserved: wallets.reserved,
           })
           .from(wallets)
-          .where(eq(wallets.workspace_id, params.id))
+          .where(and(eq(wallets.workspace_id, params.id), eq(wallets.kind, "topup")))
           .limit(1);
         const rate = usdVndRate();
-        if (!w[0]) return { currency: "VND", balance: 0, reserved: 0, available: 0, usd_vnd_rate: rate };
+        // O5: reading for display applies lazy expiry (idempotent forfeit of an
+        // ended period's unused subscription credit) inside one transaction.
+        const now = Date.now();
+        const sub = await runInImmediate(db, async (tx) => {
+          await applySubscriptionExpiry(tx, params.id, now);
+          const rows = await tx
+            .select({
+              balance: wallets.balance,
+              reserved: wallets.reserved,
+              period_end: subscriptions.current_period_end,
+              plan_name: subscriptionPlans.name,
+              rate_limit_per_minute: subscriptionPlans.rate_limit_per_minute,
+            })
+            .from(subscriptions)
+            .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, subscriptions.plan_id))
+            .innerJoin(
+              wallets,
+              and(eq(wallets.workspace_id, subscriptions.workspace_id), eq(wallets.kind, "subscription")),
+            )
+            .where(and(eq(subscriptions.workspace_id, params.id), eq(subscriptions.status, "active")))
+            .limit(1);
+          return rows[0] ?? null;
+        });
+        // Keep the existing top-level fields byte-identical; `subscription`
+        // is additive. Active-status row with an ended period still shows (so
+        // the UI can offer renewal) with expired: true; no row at all = null.
+        const subscription = sub
+          ? {
+              balance: sub.balance,
+              available: sub.balance - sub.reserved,
+              period_end: sub.period_end,
+              plan_name: sub.plan_name,
+              rate_limit_per_minute: sub.rate_limit_per_minute,
+              expired: sub.period_end <= now,
+            }
+          : null;
+        if (!w[0])
+          return {
+            currency: "VND",
+            balance: 0,
+            reserved: 0,
+            available: 0,
+            usd_vnd_rate: rate,
+            subscription,
+          };
         return {
           currency: w[0].currency,
           balance: w[0].balance,
           reserved: w[0].reserved,
           available: w[0].balance - w[0].reserved,
           usd_vnd_rate: rate,
+          subscription,
         };
       },
     )
@@ -243,6 +291,11 @@ export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
         const denied = await requireWsRole(db, params.id, gate.session.user.id, "member");
         if (denied) return denied;
         const limit = parseLimit(query?.limit);
+        // Both wallet kinds are shown: filtering kind='topup' hid all
+        // subscription financial history (credits, settles, refunds, expiry
+        // forfeits). `wallet_kind` is additive so each row names its source
+        // wallet; balance_after is that row's own wallet snapshot, never an
+        // aggregate across kinds.
         const rows = await db
           .select({
             id: ledgerEntries.id,
@@ -254,6 +307,7 @@ export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
             memo: ledgerEntries.memo,
             payment_id: ledgerEntries.payment_id,
             request_id: billingReservations.request_id,
+            wallet_kind: wallets.kind,
           })
           .from(ledgerEntries)
           .innerJoin(wallets, eq(wallets.id, ledgerEntries.wallet_id))

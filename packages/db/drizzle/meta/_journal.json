@@ -22,6 +22,20 @@
       "when": 1791075737874,
       "tag": "0002_bundles_subscriptions",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791083037023,
+      "tag": "0003_wallet_kinds_subscription_expiries",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791084040742,
+      "tag": "0004_subscription_expiries_composite_pk",
+      "breakpoints": true
     }
   ]
 }

@@ -15,6 +15,9 @@ const json = (data: unknown, status = 200) =>
 
 const posInt = (v: number) => Number.isSafeInteger(v) && v > 0;
 const nonNegInt = (v: number) => Number.isSafeInteger(v) && v >= 0;
+// Mirrors the subscription_plans rate_limit CHECK; not a money amount, so it
+// stays PATCH-editable on existing plans.
+const validRateLimit = (v: number) => Number.isSafeInteger(v) && v >= 1 && v <= 600;
 
 export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
   const guard = async (request: Request) => {
@@ -156,6 +159,7 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
           price_vnd: t.Integer(),
           credit_per_period_vnd: t.Integer(),
           period_days: t.Optional(t.Integer()),
+          rate_limit_per_minute: t.Optional(t.Integer()),
         }),
         detail: {
           tags: ["Admin"],
@@ -172,6 +176,8 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
           return jsonError(400, "INVALID", "credit_per_period_vnd must be a non-negative integer");
         if (body.period_days !== undefined && !(body.period_days >= 1))
           return jsonError(400, "INVALID", "period_days must be >= 1");
+        if (body.rate_limit_per_minute !== undefined && !validRateLimit(body.rate_limit_per_minute))
+          return jsonError(400, "INVALID", "rate_limit_per_minute must be an integer between 1 and 600");
         const id = crypto.randomUUID();
         const row = {
           id,
@@ -179,6 +185,7 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
           price_vnd: body.price_vnd,
           credit_per_period_vnd: body.credit_per_period_vnd,
           period_days: body.period_days ?? 30,
+          rate_limit_per_minute: body.rate_limit_per_minute ?? 15,
           active: true,
           created_at: Date.now(),
         };
@@ -200,12 +207,16 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
       {
         params: t.Object({ id: t.String() }),
         body: t.Object(
-          { name: t.Optional(t.String({ minLength: 1 })), active: t.Optional(t.Boolean()) },
+          {
+            name: t.Optional(t.String({ minLength: 1 })),
+            active: t.Optional(t.Boolean()),
+            rate_limit_per_minute: t.Optional(t.Integer()),
+          },
           { additionalProperties: false },
         ),
         detail: {
           tags: ["Admin"],
-          summary: "Update plan name/active (amounts immutable)",
+          summary: "Update plan name/active/rate limit (amounts immutable)",
           security: [{ cookieAuth: [] }],
         },
       },
@@ -219,9 +230,14 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
           .limit(1);
         if (!rows[0]) return jsonError(404, "NOT_FOUND", "Plan not found");
         const before = rows[0];
-        const set: { name?: string; active?: boolean } = {};
+        const set: { name?: string; active?: boolean; rate_limit_per_minute?: number } = {};
         if (body.name !== undefined) set.name = body.name;
         if (body.active !== undefined) set.active = body.active;
+        if (body.rate_limit_per_minute !== undefined) {
+          if (!validRateLimit(body.rate_limit_per_minute))
+            return jsonError(400, "INVALID", "rate_limit_per_minute must be an integer between 1 and 600");
+          set.rate_limit_per_minute = body.rate_limit_per_minute;
+        }
         if (Object.keys(set).length === 0) return json(before);
         const after = { ...before, ...set };
         await db.transaction(async (tx) => {

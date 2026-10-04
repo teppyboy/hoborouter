@@ -30,7 +30,7 @@ export function requirePositiveSafeInteger(name: string, v: unknown): number {
   return v;
 }
 
-function overflowCheckedAdd(name: string, a: number, b: number): number {
+export function overflowCheckedAdd(name: string, a: number, b: number): number {
   const sum = a + b;
   if (!Number.isSafeInteger(sum)) {
     throw new WalletError("overflow", `${name} overflow: ${a} + ${b} exceeds MAX_SAFE_INTEGER`);

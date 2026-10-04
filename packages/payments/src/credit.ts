@@ -14,9 +14,15 @@ import {
   instanceSettings,
   paymentEvents,
   payments,
+  subscriptionPlans,
   wallets,
 } from "@hoborouter/db";
 import { creditWallet, runInImmediate, WalletError } from "@hoborouter/wallet";
+import {
+  applySubscriptionExpiry,
+  ensureSubscriptionWallet,
+  extendOrCreateSubscription,
+} from "@hoborouter/wallet";
 import { isFirstTopupBonusEnabled } from "./bonus-settings";
 
 export type MockPaymentErrorCode =
@@ -184,11 +190,11 @@ export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEven
       );
     }
 
-    // Wallet for the payment's workspace (workspace_id UNIQUE on wallets).
+    // Topup wallet for the payment's workspace (unique (workspace_id, kind)).
     const walletRows = await tx
       .select({ id: wallets.id })
       .from(wallets)
-      .where(eq(wallets.workspace_id, payment.workspace_id));
+      .where(and(eq(wallets.workspace_id, payment.workspace_id), eq(wallets.kind, "topup")));
     const wallet = walletRows[0];
     if (!wallet)
       throw new MockPaymentError("not_found", `no wallet for workspace ${payment.workspace_id}`);
@@ -231,13 +237,48 @@ export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEven
         balanceAfter = adj.balanceAfter;
       }
     } else if (payment.subscription_plan_id !== null) {
-      // Owner change: subscription credit moves to a separate rate-limited
-      // subscription balance designed later. Until then, plan payments must
-      // not touch the main wallet — fail the whole settlement closed.
-      throw new MockPaymentError(
-        "invalid",
-        `subscription settlement not enabled (plan ${payment.subscription_plan_id})`,
+      // Plan payment: credit_per_period_vnd lands on the (lazily created)
+      // subscription wallet with ledger kind 'topup' referencing the payment
+      // (the one-topup-per-payment unique index is the replay gate). Expiry is
+      // applied first per O5: renewal after period end forfeits leftover
+      // credit, then the new period starts from now; renewal before period end
+      // extends from period end and keeps leftover credit.
+      const planRows = await tx
+        .select({
+          credit_per_period_vnd: subscriptionPlans.credit_per_period_vnd,
+          period_days: subscriptionPlans.period_days,
+          active: subscriptionPlans.active,
+        })
+        .from(subscriptionPlans)
+        .where(eq(subscriptionPlans.id, payment.subscription_plan_id));
+      const plan = planRows[0];
+      if (!plan) {
+        throw new MockPaymentError(
+          "invalid",
+          `missing subscription plan ${payment.subscription_plan_id}`,
+        );
+      }
+      if (!plan.active) {
+        throw new MockPaymentError("invalid", `plan ${payment.subscription_plan_id} is inactive`);
+      }
+      const now = Date.now();
+      const subWallet = await ensureSubscriptionWallet(tx, payment.workspace_id, now);
+      await applySubscriptionExpiry(tx, payment.workspace_id, now);
+      await extendOrCreateSubscription(
+        tx,
+        payment.workspace_id,
+        payment.subscription_plan_id,
+        plan.period_days,
+        now,
       );
+      const credit = await creditWallet(tx, {
+        walletId: subWallet.id,
+        amount: plan.credit_per_period_vnd,
+        kind: "topup",
+        paymentId: payment.id,
+        memo: plainMemo,
+      });
+      balanceAfter = credit.balanceAfter;
     } else {
       // Plain top-up: unchanged settlement path.
       const credit = await creditWallet(tx, {
@@ -251,10 +292,13 @@ export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEven
     }
 
     // First topup bonus (D2): once per workspace, inside this same
-    // transaction. The first_topup_bonuses UNIQUE(workspace_id) is the grant
-    // gate: its ledger_entry_id FK forces credit-before-gate, so on a
-    // concurrent loss the whole transaction rolls back (no bonus credit
-    // committed) and the provider retry settles the payment without a bonus.
+    // transaction. A plan payment IS a succeeded paid purchase: it is
+    // eligible to trigger the bonus, and the bonus itself always lands on the
+    // TOPUP wallet (never the subscription wallet). The first_topup_bonuses
+    // UNIQUE(workspace_id) is the grant gate: its ledger_entry_id FK forces
+    // credit-before-gate, so on a concurrent loss the whole transaction rolls
+    // back (no bonus credit committed) and the provider retry settles the
+    // payment without a bonus.
     const bonusAmount = await firstTopupBonusAmountVnd(tx);
     if (bonusAmount !== null) {
       // Skip when this workspace already has its one grant (committed earlier).

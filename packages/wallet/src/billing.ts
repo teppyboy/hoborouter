@@ -25,6 +25,11 @@ import {
   runInImmediate,
 } from "./wallet";
 import { calculateCharge, maxStoredMoney, type PriceSnapshot, type UsageTokens } from "./money";
+import {
+  applySubscriptionExpiry,
+  getActiveUnexpiredSubscription,
+  getSubscriptionWallet,
+} from "./subscription";
 
 type UnitPrice = {
   inputUsdMicroPer1m: number;
@@ -98,6 +103,14 @@ export type ReserveRequestArgs = {
   mode: "stream" | "non-stream";
   fxRate: number;
   capVnd: number;
+  /**
+   * O3 gateway funding: when present, the reservation funds from the
+   * subscription wallet iff the workspace has an active unexpired subscription
+   * AND its available balance covers the cap AND underLimit is true; otherwise
+   * the topup wallet funds (no limit). Lazy expiry runs first in the same txn.
+   * Absent (default): topup wallet, unchanged legacy behavior.
+   */
+  funding?: { underLimit: boolean };
   now: number;
 };
 
@@ -111,7 +124,7 @@ export type ReserveRequestArgs = {
 export async function reserveRequest(
   db: Db | Tx,
   args: ReserveRequestArgs,
-): Promise<{ requestId: string; reservationId: string }> {
+): Promise<{ requestId: string; reservationId: string; walletKind: "subscription" | "topup" }> {
   const capVnd = requirePositiveSafeInteger("capVnd", args.capVnd);
   const fxRate = requirePositiveSafeInteger("fxRate", args.fxRate);
   if (typeof args.requestId !== "string" || args.requestId === "") {
@@ -131,11 +144,29 @@ export async function reserveRequest(
           `api key ${args.apiKeyId} not usable for workspace ${args.workspaceId}`,
         );
       }
-      const ws = await tx
-        .select({ id: wallets.id })
-        .from(wallets)
-        .where(eq(wallets.workspace_id, args.workspaceId));
-      const wallet = ws[0];
+      // Funding source (O3): one request is funded by exactly one wallet.
+      // Subscription only when under the per-minute limit AND an active
+      // unexpired subscription's available covers the cap; else topup.
+      let walletKind: "subscription" | "topup" = "topup";
+      let wallet: { id: string } | undefined;
+      if (args.funding) {
+        await applySubscriptionExpiry(tx, args.workspaceId, args.now);
+        const sub = await getActiveUnexpiredSubscription(tx, args.workspaceId, args.now);
+        if (args.funding.underLimit && sub) {
+          const subWallet = await getSubscriptionWallet(tx, args.workspaceId);
+          if (subWallet && subWallet.balance - subWallet.reserved >= capVnd) {
+            wallet = subWallet;
+            walletKind = "subscription";
+          }
+        }
+      }
+      if (!wallet) {
+        const ws = await tx
+          .select({ id: wallets.id })
+          .from(wallets)
+          .where(and(eq(wallets.workspace_id, args.workspaceId), eq(wallets.kind, "topup")));
+        wallet = ws[0];
+      }
       if (!wallet)
         throw new WalletError("not_found", `wallet not found for workspace ${args.workspaceId}`);
       // Wallet row locked by runInImmediate: concurrent reserves serialize here.
@@ -234,7 +265,7 @@ export async function reserveRequest(
       if (updated.length !== 1) {
         throw new WalletError("insufficient", "insufficient: available balance below cap");
       }
-      return { requestId: args.requestId, reservationId };
+      return { requestId: args.requestId, reservationId, walletKind };
     },
     // walletId unknown before the lookup; the CAS above is the concurrency gate.
   );

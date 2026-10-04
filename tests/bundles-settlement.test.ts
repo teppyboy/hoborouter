@@ -217,26 +217,65 @@ describe("bundle settlement", () => {
     ]);
   });
 
-  test("plan payment: not credited, settlement rejected closed", async () => {
+  test("plan payment: credits ONLY the subscription wallet; topup wallet untouched", async () => {
     await db.$client.unsafe(
       `INSERT INTO subscription_plans (id, name, price_vnd, credit_per_period_vnd, period_days, active, created_at)
        VALUES ('plan-future', 'plan-future', 150000, 20000, 30, true, $1)`,
       [NOW] as never[],
     );
+    await seedWorkspace("ws-plan");
+    // ws-plan has no prior succeeded payment, but the bonus is disabled here:
+    // the bonus itself is covered by the dedicated case below.
     await seedPayment({
       id: "pay-plan",
-      ws: "ws-plain",
+      ws: "ws-plan",
       amount: 150_000,
       orderCode: "ORD-PLAN",
       planId: "plan-future",
     });
-    expect(
-      processMockPaymentEvent(db, ev("ORD-PLAN", "evt-plan", 150_000)),
-    ).rejects.toThrow(/subscription settlement not enabled/);
-    // Nothing credited by accident: balance, ledger, status all untouched.
-    expect(await balance("ws-plain")).toBe(50_000);
-    expect(await ledger("pay-plan")).toEqual([]);
+    const r = await processMockPaymentEvent(db, ev("ORD-PLAN", "evt-plan", 150_000));
+    expect(r.outcome).toBe("credited");
+    const wallets = await q<{ kind: string; balance: string }>(
+      `SELECT kind, balance FROM wallets WHERE workspace_id = 'ws-plan' ORDER BY kind`,
+    );
+    expect(wallets.map((w) => ({ kind: w.kind, balance: Number(w.balance) }))).toEqual([
+      { kind: "subscription", balance: 20_000 },
+      { kind: "topup", balance: 0 },
+    ]);
+    // Ledger for the payment lives on the subscription wallet only.
+    const led = await q<{ kind: string; wallet_kind: string; amount: string }>(
+      `SELECT l.kind, w.kind wallet_kind, l.amount FROM ledger_entries l
+       JOIN wallets w ON w.id = l.wallet_id WHERE l.payment_id = 'pay-plan'`,
+    );
+    expect(led).toEqual([{ kind: "topup", wallet_kind: "subscription", amount: "20000" }]);
     const pay = await q<{ status: string }>(`SELECT status FROM payments WHERE id = 'pay-plan'`);
-    expect(pay[0]!.status).toBe("pending");
+    expect(pay[0]!.status).toBe("succeeded");
+  });
+
+  test("plan payment grants the first-topup bonus to the TOPUP wallet when eligible", async () => {
+    await setSetting("first_topup_bonus_enabled", "true");
+    await seedWorkspace("ws-plan-bonus");
+    await seedPayment({
+      id: "pay-plan-bonus",
+      ws: "ws-plan-bonus",
+      amount: 150_000,
+      orderCode: "ORD-PLAN-B",
+      planId: "plan-future",
+    });
+    const r = await processMockPaymentEvent(db, ev("ORD-PLAN-B", "evt-plan-b", 150_000));
+    expect(r.outcome).toBe("credited");
+    const wallets = await q<{ kind: string; balance: string }>(
+      `SELECT kind, balance FROM wallets WHERE workspace_id = 'ws-plan-bonus' ORDER BY kind`,
+    );
+    expect(wallets.map((w) => ({ kind: w.kind, balance: Number(w.balance) }))).toEqual([
+      { kind: "subscription", balance: 20_000 },
+      { kind: "topup", balance: 20_000 },
+    ]);
+    const bonus = await q<{ wallet_kind: string }>(
+      `SELECT w.kind wallet_kind FROM ledger_entries l
+       JOIN wallets w ON w.id = l.wallet_id WHERE l.memo = 'first topup bonus'`,
+    );
+    expect(bonus).toEqual([{ wallet_kind: "topup" }]);
+    await setSetting("first_topup_bonus_enabled", "false");
   });
 });
