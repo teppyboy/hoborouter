@@ -10,7 +10,7 @@ const BASE = process.env.BASE ?? "http://127.0.0.1:5199";
 const API_BASE = process.env.HBR_API_URL ?? "http://127.0.0.1:3099";
 const ADMIN_EMAIL = (process.env.HBR_DEV_ADMIN_EMAIL ?? "admin@e2e.test").toLowerCase();
 const USER2_EMAIL = "user2@e2e.test";
-const PASSWORD = "correct horse battery staple";
+const PASSWORD = "Correct-Horse-Battery-Staple-1";
 const MODEL_ID = "fake/test-model";
 // Temporary public ID used only by the rename step (renamed back afterwards).
 const NEW_MODEL_ID = "fake/test-model-2";
@@ -113,6 +113,9 @@ let current: Evidence = { console: [], pageErrors: [], http: [] };
 // whitelist one (status, url substring) match so the step's noise gate does not
 // fail on it. Consumed once; anything else still fails the step.
 let expect4xx: { status: number; urlPart: string }[] = [];
+// Count of real sign-up requests observed (client-side validation must keep
+// this at zero for a mismatched-password signup attempt).
+let signupReqs = 0;
 const expectOne4xx = (status: number, urlPart: string) => {
   expect4xx.push({ status, urlPart });
 };
@@ -132,6 +135,8 @@ onEvent((m) => {
   } else if (m.method === "Runtime.exceptionThrown") {
     const d = m.params.exceptionDetails;
     current.pageErrors.push(d.exception?.description ?? d.text ?? "unknown exception");
+  } else if (m.method === "Network.requestWillBeSent") {
+    if (m.params.request.url.includes("/api/auth/sign-up")) signupReqs++;
   } else if (m.method === "Network.responseReceived") {
     const { status, url } = m.params.response;
     if (status >= 400 && !url.includes("/_vite") && !isGravatarUrl(url)) {
@@ -405,6 +410,85 @@ async function waitForDialogClosed() {
   await waitForExpr(`!document.querySelector('[role="dialog"]')`, "no open dialog");
 }
 
+// ---------- responsive viewport emulation (raw CDP, no extra deps) ----------
+const DESKTOP = { width: 1440, height: 900 } as const;
+
+/** Emulate a device: metrics + touch. mobile:true flips pointer to coarse, which
+ * is what the product's `pointer-coarse:h-11` 44px targets key off. */
+async function setViewport(width: number, height: number, mobile: boolean) {
+  await send("Emulation.setDeviceMetricsOverride", {
+    width,
+    height,
+    deviceScaleFactor: mobile ? 2 : 1,
+    mobile,
+  });
+  await send("Emulation.setTouchEmulationEnabled", { enabled: mobile, maxTouchPoints: 5 });
+}
+
+async function resetDesktop() {
+  await setViewport(DESKTOP.width, DESKTOP.height, false);
+}
+
+/** The whole page must never scroll horizontally. Tables may overflow INSIDE
+ * their own overflow-x wrapper (that's containment, not page scroll). */
+async function assertNoPageHScroll(where: string) {
+  // Offender bounds are computed BEFORE failing so the exact layout culprit
+  // appears in the step's failure message (no second evaluation needed).
+  const m = await evaluate<{ sw: number; cw: number; offenders: string[] }>(
+    `(() => {
+      const de = document.documentElement;
+      const offenders = [];
+      if (de.scrollWidth > de.clientWidth + 1) {
+        const cw = de.clientWidth;
+        for (const el of document.querySelectorAll('body *')) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0 && r.right > cw + 1) {
+            offenders.push(el.tagName + '.' + String(el.className).slice(0, 60) +
+              ' left=' + Math.round(r.left) + ' right=' + Math.round(r.right) +
+              ' w=' + Math.round(r.width));
+            if (offenders.length >= 6) break;
+          }
+        }
+      }
+      return { sw: de.scrollWidth, cw: de.clientWidth, offenders };
+    })()`,
+  );
+  if (m.sw > m.cw + 1)
+    throw new Error(
+      `${where}: whole page scrolls horizontally (scrollWidth ${m.sw} > clientWidth ${m.cw}) | offenders: ${m.offenders.join(" ; ") || "none found"}`,
+    );
+}
+
+/** Trusted Escape via the CDP Input domain (synthetic KeyboardEvent is not
+ * trusted and Radix dialogs can ignore it). */
+async function pressEscape() {
+  for (const type of ["keyDown", "keyUp"] as const) {
+    await send("Input.dispatchKeyEvent", {
+      type,
+      key: "Escape",
+      code: "Escape",
+      windowsVirtualKeyCode: 27,
+      nativeVirtualKeyCode: 27,
+    });
+  }
+}
+
+/** Run a body under an emulated viewport; ALWAYS restores desktop afterwards
+ * so a step failure cannot cascade a phone viewport into later steps. */
+async function withViewport(
+  width: number,
+  height: number,
+  mobile: boolean,
+  run: () => Promise<void>,
+) {
+  await setViewport(width, height, mobile);
+  try {
+    await run();
+  } finally {
+    await resetDesktop();
+  }
+}
+
 // ---------- step runner ----------
 const results: { name: string; pass: boolean; expected?: string; actual?: string }[] = [];
 
@@ -507,12 +591,98 @@ async function main() {
     );
   });
 
+  // --- mobile auth: phone viewport, muted card border as a computed value,
+  // 44px coarse-pointer targets, landscape footer reachability, client-only
+  // mismatch validation (no sign-up request) ---
+  await step("mobile auth: phone login fits, muted border computed, 44px inputs", async () => {
+    await withViewport(390, 844, true, async () => {
+      await goto("/login");
+      await page.waitForText("Sign in");
+      await assertNoPageHScroll("login 390x844");
+      // Touch emulation must report coarse pointers — the product's 44px
+      // `pointer-coarse:h-11` targets key off it.
+      assert(
+        await evaluate<boolean>(`matchMedia('(pointer: coarse)').matches`),
+        "touch emulation reports pointer: coarse",
+      );
+      // Muted border verified as a computed color equal to the border-border
+      // token — never from class text or screenshot pixels.
+      const border = await evaluate<{
+      card: string | null;
+      probe: string | null;
+      width: string | null;
+    }>(`(() => {
+      const card = [...document.querySelectorAll('div')].find(
+        (d) => d.className.includes('rounded-lg') && d.className.includes('border-border'));
+      if (!card) return { card: null, probe: null, width: null };
+      const probe = document.createElement('div');
+      probe.className = 'border-border';
+      document.body.appendChild(probe);
+      const out = {
+        card: getComputedStyle(card).borderTopColor,
+        probe: getComputedStyle(probe).borderTopColor,
+        width: getComputedStyle(card).borderTopWidth,
+      };
+      probe.remove();
+      return out;
+    })()`);
+    assert(!!border.card, "auth card element found");
+    assert(
+      border.card === border.probe,
+      `card border color equals border-border token (got ${border.card})`,
+    );
+    assert(
+      border.card !== "rgba(0, 0, 0, 0)" && border.width === "1px",
+      `card has a real 1px border (width ${border.width}, color ${border.card})`,
+    );
+    const inputH = await evaluate<number>(
+      `document.querySelector('form input').getBoundingClientRect().height`,
+    );
+      assert(inputH === 44, `login input height 44px under coarse pointer, got ${inputH}`);
+    });
+  });
+
+  await step("mobile auth: landscape signup footer reachable, mismatch is client-only", async () => {
+      await withViewport(844, 390, true, async () => {
+        // phone landscape
+        await goto("/signup");
+        await page.waitForText("Create account");
+        await page.setInput("Name", "Mismatch Probe");
+        await page.setInput("Email", "mismatch-probe@e2e.test");
+        await page.setInput("Password", PASSWORD);
+        await page.setInput("Confirm password", `${PASSWORD}-different`);
+        const reqsBefore = signupReqs;
+        await page.click("Sign up");
+        await page.waitForText("Passwords do not match");
+        assert(
+          signupReqs === reqsBefore,
+          `no /api/auth/sign-up request on client-side mismatch (sent ${signupReqs - reqsBefore})`,
+        );
+        // Tall signup on a short landscape viewport: the terms footer must be
+        // reachable by scrolling the auth scroll container, never clipped.
+        const footer = await evaluate<boolean>(`(() => {
+          const scroller = document.querySelector('div.fixed.inset-0.overflow-y-auto');
+          scroller.scrollTop = scroller.scrollHeight;
+          const link = [...document.querySelectorAll('a')].find(
+            (a) => a.textContent.includes('Terms of Service'));
+          const r = link.getBoundingClientRect();
+          return r.top >= 0 && r.bottom <= scroller.clientHeight + 1 && r.height > 0;
+        })()`);
+        assert(footer, "terms footer reachable by scroll in landscape");
+        await assertNoPageHScroll("signup 844x390");
+      });
+    // Leave without completing a real signup; later fixtures re-navigate.
+    await goto("/login");
+    await page.waitForText("Sign in");
+  });
+
   // --- signup admin ---
   await step("signup admin", async () => {
     await goto("/signup");
     await page.setInput("Name", "E2E Admin");
     await page.setInput("Email", ADMIN_EMAIL);
     await page.setInput("Password", PASSWORD);
+    await page.setInput("Confirm password", PASSWORD);
     await page.click("Sign up");
     await page.waitForText("Create your first workspace");
   });
@@ -549,6 +719,7 @@ async function main() {
     await page.setInput("Name", "E2E User");
     await page.setInput("Email", USER2_EMAIL);
     await page.setInput("Password", PASSWORD);
+    await page.setInput("Confirm password", PASSWORD);
     await page.click("Sign up");
     await page.waitForText("Create your first workspace");
     // give user2 their own workspace so their account is complete
@@ -854,86 +1025,78 @@ async function main() {
     );
   });
 
-  // --- chat page: pasted key, model picker, streamed reply, new chat ---
-  await step("chat: paste key, pick model, streamed reply, new chat clears", async () => {
-    await goto("/chat");
-    await page.waitForText("Start a conversation");
-    assert(await page.has("Open API keys"), "empty state links to the API keys page");
-    // Trusted CDP clicks: the page loads models on blur, and synthetic focus
-    // games do not reach React's onBlur — a real focus change does.
-    const clickAt = async (x: number, y: number) => {
-      for (const type of ["mousePressed", "mouseReleased"]) {
-        await send("Input.dispatchMouseEvent", {
-          type,
-          x,
-          y,
-          button: "left",
-          clickCount: 1,
-          buttons: type === "mousePressed" ? 1 : 0,
-        });
-      }
-    };
-    const centerOf = (selector: string) =>
-      evaluate<{ x: number; y: number }>(`(() => {
-        const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-      })()`);
-    // Paste the run key (memory-only by default; never in sessionStorage).
-    const keyAt = await centerOf("#chat-api-key");
-    await clickAt(keyAt.x, keyAt.y);
-    await send("Input.insertText", { text: apiKey });
-    await sleep(300);
-    // Clicking the textarea moves focus for real: blur fires, models load.
-    const taAt = await centerOf('textarea[aria-label="Message"]');
-    await clickAt(taAt.x, taAt.y);
-    try {
-      await waitForExpr(
-        `(() => { const t = document.getElementById('chat-model')?.textContent ?? ''; return t.includes('fake') && !t.includes('Loading'); })()`,
-        "model picker loaded from /v1/models",
-      );
-    } catch (e) {
-      const diag = await evaluate<string>(`(() => JSON.stringify({
-        trig: document.getElementById('chat-model')?.textContent ?? null,
-        errState: document.body.innerText.includes('Models:'),
-        resources: performance.getEntriesByType('resource').filter(r => r.name.includes('/v1/')).map(r => r.name),
-        keyVal: (document.getElementById('chat-api-key') ?? {}).value,
-      }))()`);
-      throw new Error(`model picker wait failed, diag=${diag} (orig: ${e})`);
-    }
-    assert(
-      (await evaluate<string>(`sessionStorage.getItem('hbr-chat-key')`)) === null,
-      "key is memory-only unless remember is toggled",
+  // --- chat: session catalog + managed "Browser Chat" auto-key flow ---
+  let chatWsId = "";
+  let chatUserId = "";
+  let chatId = "";
+  const chatKeys = () =>
+    browserFetchJson<{ id: string; name: string; status: string }[]>(
+      `/api/v1/workspaces/${chatWsId}/keys`,
     );
-    await selectOption("#chat-model", MODEL_ID);
-    // Real typing into the (now focused) message textarea.
-    await clickAt(taAt.x, taAt.y);
-    await send("Input.insertText", { text: "hi" });
+  const chatSnapshot = () =>
+    browserFetchJson<{
+      title: string;
+      model: string | null;
+      version: number;
+      archived_at: number | null;
+      messages: { role: string; content: string }[];
+    }>(`/api/v1/workspaces/${chatWsId}/chats/${chatId}`);
+  const typeMessage = (text: string) =>
+    evaluate(`(() => {
+      const ta = document.querySelector('textarea[aria-label="Message"]');
+      if (!ta) throw new Error('message textarea not found');
+      const set = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+      set.call(ta, ${JSON.stringify(text)});
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    })()`);
+  const convLog = () =>
+    evaluate<{ n: number; first?: string; last?: string } | null>(`(() => {
+      const log = document.querySelector('[aria-label="Conversation"]');
+      const inner = log?.firstElementChild; // bubbles render inside the centered column
+      if (!inner) return null;
+      return { n: inner.children.length,
+        first: inner.children[0]?.textContent,
+        last: inner.children[inner.children.length - 1]?.textContent };
+    })()`);
+  // Reply text renders mid-stream; the Send button only returns once the
+  // terminal save is done — wait for it before the next interaction.
+  const replyDone = () =>
+    waitForExpr(
+      `!!document.querySelector('[aria-label="Send message"]')`,
+      "stream finished (Send button back)",
+    );
+  const PLAINTEXT_KEY_RE = /sk-hbr-[A-Za-z0-9_-]{43}/; // full plaintext shape; key_prefix is far shorter
+
+  await step("chat: session catalog, model pick, auto Browser Chat key, streamed reply", async () => {
+    await goto("/chat");
+    await page.waitForText("What would you like to build?");
+    assert(
+      await page.has('"Browser Chat"'),
+      "empty state discloses the managed auto chat key",
+    );
+    const session = await browserFetchJson<{ user?: { id?: string } } | null>(
+      "/api/auth/get-session",
+    );
+    chatUserId = session?.user?.id ?? "";
+    chatWsId =
+      (await browserFetchJson<{ id: string; name: string }[]>("/api/v1/workspaces")).find(
+        (w) => w.name === wsName,
+      )?.id ?? "";
+    assert(!!chatUserId && !!chatWsId, "session user + main workspace id resolved");
+    // Catalog is session-scoped: the picker is usable before any key exists.
+    await waitForExpr(
+      `document.getElementById('chat-model')?.textContent === 'Choose a model'`,
+      "model catalog loaded without a key",
+    );
+    await selectOption("#chat-model", "Fake Test");
+    const keysBefore = await chatKeys();
+    await typeMessage("hi");
     await page.clickAria('[aria-label="Send message"]');
     // Streamed reply from the fake CPA (the gateway echoes the public model id).
-    try {
-      await page.waitForText("Hello from fake/test-model: hi");
-    } catch (e) {
-      const diag = await evaluate<string>(`(() => JSON.stringify({
-        log: document.querySelector('[aria-label="Conversation"]')?.innerText ?? null,
-        err: [...document.querySelectorAll('[role="alert"], [class*=destructive]')].map(e2 => e2.textContent.trim()).slice(0,3),
-        ta: document.querySelector('textarea[aria-label="Message"]')?.value,
-        chatReqs: performance.getEntriesByType('resource').filter(r => r.name.includes('/v1/chat/completions')).length,
-        sendDisabled: [...document.querySelectorAll('button')].some(b => b.getAttribute('aria-label') === 'Send message' && b.disabled),
-        body: document.body.innerText.slice(0, 300),
-      }))()`);
-      throw new Error(`reply wait failed, diag=${diag} (orig: ${e})`);
-    }
-    const conv = await evaluate<{
-      n: number;
-      first?: string;
-      last?: string;
-    } | null>(`(() => {
-      const log = document.querySelector('[aria-label="Conversation"]');
-      if (!log) return null;
-      return { n: log.children.length,
-        first: log.children[0]?.textContent,
-        last: log.children[log.children.length - 1]?.textContent };
-    })()`);
+    await page.waitForText("Hello from fake/test-model: hi");
+    await replyDone();
+    const conv = await convLog();
     assert(!!conv, "conversation log rendered");
     assert(conv!.n === 2, `two bubbles (user + assistant), got ${conv!.n}`);
     assert(conv!.first === "hi", "user bubble shows the sent message");
@@ -941,13 +1104,213 @@ async function main() {
       conv!.last!.includes("Hello from fake/test-model: hi"),
       `assistant bubble has streamed reply, got "${conv!.last!.slice(0, 120)}"`,
     );
-    // New chat clears the conversation back to the empty state.
+    // The send itself minted exactly one normal workspace API key.
+    const keysAfter = await chatKeys();
+    assert(
+      keysAfter.length === keysBefore.length + 1,
+      `exactly one key created by the chat flow (before ${keysBefore.length}, after ${keysAfter.length})`,
+    );
+    const created = keysAfter.filter((k) => !keysBefore.some((b) => b.id === k.id));
+    assert(
+      created.length === 1 && created[0]!.name === "Browser Chat" && created[0]!.status === "enabled",
+      "the new key is the enabled Browser Chat key",
+    );
+    assert(
+      !PLAINTEXT_KEY_RE.test(JSON.stringify(keysAfter)),
+      "keys list response never carries a plaintext secret",
+    );
+    // History list shows the literal first-turn title, and the snapshot matches.
+    await waitForExpr(
+      `!!document.querySelector('[aria-label="Rename conversation: hi"]')`,
+      "sidebar lists the conversation titled hi",
+    );
+    chatId =
+      (await browserFetchJson<{ data: { id: string }[] }>(
+        `/api/v1/workspaces/${chatWsId}/chats`,
+      )).data[0]?.id ?? "";
+    assert(!!chatId, "conversation persisted server-side");
+    const snap = await chatSnapshot();
+    assert(snap.title === "hi", `first-turn title is the literal prompt, got "${snap.title}"`);
+    assert(snap.model === MODEL_ID, "snapshot records the selected model");
+    assert(
+      snap.messages.length === 2 &&
+        snap.messages[0]?.role === "user" &&
+        snap.messages[1]?.role === "assistant",
+      "snapshot has the user + assistant turn",
+    );
+  });
+
+  await step("chat: full reload reopens the saved conversation with messages + model", async () => {
+    await goto("/chat");
+    await page.waitForText("What would you like to build?");
+    await waitForExpr(
+      `!!document.querySelector('[aria-label="Rename conversation: hi"]')`,
+      "history list shows the saved conversation",
+    );
+    await page.click("hi", false);
+    await page.waitForText("Hello from fake/test-model: hi");
+    const conv = await convLog();
+    assert(!!conv && conv.n === 2, `reopened log has both messages, got ${conv?.n ?? "none"}`);
+    assert(conv!.first === "hi", "saved user message restored");
+    assert(conv!.last!.includes("Hello from fake/test-model: hi"), "saved assistant reply restored");
+    const model = (await evaluate<string>(`document.getElementById('chat-model')?.textContent ?? ''`));
+    assert(model.includes("Fake Test"), `model restored from snapshot, got "${model}"`);
+  });
+
+  await step("chat: rename via UI to Saved E2E chat, continue send without 409", async () => {
+    await page.clickAria('[aria-label="Rename conversation: hi"]');
+    await page.waitForText("Rename conversation");
+    await page.setInputById("conversation-rename-title", "Saved E2E chat");
+    await page.click("Save");
+    await waitForDialogClosed();
+    await page.waitForText("Saved E2E chat");
+    // The rename went through the same versioned save the page tracks, so the
+    // next turn must save cleanly (a 409 here fails the step's noise gate).
+    await typeMessage("again");
+    await page.clickAria('[aria-label="Send message"]');
+    await page.waitForText("Hello from fake/test-model: again");
+    await replyDone();
+    assert(
+      !(await page.has("changed on another device")),
+      "no 409 conflict banner after the continued send",
+    );
+  });
+
+  await step("chat: explicit Stop keeps the partial, Retry does not duplicate the user turn", async () => {
+    await typeMessage("stop me");
+    await page.clickAria('[aria-label="Send message"]');
+    // 300ms fake-CPA chunk pacing: wait for the first content token, stop mid-stream.
+    await waitForExpr(
+      `(() => { const log = document.querySelector('[aria-label="Conversation"]');
+        const last = log?.children[log.children.length - 1];
+        return !!last && last.textContent.includes('Hello from'); })()`,
+      "first assistant content token",
+    );
+    await page.clickAria('[aria-label="Stop generating"]');
+    // The stop path persists the partial before it re-enables the composer.
+    await waitForExpr(
+      `!!document.querySelector('[aria-label="Send message"]')`,
+      "streaming ended after Stop",
+    );
+    const afterStop = await chatSnapshot();
+    assert(
+      afterStop.messages.some((m) => m.role === "assistant" && m.content.includes("Hello from")),
+      "stopped partial reply was saved",
+    );
+    const baseVersion = afterStop.version;
+    await page.click("Retry last reply");
+    const deadline = Date.now() + 10000;
+    let snap = await chatSnapshot();
+    while (snap.version <= baseVersion) {
+      if (Date.now() > deadline)
+        throw new Error(`retry save did not land (version ${snap.version} <= ${baseVersion})`);
+      await sleep(300);
+      snap = await chatSnapshot();
+    }
+    const userTurns = snap.messages.filter((m) => m.role === "user" && m.content === "stop me");
+    assert(
+      userTurns.length === 1,
+      `retry must not duplicate the original user turn, got ${userTurns.length}`,
+    );
+    const replies = snap.messages.filter(
+      (m) => m.role === "assistant" && m.content.includes("Hello from fake/test-model: stop me"),
+    );
+    assert(replies.length === 1, `exactly one saved reply for the retried turn, got ${replies.length}`);
+  });
+
+  await step("chat: archive removes from the active list, server retains messages (no delete)", async () => {
+    await page.clickAria('[aria-label="Archive conversation: Saved E2E chat"]');
+    await page.waitForText("What would you like to build?");
+    await page.waitForText("No conversations yet.");
+    const list = await browserFetchJson<{ data: { id: string }[] }>(
+      `/api/v1/workspaces/${chatWsId}/chats`,
+    );
+    assert(list.data.length === 0, "active conversation list is empty after archive");
+    const snap = await chatSnapshot();
+    assert(snap.archived_at !== null, "conversation is archived server-side, not deleted");
+    assert(
+      snap.messages.length >= 6,
+      `all messages retained after archive, got ${snap.messages.length}`,
+    );
+    assert(
+      snap.messages.some((m) => m.role === "user" && m.content === "hi"),
+      "original user message retained",
+    );
+  });
+
+  await step("chat: New chat welcome, advanced manual key is memory/tab-scoped, no legacy global", async () => {
+    const keysBeforeManual = await chatKeys();
+    await evaluate(`(() => {
+      const s = [...document.querySelectorAll('details > summary')]
+        .find(el => el.textContent.includes('Advanced: use your own API key'));
+      if (!s) throw new Error('advanced key summary not found');
+      s.click();
+      return true;
+    })()`);
+    await page.setInputById("chat-api-key", apiKey);
+    // Memory-only by default: the pasted key exists in no storage entry at all.
+    assert(
+      await evaluate<boolean>(`(() => {
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const k = sessionStorage.key(i);
+          if (k === 'hbr-chat-key' || k.startsWith('hbr-chat-key:')) return false;
+          if ((sessionStorage.getItem(k) ?? '').includes(${JSON.stringify(apiKey)})) return false;
+        }
+        return true;
+      })()`),
+      "pasted manual key stays memory-only before remember",
+    );
+    await typeMessage("manual hi");
+    await page.clickAria('[aria-label="Send message"]');
+    await page.waitForText("Hello from fake/test-model: manual hi");
+    await replyDone();
+    const keysAfterManual = await chatKeys();
+    assert(
+      keysAfterManual.length === keysBeforeManual.length,
+      "manual key path creates no additional key",
+    );
     await page.click("New chat");
-    await page.waitForText("Start a conversation");
+    await page.waitForText("What would you like to build?");
     assert(
       !(await evaluate<boolean>(`!!document.querySelector('[aria-label="Conversation"]')`)),
       "conversation log cleared after New chat",
     );
+    // Remember opts into sessionStorage namespaced by user+workspace — never
+    // the legacy unscoped key (cross-user leak on shared browsers).
+    await page.clickSwitch("chat-remember");
+    const scopedKey = `hbr-chat-key:${chatUserId}:${chatWsId}`;
+    assert(
+      await evaluate<boolean>(`(() => {
+        const scoped = sessionStorage.getItem(${JSON.stringify(scopedKey)});
+        if (scoped === null || !scoped.includes('sk-hbr-')) return false;
+        return sessionStorage.getItem('hbr-chat-key') === null;
+      })()`),
+      "remembered key stored under the user+workspace scoped key only",
+    );
+  });
+
+  await step("chat: workspace switch aborts context, chat key storage stays identity-scoped", async () => {
+    await selectOption('[aria-label="Workspace"]', `${throwaway} 2`);
+    // Nothing from the funded workspace's chat may leak into the other one.
+    await page.waitForText("What would you like to build?");
+    await page.waitForText("No conversations yet.");
+    assert(
+      !(await page.has("Hello from fake")),
+      "no prior conversation content after the workspace switch",
+    );
+    assert(
+      await evaluate<boolean>(`(() => {
+        if (sessionStorage.getItem('hbr-chat-key') !== null) return false;
+        for (let i = 0; i < sessionStorage.length; i++) {
+          const k = sessionStorage.key(i);
+          if (k.startsWith('hbr-chat-key:')) return false; // remembered key dropped on identity change
+        }
+        return true;
+      })()`),
+      "remembered manual key dropped on switch; no legacy unscoped global",
+    );
+    await selectOption('[aria-label="Workspace"]', wsName);
+    await page.waitForText("What would you like to build?");
   });
 
   // --- gateway calls (Bun fetch, not UI) ---
@@ -1310,8 +1673,8 @@ async function main() {
     const email = "throwaway@e2e.test";
     const newName = "E2E Throwaway Edited";
     const newEmail = "throwaway-edited@e2e.test";
-    const oldPassword = "throwaway old password 1";
-    const newPassword = "throwaway new password 2";
+    const oldPassword = "Throwaway-Old-Password-1";
+    const newPassword = "Throwaway-New-Password-2";
     await goto("/admin/users");
     await page.waitForText("Add user");
     await page.waitForText(ADMIN_EMAIL);
@@ -1410,6 +1773,212 @@ async function main() {
       "no raw user id in Actor column",
     );
   });
+
+  // --- optional email verification: real unverified state, SMTP off in E2E ---
+  await step(
+    "email verify page: real unverified state, forged query cannot fake success, banner hidden",
+    async () => {
+      const cfg = await browserFetchJson<{ emailVerification: { enabled: boolean } }>(
+        "/api/v1/public-config",
+      );
+      assert(cfg.emailVerification.enabled === false, "E2E runs with SMTP off (enabled=false)");
+      // The page reports status only from the real session flag; a forged
+      // query string must never produce the verified success state.
+      await goto("/verify-email?verified=1&token=forged");
+      await page.waitForText("Email not verified yet");
+      assert(!(await page.has("Email verified")), "forged query cannot fake verified success");
+      // No SMTP => no verification banner; unverified users use the app normally.
+      await goto("/");
+      await page.waitForText("Overview");
+      assert(
+        !(await page.has("Please verify your email address")),
+        "no verification banner with SMTP off",
+      );
+    },
+  );
+
+  // --- responsive sweep: phone nav sheet, page fit, chat phone layout, tablet nav ---
+  await step(
+    "mobile phone: nav sheet opens, aside hidden, 44px hamburger, Models navigates, Escape returns focus",
+    async () => {
+      await withViewport(390, 844, true, async () => {
+        await goto("/");
+        await page.waitForText("Requests");
+        await assertNoPageHScroll("overview 390x844");
+        // Hidden aside verified from the real DOM's computed style, not CSS text.
+        const asideDisplay = await evaluate<string>(
+          `getComputedStyle(document.querySelector('aside')).display`,
+        );
+        assert(asideDisplay === "none", `aside hidden on phone, got display:${asideDisplay}`);
+        const burger = await evaluate<{ visible: boolean; h: number }>(
+          `(() => { const el = document.querySelector('[aria-label="Open navigation"]');
+            const r = el.getBoundingClientRect();
+            return { visible: r.width > 0 && r.height > 0, h: r.height }; })()`,
+        );
+        assert(burger.visible && burger.h === 44, `hamburger visible 44px, got ${burger.h}`);
+        // Open the Sheet and navigate via the Models link (auth links are not in
+        // the signed-in nav; the logged-out phone sweep covered auth pages).
+        await page.clickAria('[aria-label="Open navigation"]');
+        await waitForExpr(`!!document.querySelector('[role="dialog"]')`, "mobile nav sheet open");
+        // The sheet holds two "Models" links once admin nav renders (user and
+        // admin sections); click the FIRST one (user /models) deterministically.
+        await evaluate(`(() => {
+          const dialog = document.querySelector('[role="dialog"]');
+          const link = [...dialog.querySelectorAll('a')].find(
+            (a) => a.textContent.trim() === 'Models');
+          if (!link) throw new Error('Models link not found in sheet');
+          link.click();
+          return true;
+        })()`);
+        await waitForExpr(
+          `location.pathname === '/models' && !document.querySelector('[role="dialog"]')`,
+          "Models link navigated and sheet closed",
+        );
+        await page.waitForText(MODEL_ID);
+        // Escape closes and focus returns to the trigger.
+        await page.clickAria('[aria-label="Open navigation"]');
+        await waitForExpr(`!!document.querySelector('[role="dialog"]')`, "mobile nav sheet reopened");
+        await pressEscape();
+        await waitForExpr(`!document.querySelector('[role="dialog"]')`, "sheet closed on Escape");
+        // Radix restores focus asynchronously after unmount, so wait for it.
+        await waitForExpr(
+          `document.activeElement?.getAttribute?.('aria-label') === 'Open navigation'`,
+          "focus returned to the navigation trigger",
+        );
+      });
+      // Second phone size.
+      await withViewport(375, 812, true, async () => {
+        await goto("/");
+        await page.waitForText("Requests");
+        await assertNoPageHScroll("overview 375x812");
+      });
+    },
+  );
+
+  await step(
+    "mobile phone: admin system + audit fit, chat history sheet, composer in viewport, long bubble wraps",
+    async () => {
+      // Chat page fit at phone width — isolated step so a real overflow finding
+      // here does not mask the remaining phone-layout checks below.
+      await withViewport(390, 844, true, async () => {
+        for (const [path, marker] of [
+          ["/admin/system", "Instance health and status"],
+          ["/admin/audit", "Audit log"],
+        ] as const) {
+          await goto(path);
+          await page.waitForText(marker);
+          await assertNoPageHScroll(`admin ${path} 390x844`);
+        }
+        await goto("/chat");
+        await page.waitForText("What would you like to build?");
+        await assertNoPageHScroll("chat 390x844");
+      });
+    },
+  );
+
+  await step(
+    "mobile phone: chat history sheet, composer in viewport, long bubble wraps",
+    async () => {
+      await withViewport(390, 844, true, async () => {
+        await goto("/chat");
+        await page.waitForText("What would you like to build?");
+        const hist = await evaluate<boolean>(
+          `(() => { const el = document.querySelector('[aria-label="Conversation history"]');
+            const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()`,
+        );
+        assert(hist, "chat history sheet trigger visible under lg");
+        await page.clickAria('[aria-label="Conversation history"]');
+        await waitForExpr(`!!document.querySelector('[role="dialog"]')`, "history sheet open");
+        await pressEscape();
+        await waitForExpr(`!document.querySelector('[role="dialog"]')`, "history sheet closed");
+        const composer = await evaluate<{ top: number; bottom: number; vh: number }>(
+          `(() => {
+            const r = document.querySelector('textarea[aria-label="Message"]').getBoundingClientRect();
+            return { top: r.top, bottom: r.bottom, vh: innerHeight }; })()`,
+        );
+        assert(
+          composer.top >= 0 && composer.bottom <= composer.vh + 1,
+          `composer within viewport (${JSON.stringify(composer)})`,
+        );
+        // A long unbroken bubble must wrap inside the log, never scroll the page.
+        await selectOption("#chat-model", "Fake Test");
+        await typeMessage("w".repeat(400));
+        await page.clickAria('[aria-label="Send message"]');
+        await page.waitForText("Hello from fake/test-model:");
+        await replyDone();
+        const bubble = await evaluate<{ w: number; containerW: number; overflow: boolean }>(
+          `(() => {
+            const log = document.querySelector('[aria-label="Conversation"]');
+            const w400 = 'w'.repeat(400);
+            const matches = [...log.querySelectorAll('div')].filter(
+              (d) => d.textContent === w400,
+            );
+            // innermost match: one that contains no other matching div (ancestors match too)
+            const b = matches.find((d) => !matches.some((m) => m !== d && d.contains(m)));
+            const r = b.getBoundingClientRect();
+            return { w: r.width, containerW: log.getBoundingClientRect().width,
+              overflow: b.scrollWidth > b.clientWidth + 1 }; })()`,
+        );
+        assert(
+          bubble.w <= bubble.containerW * 0.86,
+          `bubble stays inside its max width (${bubble.w} of ${bubble.containerW})`,
+        );
+        assert(!bubble.overflow, "long word wrapped, no inner overflow");
+        await assertNoPageHScroll("chat after long bubble 390x844");
+      });
+    },
+  );
+
+  await step(
+    "tablet: desktop nav visible, collapse persists across reload, header fits in both orientations",
+    async () => {
+      await withViewport(820, 1180, true, async () => {
+        // iPad portrait; md+ shows the desktop aside
+        await goto("/");
+        await page.waitForText("Requests");
+        const aside = await evaluate<{ display: string; w: number }>(
+          `(() => { const a = document.querySelector('aside'); const r = a.getBoundingClientRect();
+            return { display: getComputedStyle(a).display, w: r.width }; })()`,
+        );
+        assert(
+          aside.display !== "none" && aside.w > 100,
+          `desktop nav visible on tablet (display ${aside.display}, width ${aside.w})`,
+        );
+        assert(
+          await evaluate<boolean>(
+            `getComputedStyle(document.querySelector('[aria-label="Open navigation"]')).display === 'none'`,
+          ),
+          "hamburger hidden on tablet",
+        );
+        // Collapse state persists (zustand persist -> localStorage).
+        await page.clickAria('[aria-label="Collapse sidebar"]');
+        await goto("/");
+        await page.waitForText("Requests");
+        const collapsedW = await evaluate<number>(
+          `document.querySelector('aside').getBoundingClientRect().width`,
+        );
+        assert(collapsedW === 56, `collapsed sidebar persists across reload (width ${collapsedW})`);
+        assert(
+          await evaluate<boolean>(`!!document.querySelector('[aria-label="Expand sidebar"]')`),
+          "expand control rendered",
+        );
+        await page.clickAria('[aria-label="Expand sidebar"]');
+        await assertNoPageHScroll("overview 820x1180");
+      });
+      await withViewport(1180, 820, true, async () => {
+        // landscape
+        await goto("/");
+        await page.waitForText("Requests");
+        await assertNoPageHScroll("overview 1180x820");
+        assert(
+          await evaluate<boolean>(
+            `getComputedStyle(document.querySelector('aside')).display !== 'none'`,
+          ),
+          "desktop nav stays visible in landscape",
+        );
+      });
+    },
+  );
 
   // --- theme toggle ---
   await step("theme toggle", async () => {
