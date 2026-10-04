@@ -211,25 +211,12 @@ describe("additive migration from pre-0001 baseline", () => {
       version: 0,
       created_at: 1,
     });
-    await db.insert(payments).values({
-      id: "p-pre",
-      workspace_id: "ws-chat",
-      amount: 50000,
-      status: "succeeded",
-      provider: "manual",
-      provider_order_code: "pre-1",
-      created_at: 1,
-    });
-    await db.insert(ledgerEntries).values({
-      id: "l-pre",
-      wallet_id: "w-pre",
-      direction: "credit",
-      amount: 50000,
-      kind: "topup",
-      payment_id: "p-pre",
-      balance_after: 50000,
-      created_at: 1,
-    });
+    // Raw SQL with explicit pre-0001 columns: the drizzle schema object now
+    // carries post-0002 payment columns that the baseline table lacks.
+    await db.execute(sql`INSERT INTO "payments" ("id", "workspace_id", "amount", "status", "provider", "provider_order_code", "created_at")
+      VALUES ('p-pre', 'ws-chat', 50000, 'succeeded', 'manual', 'pre-1', 1)`);
+    await db.execute(sql`INSERT INTO "ledger_entries" ("id", "wallet_id", "direction", "amount", "kind", "payment_id", "balance_after", "created_at")
+      VALUES ('l-pre', 'w-pre', 'credit', 50000, 'topup', 'p-pre', 50000, 1)`);
   });
 
   test("applying 0001 preserves money rows, then migrate is idempotent", async () => {

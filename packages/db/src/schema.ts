@@ -152,6 +152,12 @@ export const ledgerEntries = pgTable(
     uniqueIndex("ledger_one_refund_per_original")
       .on(t.original_ledger_entry_id)
       .where(sql`kind = 'refund'`),
+    // Idempotency for promo/credit adjustments keyed by (payment, memo) so
+    // bundle bonus + first topup bonus can coexist on one payment while
+    // replays of either stay impossible.
+    uniqueIndex("ledger_one_adjustment_per_payment_memo")
+      .on(t.payment_id, t.memo)
+      .where(sql`kind = 'adjustment'`),
     check("ledger_direction", sql`${t.direction} IN ('debit','credit')`),
     check("ledger_kind", sql`${t.kind} IN ('topup','settle','adjustment','refund')`),
     check("ledger_amount_type", sql`${t.amount} > 0 AND ${t.amount} <= ${MAX_BOUND}`),
@@ -182,10 +188,18 @@ export const payments = pgTable(
     provider_order_code: text("provider_order_code").notNull(),
     created_at: big("created_at").notNull(),
     expires_at: big("expires_at"),
+    // Exactly one of these is set for bundle/plan purchases; both NULL means a
+    // plain top-up (whose settlement path must stay unchanged).
+    bundle_id: text("bundle_id").references(() => creditBundles.id),
+    subscription_plan_id: text("subscription_plan_id").references(() => subscriptionPlans.id),
   },
   (t) => [
     uniqueIndex("payments_provider_order").on(t.provider, t.provider_order_code),
     check("payments_amount_type", sql`${t.amount} > 0 AND ${t.amount} <= ${MAX_BOUND}`),
+    check(
+      "payments_one_purchase_kind",
+      sql`${t.bundle_id} IS NULL OR ${t.subscription_plan_id} IS NULL`,
+    ),
   ],
 );
 
@@ -203,6 +217,98 @@ export const paymentEvents = pgTable(
     processed_at: big("processed_at").notNull(),
   },
   (t) => [uniqueIndex("payment_events_provider_reference").on(t.provider, t.provider_reference)],
+);
+
+// --- credit bundles & subscription plans ---
+export const creditBundles = pgTable(
+  "credit_bundles",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    price_vnd: big("price_vnd").notNull(),
+    credit_vnd: big("credit_vnd").notNull(),
+    bonus_vnd: big("bonus_vnd").notNull().default(0),
+    // Deactivated, never deleted — past payments keep their FK.
+    active: boolean("active").notNull().default(true),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    check("cb_price_vnd", sql`${t.price_vnd} > 0 AND ${t.price_vnd} <= ${MAX_BOUND}`),
+    check("cb_credit_vnd", intBounded(t.credit_vnd)),
+    check("cb_bonus_vnd", intBounded(t.bonus_vnd)),
+    check("cb_created_at", intBounded(t.created_at)),
+  ],
+);
+
+export const subscriptionPlans = pgTable(
+  "subscription_plans",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    price_vnd: big("price_vnd").notNull(),
+    credit_per_period_vnd: big("credit_per_period_vnd").notNull(),
+    // Fixed period length; renewal extends from max(now, period_end).
+    period_days: integer("period_days").notNull().default(30),
+    // Deactivated, never deleted.
+    active: boolean("active").notNull().default(true),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    check("sp_price_vnd", sql`${t.price_vnd} > 0 AND ${t.price_vnd} <= ${MAX_BOUND}`),
+    check("sp_credit_per_period_vnd", intBounded(t.credit_per_period_vnd)),
+    check("sp_period_days", sql`${t.period_days} >= 1`),
+    check("sp_created_at", intBounded(t.created_at)),
+  ],
+);
+
+export const subscriptions = pgTable(
+  "subscriptions",
+  {
+    id: text("id").primaryKey(),
+    workspace_id: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    plan_id: text("plan_id")
+      .notNull()
+      .references(() => subscriptionPlans.id),
+    status: text("status", { enum: ["active", "canceled"] }).notNull().default("active"),
+    current_period_start: big("current_period_start").notNull(),
+    current_period_end: big("current_period_end").notNull(),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    // One active subscription per workspace; canceled rows keep history.
+    uniqueIndex("subscriptions_one_active_per_workspace")
+      .on(t.workspace_id)
+      .where(sql`status = 'active'`),
+    check("subscriptions_status", sql`${t.status} IN ('active','canceled')`),
+    check("subscriptions_period", sql`${t.current_period_start} < ${t.current_period_end}`),
+    check("subscriptions_current_period_start", intBounded(t.current_period_start)),
+    check("subscriptions_current_period_end", intBounded(t.current_period_end)),
+    check("subscriptions_created_at", intBounded(t.created_at)),
+  ],
+);
+
+/** Grants the once-per-workspace first successful paid top-up bonus; the PK is the grant gate. */
+export const firstTopupBonuses = pgTable(
+  "first_topup_bonuses",
+  {
+    workspace_id: text("workspace_id")
+      .primaryKey()
+      .references(() => workspaces.id),
+    payment_id: text("payment_id")
+      .notNull()
+      .references(() => payments.id),
+    ledger_entry_id: text("ledger_entry_id")
+      .notNull()
+      .references(() => ledgerEntries.id),
+    amount: big("amount").notNull(),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    check("ftb_amount", sql`${t.amount} > 0 AND ${t.amount} <= ${MAX_BOUND}`),
+    check("ftb_created_at", intBounded(t.created_at)),
+  ],
 );
 
 // --- canonical paid-gateway catalog ---

@@ -20,16 +20,28 @@ import {
   type PayosConfig,
 } from "@hoborouter/payments";
 
-export const paymentsRoutes = (
+/** Bundle FK column carried on a bundle purchase; undefined = plain top-up. */
+export interface PayosPurchase {
+  bundleId?: string;
+}
+
+// payOS branch of payment creation: persist pending + audit atomically, then
+// create the checkout link. Remote failure marks the row failed and returns a
+// safe 502 — no upstream body or credentials ever reach the response.
+// Exported so bundle/plan purchase routes reuse the identical pipeline; the
+// purchase argument only adds the FK columns and audit fields (both omitted
+// for plain top-ups, whose behavior is unchanged).
+export const makePayosPaymentCreator = (
   db: Db,
-  auth: BetterAuthInstance,
-  payos: PayosConfig = payosConfigFromEnv(),
+  payos: PayosConfig,
   payosFetch?: (input: string | URL, init?: RequestInit) => Promise<Response>,
-) => {
-  // payOS branch of payment creation: persist pending + audit atomically, then
-  // create the checkout link. Remote failure marks the row failed and returns a
-  // safe 502 — no upstream body or credentials ever reach the response.
-  const createPayosPayment = async (workspaceId: string, userId: string, amount: number) => {
+) =>
+  async (
+    workspaceId: string,
+    userId: string,
+    amount: number,
+    purchase?: PayosPurchase,
+  ) => {
     const id = crypto.randomUUID();
     const orderCode = payosNextOrderCode();
     const now = Date.now();
@@ -42,13 +54,18 @@ export const paymentsRoutes = (
         provider: "payos",
         provider_order_code: String(orderCode),
         created_at: now,
+        bundle_id: purchase?.bundleId,
       });
       await writeAudit(tx, {
         actorUserId: userId,
         workspaceId,
         action: "payment.create",
         target: id,
-        detail: { amount, provider: "payos" },
+        detail: {
+          amount,
+          provider: "payos",
+          ...(purchase?.bundleId ? { bundle_id: purchase.bundleId } : {}),
+        },
       });
     });
     // Same canonical base as auth.ts; redirect pages are display-only (the
@@ -84,6 +101,14 @@ export const paymentsRoutes = (
       return jsonError(502, "PROVIDER_UNAVAILABLE", "payment provider failed to create checkout");
     }
   };
+
+export const paymentsRoutes = (
+  db: Db,
+  auth: BetterAuthInstance,
+  payos: PayosConfig = payosConfigFromEnv(),
+  payosFetch?: (input: string | URL, init?: RequestInit) => Promise<Response>,
+) => {
+  const createPayosPayment = makePayosPaymentCreator(db, payos, payosFetch);
 
   return (
     new Elysia({ name: "payments" })

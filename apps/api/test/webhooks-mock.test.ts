@@ -50,6 +50,11 @@ beforeAll(async () => {
   await q(db, 
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
 `wal-${wsA}`, wsA, Date.now());
+  // Disable the default-on first-topup bonus: these tests assert exact plain
+  // top-up balances and are about webhook behavior, not the bonus.
+  await q(db,
+    "INSERT INTO instance_settings (key, value, updated_at) VALUES ('first_topup_bonus_enabled','false',?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+    Date.now());
 });
 
 afterAll(() => {

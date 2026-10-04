@@ -17,6 +17,8 @@ import { v1ModelsRoutes } from "./routes/v1-models";
 import { gatewayRoutes } from "./routes/v1-gateway";
 import { recoverPending } from "@hoborouter/wallet";
 import { paymentsRoutes } from "./routes/payments";
+import { bundlesRoutes } from "./routes/bundles";
+import { adminBundlesRoutes } from "./routes/admin-bundles";
 import { mockWebhookRoutes } from "./routes/webhooks-mock";
 import { payosWebhookRoutes } from "./routes/webhooks-payos";
 import { dashboardRoutes } from "./routes/dashboard";
@@ -111,6 +113,7 @@ export const buildApp = async (deps: AppDeps = {}) => {
     .use(keysRoutes(db, auth))
     .use(chatsRoutes(db, auth))
     .use(paymentsRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch))
+    .use(bundlesRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch))
     .use(mockWebhookRoutes(db, mockPayments))
     .use(payosWebhookRoutes(db, payosConfigFromEnv()))
     .use(cpaHealthRoutes(db, auth))
@@ -121,6 +124,7 @@ export const buildApp = async (deps: AppDeps = {}) => {
     .use(adminPaymentRejectRoutes(db, auth))
     .use(adminUserEditRoutes(db, auth))
     .use(adminSettingsRoutes(db, auth))
+    .use(adminBundlesRoutes(db, auth))
     .use(adminRequestsRoutes(db, auth))
     .use(catalogPublicRoutes(db, auth))
     .use(publicConfigRoutes())

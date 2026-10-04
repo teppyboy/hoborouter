@@ -19,6 +19,7 @@ export const keys = lazyRoute(() => import("../pages/keys"));
 export const logs = lazyRoute(() => import("../pages/logs"));
 export const usage = lazyRoute(() => import("../pages/usage"));
 export const credits = lazyRoute(() => import("../pages/billing/credits"));
+export const bundles = lazyRoute(() => import("../pages/billing/bundles"));
 export const payments = lazyRoute(() => import("../pages/billing/payments"));
 export const settings = lazyRoute(() => import("../pages/settings"));
 export const adminUsers = lazyRoute(() => import("../pages/admin/users"));
@@ -35,6 +36,7 @@ export const chunkByPath: Record<string, { preload: () => Promise<unknown> }> = 
   "/logs": logs,
   "/usage": usage,
   "/billing/credits": credits,
+  "/billing/bundles": bundles,
   "/billing/payments": payments,
   "/settings": settings,
 };

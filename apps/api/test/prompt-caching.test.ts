@@ -305,7 +305,11 @@ describe("admin settings endpoints", () => {
   test("admin GET default true; PUT persists and audits settings.update", async () => {
     const g = await req(ctx.app, "/api/v1/admin/settings", { cookie: admin });
     expect(g.status).toBe(200);
-    expect(await g.json()).toEqual({ prompt_caching_enabled: true });
+    expect(await g.json()).toEqual({
+      prompt_caching_enabled: true,
+      first_topup_bonus_enabled: true,
+      first_topup_bonus_amount_vnd: 20000,
+    });
     const p = await req(ctx.app, "/api/v1/admin/settings", {
       method: "PUT",
       cookie: admin,
@@ -322,7 +326,11 @@ describe("admin settings endpoints", () => {
     expect(audit!.action).toBe("settings.update");
     expect(JSON.parse(audit!.detail)).toEqual({ before: true, after: false });
     const g2 = await req(ctx.app, "/api/v1/admin/settings", { cookie: admin });
-    expect(await g2.json()).toEqual({ prompt_caching_enabled: false });
+    expect(await g2.json()).toEqual({
+      prompt_caching_enabled: false,
+      first_topup_bonus_enabled: true,
+      first_topup_bonus_amount_vnd: 20000,
+    });
   });
 
   test("PUT rejects non-boolean", async () => {

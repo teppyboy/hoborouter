@@ -17,6 +17,7 @@ import {
   adminUsers,
   adminSettings,
   credits,
+  bundles,
   keys,
   logs,
   modelDetail,
@@ -30,6 +31,7 @@ import {
 import { queryClient } from "./lib/query-client";
 
 const AdminAudit = lazy(() => import("./pages/admin/audit"));
+const AdminBundles = lazy(() => import("./pages/admin/bundles"));
 
 // Chat page exports a named component; remap to default for lazyRoute.
 const Chat = lazyRoute(() =>
@@ -174,6 +176,7 @@ const protectedRoutes = [
   protectedRoute("/logs", logs),
   protectedRoute("/usage", usage),
   protectedRoute("/billing/credits", credits),
+  protectedRoute("/billing/bundles", bundles),
   protectedRoute("/billing/payments", payments),
   protectedRoute("/settings", settings),
   // Admin
@@ -183,6 +186,7 @@ const protectedRoutes = [
   // Obsolete pages: old URLs land on the unified Models page.
   redirectRoute("/admin/providers", "/admin/models"),
   redirectRoute("/admin/pricing", "/admin/models"),
+  protectedRoute("/admin/bundles", AdminBundles),
   protectedRoute("/admin/payments", adminPayments),
   protectedRoute("/admin/system", adminSystem),
   protectedRoute("/admin/audit", AdminAudit),

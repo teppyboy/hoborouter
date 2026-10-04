@@ -1,0 +1,29 @@
+// Bundle/plan creation amount parsing: the only client-side validation shared
+// by both create forms on the admin bundles page. Sign rules (price > 0,
+// credit/bonus >= 0) live in each form + the server; the parser accepts any
+// safe integer so the form can flag the specific rule that failed.
+import { test, expect } from "bun:test";
+import { parseIntVnd } from "../apps/web/src/pages/admin/bundles";
+
+test("accepts plain integers and padded input", () => {
+  expect(parseIntVnd("500000")).toBe(500000);
+  expect(parseIntVnd(" 500000 ")).toBe(500000);
+  expect(parseIntVnd("0")).toBe(0);
+});
+
+test("rejects empty, whitespace-only, float, and non-numeric input", () => {
+  expect(parseIntVnd("")).toBeNull();
+  expect(parseIntVnd("   ")).toBeNull();
+  expect(parseIntVnd("500.5")).toBeNull();
+  expect(parseIntVnd("50a")).toBeNull();
+  expect(parseIntVnd("1e6")).toBeNull();
+});
+
+test("rejects values beyond the safe-integer money bound", () => {
+  expect(parseIntVnd("9007199254740992")).toBeNull();
+  expect(parseIntVnd("9007199254740991")).toBe(9007199254740991);
+});
+
+test("parses negatives so the form (not the parser) flags sign violations", () => {
+  expect(parseIntVnd("-5")).toBe(-5);
+});

@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatVnd, formatUsdFromVnd, formatDate } from "../../lib/format";
-import { formatLedgerKindLabel } from "../../lib/display";
+import { formatLedgerKindLabel, formatLedgerMemoLabel } from "../../lib/display";
 import { partitionLedger, signedLedgerAmount } from "./ledger-display";
 import { PageHeader, EmptyState, ErrorState, DataTable } from "../../components/page";
 import { Button } from "../../components/ui/button";
@@ -94,9 +94,21 @@ export default function BillingCreditsPage() {
     {
       accessorKey: "kind",
       header: "Kind",
-      cell: (c) => (
-        <span className="font-mono text-xs">{formatLedgerKindLabel(c.getValue<string>())}</span>
-      ),
+      cell: (c) => {
+        // Adjustment memos name the bonus source (bundle bonus, first topup
+        // bonus); show the human label next to the kind so the rows are
+        // self-explanatory.
+        const kind = c.getValue<string>();
+        const memo =
+          c.row.original.kind === "adjustment" && c.row.original.memo
+            ? formatLedgerMemoLabel(c.row.original.memo)
+            : null;
+        return (
+          <span className="font-mono text-xs">
+            {memo ? `${formatLedgerKindLabel(kind)} — ${memo}` : formatLedgerKindLabel(kind)}
+          </span>
+        );
+      },
     },
     {
       accessorKey: "amount",

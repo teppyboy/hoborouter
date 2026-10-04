@@ -70,6 +70,20 @@ export function formatStatusLabel(status: string): string {
   }
 }
 
+const MEMO_LABELS: Record<string, string> = {
+  // Canonical memos are written by the settlement path (ledger_entries.memo,
+  // kind = 'adjustment'); keys are lowercase exact matches.
+  "bundle bonus": "Bundle bonus",
+  "first topup bonus": "First top-up bonus",
+  "subscription credit": "Subscription credit",
+};
+
+/** Human label for a ledger adjustment memo; unknown memos fall back to readable text. */
+export function formatLedgerMemoLabel(memo: string): string {
+  const v = memo.trim().toLowerCase();
+  return MEMO_LABELS[v] ?? readable(memo);
+}
+
 function readable(value: string): string {
   const v = value.trim();
   if (!v) return "—";

@@ -82,6 +82,12 @@ beforeAll(async () => {
   await db.execute(
     sql`INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-ws-payos','ws-payos','VND', 0, 0, 0, ${now})`,
   );
+  // Disable the default-on first-topup bonus: these tests assert exact plain
+  // top-up balances and are about replay/idempotency, not the bonus.
+  await db.execute(
+    sql`INSERT INTO instance_settings (key, value, updated_at) VALUES ('first_topup_bonus_enabled', 'false', ${now})
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+  );
 });
 
 afterAll(async () => {

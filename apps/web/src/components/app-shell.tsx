@@ -15,6 +15,7 @@ import {
   MessageSquare,
   Monitor,
   Moon,
+  Package,
   PanelLeft,
   PanelLeftClose,
   ScrollText,
@@ -80,6 +81,7 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     label: "Billing",
     items: [
       { label: "Credits", to: "/billing/credits", icon: Wallet },
+      { label: "Bundles", to: "/billing/bundles", icon: Package },
       { label: "Payments", to: "/billing/payments", icon: CreditCard },
     ],
   },
@@ -90,6 +92,7 @@ const ADMIN_NAV: NavItem[] = [
   { label: "Users", to: "/admin/users", icon: Users },
   { label: "Models", to: "/admin/models", icon: Boxes },
   { label: "Payments", to: "/admin/payments", icon: CreditCard },
+  { label: "Bundles & plans", to: "/admin/bundles", icon: Package },
   { label: "Audit log", to: "/admin/audit", icon: ScrollText },
   { label: "System", to: "/admin/system", icon: Cpu },
   { label: "Settings", to: "/admin/settings", icon: Settings2 },

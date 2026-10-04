@@ -5,6 +5,7 @@ export {
   MockSignatureConfigError,
 } from "./mock-signature";
 export { processMockPaymentEvent, MockPaymentError } from "./credit";
+export { isFirstTopupBonusEnabled } from "./bonus-settings";
 export type { ProcessMockEventArgs, ProcessMockEventResult, MockPaymentErrorCode } from "./credit";
 export {
   payosNextOrderCode,

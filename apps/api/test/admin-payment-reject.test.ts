@@ -93,6 +93,12 @@ beforeAll(async () => {
   await db.execute(
     sql`INSERT INTO wallets (id, workspace_id, balance, reserved, created_at) VALUES ('w-main', 'ws-main', 0, 0, ${now})`,
   );
+  // Disable the default-on first-topup bonus: these tests assert exact plain
+  // top-up balances and are about the reject flow, not the bonus.
+  await db.execute(
+    sql`INSERT INTO instance_settings (key, value, updated_at) VALUES ('first_topup_bonus_enabled', 'false', ${now})
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+  );
 });
 
 afterAll(async () => {

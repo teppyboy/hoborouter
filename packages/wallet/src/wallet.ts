@@ -1,7 +1,7 @@
 // Task 8: VND wallet core — creditWallet, getWallet.
 // All money = integer VND. All mutations run in Postgres transactions that
 // first lock the wallet row (SELECT ... FOR UPDATE).
-import { and, eq, type SQL } from "drizzle-orm";
+import { and, eq, isNull, type SQL } from "drizzle-orm";
 import type { Db, Tx } from "@hoborouter/db";
 import { ledgerEntries, wallets } from "@hoborouter/db";
 
@@ -91,7 +91,7 @@ export async function creditWallet(
   opts: {
     walletId: string;
     amount: number;
-    kind: "topup";
+    kind: "topup" | "adjustment";
     paymentId: string | null;
     memo?: string;
   },
@@ -104,14 +104,26 @@ export async function creditWallet(
       await lockWallet(tx, opts.walletId);
       const wallet = await getWalletRow(tx, opts.walletId);
       if (opts.paymentId !== null) {
+        // Kind-aware dedup: topup keeps its one-per-payment gate; adjustments
+        // dedup per (payment, memo) so distinct memos (bundle bonus, first
+        // topup bonus) can coexist on one payment — matching the partial
+        // UNIQUE(payment_id, memo) WHERE kind='adjustment' index.
+        const dedup = [
+          eq(ledgerEntries.payment_id, opts.paymentId),
+          eq(ledgerEntries.kind, opts.kind),
+        ];
+        if (opts.kind === "adjustment") {
+          if (opts.memo === undefined) dedup.push(isNull(ledgerEntries.memo));
+          else dedup.push(eq(ledgerEntries.memo, opts.memo));
+        }
         const existing = await tx
           .select({ x: ledgerEntries.payment_id })
           .from(ledgerEntries)
-          .where(and(eq(ledgerEntries.payment_id, opts.paymentId), eq(ledgerEntries.kind, "topup")));
+          .where(and(...dedup));
         if (existing.length > 0) {
           throw new WalletError(
             "conflict",
-            `topup credit already exists for payment ${opts.paymentId}`,
+            `${opts.kind} credit already exists for payment ${opts.paymentId}`,
           );
         }
       }
@@ -141,7 +153,7 @@ export async function creditWallet(
         wallet_id: wallet.id,
         direction: "credit",
         amount,
-        kind: "topup",
+        kind: opts.kind,
         payment_id: opts.paymentId,
         balance_after: balanceAfter,
         memo: opts.memo ?? null,

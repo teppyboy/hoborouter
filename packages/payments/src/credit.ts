@@ -5,10 +5,19 @@
 // provider_reference) -> creditWallet -> payments.status=succeeded -> COMMIT.
 // Replay hits the UNIQUE constraint and is answered 2xx with no second credit;
 // any failure rolls back everything.
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import type { Db, Tx } from "@hoborouter/db";
-import { paymentEvents, payments, wallets } from "@hoborouter/db";
+import {
+  auditLog,
+  creditBundles,
+  firstTopupBonuses,
+  instanceSettings,
+  paymentEvents,
+  payments,
+  wallets,
+} from "@hoborouter/db";
 import { creditWallet, runInImmediate, WalletError } from "@hoborouter/wallet";
+import { isFirstTopupBonusEnabled } from "./bonus-settings";
 
 export type MockPaymentErrorCode =
   | "not_found"
@@ -37,6 +46,36 @@ export type ProcessMockEventResult =
   | { outcome: "credited"; paymentId: string; balanceAfter: number }
   | { outcome: "already_processed"; paymentId: string };
 
+// Fixed adjustment memos — the partial UNIQUE(payment_id, memo) WHERE
+// kind='adjustment' index makes replays of each leg impossible; changing a
+// memo string would orphan old idempotency keys.
+const MEMO_BUNDLE_BONUS = "bundle bonus";
+const MEMO_FIRST_TOPUP_BONUS = "first topup bonus";
+
+/**
+ * First-topup bonus amount from instance_settings (read inside the credit
+ * transaction). D2: enabled defaults to true, amount defaults to 20000;
+ * any present-but-invalid value fails closed to no bonus. Returns null when
+ * the bonus must not be granted.
+ */
+async function firstTopupBonusAmountVnd(tx: Tx): Promise<number | null> {
+  const rows = await tx
+    .select({ key: instanceSettings.key, value: instanceSettings.value })
+    .from(instanceSettings)
+    .where(eq(instanceSettings.key, "first_topup_bonus_enabled"));
+  const enabled = rows[0]?.value;
+  if (!isFirstTopupBonusEnabled(enabled)) return null;
+  const amountRows = await tx
+    .select({ value: instanceSettings.value })
+    .from(instanceSettings)
+    .where(eq(instanceSettings.key, "first_topup_bonus_amount_vnd"));
+  const raw = amountRows[0]?.value;
+  if (raw === undefined) return 20_000;
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n <= 0) return null;
+  return n;
+}
+
 export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEventArgs) {
   const provider = args.provider ?? "mock";
   return runInImmediate(db, async (tx) => {
@@ -46,6 +85,8 @@ export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEven
         amount: payments.amount,
         status: payments.status,
         workspace_id: payments.workspace_id,
+        bundle_id: payments.bundle_id,
+        subscription_plan_id: payments.subscription_plan_id,
       })
       .from(payments)
       .where(
@@ -152,19 +193,133 @@ export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEven
     if (!wallet)
       throw new MockPaymentError("not_found", `no wallet for workspace ${payment.workspace_id}`);
 
-    const credit = await creditWallet(tx, {
-      walletId: wallet.id,
-      amount: payment.amount,
-      kind: "topup",
-      paymentId: payment.id,
-      memo: `${provider} topup ${args.providerReference}`,
-    });
+    // Lock the wallet before branching: serializes concurrent subscription
+    // create/renew per workspace and keeps all credits in one lock order.
+    await tx.select({ id: wallets.id }).from(wallets).where(eq(wallets.id, wallet.id)).for("update");
+
+    const plainMemo = `${provider} topup ${args.providerReference}`;
+    let balanceAfter: number;
+    if (payment.bundle_id !== null) {
+      // Bundle: price paid becomes credit_vnd of topup + an adjustment for the
+      // promo bonus, so the ledger stays legible about what was granted vs paid.
+      const bundleRows = await tx
+        .select({ credit_vnd: creditBundles.credit_vnd, bonus_vnd: creditBundles.bonus_vnd })
+        .from(creditBundles)
+        .where(eq(creditBundles.id, payment.bundle_id));
+      const bundle = bundleRows[0];
+      if (!bundle)
+        throw new MockPaymentError("invalid", `missing bundle ${payment.bundle_id}`);
+      balanceAfter = 0;
+      if (bundle.credit_vnd > 0) {
+        const topup = await creditWallet(tx, {
+          walletId: wallet.id,
+          amount: bundle.credit_vnd,
+          kind: "topup",
+          paymentId: payment.id,
+          memo: plainMemo,
+        });
+        balanceAfter = topup.balanceAfter;
+      }
+      if (bundle.bonus_vnd > 0) {
+        const adj = await creditWallet(tx, {
+          walletId: wallet.id,
+          amount: bundle.bonus_vnd,
+          kind: "adjustment",
+          paymentId: payment.id,
+          memo: MEMO_BUNDLE_BONUS,
+        });
+        balanceAfter = adj.balanceAfter;
+      }
+    } else if (payment.subscription_plan_id !== null) {
+      // Owner change: subscription credit moves to a separate rate-limited
+      // subscription balance designed later. Until then, plan payments must
+      // not touch the main wallet — fail the whole settlement closed.
+      throw new MockPaymentError(
+        "invalid",
+        `subscription settlement not enabled (plan ${payment.subscription_plan_id})`,
+      );
+    } else {
+      // Plain top-up: unchanged settlement path.
+      const credit = await creditWallet(tx, {
+        walletId: wallet.id,
+        amount: payment.amount,
+        kind: "topup",
+        paymentId: payment.id,
+        memo: plainMemo,
+      });
+      balanceAfter = credit.balanceAfter;
+    }
+
+    // First topup bonus (D2): once per workspace, inside this same
+    // transaction. The first_topup_bonuses UNIQUE(workspace_id) is the grant
+    // gate: its ledger_entry_id FK forces credit-before-gate, so on a
+    // concurrent loss the whole transaction rolls back (no bonus credit
+    // committed) and the provider retry settles the payment without a bonus.
+    const bonusAmount = await firstTopupBonusAmountVnd(tx);
+    if (bonusAmount !== null) {
+      // Skip when this workspace already has its one grant (committed earlier).
+      const existingGrant = await tx
+        .select({ ws: firstTopupBonuses.workspace_id })
+        .from(firstTopupBonuses)
+        .where(eq(firstTopupBonuses.workspace_id, payment.workspace_id));
+      // Owner rule: first successful PAID top-up ever. first_topup_bonuses is
+      // empty after deploy, so without this check every pre-release workspace
+      // would get the bonus on its next top-up. The current payment is still
+      // pending here, so count OTHER succeeded payments for the workspace.
+      const otherSucceeded = await tx
+        .select({ id: payments.id })
+        .from(payments)
+        .where(
+          and(
+            eq(payments.workspace_id, payment.workspace_id),
+            eq(payments.status, "succeeded"),
+            ne(payments.id, payment.id),
+          ),
+        );
+      if (existingGrant.length === 0 && otherSucceeded.length === 0) {
+        const adj = await creditWallet(tx, {
+          walletId: wallet.id,
+          amount: bonusAmount,
+          kind: "adjustment",
+          paymentId: payment.id,
+          memo: MEMO_FIRST_TOPUP_BONUS,
+        });
+        const granted = await tx
+          .insert(firstTopupBonuses)
+          .values({
+            workspace_id: payment.workspace_id,
+            payment_id: payment.id,
+            ledger_entry_id: adj.ledgerEntryId,
+            amount: bonusAmount,
+            created_at: Date.now(),
+          })
+          .onConflictDoNothing({ target: firstTopupBonuses.workspace_id })
+          .returning({ workspace_id: firstTopupBonuses.workspace_id });
+        if (granted.length === 0) {
+          // Concurrent payment won the grant between our check and insert:
+          // roll back so no un-gated bonus credit commits; the provider retry
+          // settles this payment cleanly without a bonus.
+          throw new MockPaymentError(
+            "invalid",
+            `first topup bonus already granted for workspace ${payment.workspace_id}`,
+          );
+        }
+        balanceAfter = adj.balanceAfter;
+        await tx.insert(auditLog).values({
+          id: crypto.randomUUID(),
+          workspace_id: payment.workspace_id,
+          action: "bonus.first_topup",
+          target: payment.id,
+          created_at: Date.now(),
+        });
+      }
+    }
 
     await tx.update(payments).set({ status: "succeeded" }).where(eq(payments.id, payment.id));
     return {
       outcome: "credited",
       paymentId: payment.id,
-      balanceAfter: credit.balanceAfter,
+      balanceAfter: balanceAfter,
     } as const;
   });
 }
