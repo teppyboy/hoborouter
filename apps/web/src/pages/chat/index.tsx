@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { History, Send, Square } from "lucide-react";
+import { History, KeyRound, Plus, Send, Square } from "lucide-react";
 import { createSseParser, type StreamDelta } from "./sse";
 import { ConversationList, conversationListKey } from "./conversation-list";
 import { buildPersistMessages, findRetryTurn, isEmptyAssistant, type TurnMessage } from "./turn";
@@ -10,7 +10,7 @@ import {
   getConversation,
   saveConversation,
 } from "./conversations";
-import { renderMarkdown } from "../legal/legal-page";
+import { ChatMarkdown } from "../../components/chat-markdown";
 import { ErrorState, CopyButton } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -591,6 +591,12 @@ export function ChatPage() {
   );
   const showRetry = !streaming && lastUserRef.current !== null;
 
+  // Phone toolbar buttons must be 44px touch targets: the shared `size="sm"`
+  // only gives 36px on coarse pointers, so the page overrides the height
+  // (page-only — the shared button styles stay untouched) and `min-w-11`
+  // guarantees 44px width for the icon-only phone layout.
+  const toolbarTouch = "pointer-coarse:h-11 min-w-11";
+
   const historyList = (
     <ConversationList
       userId={userId ?? ""}
@@ -645,9 +651,17 @@ export function ChatPage() {
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* Compact top bar: history (phone), model picker + New chat. */}
-        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
-          <h1 className="sr-only">Chat</h1>
+        {/* Compact top bar: history (phone), model picker + New chat.
+          Icon-only controls below sm keep everything on one row at 375/390;
+          labels come back at sm+. role=group exposes the controls for the E2E
+          geometry probe without a roving-tabindex toolbar keyboard contract
+          (native buttons are already tab-navigable). */}
+        <h1 className="sr-only">Chat</h1>
+        <div
+          role="group"
+          aria-label="Chat controls"
+          className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2"
+        >
           {/* Phone: history opens in a sheet owned by this page, not the app
             nav drawer. */}
           <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
@@ -655,11 +669,12 @@ export function ChatPage() {
               <Button
                 variant="outline"
                 size="sm"
-                className="lg:hidden"
+                className={`${toolbarTouch} lg:hidden`}
                 aria-label="Conversation history"
+                title="Conversation history"
               >
                 <History className="size-4" aria-hidden />
-                History
+                <span className="hidden sm:inline">History</span>
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="w-80">
@@ -671,7 +686,7 @@ export function ChatPage() {
             <SelectTrigger
               id="chat-model"
               aria-label="Model"
-              className="h-9 w-auto min-w-0 max-w-56 gap-1 border-0 bg-muted/50 shadow-none"
+              className="h-9 min-w-0 max-w-56 flex-1 gap-1 border-0 bg-muted/50 shadow-none"
             >
               <SelectValue
                 className="min-w-0 truncate"
@@ -694,17 +709,29 @@ export function ChatPage() {
           </Select>
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
             {autoEligible && !autoKeyReady && !manualKey && !keyError && (
-              <Button variant="ghost" size="sm" onClick={() => void resolveKey()}>
-                Connect
+              <Button
+                variant="ghost"
+                size="sm"
+                className={toolbarTouch}
+                onClick={() => void resolveKey()}
+                aria-label="Connect"
+                title="Connect"
+              >
+                <KeyRound className="size-4" aria-hidden />
+                <span className="hidden sm:inline">Connect</span>
               </Button>
             )}{" "}
             <Button
               variant="outline"
               size="sm"
+              className={toolbarTouch}
               onClick={newChat}
               disabled={messages.length === 0 && !streaming && activeChatId === null}
+              aria-label="New chat"
+              title="New chat"
             >
-              New chat
+              <Plus className="size-4" aria-hidden />
+              <span className="hidden sm:inline">New chat</span>
             </Button>
           </div>
         </div>
@@ -792,7 +819,10 @@ export function ChatPage() {
                     )}
                     {m.content ? (
                       <>
-                        <div className="[&_p]:my-2 [&_p]:[overflow-wrap:anywhere]">{renderMarkdown(m.content)}</div>
+                        <ChatMarkdown
+                          content={m.content}
+                          streaming={streaming && i === messages.length - 1}
+                        />
                         <div className="flex justify-end">
                           <CopyButton value={m.content} label="Copy reply" />
                         </div>

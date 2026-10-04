@@ -1311,6 +1311,47 @@ async function main() {
     );
   });
 
+  await step("chat: markdown engine sanitizes model output in the browser (no script/js-href/img fetch, no overflow)", async () => {
+    // The fake CPA echoes the prompt into the reply, so the markdown payload
+    // travels as chat content only — no provider or fake-CPA change, and the
+    // send uses the remembered manual key (no new key, fake model, no charge).
+    await typeMessage(
+      '**bold** <script>alert(1)</script> [click](javascript:alert(1)) ![px](https://evil.example/track.png)',
+    );
+    await page.clickAria('[aria-label="Send message"]');
+    await page.waitForText("Hello from fake/test-model:");
+    await replyDone();
+    const md = await evaluate<{
+      strong: string;
+      scripts: number;
+      jsLinks: number;
+      imgs: number;
+      imgAlt: boolean;
+      overflow: boolean;
+    }>(`(() => {
+      const log = document.querySelector('[aria-label="Conversation"]');
+      const last = log?.firstElementChild?.lastElementChild;
+      const mdEl = last?.querySelector('.wrap-anywhere');
+      if (!mdEl) throw new Error('markdown container not found');
+      return {
+        strong: [...mdEl.querySelectorAll('strong')].map(s => s.textContent).join('|'),
+        scripts: mdEl.querySelectorAll('script').length,
+        jsLinks: [...mdEl.querySelectorAll('a')].filter(a => (a.getAttribute('href') ?? '').toLowerCase().startsWith('javascript:')).length,
+        imgs: mdEl.querySelectorAll('img').length,
+        imgAlt: !!mdEl.querySelector('.md-img-alt'),
+        overflow: mdEl.scrollWidth > mdEl.clientWidth + 1,
+      };
+    })()`, );
+    assert(md.strong === "bold", `markdown emphasis rendered, got "${md.strong}"`);
+    assert(md.scripts === 0, `injected <script> stripped, got ${md.scripts}`);
+    assert(md.jsLinks === 0, `javascript: href stripped, got ${md.jsLinks}`);
+    assert(
+      md.imgs === 0 && md.imgAlt,
+      `remote image never fetched, alt text survives (imgs ${md.imgs}, alt ${md.imgAlt})`,
+    );
+    assert(!md.overflow, "markdown output does not overflow the log horizontally");
+  });
+
   await step("chat: workspace switch aborts context, chat key storage stays identity-scoped", async () => {
     await selectOption('[aria-label="Workspace"]', `${throwaway} 2`);
     // Nothing from the funded workspace's chat may leak into the other one.
@@ -1921,6 +1962,53 @@ async function main() {
         assert(
           composer.top >= 0 && composer.bottom <= composer.vh + 1,
           `composer within viewport (${JSON.stringify(composer)})`,
+        );
+        // Toolbar geometry: one row on the phone — every control on a shared
+        // centerY (2px tolerance), 44px touch targets for the icon-only
+        // buttons (Connect may be absent depending on key state), and the
+        // document itself must not scroll vertically.
+        const toolbar = await evaluate<{
+          centers: number[];
+          sizes: Array<{ label: string; w: number; h: number }>;
+          docH: number;
+          innerH: number;
+        }>(
+          `(() => {
+            const tb = document.querySelector('[role="group"][aria-label="Chat controls"]');
+            if (!tb) throw new Error('chat toolbar not found');
+            const sels = [
+              ['Model', '#chat-model'],
+              ['History', '[aria-label="Conversation history"]'],
+              ['Connect', '[aria-label="Connect"]'],
+              ['New chat', '[aria-label="New chat"]'],
+            ];
+            const centers = [];
+            const sizes = [];
+            for (const [label, sel] of sels) {
+              const el = tb.querySelector(sel);
+              if (!el) continue; // Connect renders only when a key is pending
+              const r = el.getBoundingClientRect();
+              if (!(r.width > 0 && r.height > 0)) throw new Error(label + ' control not visible');
+              centers.push(r.top + r.height / 2);
+              sizes.push({ label, w: r.width, h: r.height });
+            }
+            return { centers, sizes,
+              docH: document.documentElement.scrollHeight, innerH: innerHeight };
+          })()`,
+        );
+        assert(
+          Math.max(...toolbar.centers) - Math.min(...toolbar.centers) <= 2,
+          `toolbar controls share one row (centers ${JSON.stringify(toolbar.centers)})`,
+        );
+        for (const s of toolbar.sizes) {
+          assert(
+            s.w >= 44 && s.h >= 44,
+            `toolbar ${s.label} touch target >= 44px, got ${s.w}x${s.h}`,
+          );
+        }
+        assert(
+          toolbar.docH <= toolbar.innerH + 1,
+          `document does not scroll: ${toolbar.docH} vs ${toolbar.innerH}`,
         );
         // A long unbroken bubble must wrap inside the log, never scroll the page.
         await selectOption("#chat-model", "Fake Test");

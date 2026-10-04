@@ -5,5 +5,9 @@
   "type": "module",
   "dependencies": {
     "@hoborouter/shared": "workspace:"
+  },
+  "devDependencies": {
+    "@types/jsdom": "30.0.0",
+    "jsdom": "30.1.1"
   }
 }

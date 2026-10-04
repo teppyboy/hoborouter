@@ -5,7 +5,7 @@ import { ThemeToggle } from "../../components/theme-toggle";
 // Renders a small, safe subset of inline markdown: links, bold, code.
 function inline(text: string, keyBase: string) {
   const parts: React.ReactNode[] = [];
-  const re = /\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|`([^`]+)`/g;
+  const re = /\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|`([^`]+)`|\*([^*\s](?:[^*]*[^*\s])?)\*(?!\*)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
@@ -28,6 +28,11 @@ function inline(text: string, keyBase: string) {
       );
     } else if (m[3] !== undefined) {
       parts.push(<strong key={`${keyBase}-${i++}`}>{m[3]}</strong>);
+    } else if (m[5] !== undefined) {
+      // Single-asterisk emphasis, checked after links/bold/code so it never
+      // matches inside a link target/label, bold, or inline code. Unterminated
+      // markers simply stay literal (streaming-safe).
+      parts.push(<em key={`${keyBase}-${i++}`}>{m[5]}</em>);
     } else {
       parts.push(<code key={`${keyBase}-${i++}`} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">{m[4]}</code>);
     }

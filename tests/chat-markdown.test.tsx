@@ -51,6 +51,55 @@ test("headings and lists still render alongside fenced blocks", () => {
   expect(out).toContain("code line");
 });
 
+test("single asterisk emphasis renders em", () => {
+  const out = html("use *you* here");
+  expect(out).toContain("<em>you</em>");
+  expect(out).not.toContain("*you*");
+});
+
+test("bold double asterisks stay strong, not em", () => {
+  const out = html("**you** now");
+  expect(out).toContain("<strong>you</strong>");
+  expect(out).not.toContain("<em>");
+});
+
+test("inline code with asterisks stays literal", () => {
+  const out = html("run `*code*` now");
+  expect(out).toContain("*code*");
+  expect(out).not.toContain("<em>");
+});
+
+test("fenced code containing asterisks keeps exact bytes, no em", () => {
+  const out = html("```\nconst re = /a*b/; // *not em*\n```");
+  expect(out).toContain("const re = /a*b/; // *not em*");
+  expect(out).not.toContain("<em>");
+});
+
+test("dash and asterisk bullets both render lists", () => {
+  const out = html("- dash item\n* star item");
+  expect(out).toContain("<li>dash item</li>");
+  expect(out).toContain("<li>star item</li>");
+});
+
+test("javascript link target stays a non-anchor", () => {
+  const out = html("[x](javascript:alert(1))");
+  expect(out).not.toContain("<a ");
+  expect(out).toContain("x");
+});
+
+test("unterminated single asterisk stays plain while streaming", () => {
+  const out = html("partial *emph");
+  expect(out).toContain("partial *emph");
+  expect(out).not.toContain("<em>");
+});
+
+test("mixed bold, italic, and code render predictably", () => {
+  const out = html("**bold** and *em* and `c*d`");
+  expect(out).toContain("<strong>bold</strong>");
+  expect(out).toContain("<em>em</em>");
+  expect(out).toContain(">c*d</code>");
+});
+
 test("legal-page basics unchanged: paragraphs, bold, links, blockquote", () => {
   const out = html(
     "Plain **bold** text.\n\n[Docs](https://example.com) link.\n\n> quoted line",

@@ -50,6 +50,20 @@ test("ChatPage SSR keeps manual key as a collapsed Advanced section", () => {
   expect(html).toContain("Advanced: use your own API key");
 });
 
+test("ChatPage SSR exposes the toolbar with accessible control labels", () => {
+  const html = render();
+  // Group semantics (no roving-tabindex toolbar contract) plus per-control
+  // accessible names (icon-only on phones still carries aria-label + title;
+  // Connect is absent without a session, so it is E2E-asserted, not
+  // SSR-asserted).
+  expect(html).toContain('role="group"');
+  expect(html).toContain('aria-label="Chat controls"');
+  expect(html).toContain('aria-label="Conversation history"');
+  expect(html).toContain('title="Conversation history"');
+  expect(html).toContain('aria-label="New chat"');
+  expect(html).toContain('title="New chat"');
+});
+
 test("ChatPage SSR preserves E2E-facing labels and never leaks a key", () => {
   const html = render();
   expect(html).toContain('id="chat-model"');
