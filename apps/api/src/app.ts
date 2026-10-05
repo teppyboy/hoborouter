@@ -10,6 +10,7 @@ import { membersRoutes } from "./routes/members";
 import { auditRoutes } from "./routes/audit";
 import { keysRoutes } from "./routes/keys";
 import { chatsRoutes } from "./routes/chats";
+import { cpaManagementProxyRoutes } from "./cpa-management-core";
 import { cpaHealthRoutes } from "./routes/cpahealth";
 import { adminModelsRoutes } from "./routes/admin-models";
 import { adminCatalogRoutes } from "./routes/admin-catalog";
@@ -131,6 +132,7 @@ export const buildApp = async (deps: AppDeps = {}) => {
     mockWebhookRoutes(db, mockPayments),
     payosWebhookRoutes(db, payosConfigFromEnv()),
     cpaHealthRoutes(db, auth),
+    cpaManagementProxyRoutes(db, auth),
     adminModelsRoutes(db, auth),
     adminCatalogRoutes(db, auth),
     dashboardRoutes(db, auth),
