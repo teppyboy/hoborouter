@@ -1,0 +1,268 @@
+// USD-canonical bundle/plan display (jsdom, real React, mocked network):
+// - USD is the canonical display currency when the backend rate is known:
+//   prices render USD primary with the VND integer as secondary, and a single
+//   seamless toggle switches the whole section to VND and back;
+// - without a rate (older backend) the section stays VND-only with no toggle;
+// - the cancel-subscription button DELETEs the workspace subscription and
+//   surfaces the "will not renew" state after cancellation.
+// No client money conversion is ever sent: purchases still POST nothing but
+// the provider choice; the server charges the VND bundle/plan price.
+import { test, expect, afterAll } from "bun:test";
+import { JSDOM } from "jsdom";
+import { act } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+const GLOBAL_KEYS = [
+  "window",
+  "document",
+  "Node",
+  "Element",
+  "HTMLElement",
+  "HTMLInputElement",
+  "Event",
+  "MouseEvent",
+  "localStorage",
+] as const;
+const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
+let jsdomWindow: { close: () => void } | null = null;
+type EventCtor<T, I> = new (type: string, init?: I) => T;
+interface JsdomRealm {
+  Event: EventCtor<Event, EventInit>;
+  MouseEvent: EventCtor<MouseEvent, MouseEventInit>;
+  document: Document;
+  Node: typeof Node;
+  Element: typeof Element;
+  HTMLElement: typeof HTMLElement;
+  HTMLInputElement: typeof HTMLInputElement;
+  localStorage: Storage;
+  close: () => void;
+}
+const W = new JSDOM("", { url: "http://localhost:5173" }).window as unknown as JsdomRealm;
+
+for (const k of GLOBAL_KEYS) originals[k] = Object.getOwnPropertyDescriptor(globalThis, k);
+for (const [k, v] of Object.entries({
+  window: W,
+  document: W.document,
+  Node: W.Node,
+  Element: W.Element,
+  HTMLElement: W.HTMLElement,
+  HTMLInputElement: W.HTMLInputElement,
+  Event: W.Event,
+  MouseEvent: W.MouseEvent,
+  localStorage: W.localStorage,
+})) {
+  (globalThis as Record<string, unknown>)[k] = v;
+}
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+jsdomWindow = W;
+
+afterAll(() => {
+  for (const k of GLOBAL_KEYS) {
+    const d = originals[k];
+    if (d) Object.defineProperty(globalThis, k, d);
+    else delete (globalThis as Record<string, unknown>)[k];
+  }
+  jsdomWindow?.close();
+  jsdomWindow = null;
+});
+
+// @ts-expect-error relative specifier has no declaration file under tests tsconfig
+const { createRoot } = await import("../apps/web/node_modules/react-dom/client");
+const { BundleCards, PlanCards, SubscriptionStatusCard } = await import(
+  "../apps/web/src/pages/billing/bundles"
+);
+import type { SubscriptionInfo } from "../apps/web/src/pages/billing/bundles";
+
+const RATE = 26_000;
+const BUNDLES = [
+  { id: "b1", name: "Starter", price_vnd: 50_000, credit_vnd: 50_000, bonus_vnd: 0 },
+  { id: "b2", name: "Value", price_vnd: 100_000, credit_vnd: 110_000, bonus_vnd: 10_000 },
+];
+const PLANS = [
+  {
+    id: "p1",
+    name: "Pro",
+    price_vnd: 200_000,
+    credit_per_period_vnd: 250_000,
+    period_days: 30,
+    rate_limit_per_minute: 15,
+  },
+];
+
+function jsonResponse(status: number, body: unknown): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  } as unknown as Response;
+}
+
+interface Mount {
+  container: HTMLElement;
+  click: (el: Element) => void;
+  priceText: (id: string) => string;
+  toggleButton: () => HTMLButtonElement | null;
+}
+
+function mountCards(
+  Component: typeof BundleCards | typeof PlanCards,
+  opts: { rate: number | undefined; subscribed?: boolean },
+): Mount {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const root = createRoot(container);
+  const props =
+    Component === BundleCards
+      ? {
+          bundles: BUNDLES,
+          workspaceId: "ws_1",
+          payosAvailable: false,
+          rate: opts.rate,
+          onNavigate: () => {},
+        }
+      : {
+          plans: PLANS,
+          workspaceId: "ws_1",
+          payosAvailable: false,
+          subscribed: opts.subscribed ?? false,
+          rate: opts.rate,
+          onNavigate: () => {},
+        };
+  act(() => {
+    root.render(
+      <QueryClientProvider client={qc}>
+        {/* @ts-expect-error union of two similar prop shapes; each call site is consistent */}
+        <Component {...props} />
+      </QueryClientProvider>,
+    );
+  });
+  const click = (el: Element) =>
+    act(() => {
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+  return {
+    container,
+    click,
+    priceText: (id: string) =>
+      container.querySelector(`[data-testid="price-${id}"]`)?.textContent ?? "",
+    toggleButton: () =>
+      [...container.querySelectorAll("button")].find((b) =>
+        /^Show (VND|USD)$/.test(b.textContent ?? ""),
+      ) ?? null,
+  };
+}
+
+test("USD is canonical: price shows USD primary with the VND integer secondary", () => {
+  const m = mountCards(BundleCards, { rate: RATE });
+  expect(m.priceText("b1")).toContain("$1.92");
+  expect(m.container.textContent).toContain("50.000 ₫");
+  expect(m.container.textContent).toContain("$3.85"); // 100000 / 26000
+  expect(m.toggleButton()?.textContent).toBe("Show VND");
+});
+
+test("toggle converts the section to VND and back to USD", () => {
+  const m = mountCards(BundleCards, { rate: RATE });
+  const btn = m.toggleButton();
+  if (!btn) throw new Error("toggle missing");
+  m.click(btn);
+  expect(m.priceText("b1")).toContain("50.000 ₫");
+  expect(m.priceText("b1")).not.toContain("$");
+  expect(m.toggleButton()?.textContent).toBe("Show USD");
+  const back = m.toggleButton();
+  if (!back) throw new Error("toggle missing");
+  m.click(back);
+  expect(m.priceText("b1")).toContain("$1.92");
+});
+
+test("bonus and per-period credit follow the selected currency too", () => {
+  const m = mountCards(BundleCards, { rate: RATE });
+  expect(m.container.textContent).toContain("+$0.38"); // 10000 / 26000 bonus
+  const p = mountCards(PlanCards, { rate: RATE });
+  expect(p.priceText("p1")).toContain("$7.69"); // 200000 / 26000
+  expect(p.container.textContent).toContain("$9.62"); // 250000 / 26000 per period
+});
+
+test("no rate: VND-only display, no toggle", () => {
+  const m = mountCards(BundleCards, { rate: undefined });
+  expect(m.priceText("b1")).toContain("50.000 ₫");
+  expect(m.priceText("b1")).not.toContain("$");
+  expect(m.toggleButton()).toBeNull();
+});
+
+// --- cancel subscription --------------------------------------------------
+
+const ACTIVE_SUB: SubscriptionInfo = {
+  balance: 250_000,
+  available: 230_000,
+  period_end: Date.parse("2030-02-01T00:00:00Z"),
+  plan_name: "Pro",
+  rate_limit_per_minute: 15,
+  expired: false,
+  canceled: false,
+};
+
+function mountSubCard(subscription: SubscriptionInfo): {
+  container: HTMLElement;
+  fetchCalls: { url: string; method: string }[];
+  clickCancel: () => Promise<void>;
+} {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const root = createRoot(container);
+  const fetchCalls: { url: string; method: string }[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    fetchCalls.push({ url, method: init?.method ?? "GET" });
+    return jsonResponse(200, {
+      id: "sub-1",
+      status: "active",
+      canceled_at: Date.now(),
+      period_end: subscription.period_end,
+    });
+  }) as typeof fetch;
+  act(() => {
+    root.render(
+      <QueryClientProvider client={qc}>
+        <SubscriptionStatusCard subscription={subscription} workspaceId="ws_1" rate={RATE} />
+      </QueryClientProvider>,
+    );
+  });
+  const clickCancel = async () => {
+    const btn = [...container.querySelectorAll("button")].find((b) =>
+      (b.textContent ?? "").includes("Cancel subscription"),
+    );
+    if (!btn) throw new Error("cancel button missing");
+    await act(async () => {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+  };
+  const cleanup = () => {
+    globalThis.fetch = realFetch;
+  };
+  void cleanup;
+  return { container, fetchCalls, clickCancel };
+}
+
+test("active subscription card shows plan, credit and a cancel button", () => {
+  const m = mountSubCard(ACTIVE_SUB);
+  expect(m.container.textContent).toContain("Pro");
+  expect(m.container.textContent).toContain("$9.62"); // 250000 / 26000
+  expect(m.container.textContent).toContain("Cancel subscription");
+  expect(m.container.textContent).toContain("will not renew");
+});
+
+test("cancel button DELETEs the workspace subscription", async () => {
+  const m = mountSubCard(ACTIVE_SUB);
+  await m.clickCancel();
+  expect(m.fetchCalls.some((c) => c.method === "DELETE" && c.url === "/api/v1/workspaces/ws_1/subscription")).toBe(true);
+});
+
+test("expired subscription shows no cancel button", () => {
+  const m = mountSubCard({ ...ACTIVE_SUB, expired: true });
+  expect(m.container.textContent).not.toContain("Cancel subscription");
+});

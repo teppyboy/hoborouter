@@ -5,7 +5,7 @@ import { Package as PackageIcon, RefreshCw as RefreshCwIcon } from "lucide-react
 import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
-import { formatVnd } from "../../lib/format";
+import { formatVnd, formatUsdFromVnd, formatDate, useUsdVndRate } from "../../lib/format";
 import { PageHeader, EmptyState, ErrorState } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
@@ -35,6 +35,78 @@ export interface SubscriptionInfo {
   plan_name: string;
   rate_limit_per_minute: number;
   expired: boolean;
+  /** Cancel marker (decision b): informational, credit stays till period_end. */
+  canceled?: boolean;
+}
+
+/**
+ * Display currency for the billing sections. USD is canonical when the
+ * backend FX rate is known; VND is the fallback (older backend) and the
+ * ledger truth. Conversion is DISPLAY-ONLY: purchases always charge the
+ * server-side VND price and no converted amount is ever sent back.
+ */
+export type DisplayCurrency = "USD" | "VND";
+
+const hasRate = (rate: number | undefined): boolean =>
+  typeof rate === "number" && Number.isFinite(rate) && rate > 0;
+
+/**
+ * Seamless USD⇄VND toggle. Renders nothing without a backend rate: VND-only
+ * display is the behavior-preserving fallback.
+ */
+export function CurrencyToggle({
+  currency,
+  rate,
+  onChange,
+}: {
+  currency: DisplayCurrency;
+  rate: number | undefined;
+  onChange: (c: DisplayCurrency) => void;
+}) {
+  if (!hasRate(rate)) return null;
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={() => onChange(currency === "USD" ? "VND" : "USD")}
+    >
+      {currency === "USD" ? "Show VND" : "Show USD"}
+    </Button>
+  );
+}
+
+/**
+ * One money amount in the selected display currency. The primary line is the
+ * selected currency; the other currency renders as a small secondary line so
+ * the exact integer-VND ledger amount stays visible in USD mode too.
+ */
+export function Amount({
+  vnd,
+  currency,
+  rate,
+  testId,
+  className = "",
+}: {
+  vnd: number;
+  currency: DisplayCurrency;
+  rate: number | undefined;
+  testId?: string;
+  className?: string;
+}) {
+  const usd = formatUsdFromVnd(vnd, rate);
+  const showUsd = currency === "USD" && usd !== null;
+  const primary = showUsd ? usd! : formatVnd(vnd);
+  const secondary = hasRate(rate) ? (showUsd ? formatVnd(vnd) : usd) : null;
+  return (
+    <div className="min-w-0">
+      <p data-testid={testId} className={className}>
+        {primary}
+      </p>
+      {secondary !== null && (
+        <p className="text-xs text-muted-foreground">= {secondary}</p>
+      )}
+    </div>
+  );
 }
 
 export default function BillingBundlesPage() {
@@ -71,14 +143,19 @@ export default function BillingBundlesPage() {
   });
   const payosAvailable = methods.data?.payos === true;
 
+  // FX rate for the USD-canonical display; undefined (older backend) keeps
+  // the VND-only display.
+  const rate = useUsdVndRate(workspaceId).data;
+
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Credit bundles"
-        description="Buy credit in fixed bundles; credit lands in the wallet once the payment settles."
-      />
+      <section aria-label="Credit bundles" className="space-y-4">
+        <PageHeader
+          title="Credit bundles"
+          description="Buy credit in fixed bundles; credit lands in the wallet once the payment settles."
+        />
 
-      {bundles.isPending ? (
+        {bundles.isPending ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <Skeleton className="h-44 w-full" />
           <Skeleton className="h-44 w-full" />
@@ -97,15 +174,25 @@ export default function BillingBundlesPage() {
           bundles={bundles.data.data}
           workspaceId={workspaceId ?? undefined}
           payosAvailable={payosAvailable}
+          rate={rate}
           onNavigate={(href) => void navigate({ href })}
         />
       )}
+      </section>
 
-      <PageHeader
-        title="Subscription plans"
-        description="A plan credits the subscription balance each period; the gateway spends it first while the period is active."
-      />
-      {plans.isPending ? (
+      <section aria-label="Subscription plans" className="space-y-4">
+        <PageHeader
+          title="Subscription plans"
+          description="A plan credits the subscription balance each period; the gateway spends it first while the period is active."
+        />
+        {wallet.data?.subscription && workspaceId ? (
+          <SubscriptionStatusCard
+            subscription={wallet.data.subscription}
+            workspaceId={workspaceId}
+            rate={rate}
+          />
+        ) : null}
+        {plans.isPending ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <Skeleton className="h-44 w-full" />
           <Skeleton className="h-44 w-full" />
@@ -124,9 +211,11 @@ export default function BillingBundlesPage() {
           workspaceId={workspaceId ?? undefined}
           payosAvailable={payosAvailable}
           subscribed={subscribed}
+          rate={rate}
           onNavigate={(href) => void navigate({ href })}
         />
       )}
+      </section>
     </div>
   );
 }
@@ -139,14 +228,21 @@ export function BundleCards({
   bundles,
   workspaceId,
   payosAvailable,
+  rate,
   onNavigate,
 }: {
   bundles: Bundle[];
   workspaceId: string | undefined;
   payosAvailable: boolean;
+  /** Backend FX rate; undefined (older backend) keeps VND-only display. */
+  rate?: number;
   onNavigate: (href: string) => void;
 }) {
   const queryClient = useQueryClient();
+
+  // USD is the canonical display currency; without a rate the section stays
+  // VND-only (behavior-preserving fallback).
+  const [currency, setCurrency] = useState<DisplayCurrency>("USD");
 
   // One provider choice shared by all cards, identical semantics to the
   // top-up form: manual default, collapses back to manual when the backend
@@ -185,8 +281,9 @@ export function BundleCards({
 
   return (
     <div className="space-y-4">
-      {payosAvailable && (
-        <fieldset className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {payosAvailable && (
+          <fieldset className="space-y-2">
           <legend className="text-sm font-medium">Payment method</legend>
           <label className="flex items-start gap-2 text-sm">
             <input
@@ -222,7 +319,9 @@ export function BundleCards({
             </span>
           </label>
         </fieldset>
-      )}
+        )}
+        <CurrencyToggle currency={currency} rate={rate} onChange={setCurrency} />
+      </div>
 
       {/* min-w-0 on cards: nothing may force the page wider than 375px. */}
       <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -234,13 +333,25 @@ export function BundleCards({
             <CardContent className="flex min-w-0 flex-1 flex-col gap-3">
               <div>
                 <p className="text-xs text-muted-foreground">Price</p>
-                <p className="font-mono text-xl font-semibold">{formatVnd(bundle.price_vnd)}</p>
+                <Amount
+                  vnd={bundle.price_vnd}
+                  currency={currency}
+                  rate={rate}
+                  testId={`price-${bundle.id}`}
+                  className="font-mono text-xl font-semibold"
+                />
               </div>
               <div className="text-sm">
-                <p className="font-mono">{formatVnd(bundle.credit_vnd)} credit</p>
+                <p className="font-mono">
+                  {currency === "USD" && hasRate(rate)
+                    ? `${formatUsdFromVnd(bundle.credit_vnd, rate)} credit`
+                    : `${formatVnd(bundle.credit_vnd)} credit`}
+                </p>
                 {bundle.bonus_vnd > 0 && (
                   <p className="font-mono text-xs text-emerald-600 dark:text-emerald-400">
-                    + {formatVnd(bundle.bonus_vnd)} bonus
+                    {currency === "USD" && hasRate(rate)
+                      ? `+${formatUsdFromVnd(bundle.bonus_vnd, rate)} bonus`
+                      : `+ ${formatVnd(bundle.bonus_vnd)} bonus`}
                   </p>
                 )}
               </div>
@@ -274,15 +385,21 @@ export function PlanCards({
   workspaceId,
   payosAvailable,
   subscribed,
+  rate,
   onNavigate,
 }: {
   plans: Plan[];
   workspaceId: string | undefined;
   payosAvailable: boolean;
   subscribed: boolean;
+  /** Backend FX rate; undefined (older backend) keeps VND-only display. */
+  rate?: number;
   onNavigate: (href: string) => void;
 }) {
   const queryClient = useQueryClient();
+
+  // USD canonical display, same rules as BundleCards.
+  const [currency, setCurrency] = useState<DisplayCurrency>("USD");
 
   const [providerChoice, setProviderChoice] = useState<"manual" | "payos">("manual");
   const provider = payosAvailable && providerChoice === "payos" ? "payos" : "manual";
@@ -316,8 +433,9 @@ export function PlanCards({
 
   return (
     <div className="space-y-4">
-      {payosAvailable && (
-        <fieldset className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {payosAvailable && (
+          <fieldset className="space-y-2">
           <legend className="text-sm font-medium">Payment method</legend>
           <label className="flex items-start gap-2 text-sm">
             <input
@@ -353,7 +471,9 @@ export function PlanCards({
             </span>
           </label>
         </fieldset>
-      )}
+        )}
+        <CurrencyToggle currency={currency} rate={rate} onChange={setCurrency} />
+      </div>
 
       {/* min-w-0 on cards: nothing may force the page wider than 375px. */}
       <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -365,11 +485,19 @@ export function PlanCards({
             <CardContent className="flex min-w-0 flex-1 flex-col gap-3">
               <div>
                 <p className="text-xs text-muted-foreground">Price</p>
-                <p className="font-mono text-xl font-semibold">{formatVnd(plan.price_vnd)}</p>
+                <Amount
+                  vnd={plan.price_vnd}
+                  currency={currency}
+                  rate={rate}
+                  testId={`price-${plan.id}`}
+                  className="font-mono text-xl font-semibold"
+                />
               </div>
               <div className="text-sm">
                 <p className="font-mono">
-                  {formatVnd(plan.credit_per_period_vnd)} credit / {plan.period_days} days
+                  {currency === "USD" && hasRate(rate)
+                    ? `${formatUsdFromVnd(plan.credit_per_period_vnd, rate)} credit / ${plan.period_days} days`
+                    : `${formatVnd(plan.credit_per_period_vnd)} credit / ${plan.period_days} days`}
                 </p>
                 {!!plan.rate_limit_per_minute && (
                   <p className="text-xs text-muted-foreground">
@@ -391,6 +519,81 @@ export function PlanCards({
 
       <p className="text-xs text-muted-foreground">
         Payment completes when the provider confirms; status shows on the Payments page.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Active-subscription status for the Subscriptions section (decision b): the
+ * cancel button stops renewal only — no refund, no forfeit; credit stays
+ * usable until period_end and the existing lazy expiry applies afterwards.
+ * Static rendering fires nothing; cancel goes through the mutation.
+ */
+export function SubscriptionStatusCard({
+  subscription,
+  workspaceId,
+  rate,
+}: {
+  subscription: SubscriptionInfo;
+  workspaceId: string;
+  rate: number | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const [currency, setCurrency] = useState<DisplayCurrency>("USD");
+
+  const cancel = useMutation({
+    mutationFn: () => api<{ id: string; status: string; period_end: number }>(
+      `/api/v1/workspaces/${workspaceId}/subscription`,
+      { method: "DELETE" },
+    ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["wallet", workspaceId] });
+      toast("Subscription canceled — credit stays usable until the period ends");
+    },
+    onError: (err) => {
+      toast.error(err instanceof ApiError ? err.message : "Cancel failed");
+    },
+  });
+
+  const usd = formatUsdFromVnd(subscription.balance, rate);
+  return (
+    <div className="min-w-0 rounded-lg border border-border p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-sm font-semibold">Your subscription</p>
+        <p className="text-xs text-muted-foreground">{subscription.plan_name}</p>
+      </div>
+      <Amount
+        vnd={subscription.balance}
+        currency={currency}
+        rate={rate}
+        testId="subscription-balance"
+        className={`mt-1 font-mono text-2xl font-semibold ${subscription.expired ? "text-muted-foreground" : ""}`}
+      />
+      <p className="mt-1 text-sm">
+        Period ends <span className="font-mono">{formatDate(subscription.period_end)}</span>
+        {subscription.expired ? " (expired)" : ""}
+        {subscription.canceled && !subscription.expired ? " (canceled — will not renew)" : ""}
+      </p>
+      <p className="text-sm text-muted-foreground">
+        {subscription.rate_limit_per_minute} requests per minute
+      </p>
+      {!subscription.expired && (
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={cancel.isPending}
+            onClick={() => cancel.mutate()}
+          >
+            {cancel.isPending ? "Canceling…" : "Cancel subscription"}
+          </Button>
+          <CurrencyToggle currency={currency} rate={rate} onChange={setCurrency} />
+        </div>
+      )}
+      <p className="mt-2 text-xs text-muted-foreground">
+        Canceling stops renewal only (will not renew): credit stays usable until the period ends,
+        then unused credit is forfeited. {usd !== null ? "Shown in USD from the VND ledger." : ""}
       </p>
     </div>
   );
