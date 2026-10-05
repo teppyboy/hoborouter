@@ -20,6 +20,7 @@ import {
   PanelLeft,
   PanelLeftClose,
   ScrollText,
+  Server,
   Settings,
   Shuffle,
   Sun,
@@ -92,6 +93,7 @@ const ADMIN_NAV: NavItem[] = [
   { label: "Promotions", to: "/admin/promotions", icon: Gift },
   { label: "Audit log", to: "/admin/audit", icon: ScrollText },
   { label: "System", to: "/admin/system", icon: Cpu },
+  { label: "CPA", to: "/admin/cpa", icon: Server },
   { label: "Settings", to: "/admin/settings", icon: Settings2 },
 ];
 
