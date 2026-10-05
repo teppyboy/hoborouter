@@ -119,7 +119,7 @@ describe("DELETE /api/v1/workspaces/:id/subscription", () => {
       "SELECT count(*) AS n FROM audit_log WHERE action = 'subscription.cancel' AND workspace_id = ?",
       ws,
     );
-    expect(audits[0]!.n).toBe(1);
+    expect(Number(audits[0]!.n)).toBe(1);
   });
 
   test("wallet GET reports canceled: true additively; expired flag unchanged", async () => {
@@ -145,7 +145,7 @@ describe("DELETE /api/v1/workspaces/:id/subscription", () => {
       "SELECT count(*) AS n FROM audit_log WHERE action = 'subscription.cancel' AND workspace_id = ?",
       ws,
     );
-    expect(audits[0]!.n).toBe(1);
+    expect(Number(audits[0]!.n)).toBe(1);
   });
 
   test("no active subscription: 404", async () => {

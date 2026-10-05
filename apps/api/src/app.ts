@@ -32,6 +32,7 @@ import { adminBusinessRoutes } from "./routes/admin-business";
 import { adminPromotionsRoutes } from "./routes/admin-promotions";
 import { adminSupportLeadRoutes } from "./routes/admin-support-leads";
 import { promotionsRoutes } from "./routes/promotions";
+import { subscriptionCancelRoutes } from "./routes/subscription-cancel";
 import { supportLeadRoutes } from "./routes/support-leads";
 import { supportSettingsRoutes } from "./routes/support-settings";
 import { publicCatalogRoutes } from "./routes/public-catalog";
@@ -149,6 +150,7 @@ export const buildApp = async (deps: AppDeps = {}) => {
     adminSupportLeadRoutes(db, auth),
     promotionsRoutes(db, auth),
     supportLeadRoutes(db, auth),
+    subscriptionCancelRoutes(db, auth),
     v1ModelsRoutes(db),
     gatewayRoutes(db),
   ];
