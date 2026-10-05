@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { PageHeader, EmptyState, ErrorState } from "../../components/page";
+import { PageHeader, EmptyState, ErrorState, ScrollPanel } from "../../components/page";
 import {
   Table,
   TableBody,
@@ -8,7 +8,7 @@ import {
   TableHeader,
   TableRow,
 } from "../../components/ui/table";
-import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -23,6 +23,15 @@ import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useUsageSummary, successRateLabel } from "../logs/api";
 import { metricSeries, type Metric } from "./charthelper";
+
+/** Row shape from GET /usage-summary `by_model` (public IDs only). */
+export interface PerModelRow {
+  /** Public model ID; API may return numeric IDs for legacy rows. */
+  public_model: string | number;
+  requests: number;
+  spend_vnd: number;
+  tokens: number;
+}
 
 const PERIODS = [7, 30, 90] as const;
 
@@ -118,6 +127,97 @@ function KpiCard({ title, value, caption }: { title: string; value: string; capt
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Chart and Per-model views live in separate tabs so the per-model table can
+ * grow without pushing the chart (or the page) down; only the active tab's
+ * content renders. Filters stay in the page header, above the tabs.
+ */
+export function UsageDataTabs({
+  chart,
+  perModel,
+}: {
+  chart: React.ReactNode;
+  perModel: React.ReactNode;
+}) {
+  return (
+    <Tabs defaultValue="chart" className="min-w-0">
+      <TabsList aria-label="Usage data views">
+        <TabsTrigger value="chart">Chart</TabsTrigger>
+        <TabsTrigger value="per-model">Per model</TabsTrigger>
+      </TabsList>
+      <TabsContent value="chart">{chart}</TabsContent>
+      <TabsContent value="per-model">{perModel}</TabsContent>
+    </Tabs>
+  );
+}
+
+/**
+ * Per-model usage table. Extracted for render tests; long model lists scroll
+ * inside their panel instead of growing the page.
+ */
+export function PerModelTable({
+  byModel,
+  totalTokens,
+  rate,
+}: {
+  byModel: PerModelRow[];
+  totalTokens: number;
+  rate?: number;
+}) {
+  if (byModel.length === 0) return <EmptyState title="No requests yet" />;
+  return (
+    <ScrollPanel label="Per model usage" stickyHeader>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Model</TableHead>
+            <TableHead className="text-right">Requests</TableHead>
+            <TableHead className="text-right">Tokens</TableHead>
+            <TableHead className="text-right">Token share</TableHead>
+            <TableHead className="text-right">Spend</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {byModel.map((m) => {
+            const tokens = m.tokens;
+            const share = totalTokens > 0 ? ((tokens / totalTokens) * 100).toFixed(1) + "%" : "—";
+            return (
+              <TableRow key={String(m.public_model)}>
+                <TableCell className="font-mono text-xs">{String(m.public_model)}</TableCell>
+                <TableCell className="text-right font-mono text-xs">
+                  {m.requests.toLocaleString("en-US")}
+                </TableCell>
+                <TableCell className="text-right font-mono text-xs">
+                  {formatTokens(tokens)}
+                </TableCell>
+                <TableCell className="text-right font-mono text-xs">
+                  <div className="flex items-center justify-end gap-2">
+                    <div
+                      className="hidden h-1.5 w-16 overflow-hidden rounded-sm bg-muted sm:block"
+                      aria-hidden="true"
+                    >
+                      <div
+                        className="h-full bg-foreground/60"
+                        style={{
+                          width: `${totalTokens > 0 ? Math.min((tokens / totalTokens) * 100, 100) : 0}%`,
+                        }}
+                      />
+                    </div>
+                    {share}
+                  </div>
+                </TableCell>
+                <TableCell className="text-right font-mono text-xs">
+                  {formatUsdFromVnd(m.spend_vnd, rate) ?? formatVnd(m.spend_vnd)}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </ScrollPanel>
   );
 }
 
@@ -232,90 +332,37 @@ export default function UsagePage() {
         />
       </div>
 
-      <Card>
-        <CardHeader className="pb-0">
-          <Tabs value={metric} onValueChange={(v) => setMetric(v as Metric)}>
-            <TabsList aria-label="Chart metric">
-              {METRICS.map((m) => (
-                <TabsTrigger key={m.id} value={m.id} className="text-xs">
-                  {m.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-        </CardHeader>
-        <CardContent>
-          {daily.length === 0 ? (
-            <EmptyState title="No requests yet" />
-          ) : (
-            <>
-              <DailyChart daily={daily} days={days} metric={metric} rate={rate} />
-              <div className="mt-2 flex justify-between pl-16 text-xs text-muted-foreground">
-                <span>{metricSeries(daily, days, metric)[0]?.label}</span>
-                <span>{metricSeries(daily, days, metric).at(-1)?.label}</span>
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      <section>
-        <p className="mb-2 text-xs text-muted-foreground">Per model</p>
-        {by_model.length === 0 ? (
-          <EmptyState title="No requests yet" />
-        ) : (
-          <div className="rounded-lg border border-border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Model</TableHead>
-                  <TableHead className="text-right">Requests</TableHead>
-                  <TableHead className="text-right">Tokens</TableHead>
-                  <TableHead className="text-right">Token share</TableHead>
-                  <TableHead className="text-right">Spend</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {by_model.map((m) => {
-                  const tokens = m.tokens;
-                  const share =
-                    totalTokens > 0 ? ((tokens / totalTokens) * 100).toFixed(1) + "%" : "—";
-                  return (
-                    <TableRow key={String(m.public_model)}>
-                      <TableCell className="font-mono text-xs">{String(m.public_model)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs">
-                        {m.requests.toLocaleString("en-US")}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-xs">
-                        {formatTokens(tokens)}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-xs">
-                        <div className="flex items-center justify-end gap-2">
-                          <div
-                            className="hidden h-1.5 w-16 overflow-hidden rounded-sm bg-muted sm:block"
-                            aria-hidden="true"
-                          >
-                            <div
-                              className="h-full bg-foreground/60"
-                              style={{
-                                width: `${totalTokens > 0 ? Math.min((tokens / totalTokens) * 100, 100) : 0}%`,
-                              }}
-                            />
-                          </div>
-                          {share}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-xs">
-                        {formatUsdFromVnd(m.spend_vnd, rate) ?? formatVnd(m.spend_vnd)}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </section>
+      <UsageDataTabs
+        chart={
+          <Card>
+            <CardHeader className="pb-0">
+              <Tabs value={metric} onValueChange={(v) => setMetric(v as Metric)}>
+                <TabsList aria-label="Chart metric">
+                  {METRICS.map((m) => (
+                    <TabsTrigger key={m.id} value={m.id} className="text-xs">
+                      {m.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            </CardHeader>
+            <CardContent>
+              {daily.length === 0 ? (
+                <EmptyState title="No requests yet" />
+              ) : (
+                <>
+                  <DailyChart daily={daily} days={days} metric={metric} rate={rate} />
+                  <div className="mt-2 flex justify-between pl-16 text-xs text-muted-foreground">
+                    <span>{metricSeries(daily, days, metric)[0]?.label}</span>
+                    <span>{metricSeries(daily, days, metric).at(-1)?.label}</span>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        }
+        perModel={<PerModelTable byModel={by_model} totalTokens={totalTokens} rate={rate} />}
+      />
     </div>
   );
 }

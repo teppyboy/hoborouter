@@ -11,11 +11,13 @@ import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatVnd, formatUsdFromVnd, formatDate } from "../../lib/format";
 import { formatLedgerKindLabel, formatLedgerMemoLabel } from "../../lib/display";
 import { partitionLedger, signedLedgerAmount, formatLedgerSourceLabel } from "./ledger-display";
-import { PageHeader, EmptyState, ErrorState, DataTable } from "../../components/page";
+import type { LedgerSections } from "./ledger-display";
+import { PageHeader, EmptyState, ErrorState, DataTable, ScrollPanel } from "../../components/page";
 import RedeemPromo from "../../components/redeem-promo";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { Skeleton } from "../../components/ui/skeleton";
 import {
   Form,
@@ -45,7 +47,7 @@ interface SubscriptionInfo {
   expired: boolean;
 }
 
-interface LedgerEntry {
+export interface LedgerEntry {
   id: string;
   created_at: number | string;
   direction: "debit" | "credit";
@@ -88,6 +90,8 @@ function validateUsdInput(text: string): string | null {
   if (!/[1-9]/.test(t)) return "USD amount must be greater than zero";
   return null;
 }
+
+export type LedgerColumns = ColumnDef<LedgerEntry>[];
 
 const PRESETS = [50_000, 100_000, 200_000, 500_000];
 
@@ -250,31 +254,7 @@ export default function BillingCreditsPage() {
               description="Not available yet — entries appear after the first top-up or usage."
             />
           ) : (
-            (() => {
-              const sections = partitionLedger(ledger.data.data);
-              return (
-                <>
-                  <LedgerSection
-                    title="Usage deductions"
-                    entries={sections.usage}
-                    columns={columns}
-                    empty="No usage yet — deductions appear after the first request."
-                  />
-                  <LedgerSection
-                    title="Top-up history"
-                    entries={sections.topups}
-                    columns={columns}
-                    empty="No top-ups yet."
-                  />
-                  <LedgerSection
-                    title="Adjustments & refunds"
-                    entries={sections.adjustments}
-                    columns={columns}
-                    empty="No adjustments or refunds."
-                  />
-                </>
-              );
-            })()
+            <LedgerTabs columns={columns} sections={partitionLedger(ledger.data.data)} />
           )}
         </div>
 
@@ -591,28 +571,59 @@ export function SubscriptionCard({
   );
 }
 
-function LedgerSection({
-  title,
-  entries,
+/**
+ * Tabbed ledger: Usage deductions / Top-up history / Adjustments & refunds.
+ * Only the active tab's rows render, so the page height stays bounded while
+ * each tab's table scrolls inside its own panel.
+ */
+export function LedgerTabs({
+  sections,
   columns,
-  empty,
 }: {
-  title: string;
-  entries: LedgerEntry[];
-  columns: ColumnDef<LedgerEntry>[];
-  empty: string;
+  sections: LedgerSections<LedgerEntry>;
+  columns: LedgerColumns;
 }) {
+  const tabs = [
+    {
+      id: "usage",
+      title: "Usage deductions",
+      entries: sections.usage,
+      empty: "No usage yet — deductions appear after the first request.",
+    },
+    {
+      id: "topups",
+      title: "Top-up history",
+      entries: sections.topups,
+      empty: "No top-ups yet.",
+    },
+    {
+      id: "adjustments",
+      title: "Adjustments & refunds",
+      entries: sections.adjustments,
+      empty: "No adjustments or refunds.",
+    },
+  ];
   return (
-    <div className="space-y-2">
-      <h3 className="text-xs font-medium text-muted-foreground">
-        {title} ({entries.length})
-      </h3>
-      {entries.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{empty}</p>
-      ) : (
-        <DataTable columns={columns} data={entries} empty={empty} />
-      )}
-    </div>
+    <Tabs defaultValue="usage" className="min-w-0">
+      <TabsList aria-label="Ledger sections" className="h-auto max-w-full flex-wrap">
+        {tabs.map((t) => (
+          <TabsTrigger key={t.id} value={t.id}>
+            {t.title} ({t.entries.length})
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      {tabs.map((t) => (
+        <TabsContent key={t.id} value={t.id}>
+          <ScrollPanel label={t.title} stickyHeader>
+            {t.entries.length === 0 ? (
+              <p className="p-4 text-sm text-muted-foreground">{t.empty}</p>
+            ) : (
+              <DataTable columns={columns} data={t.entries} empty={t.empty} />
+            )}
+          </ScrollPanel>
+        </TabsContent>
+      ))}
+    </Tabs>
   );
 }
 

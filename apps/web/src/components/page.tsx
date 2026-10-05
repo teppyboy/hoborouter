@@ -177,3 +177,36 @@ export function DataTable<TData>({
 }
 
 export { Check };
+
+/**
+ * Bounded-height scroll container: long tables scroll inside their panel
+ * instead of growing the whole page. Exposed as a labelled region and
+ * keyboard-scrollable (tabIndex) per WCAG 2.1.1; stickyHeader keeps the
+ * table header visible while rows scroll.
+ */
+export function ScrollPanel({
+  label,
+  children,
+  stickyHeader,
+  className,
+}: {
+  label: string;
+  children: React.ReactNode;
+  stickyHeader?: boolean;
+  className?: string;
+}) {
+  return (
+    <div
+      role="region"
+      aria-label={label}
+      tabIndex={0}
+      className={cn(
+        "max-h-96 overflow-auto rounded-lg border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        stickyHeader && "[&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [&_thead]:bg-background",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}

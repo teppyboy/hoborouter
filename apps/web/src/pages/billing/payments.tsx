@@ -7,10 +7,18 @@ import { api } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatVnd, formatUsdFromVnd, useUsdVndRate, formatDate } from "../../lib/format";
 import { formatProviderLabel, formatStatusLabel } from "../../lib/display";
-import { PageHeader, EmptyState, ErrorState, DataTable, CopyButton } from "../../components/page";
+import {
+  PageHeader,
+  EmptyState,
+  ErrorState,
+  DataTable,
+  CopyButton,
+  ScrollPanel,
+} from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Badge } from "../../components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import type { ColumnDef } from "@tanstack/react-table";
 
 interface Payment {
@@ -46,6 +54,69 @@ export default function BillingPaymentsPage() {
 
   const rate = useUsdVndRate(workspaceId).data;
 
+  const history = payments.isPending ? (
+    <Skeleton className="h-40 w-full" />
+  ) : payments.isError ? (
+    <ErrorState message={payments.error.message} />
+  ) : payments.data.data.length === 0 ? (
+    <EmptyState
+      icon={CreditCard}
+      title="No payments yet"
+      description="Create a top-up on the Credits page."
+    >
+      <Button size="sm" onClick={() => void navigate({ href: "/billing/credits" })}>
+        Go to Credits
+      </Button>
+    </EmptyState>
+  ) : (
+    <PaymentHistory payments={payments.data.data} rate={rate} />
+  );
+
+  return (
+    <div className="space-y-6">
+      <PageHeader title="Payments" description="Top-up payment history and status." />
+      {selectedId && workspaceId ? (
+        <PaymentsTabs
+          status={<PaymentStatus workspaceId={workspaceId} paymentId={selectedId} />}
+          history={history}
+        />
+      ) : (
+        history
+      )}
+    </div>
+  );
+}
+
+/**
+ * When a specific payment is opened (`?payment=…`), its live status and the
+ * full history live in separate tabs; status is the default so the just-created
+ * payment's state is the first thing seen. Loading/error/empty states stay in
+ * the shared `history` node, so every tab inherits them unchanged.
+ */
+export function PaymentsTabs({
+  status,
+  history,
+}: {
+  status: React.ReactNode;
+  history: React.ReactNode;
+}) {
+  return (
+    <Tabs defaultValue="status" className="min-w-0">
+      <TabsList aria-label="Payments sections">
+        <TabsTrigger value="status">Payment status</TabsTrigger>
+        <TabsTrigger value="history">History</TabsTrigger>
+      </TabsList>
+      <TabsContent value="status">{status}</TabsContent>
+      <TabsContent value="history">{history}</TabsContent>
+    </Tabs>
+  );
+}
+
+/**
+ * Payment history table. Extracted for render tests; the table scrolls inside
+ * its panel so a long history never grows the page.
+ */
+export function PaymentHistory({ payments, rate }: { payments: Payment[]; rate?: number }) {
   const columns: ColumnDef<Payment>[] = [
     { accessorKey: "created_at", header: "Time", cell: (c) => formatDate(c.getValue<string>()) },
     {
@@ -92,30 +163,9 @@ export default function BillingPaymentsPage() {
   ];
 
   return (
-    <div className="space-y-6">
-      <PageHeader title="Payments" description="Top-up payment history and status." />
-      {selectedId && workspaceId ? (
-        <PaymentStatus workspaceId={workspaceId} paymentId={selectedId} />
-      ) : null}
-
-      {payments.isPending ? (
-        <Skeleton className="h-40 w-full" />
-      ) : payments.isError ? (
-        <ErrorState message={payments.error.message} />
-      ) : payments.data.data.length === 0 ? (
-        <EmptyState
-          icon={CreditCard}
-          title="No payments yet"
-          description="Create a top-up on the Credits page."
-        >
-          <Button size="sm" onClick={() => void navigate({ href: "/billing/credits" })}>
-            Go to Credits
-          </Button>
-        </EmptyState>
-      ) : (
-        <DataTable columns={columns} data={payments.data.data} empty="No payments" />
-      )}
-    </div>
+    <ScrollPanel label="Payment history" stickyHeader>
+      <DataTable columns={columns} data={payments} empty="No payments" />
+    </ScrollPanel>
   );
 }
 
