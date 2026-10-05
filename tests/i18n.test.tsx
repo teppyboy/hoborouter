@@ -143,3 +143,36 @@ test("LanguageToggle renders an accessible VI/EN button", () => {
   expect(html).toContain('aria-label="Switch to Vietnamese"');
   expect(html).toContain(">VI<"); // shows the locale you can switch TO
 });
+
+// Client mount: zustand serves the initial state as the SSR snapshot, so a
+// store flip must be proven with a real DOM click (same reason as auth-i18n).
+test("clicking LanguageToggle flips the locale and mirrors <html lang>", async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+  const { act } = await import("react");
+  // react-dom/client is only resolvable through the web app's node_modules.
+  const webDir = new URL("../apps/web/src/components/", import.meta.url).pathname;
+  const { createRoot } = (await import(Bun.resolveSync("react-dom/client", webDir))) as {
+    createRoot: (c: HTMLElement) => {
+      render: (n: unknown) => void;
+      unmount: () => void;
+    };
+  };
+  useLocaleStore.getState().setLocale("en");
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(<LanguageToggle />));
+  const click = (label: string) => {
+    const button = container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+    if (!button) throw new Error(`missing button: ${label}`);
+    act(() => button.dispatchEvent(new window.MouseEvent("click", { bubbles: true })));
+  };
+  click("Switch to Vietnamese");
+  expect(useLocaleStore.getState().locale).toBe("vi");
+  expect(document.documentElement.lang).toBe("vi");
+  click("Chuyển sang tiếng Anh");
+  expect(useLocaleStore.getState().locale).toBe("en");
+  expect(document.documentElement.lang).toBe("en");
+  act(() => root.unmount());
+  container.remove();
+});

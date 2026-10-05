@@ -64,3 +64,13 @@ test("account menu keeps avatar trigger; username hidden below sm", () => {
   expect(html).toContain('aria-label="Account menu"');
   expect(html).toMatch(/class="[^"]*hidden[^"]*sm:inline/);
 });
+
+test("header mounts the language toggle beside the theme toggle", () => {
+  const html = renderShell();
+  expect(html).toContain('aria-label="Switch to Vietnamese"');
+  expect(html).toContain(">VI<");
+  // Language toggle renders before the theme toggle in the header controls.
+  expect(html.indexOf('aria-label="Switch to Vietnamese"')).toBeLessThan(
+    html.indexOf('aria-label="Theme:'),
+  );
+});

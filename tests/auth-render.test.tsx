@@ -21,3 +21,12 @@ test("AuthLayout renders SSR without legacy mask/glow classes", () => {
   expect(html).not.toContain("backdrop-blur");
   expect(html).not.toContain("shadow-lg");
 });
+
+test("AuthLayout mounts the language toggle beside the theme toggle", () => {
+  const html = render();
+  expect(html).toContain('aria-label="Switch to Vietnamese"');
+  expect(html).toContain(">VI<");
+  expect(html.indexOf('aria-label="Switch to Vietnamese"')).toBeLessThan(
+    html.indexOf('aria-label="Switch to dark mode"'),
+  );
+});

@@ -3,6 +3,7 @@
 import { type ReactNode } from "react";
 import { Shuffle } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
+import { LanguageToggle } from "./language-toggle";
 
 export function AuthLayout({ children }: { children: ReactNode }) {
   return (
@@ -12,7 +13,8 @@ export function AuthLayout({ children }: { children: ReactNode }) {
       <div className="flex items-center gap-2 p-4 sm:p-6">
         <Shuffle className="size-5 shrink-0" aria-hidden />
         <span className="font-semibold tracking-tight">Hoborouter</span>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1">
+          <LanguageToggle />
           <ThemeToggle />
         </div>
       </div>

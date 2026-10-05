@@ -211,3 +211,16 @@ test("public layout shows support section and brand from instance", () => {
   expect(html).toContain("Hoborouter");
   expect(html).toContain("body");
 });
+
+test("public layout header mounts the language toggle beside the theme toggle", () => {
+  const html = renderToStaticMarkup(
+    <PublicLayout instance={instance}>
+      <p>body</p>
+    </PublicLayout>,
+  );
+  expect(html).toContain('aria-label="Switch to Vietnamese"');
+  expect(html).toContain(">VI<");
+  expect(html.indexOf('aria-label="Switch to Vietnamese"')).toBeLessThan(
+    html.indexOf('aria-label="Switch to dark mode"'),
+  );
+});

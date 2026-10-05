@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { Shuffle } from "lucide-react";
 import { ThemeToggle } from "../../components/theme-toggle";
+import { LanguageToggle } from "../../components/language-toggle";
 
 // Renders a small, safe subset of inline markdown: links, bold, code.
 function inline(text: string, keyBase: string) {
@@ -180,7 +181,10 @@ export function LegalPage({ title, md }: { title: string; md: string }) {
             <Shuffle className="size-5 shrink-0" aria-hidden />
             <span className="text-lg font-bold tracking-tight">Hoborouter</span>
           </Link>
-          <ThemeToggle />
+          <div className="flex items-center gap-1">
+            <LanguageToggle />
+            <ThemeToggle />
+          </div>
         </div>
         <h1 className="mt-6 text-3xl font-bold">{title}</h1>
         <p className="mt-1 text-sm text-muted-foreground">Last updated: 2026-10-02</p>

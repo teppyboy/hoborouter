@@ -35,6 +35,7 @@ import { useWorkspaceStore } from "../lib/workspace";
 import { preloadChunk, preloadNavChunksOnIdle } from "../lib/prefetch";
 import { gravatarUrl } from "../lib/avatar";
 import { resendVerification, type SessionUser } from "../lib/auth";
+import { LanguageToggle } from "./language-toggle";
 import { usePublicConfig } from "./turnstile";
 import { useCurrentWorkspaceId, useWorkspaces, type Workspace } from "../lib/workspace-queries";
 import { CreateWorkspace } from "./create-workspace";
@@ -520,6 +521,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <WorkspaceSwitcher />
             </div>
             <div className="flex-1" />
+            <LanguageToggle />
             <ThemeToggle />
             <Separator orientation="vertical" className="h-4" />
             <UserMenu />

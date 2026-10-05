@@ -6,6 +6,7 @@
 import { type ReactNode } from "react";
 import { Shuffle } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
+import { LanguageToggle } from "./language-toggle";
 import { SupportLinks } from "./support-links";
 import type { PublicInstance } from "../lib/public-queries";
 
@@ -55,6 +56,7 @@ export function PublicLayout({
             >
               Sign up
             </a>
+            <LanguageToggle />
             <ThemeToggle />
           </div>
         </div>
