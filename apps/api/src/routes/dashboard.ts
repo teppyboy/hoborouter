@@ -249,6 +249,7 @@ export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
               balance: wallets.balance,
               reserved: wallets.reserved,
               period_end: subscriptions.current_period_end,
+              canceled_at: subscriptions.canceled_at,
               plan_name: subscriptionPlans.name,
               rate_limit_per_minute: subscriptionPlans.rate_limit_per_minute,
             })
@@ -275,6 +276,9 @@ export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
               balance: sub.balance,
               available: sub.balance - sub.reserved,
               period_end: sub.period_end,
+              // Cancel marker (decision b): informational only — credit stays
+              // spendable through period_end and expiry is unchanged.
+              canceled: sub.canceled_at !== null,
               plan_name: sub.plan_name,
               rate_limit_per_minute: sub.rate_limit_per_minute,
               expired: sub.period_end <= now,

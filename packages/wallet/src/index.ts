@@ -23,10 +23,11 @@ export type {
 } from "./billing";
 export {
   applySubscriptionExpiry,
+  cancelSubscription,
   ensureSubscriptionWallet,
   extendOrCreateSubscription,
   getActiveUnexpiredSubscription,
   getSubscriptionWallet,
   MEMO_SUBSCRIPTION_EXPIRED,
 } from "./subscription";
-export type { SubscriptionRow, WalletRow } from "./subscription";
+export type { SubscriptionRow, WalletRow, CanceledSubscription } from "./subscription";

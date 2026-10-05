@@ -2,7 +2,7 @@
 // the funding selector (billing.ts) and plan settlement (payments/credit.ts).
 // All money is integer VND; ledger is append-only; expired credit is forfeited
 // via an adjustment debit, never by deleting rows.
-import { and, eq, gt, lte } from "drizzle-orm";
+import { and, eq, gt, isNull, lte } from "drizzle-orm";
 import type { Tx } from "@hoborouter/db";
 import {
   auditLog,
@@ -20,6 +20,9 @@ export type SubscriptionRow = {
   id: string;
   plan_id: string;
   status: "active" | "canceled";
+  // Cancellation marker (decision b): set when the member cancels; the row
+  // keeps status 'active' and its credit stays spendable through period end.
+  canceled_at: number | null;
   current_period_start: number;
   current_period_end: number;
 };
@@ -103,6 +106,7 @@ export async function getActiveUnexpiredSubscription(
       id: subscriptions.id,
       plan_id: subscriptions.plan_id,
       status: subscriptions.status,
+      canceled_at: subscriptions.canceled_at,
       current_period_start: subscriptions.current_period_start,
       current_period_end: subscriptions.current_period_end,
     })
@@ -115,6 +119,87 @@ export async function getActiveUnexpiredSubscription(
       ),
     );
   return rows[0] ?? null;
+}
+
+export type CanceledSubscription = {
+  id: string;
+  canceled_at: number;
+  current_period_end: number;
+};
+
+/**
+ * Member cancel (decision b): stops renewal ONLY. The row keeps status
+ * 'active' (so the one-active index, gateway funding and lazy expiry are
+ * untouched) and the credit stays spendable through current_period_end;
+ * the normal lazy expiry then forfeits the leftover exactly as for an
+ * uncanceled subscription. No wallet or ledger mutation here — cancel moves
+ * no money. Idempotent: repeats return the first cancel marker without a
+ * second audit row. Null when the workspace has no active subscription.
+ */
+export async function cancelSubscription(
+  tx: Tx,
+  workspaceId: string,
+  now: number,
+): Promise<CanceledSubscription | null> {
+  const rows = await tx
+    .select({
+      id: subscriptions.id,
+      canceled_at: subscriptions.canceled_at,
+      current_period_end: subscriptions.current_period_end,
+    })
+    .from(subscriptions)
+    .where(and(eq(subscriptions.workspace_id, workspaceId), eq(subscriptions.status, "active")));
+  const existing = rows[0];
+  if (!existing) return null;
+  if (existing.canceled_at !== null) {
+    return {
+      id: existing.id,
+      canceled_at: existing.canceled_at,
+      current_period_end: existing.current_period_end,
+    };
+  }
+  const cas = await tx
+    .update(subscriptions)
+    .set({ canceled_at: now })
+    .where(and(eq(subscriptions.id, existing.id), isNull(subscriptions.canceled_at)))
+    .returning({ id: subscriptions.id });
+  if (cas.length !== 1) {
+    // A concurrent cancel won the CAS; its marker is the same decision, so
+    // re-read instead of failing the (idempotent) request.
+    const fresh = await tx
+      .select({
+        id: subscriptions.id,
+        canceled_at: subscriptions.canceled_at,
+        current_period_end: subscriptions.current_period_end,
+      })
+      .from(subscriptions)
+      .where(eq(subscriptions.id, existing.id));
+    const cur = fresh[0];
+    if (!cur || cur.canceled_at === null) {
+      throw new WalletError(
+        "conflict",
+        `subscription ${existing.id} changed concurrently during cancel`,
+      );
+    }
+    return {
+      id: cur.id,
+      canceled_at: cur.canceled_at,
+      current_period_end: cur.current_period_end,
+    };
+  }
+  await tx.insert(auditLog).values({
+    id: crypto.randomUUID(),
+    workspace_id: workspaceId,
+    action: "subscription.cancel",
+    target: existing.id,
+    detail: { periodEnd: existing.current_period_end },
+    created_at: now,
+  });
+  return {
+    id: existing.id,
+    canceled_at: now,
+    current_period_end: existing.current_period_end,
+  };
 }
 
 /**

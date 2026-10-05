@@ -50,6 +50,13 @@
       "when": 1791190000000,
       "tag": "0006_payment_snapshot_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791300000000,
+      "tag": "0007_subscription_canceled_at",
+      "breakpoints": true
     }
   ]
 }

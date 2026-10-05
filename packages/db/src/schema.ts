@@ -296,6 +296,11 @@ export const subscriptions = pgTable(
     status: text("status", { enum: ["active", "canceled"] })
       .notNull()
       .default("active"),
+    // Cancel marker (decision b): set when the member cancels. Renewal is
+    // not automatic in this system, so cancellation is informational —
+    // status stays 'active' and credit stays spendable through
+    // current_period_end, after which the normal lazy expiry forfeits it.
+    canceled_at: big("canceled_at"),
     current_period_start: big("current_period_start").notNull(),
     current_period_end: big("current_period_end").notNull(),
     created_at: big("created_at").notNull(),
