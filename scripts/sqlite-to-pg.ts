@@ -10,7 +10,14 @@
 // NOTE: imports only @hoborouter/db (not drizzle-orm directly) because
 // drizzle-orm is only resolvable from within packages/db.
 import { Database } from "bun:sqlite";
-import { closeDb, createDb, migrate, schema, MAX_SAFE_INTEGER_MONEY, type Db } from "@hoborouter/db";
+import {
+  closeDb,
+  createDb,
+  migrate,
+  schema,
+  MAX_SAFE_INTEGER_MONEY,
+  type Db,
+} from "@hoborouter/db";
 import type { PgTable } from "drizzle-orm/pg-core";
 
 const args = process.argv.slice(2);
@@ -21,7 +28,9 @@ function arg(name: string): string | undefined {
 const from = arg("--from");
 const force = args.includes("--force");
 if (!from) {
-  console.error("Usage: bun scripts/sqlite-to-pg.ts --from <sqlite file> [--to <DATABASE_URL>] [--force]");
+  console.error(
+    "Usage: bun scripts/sqlite-to-pg.ts --from <sqlite file> [--to <DATABASE_URL>] [--force]",
+  );
   process.exit(1);
 }
 
@@ -81,7 +90,12 @@ function tableColumns(table: PgTable): ColumnInfo[] {
       const col = value as { name: string; dataType: string; columnType?: string };
       // auth-schema.tsMs() is a customType with dataType bigint whose toDriver
       // expects a Date (not an epoch-ms number like plain bigint mode 'number').
-      out.push({ key, db: col.name, dataType: col.dataType, custom: col.columnType === "PgCustomColumn" });
+      out.push({
+        key,
+        db: col.name,
+        dataType: col.dataType,
+        custom: col.columnType === "PgCustomColumn",
+      });
     }
   }
   return out;

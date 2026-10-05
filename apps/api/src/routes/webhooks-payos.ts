@@ -45,18 +45,25 @@ export const payosWebhookRoutes = (db: Db, cfg: PayosWebhookConfig) => {
         });
       }
       try {
-        await processMockPaymentEvent(db, {
+        const result = await processMockPaymentEvent(db, {
           provider: "payos",
           orderCode: event.orderCode,
           providerReference: event.providerRef,
           amount: event.amountVnd,
           rawPayload: raw,
+          // Signed field, present only after signature verification; stored
+          // in audit detail for late-paid evidence, never trusted for money.
+          transactionDateTime: event.transactionDateTime,
         });
-        // 2xx only after durable commit; replays also 2xx, no second credit.
-        return new Response(JSON.stringify({ success: true }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+        // 2xx only after durable commit; replays and late-paid evidence are
+        // also 2xx with no credit.
+        return new Response(
+          JSON.stringify({
+            success: true,
+            ...(result.outcome === "late_paid" ? { status: "late_paid" } : {}),
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
       } catch (err) {
         if (err instanceof MockPaymentError) {
           if (

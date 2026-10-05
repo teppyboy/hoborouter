@@ -87,7 +87,11 @@ const fakeCpa = Bun.serve({
             object: "chat.completion",
             model: UPSTREAM,
             choices: [
-              { index: 0, message: { role: "assistant", content: UPSTREAM }, finish_reason: "stop" },
+              {
+                index: 0,
+                message: { role: "assistant", content: UPSTREAM },
+                finish_reason: "stop",
+              },
             ],
             usage: {
               prompt_tokens: 5,
@@ -156,10 +160,27 @@ async function setup() {
   ).toBe(201);
 
   const now = Date.now();
-  await q(db, "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-nl','nl','active',?)", now);
-  await q(db, "INSERT INTO workspace_members (workspace_id, user_id, role) SELECT 'ws-nl', id, 'owner' FROM users WHERE email = 'noleak@example.com'");
-  await q(db, "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-nl','ws-nl','VND',1000000000,0,0,?)", now);
-  await q(db, "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key-nl','ws-nl',?,?,'nl','active',?)", hashApiKey(PLAINTEXT), "sk-hbr-nl...", now);
+  await q(
+    db,
+    "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-nl','nl','active',?)",
+    now,
+  );
+  await q(
+    db,
+    "INSERT INTO workspace_members (workspace_id, user_id, role) SELECT 'ws-nl', id, 'owner' FROM users WHERE email = 'noleak@example.com'",
+  );
+  await q(
+    db,
+    "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-nl','ws-nl','VND',1000000000,0,0,?)",
+    now,
+  );
+  await q(
+    db,
+    "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key-nl','ws-nl',?,?,'nl','active',?)",
+    hashApiKey(PLAINTEXT),
+    "sk-hbr-nl...",
+    now,
+  );
   return { app };
 }
 

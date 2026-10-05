@@ -24,9 +24,7 @@ export function zeroFillDaily(daily: DailyPoint[], days: number): DailyPoint[] {
   const now = Date.now();
   for (let i = days - 1; i >= 0; i--) {
     const day = utcDay(now - i * 86_400_000);
-    out.push(
-      byDay.get(day) ?? { day, requests: 0, tokens: 0, spend_vnd: 0, errors: 0 },
-    );
+    out.push(byDay.get(day) ?? { day, requests: 0, tokens: 0, spend_vnd: 0, errors: 0 });
   }
   return out;
 }

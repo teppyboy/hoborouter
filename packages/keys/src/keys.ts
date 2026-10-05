@@ -34,14 +34,21 @@ export async function verifyApiKey(db: Db | Tx, plaintext: string): Promise<ApiK
     .select({ api_key_id: apiKeys.id, workspace_id: apiKeys.workspace_id, status: apiKeys.status })
     .from(apiKeys)
     .where(
-      and(eq(apiKeys.key_hash, hashApiKey(plaintext)), inArray(apiKeys.status, ["active", "enabled"])),
+      and(
+        eq(apiKeys.key_hash, hashApiKey(plaintext)),
+        inArray(apiKeys.status, ["active", "enabled"]),
+      ),
     )
     .limit(1);
   return rows[0] ?? null;
 }
 
 /** Zero permission rows = unrestricted (true); otherwise model must be in the set. */
-export async function isModelAllowed(db: Db | Tx, apiKeyId: string, modelId: string): Promise<boolean> {
+export async function isModelAllowed(
+  db: Db | Tx,
+  apiKeyId: string,
+  modelId: string,
+): Promise<boolean> {
   const hasAny = await db
     .select({ x: apiKeyModelPermissions.api_key_id })
     .from(apiKeyModelPermissions)

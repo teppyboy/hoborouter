@@ -69,10 +69,17 @@ async function request<T>(path: string, init: RequestInit, opts?: ConversationsF
   try {
     res = await doFetch(path, { credentials: "include", ...init, signal: opts?.signal });
   } catch {
-    throw new ConversationError("network", "Could not reach the server. Check your connection and try again.");
+    throw new ConversationError(
+      "network",
+      "Could not reach the server. Check your connection and try again.",
+    );
   }
   if (!res.ok) {
-    throw new ConversationError(kindForStatus(res.status), `Chat request failed (${res.status})`, res.status);
+    throw new ConversationError(
+      kindForStatus(res.status),
+      `Chat request failed (${res.status})`,
+      res.status,
+    );
   }
   try {
     return JSON.parse(await res.text()) as T;
@@ -127,7 +134,10 @@ export async function listConversations(
     { method: "GET" },
     opts,
   );
-  if (!Array.isArray(body?.data) || (body.nextCursor !== null && typeof body.nextCursor !== "string")) {
+  if (
+    !Array.isArray(body?.data) ||
+    (body.nextCursor !== null && typeof body.nextCursor !== "string")
+  ) {
     throw new ConversationError("invalid", "Chat service returned an unexpected response.");
   }
   return { data: body.data as ConversationSummary[], nextCursor: body.nextCursor ?? null };

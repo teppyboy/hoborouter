@@ -18,12 +18,7 @@ import {
 } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Skeleton } from "../../components/ui/skeleton";
-import {
-  formatTokens,
-  formatVnd,
-  formatUsdFromVnd,
-  useUsdVndRate,
-} from "../../lib/format";
+import { formatTokens, formatVnd, formatUsdFromVnd, useUsdVndRate } from "../../lib/format";
 import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useUsageSummary, successRateLabel } from "../logs/api";
@@ -72,8 +67,15 @@ function DailyChart({
         <span>{fmt(max / 2)}</span>
         <span>{fmt(0)}</span>
       </div>
-      <div role="group" aria-label={`Daily ${metric} over the last ${days} days`} className="relative min-w-0 flex-1">
-        <div aria-hidden="true" className="absolute inset-0 flex h-[240px] flex-col justify-between">
+      <div
+        role="group"
+        aria-label={`Daily ${metric} over the last ${days} days`}
+        className="relative min-w-0 flex-1"
+      >
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 flex h-[240px] flex-col justify-between"
+        >
           {[0, 1, 2].map((i) => (
             <div key={i} className="h-px w-full bg-border" />
           ))}
@@ -111,7 +113,9 @@ function KpiCard({ title, value, caption }: { title: string; value: string; capt
         <CardTitle className="text-xs font-medium text-muted-foreground">{title}</CardTitle>
       </CardHeader>
       <CardContent>
-        <p className="font-mono text-2xl" title={caption}>{value}</p>
+        <p className="font-mono text-2xl" title={caption}>
+          {value}
+        </p>
       </CardContent>
     </Card>
   );
@@ -275,9 +279,7 @@ export default function UsagePage() {
                 {by_model.map((m) => {
                   const tokens = m.tokens;
                   const share =
-                    totalTokens > 0
-                      ? ((tokens / totalTokens) * 100).toFixed(1) + "%"
-                      : "—";
+                    totalTokens > 0 ? ((tokens / totalTokens) * 100).toFixed(1) + "%" : "—";
                   return (
                     <TableRow key={String(m.public_model)}>
                       <TableCell className="font-mono text-xs">{String(m.public_model)}</TableCell>

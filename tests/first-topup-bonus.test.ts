@@ -4,7 +4,18 @@
 // disables, any present-but-invalid amount means no bonus (topup still credits).
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { createTestDb, type Db } from "../packages/db/src/index";
-import { processMockPaymentEvent } from "../packages/payments/src/credit";
+import {
+  processMockPaymentEvent,
+  type ProcessMockEventResult,
+} from "../packages/payments/src/credit";
+
+// Narrow the discriminated result union so `balanceAfter` reads type-check;
+// throws (failing the test) on any non-credited outcome.
+function assertCredited(
+  r: ProcessMockEventResult,
+): asserts r is Extract<ProcessMockEventResult, { outcome: "credited" }> {
+  if (r.outcome !== "credited") throw new Error(`expected credited outcome, got ${r.outcome}`);
+}
 
 const NOW = 1_700_000_000_000;
 
@@ -63,10 +74,9 @@ async function clearBonusSettings(): Promise<void> {
 }
 
 async function balance(ws: string): Promise<number> {
-  const rows = await q<{ balance: string }>(
-    `SELECT balance FROM wallets WHERE workspace_id = $1`,
-    [ws],
-  );
+  const rows = await q<{ balance: string }>(`SELECT balance FROM wallets WHERE workspace_id = $1`, [
+    ws,
+  ]);
   return Number(rows[0]!.balance);
 }
 
@@ -96,11 +106,10 @@ describe("first topup bonus", () => {
     await seedPlainPayment(ws, "pay-ftb-1", 50_000);
     const r = await processMockPaymentEvent(db, ev("ORD-pay-ftb-1", "evt-ftb-1", 50_000));
     expect(r.outcome).toBe("credited");
+    assertCredited(r);
     expect(r.balanceAfter).toBe(70_000);
     expect(await balance(ws)).toBe(70_000);
-    expect(await adjustments("pay-ftb-1")).toEqual([
-      { memo: "first topup bonus", amount: 20_000 },
-    ]);
+    expect(await adjustments("pay-ftb-1")).toEqual([{ memo: "first topup bonus", amount: 20_000 }]);
     expect(await topups("pay-ftb-1")).toHaveLength(1);
     const grants = await q<{ amount: string; payment_id: string }>(
       `SELECT amount, payment_id FROM first_topup_bonuses WHERE workspace_id = $1`,
@@ -138,6 +147,7 @@ describe("first topup bonus", () => {
     await processMockPaymentEvent(db, ev("ORD-pay-ftb-3a", "evt-ftb-3a", 50_000));
     await seedPlainPayment(ws, "pay-ftb-3b", 30_000);
     const r = await processMockPaymentEvent(db, ev("ORD-pay-ftb-3b", "evt-ftb-3b", 30_000));
+    assertCredited(r);
     expect(r.balanceAfter).toBe(100_000); // 50k + 20k bonus (3a) + 30k, no second bonus
     expect(await adjustments("pay-ftb-3b")).toEqual([]);
   });
@@ -175,6 +185,7 @@ describe("first topup bonus", () => {
     await setSetting("first_topup_bonus_enabled", "false");
     await seedPlainPayment(ws, "pay-ftb-5", 50_000);
     const r = await processMockPaymentEvent(db, ev("ORD-pay-ftb-5", "evt-ftb-5", 50_000));
+    assertCredited(r);
     expect(r.balanceAfter).toBe(50_000);
     expect(await adjustments("pay-ftb-5")).toEqual([]);
     expect(await topups("pay-ftb-5")).toHaveLength(1);
@@ -188,6 +199,7 @@ describe("first topup bonus", () => {
     await setSetting("first_topup_bonus_amount_vnd", "not-a-number");
     await seedPlainPayment(ws, "pay-ftb-6", 50_000);
     const r = await processMockPaymentEvent(db, ev("ORD-pay-ftb-6", "evt-ftb-6", 50_000));
+    assertCredited(r);
     expect(r.balanceAfter).toBe(50_000);
     expect(await adjustments("pay-ftb-6")).toEqual([]);
     expect(await topups("pay-ftb-6")).toHaveLength(1);
@@ -199,10 +211,9 @@ describe("first topup bonus", () => {
     await setSetting("first_topup_bonus_amount_vnd", "5000");
     await seedPlainPayment(ws, "pay-ftb-7", 50_000);
     const r = await processMockPaymentEvent(db, ev("ORD-pay-ftb-7", "evt-ftb-7", 50_000));
+    assertCredited(r);
     expect(r.balanceAfter).toBe(55_000);
-    expect(await adjustments("pay-ftb-7")).toEqual([
-      { memo: "first topup bonus", amount: 5_000 },
-    ]);
+    expect(await adjustments("pay-ftb-7")).toEqual([{ memo: "first topup bonus", amount: 5_000 }]);
   });
 
   test("pre-release workspace: earlier succeeded payment, no bonus row -> no bonus on next topup", async () => {
@@ -215,12 +226,12 @@ describe("first topup bonus", () => {
       [ws, NOW] as never[],
     );
     // The pre-release payment already credited the wallet (no ledger row seeded).
-    await db.$client.unsafe(
-      `UPDATE wallets SET balance = 50000 WHERE workspace_id = $1`,
-      [ws] as never[],
-    );
+    await db.$client.unsafe(`UPDATE wallets SET balance = 50000 WHERE workspace_id = $1`, [
+      ws,
+    ] as never[]);
     await seedPlainPayment(ws, "pay-ftb-9b", 30_000);
     const r = await processMockPaymentEvent(db, ev("ORD-pay-ftb-9b", "evt-ftb-9b", 30_000));
+    assertCredited(r);
     expect(r.balanceAfter).toBe(80_000); // 50k (pre-release) + 30k, no bonus
     expect(await adjustments("pay-ftb-9b")).toEqual([]);
     expect(await q(`SELECT 1 FROM first_topup_bonuses WHERE workspace_id = $1`, [ws])).toHaveLength(
@@ -233,6 +244,7 @@ describe("first topup bonus", () => {
     const ws = await seedWorkspace();
     await seedPlainPayment(ws, "pay-ftb-10", 50_000);
     const r = await processMockPaymentEvent(db, ev("ORD-pay-ftb-10", "evt-ftb-10", 50_000));
+    assertCredited(r);
     expect(r.balanceAfter).toBe(70_000);
     expect(await adjustments("pay-ftb-10")).toEqual([
       { memo: "first topup bonus", amount: 20_000 },
@@ -255,10 +267,9 @@ describe("first topup bonus", () => {
       rawPayload: JSON.stringify({ source: "admin-complete" }),
     });
     expect(r.outcome).toBe("credited");
+    assertCredited(r);
     expect(r.balanceAfter).toBe(70_000);
-    expect(await adjustments("pay-ftb-8")).toEqual([
-      { memo: "first topup bonus", amount: 20_000 },
-    ]);
+    expect(await adjustments("pay-ftb-8")).toEqual([{ memo: "first topup bonus", amount: 20_000 }]);
     expect(await topups("pay-ftb-8")).toHaveLength(1);
   });
 });

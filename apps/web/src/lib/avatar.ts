@@ -16,11 +16,7 @@ export async function gravatarUrl(email: string | null | undefined): Promise<str
 function canvasToBlob(canvas: OffscreenCanvas | HTMLCanvasElement, type: string): Promise<Blob> {
   if ("convertToBlob" in canvas) return canvas.convertToBlob({ type, quality: 0.85 });
   return new Promise((resolve, reject) =>
-    canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error("encoding failed"))),
-      type,
-      0.85,
-    ),
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("encoding failed"))), type, 0.85),
   );
 }
 

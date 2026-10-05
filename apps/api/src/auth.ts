@@ -163,8 +163,7 @@ export function createAuth(db: Db) {
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path !== "/sign-up/email" && ctx.path !== "/change-password") return;
         const body = (ctx.body ?? {}) as Record<string, unknown>;
-        const password =
-          ctx.path === "/sign-up/email" ? body.password : body.newPassword;
+        const password = ctx.path === "/sign-up/email" ? body.password : body.newPassword;
         if (typeof password !== "string") return;
         const unmet = checkPassword(password);
         if (unmet.length > 0) {

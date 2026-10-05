@@ -7,6 +7,7 @@ import {
   Boxes,
   CreditCard,
   Cpu,
+  Gift,
   Settings2,
   KeyRound,
   LayoutDashboard,
@@ -51,13 +52,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from "./ui/select";
 import { Separator } from "./ui/separator";
 import { Badge } from "./ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetTitle,
-  SheetTrigger,
-} from "./ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from "./ui/sheet";
 
 interface NavItem {
   label: string;
@@ -93,6 +88,7 @@ const ADMIN_NAV: NavItem[] = [
   { label: "Models", to: "/admin/models", icon: Boxes },
   { label: "Payments", to: "/admin/payments", icon: CreditCard },
   { label: "Bundles & plans", to: "/admin/bundles", icon: Package },
+  { label: "Promotions", to: "/admin/promotions", icon: Gift },
   { label: "Audit log", to: "/admin/audit", icon: ScrollText },
   { label: "System", to: "/admin/system", icon: Cpu },
   { label: "Settings", to: "/admin/settings", icon: Settings2 },
@@ -382,9 +378,7 @@ function NavLinks({
       {NAV_GROUPS.map((group, gi) => (
         <div key={gi} className={cn(gi > 0 && "mt-4")}>
           {group.label && !collapsed && (
-            <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">
-              {group.label}
-            </p>
+            <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">{group.label}</p>
           )}
           {group.items.map((item) => (
             <NavLink

@@ -26,8 +26,7 @@ export { users, session, account, verification };
 /** Largest integer representable exactly in IEEE doubles — upper bound for all canonical money/token columns. */
 export const MAX_SAFE_INTEGER_MONEY = 9007199254740991;
 const MAX_BOUND = sql.raw(String(MAX_SAFE_INTEGER_MONEY));
-const intBounded = (col: AnyPgColumn) =>
-  sql`${col} >= 0 AND ${col} <= ${MAX_BOUND}`;
+const intBounded = (col: AnyPgColumn) => sql`${col} >= 0 AND ${col} <= ${MAX_BOUND}`;
 
 const big = (name: string) => bigint(name, { mode: "number" });
 
@@ -106,7 +105,9 @@ export const wallets = pgTable(
       .notNull()
       .references(() => workspaces.id),
     currency: text("currency").notNull().default("VND"),
-    kind: text("kind", { enum: ["topup", "subscription"] }).notNull().default("topup"),
+    kind: text("kind", { enum: ["topup", "subscription"] })
+      .notNull()
+      .default("topup"),
     balance: big("balance").notNull(),
     reserved: big("reserved").notNull(),
     version: integer("version").notNull().default(0),
@@ -196,6 +197,12 @@ export const payments = pgTable(
     // plain top-up (whose settlement path must stay unchanged).
     bundle_id: text("bundle_id").references(() => creditBundles.id),
     subscription_plan_id: text("subscription_plan_id").references(() => subscriptionPlans.id),
+    // Creation-time snapshot of what the payer entered (never recomputed):
+    // VND payments snapshot the VND amount text; USD top-ups snapshot the
+    // exact input text plus the FX rate used for the ceiling conversion.
+    input_currency: text("input_currency"),
+    input_amount_text: text("input_amount_text"),
+    fx_rate_vnd_per_usd: big("fx_rate_vnd_per_usd"),
   },
   (t) => [
     uniqueIndex("payments_provider_order").on(t.provider, t.provider_order_code),
@@ -203,6 +210,10 @@ export const payments = pgTable(
     check(
       "payments_one_purchase_kind",
       sql`${t.bundle_id} IS NULL OR ${t.subscription_plan_id} IS NULL`,
+    ),
+    check(
+      "payments_fx_rate_positive",
+      sql`${t.fx_rate_vnd_per_usd} IS NULL OR ${t.fx_rate_vnd_per_usd} > 0`,
     ),
   ],
 );
@@ -264,7 +275,10 @@ export const subscriptionPlans = pgTable(
     check("sp_price_vnd", sql`${t.price_vnd} > 0 AND ${t.price_vnd} <= ${MAX_BOUND}`),
     check("sp_credit_per_period_vnd", intBounded(t.credit_per_period_vnd)),
     check("sp_period_days", sql`${t.period_days} >= 1`),
-    check("sp_rate_limit_per_minute", sql`${t.rate_limit_per_minute} >= 1 AND ${t.rate_limit_per_minute} <= 600`),
+    check(
+      "sp_rate_limit_per_minute",
+      sql`${t.rate_limit_per_minute} >= 1 AND ${t.rate_limit_per_minute} <= 600`,
+    ),
     check("sp_created_at", intBounded(t.created_at)),
   ],
 );
@@ -279,7 +293,9 @@ export const subscriptions = pgTable(
     plan_id: text("plan_id")
       .notNull()
       .references(() => subscriptionPlans.id),
-    status: text("status", { enum: ["active", "canceled"] }).notNull().default("active"),
+    status: text("status", { enum: ["active", "canceled"] })
+      .notNull()
+      .default("active"),
     current_period_start: big("current_period_start").notNull(),
     current_period_end: big("current_period_end").notNull(),
     created_at: big("created_at").notNull(),
@@ -343,6 +359,61 @@ export const firstTopupBonuses = pgTable(
   ],
 );
 
+/**
+ * Promo codes grant a one-time credit per workspace on redemption. Only the
+ * app-side hash is stored — the plaintext code never reaches the database.
+ * `uses` is bounded by `max_uses` so exhausted codes cannot be redeemed even
+ * if app-side checks race.
+ */
+export const promoCodes = pgTable(
+  "promo_codes",
+  {
+    id: text("id").primaryKey(),
+    code_hash: text("code_hash").notNull(),
+    name: text("name").notNull(),
+    amount_vnd: big("amount_vnd").notNull(),
+    max_uses: integer("max_uses").notNull(),
+    uses: integer("uses").notNull().default(0),
+    expires_at: big("expires_at"),
+    active: boolean("active").notNull().default(true),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("promo_codes_code_hash").on(t.code_hash),
+    check("pc_amount_vnd", sql`${t.amount_vnd} > 0 AND ${t.amount_vnd} <= ${MAX_BOUND}`),
+    check("pc_max_uses", sql`${t.max_uses} >= 1`),
+    check("pc_uses", sql`${t.uses} >= 0 AND ${t.uses} <= ${t.max_uses}`),
+    check("pc_expires_at", sql`${t.expires_at} IS NULL OR ${intBounded(t.expires_at)}`),
+    check("pc_created_at", intBounded(t.created_at)),
+  ],
+);
+
+/**
+ * Redemption record + idempotency gate: the unique (promo_code_id,
+ * workspace_id) pair makes a second redemption of the same code by the same
+ * workspace impossible at the storage layer, regardless of app races.
+ */
+export const promoRedemptions = pgTable(
+  "promo_redemptions",
+  {
+    id: text("id").primaryKey(),
+    promo_code_id: text("promo_code_id")
+      .notNull()
+      .references(() => promoCodes.id),
+    workspace_id: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    ledger_entry_id: text("ledger_entry_id")
+      .notNull()
+      .references(() => ledgerEntries.id),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("promo_redemptions_code_workspace").on(t.promo_code_id, t.workspace_id),
+    check("pr_created_at", intBounded(t.created_at)),
+  ],
+);
+
 // --- canonical paid-gateway catalog ---
 export const models = pgTable(
   "models",
@@ -362,6 +433,8 @@ export const models = pgTable(
     prompt_caching: text("prompt_caching", { enum: ["inherit", "on", "off"] })
       .notNull()
       .default("inherit"),
+    // Marks models resolvable by the hoborouter/auto cheapest-first router.
+    auto_eligible: boolean("auto_eligible").notNull().default(false),
     created_at: big("created_at").notNull(),
     updated_at: big("updated_at").notNull(),
   },
@@ -677,10 +750,7 @@ export const settlements = pgTable(
     check("st_charged_input_type", intBounded(t.charged_input)),
     check("st_charged_output_type", intBounded(t.charged_output)),
     check("st_charged_total_type", intBounded(t.charged_total)),
-    check(
-      "st_charged_vnd_nonneg",
-      sql`${t.charged_vnd} IS NULL OR ${intBounded(t.charged_vnd)}`,
-    ),
+    check("st_charged_vnd_nonneg", sql`${t.charged_vnd} IS NULL OR ${intBounded(t.charged_vnd)}`),
     check(
       "st_one_reservation",
       sql`(${t.reservation_id} IS NOT NULL) != (${t.billing_reservation_id} IS NOT NULL)`,
@@ -793,6 +863,29 @@ export const chatConversations = pgTable(
       "chat_conversations_archived_at",
       sql`${t.archived_at} IS NULL OR ${intBounded(t.archived_at)}`,
     ),
+  ],
+);
+
+// --- support lead intake (paid chatbot-integration requests) ---
+export const supportLeads = pgTable(
+  "support_leads",
+  {
+    id: text("id").primaryKey(),
+    contact_email: text("contact_email").notNull(),
+    contact_channel: text("contact_channel"),
+    workspace_id: text("workspace_id").references(() => workspaces.id),
+    message: text("message").notNull(),
+    status: text("status", { enum: ["open", "handled"] })
+      .notNull()
+      .default("open"),
+    created_at: big("created_at").notNull(),
+    handled_at: big("handled_at"),
+    handled_by: text("handled_by").references(() => users.id),
+  },
+  (t) => [
+    check("sl_status", sql`${t.status} IN ('open','handled')`),
+    check("sl_created_at", intBounded(t.created_at)),
+    check("sl_handled_at", sql`${t.handled_at} IS NULL OR ${intBounded(t.handled_at)}`),
   ],
 );
 

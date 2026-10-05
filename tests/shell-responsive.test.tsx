@@ -7,11 +7,7 @@
 import { test, expect } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  createRouter,
-  createRootRoute,
-  createMemoryHistory,
-} from "@tanstack/react-router";
+import { createRouter, createRootRoute, createMemoryHistory } from "@tanstack/react-router";
 import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js";
 
 (globalThis as { window?: unknown }).window ??= {

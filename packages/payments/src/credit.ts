@@ -46,17 +46,102 @@ export interface ProcessMockEventArgs {
   providerReference: string;
   amount: number;
   rawPayload: string;
+  /** Signed payOS transactionDateTime (already verified by the provider); audit detail only. */
+  transactionDateTime?: string;
+  /**
+   * Instance-admin late-credit mode (POST /admin/payments/:id/credit-late):
+   * allows an EXPIRED payment to settle exactly once using the durably
+   * retained payment event as evidence. Never set from webhook input.
+   */
+  adminLateCredit?: { actorUserId: string };
 }
 
 export type ProcessMockEventResult =
   | { outcome: "credited"; paymentId: string; balanceAfter: number }
-  | { outcome: "already_processed"; paymentId: string };
+  | { outcome: "already_processed"; paymentId: string }
+  | { outcome: "late_paid"; paymentId: string };
 
 // Fixed adjustment memos — the partial UNIQUE(payment_id, memo) WHERE
 // kind='adjustment' index makes replays of each leg impossible; changing a
 // memo string would orphan old idempotency keys.
 const MEMO_BUNDLE_BONUS = "bundle bonus";
 const MEMO_FIRST_TOPUP_BONUS = "first topup bonus";
+
+/**
+ * Late paid webhook on an EXPIRED payment: retain the event durably (the
+ * UNIQUE(provider, provider_reference) gate keeps replays and cross-payment
+ * reuse impossible), audit payment.late_paid_detected, and return a 2xx
+ * late-paid outcome with NO wallet/ledger write and no status change. The
+ * admin reviews the evidence and credits via the audited credit-late route.
+ */
+async function retainLatePaidEvidence(
+  tx: Tx,
+  payment: {
+    id: string;
+    workspace_id: string;
+    amount: number;
+    status: string;
+  },
+  provider: string,
+  args: ProcessMockEventArgs,
+): Promise<ProcessMockEventResult> {
+  const inserted = await tx
+    .insert(paymentEvents)
+    .values({
+      id: crypto.randomUUID(),
+      payment_id: payment.id,
+      provider,
+      provider_reference: args.providerReference,
+      raw_payload: args.rawPayload,
+      signature_valid: true,
+      processed_at: Date.now(),
+    })
+    .onConflictDoNothing({
+      target: [paymentEvents.provider, paymentEvents.provider_reference],
+    })
+    .returning({ id: paymentEvents.id });
+  if (inserted.length === 0) {
+    // Replay of the same late event (idempotent 2xx) or reuse of the
+    // reference by another payment (invalid).
+    const existingRows = await tx
+      .select({ payment_id: paymentEvents.payment_id })
+      .from(paymentEvents)
+      .where(
+        and(
+          eq(paymentEvents.provider, provider),
+          eq(paymentEvents.provider_reference, args.providerReference),
+        ),
+      );
+    const existing = existingRows[0];
+    if (existing && existing.payment_id === payment.id) {
+      return { outcome: "late_paid", paymentId: payment.id };
+    }
+    throw new MockPaymentError(
+      "invalid",
+      `provider_reference ${args.providerReference} already used by payment ${existing?.payment_id}`,
+    );
+  }
+  await tx.insert(auditLog).values({
+    id: crypto.randomUUID(),
+    actor_user_id: null,
+    workspace_id: payment.workspace_id,
+    action: "payment.late_paid_detected",
+    target: payment.id,
+    detail: {
+      provider,
+      order_code: args.orderCode,
+      provider_reference: args.providerReference,
+      amount: args.amount,
+      // payOS signed timestamp reaches audit detail ONLY via the verified
+      // event (VerifiedPaymentEvent), never from unverified input.
+      ...(args.transactionDateTime !== undefined
+        ? { transaction_date_time: args.transactionDateTime }
+        : {}),
+    },
+    created_at: Date.now(),
+  });
+  return { outcome: "late_paid", paymentId: payment.id };
+}
 
 /**
  * First-topup bonus amount from instance_settings (read inside the credit
@@ -82,7 +167,12 @@ async function firstTopupBonusAmountVnd(tx: Tx): Promise<number | null> {
   return n;
 }
 
-export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEventArgs) {
+// Explicit result type: callers narrow on the discriminated `outcome` field
+// instead of depending on inference through runInImmediate's generic.
+export async function processMockPaymentEvent(
+  db: Db | Tx,
+  args: ProcessMockEventArgs,
+): Promise<ProcessMockEventResult> {
   const provider = args.provider ?? "mock";
   return runInImmediate(db, async (tx) => {
     const paymentRows = await tx
@@ -106,12 +196,12 @@ export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEven
       .for("update");
     const payment = paymentRows[0];
     if (!payment) throw new MockPaymentError("not_found", `unknown order ${args.orderCode}`);
-    if (payment.status !== "pending" && payment.status !== "succeeded") {
-      throw new MockPaymentError("invalid", `payment ${payment.id} is ${payment.status}`);
-    }
+    // Runtime statuses exceed the TS enum (DB column has no CHECK); compare as
+    // a widened string so terminal-state branches below type-check.
+    const status: string = payment.status;
     // Server-side amount check against the payments row — never trust the event.
-    // Applies to succeeded payments too: an exact-duplicate replay must carry
-    // the same amount; a changed amount is rejected, never answered 2xx.
+    // Validate before the expired branch so a mismatched late callback cannot
+    // become durable evidence or receive a 2xx response.
     if (
       typeof args.amount !== "number" ||
       !Number.isSafeInteger(args.amount) ||
@@ -121,6 +211,36 @@ export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEven
         "amount_mismatch",
         `event amount ${args.amount} != order amount ${payment.amount}`,
       );
+    }
+    // 'expired' (timeout) and 'rejected' are terminal admin-control states.
+    // A paid webhook for an expired payment becomes durable LATE-PAID
+    // evidence (event row + audit) with no automatic credit — review and
+    // credit happen only via the admin credit-late route. 'rejected' is
+    // never reopened: it stays invalid with no event row.
+    if (status === "expired" && !args.adminLateCredit) {
+      return retainLatePaidEvidence(tx, payment, provider, args);
+    }
+    if (status !== "pending" && status !== "succeeded" && status !== "expired") {
+      throw new MockPaymentError("invalid", `payment ${payment.id} is ${status}`);
+    }
+    // Admin late credit of an expired payment requires the retained evidence
+    // event (inserted by the late-paid path above) — no event, no credit.
+    let retainedEventRef: string | null = null;
+    if (status === "expired") {
+      const retained = await tx
+        .select({ provider_reference: paymentEvents.provider_reference })
+        .from(paymentEvents)
+        .where(
+          and(eq(paymentEvents.payment_id, payment.id), eq(paymentEvents.signature_valid, true)),
+        )
+        .limit(1);
+      if (retained.length === 0) {
+        throw new MockPaymentError(
+          "invalid",
+          `payment ${payment.id} is expired without retained late-paid evidence`,
+        );
+      }
+      retainedEventRef = retained[0]!.provider_reference;
     }
 
     // Insert-first: UNIQUE(provider, provider_reference) is the replay gate
@@ -181,6 +301,28 @@ export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEven
       throw new MockPaymentError("invalid", "event conflict without existing row");
     }
 
+    if (status === "expired") {
+      // Admin late credit committed on top of the retained evidence: the
+      // explicit, audited admin action (the credit itself follows below).
+      await tx.insert(auditLog).values({
+        id: crypto.randomUUID(),
+        actor_user_id: args.adminLateCredit?.actorUserId ?? null,
+        workspace_id: payment.workspace_id,
+        action: "payment.late_credit",
+        target: payment.id,
+        detail: {
+          provider,
+          order_code: args.orderCode,
+          provider_reference: args.providerReference,
+          retained_event_reference: retainedEventRef,
+          ...(args.transactionDateTime !== undefined
+            ? { transaction_date_time: args.transactionDateTime }
+            : {}),
+        },
+        created_at: Date.now(),
+      });
+    }
+
     if (payment.status === "succeeded") {
       // Succeeded order + distinct reference: reject without a second credit.
       // The event insert above is rolled back with the txn — no unaudited 2xx.
@@ -201,7 +343,11 @@ export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEven
 
     // Lock the wallet before branching: serializes concurrent subscription
     // create/renew per workspace and keeps all credits in one lock order.
-    await tx.select({ id: wallets.id }).from(wallets).where(eq(wallets.id, wallet.id)).for("update");
+    await tx
+      .select({ id: wallets.id })
+      .from(wallets)
+      .where(eq(wallets.id, wallet.id))
+      .for("update");
 
     const plainMemo = `${provider} topup ${args.providerReference}`;
     let balanceAfter: number;
@@ -213,8 +359,7 @@ export async function processMockPaymentEvent(db: Db | Tx, args: ProcessMockEven
         .from(creditBundles)
         .where(eq(creditBundles.id, payment.bundle_id));
       const bundle = bundleRows[0];
-      if (!bundle)
-        throw new MockPaymentError("invalid", `missing bundle ${payment.bundle_id}`);
+      if (!bundle) throw new MockPaymentError("invalid", `missing bundle ${payment.bundle_id}`);
       balanceAfter = 0;
       if (bundle.credit_vnd > 0) {
         const topup = await creditWallet(tx, {

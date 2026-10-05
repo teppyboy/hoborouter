@@ -141,9 +141,8 @@ function CpaHealthCard() {
                   <XCircle className="size-4" />
                 )}
                 <span className="min-w-0 break-words">
-                  {query.data.management_api.healthy ? "Healthy" : "Unreachable"} ({
-                    query.data.management_api.http_status
-                  })
+                  {query.data.management_api.healthy ? "Healthy" : "Unreachable"} (
+                  {query.data.management_api.http_status})
                 </span>
               </dd>
             </div>
@@ -156,9 +155,8 @@ function CpaHealthCard() {
                   <XCircle className="size-4" />
                 )}
                 <span className="min-w-0 break-words">
-                  {query.data.proxy_endpoint.healthy ? "Healthy" : "Unreachable"} ({
-                    query.data.proxy_endpoint.http_status
-                  })
+                  {query.data.proxy_endpoint.healthy ? "Healthy" : "Unreachable"} (
+                  {query.data.proxy_endpoint.http_status})
                 </span>
               </dd>
             </div>

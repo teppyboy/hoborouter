@@ -19,7 +19,10 @@ export function useUsdVndRate(workspaceId: string | null | undefined) {
 }
 
 /** USD from VND using the backend-provided FX rate. Returns null when rate unavailable (fall back to VND). */
-export function formatUsdFromVnd(vnd: number | null | undefined, rate: number | undefined): string | null {
+export function formatUsdFromVnd(
+  vnd: number | null | undefined,
+  rate: number | undefined,
+): string | null {
   if (vnd == null || !rate || !Number.isFinite(rate) || rate <= 0) return null;
   const usd = vnd / rate;
   if (usd === 0) return "$0.00";

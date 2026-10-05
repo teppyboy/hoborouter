@@ -59,8 +59,7 @@ export function parseIntVnd(raw: string): number | null {
 
 function useCatalogMutation(path: string, key: readonly unknown[]) {
   const qc = useQueryClient();
-  const onError = (e: unknown) =>
-    toast.error(e instanceof ApiError ? e.message : "Request failed");
+  const onError = (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Request failed");
   const create = useMutation({
     mutationFn: (body: Record<string, number | string>) =>
       api<CatalogRow>(path, { method: "POST", body: JSON.stringify(body) }),
@@ -77,8 +76,7 @@ function useCatalogMutation(path: string, key: readonly unknown[]) {
     }: {
       id: string;
       body: { name?: string; active?: boolean; rate_limit_per_minute?: number };
-    }) =>
-      api<CatalogRow>(`${path}/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    }) => api<CatalogRow>(`${path}/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: key }),
     onError,
   });
@@ -204,9 +202,7 @@ function CatalogTable<T extends CatalogRow>({
     {
       accessorKey: "price_vnd",
       header: "Price",
-      cell: (c) => (
-        <span className="font-mono text-xs">{formatVnd(c.getValue<number>())}</span>
-      ),
+      cell: (c) => <span className="font-mono text-xs">{formatVnd(c.getValue<number>())}</span>,
     },
     {
       id: "detail",
@@ -217,11 +213,7 @@ function CatalogTable<T extends CatalogRow>({
       accessorKey: "active",
       header: "Status",
       cell: (c) =>
-        c.getValue<boolean>() ? (
-          <Badge>Active</Badge>
-        ) : (
-          <Badge variant="secondary">Inactive</Badge>
-        ),
+        c.getValue<boolean>() ? <Badge>Active</Badge> : <Badge variant="secondary">Inactive</Badge>,
     },
     {
       accessorKey: "created_at",
@@ -277,8 +269,14 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
   const priceN = parseIntVnd(price);
   const creditN = parseIntVnd(credit);
   const bonusN = parseIntVnd(bonus);
-  const valid = name.trim().length > 0 && priceN !== null && priceN > 0 &&
-    creditN !== null && creditN >= 0 && bonusN !== null && bonusN >= 0;
+  const valid =
+    name.trim().length > 0 &&
+    priceN !== null &&
+    priceN > 0 &&
+    creditN !== null &&
+    creditN >= 0 &&
+    bonusN !== null &&
+    bonusN >= 0;
   const submit = () => {
     create.mutate(
       { name: name.trim(), price_vnd: priceN!, credit_vnd: creditN!, bonus_vnd: bonusN! },
@@ -334,7 +332,9 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
         <CatalogTable
           data={query.data?.data ?? []}
           detailLabel="Credit"
-          detail={(b) => formatVnd(b.credit_vnd) + (b.bonus_vnd > 0 ? ` + ${formatVnd(b.bonus_vnd)} bonus` : "")}
+          detail={(b) =>
+            formatVnd(b.credit_vnd) + (b.bonus_vnd > 0 ? ` + ${formatVnd(b.bonus_vnd)} bonus` : "")
+          }
           onRename={(id, n) => update.mutate({ id, body: { name: n } })}
           onSetActive={(row, active) => update.mutate({ id: row.id, body: { active } })}
           renaming={renaming}
@@ -346,10 +346,10 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
 }
 
 function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
-  const { create, update } = useCatalogMutation(
-    "/api/v1/admin/subscription-plans",
-    ["admin", "subscription-plans"],
-  );
+  const { create, update } = useCatalogMutation("/api/v1/admin/subscription-plans", [
+    "admin",
+    "subscription-plans",
+  ]);
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   const [credit, setCredit] = useState("");
@@ -362,8 +362,13 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
   const periodN = parseIntVnd(period);
   const rateN = parseIntVnd(rateLimit);
   const rateInvalid = (v: number | null) => v === null || v < 1 || v > 600;
-  const valid = name.trim().length > 0 && priceN !== null && priceN > 0 &&
-    creditN !== null && creditN >= 0 && (period === "" || (periodN !== null && periodN >= 1)) &&
+  const valid =
+    name.trim().length > 0 &&
+    priceN !== null &&
+    priceN > 0 &&
+    creditN !== null &&
+    creditN >= 0 &&
+    (period === "" || (periodN !== null && periodN >= 1)) &&
     (rateLimit === "" || !rateInvalid(rateN));
   const submit = () => {
     const body: Record<string, number | string> = {
@@ -460,10 +465,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
 }
 
 export default function AdminBundlesPage() {
-  const bundles = useAdminQuery<{ data: Bundle[] }>(
-    ["admin", "bundles"],
-    "/api/v1/admin/bundles",
-  );
+  const bundles = useAdminQuery<{ data: Bundle[] }>(["admin", "bundles"], "/api/v1/admin/bundles");
   const plans = useAdminQuery<{ data: Plan[] }>(
     ["admin", "subscription-plans"],
     "/api/v1/admin/subscription-plans",

@@ -122,7 +122,8 @@ test("save: PUT carries the client version and returns the server snapshot", asy
 });
 
 test("save: 409 stale version rejects with a readable conflict, no fake success", async () => {
-  globalThis.fetch = (async () => respond(409, { error: { code: "CONFLICT" } })) as unknown as typeof fetch;
+  globalThis.fetch = (async () =>
+    respond(409, { error: { code: "CONFLICT" } })) as unknown as typeof fetch;
   let err: unknown;
   try {
     await saveConversation("ws-1", "chat-1", { version: 3, messages: [] });
@@ -153,7 +154,8 @@ test("archive: PATCH archived:true, server answers {id, archived_at}", async () 
 });
 
 test("server 500 rejects — the helper never invents a local success", async () => {
-  globalThis.fetch = (async () => respond(500, { error: { code: "X" } })) as unknown as typeof fetch;
+  globalThis.fetch = (async () =>
+    respond(500, { error: { code: "X" } })) as unknown as typeof fetch;
   let err: unknown;
   try {
     await listConversations("ws-1");

@@ -20,8 +20,7 @@ let drop: () => Promise<void>;
 const session = (uid: string | null) => ({
   handler: async () => new Response("", { status: 404 }),
   api: {
-    getSession: async () =>
-      uid ? { user: { id: uid }, session: { id: "s", userId: uid } } : null,
+    getSession: async () => (uid ? { user: { id: uid }, session: { id: "s", userId: uid } } : null),
   },
 });
 
@@ -57,7 +56,12 @@ async function paymentRow(id: string) {
   const r = await db.execute(
     sql`select status, amount::text as amount, workspace_id, provider_order_code from payments where id = ${id}`,
   );
-  return r[0] as { status: string; amount: string; workspace_id: string; provider_order_code: string };
+  return r[0] as {
+    status: string;
+    amount: string;
+    workspace_id: string;
+    provider_order_code: string;
+  };
 }
 
 async function auditCount(action: string, target: string) {
@@ -81,7 +85,9 @@ beforeAll(async () => {
         (${MEMBER}, 'Member', 'member@test.dev', true, ${now}, ${now}),
         (${OWNER}, 'Owner', 'owner@test.dev', true, ${now}, ${now})`,
   );
-  await db.execute(sql`INSERT INTO instance_admins (user_id, created_at) VALUES (${ADMIN}, ${now})`);
+  await db.execute(
+    sql`INSERT INTO instance_admins (user_id, created_at) VALUES (${ADMIN}, ${now})`,
+  );
   await db.execute(
     sql`INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-main', 'ws-main', 'active', ${now})`,
   );
@@ -150,11 +156,20 @@ describe("admin payment reject", () => {
 
   test("no auth -> 401; member and owner -> 403", async () => {
     const id = await seedPayment("pending");
-    const anon = await post(new Elysia().use(adminPaymentRejectRoutes(db, session(null))), `/api/v1/admin/payments/${id}/reject`);
+    const anon = await post(
+      new Elysia().use(adminPaymentRejectRoutes(db, session(null))),
+      `/api/v1/admin/payments/${id}/reject`,
+    );
     expect(anon.status).toBe(401);
-    const member = await post(new Elysia().use(adminPaymentRejectRoutes(db, session(MEMBER))), `/api/v1/admin/payments/${id}/reject`);
+    const member = await post(
+      new Elysia().use(adminPaymentRejectRoutes(db, session(MEMBER))),
+      `/api/v1/admin/payments/${id}/reject`,
+    );
     expect(member.status).toBe(403);
-    const owner = await post(new Elysia().use(adminPaymentRejectRoutes(db, session(OWNER))), `/api/v1/admin/payments/${id}/reject`);
+    const owner = await post(
+      new Elysia().use(adminPaymentRejectRoutes(db, session(OWNER))),
+      `/api/v1/admin/payments/${id}/reject`,
+    );
     expect(owner.status).toBe(403);
     // Still pending, untouched.
     expect((await paymentRow(id)).status).toBe("pending");

@@ -14,7 +14,12 @@ beforeAll(async () => {
   await seedFixture(db);
   await makePayment(db, "pay-ledger-1", "ws-a");
   await makePayment(db, "pay-ledger-2", "ws-a");
-  await creditWallet(db, { walletId: "wallet-a", amount: 500, kind: "topup", paymentId: "pay-ledger-1" });
+  await creditWallet(db, {
+    walletId: "wallet-a",
+    amount: 500,
+    kind: "topup",
+    paymentId: "pay-ledger-1",
+  });
 });
 
 afterAll(async () => {

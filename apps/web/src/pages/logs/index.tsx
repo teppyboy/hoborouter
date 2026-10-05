@@ -3,12 +3,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import {
-  PageHeader,
-  EmptyState,
-  ErrorState,
-  CopyButton,
-} from "../../components/page";
+import { PageHeader, EmptyState, ErrorState, CopyButton } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import {
@@ -37,12 +32,24 @@ import {
   DialogTitle,
 } from "../../components/ui/dialog";
 import { useIsAdmin } from "../../components/app-shell";
-import { formatDate, formatTokens, formatUsdFromVnd, formatVnd, useUsdVndRate } from "../../lib/format";
+import {
+  formatDate,
+  formatTokens,
+  formatUsdFromVnd,
+  formatVnd,
+  useUsdVndRate,
+} from "../../lib/format";
 import { formatStatusLabel, formatProviderLabel } from "../../lib/display";
 import { ApiError, api } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useRequestLogs, type UsageLogRow } from "./api";
-import { applyLogFilters, paginateLogs, visibleRows, LOG_PAGE_SIZE, type LogFilters } from "./filters";
+import {
+  applyLogFilters,
+  paginateLogs,
+  visibleRows,
+  LOG_PAGE_SIZE,
+  type LogFilters,
+} from "./filters";
 
 function formatDuration(ms: number | null | undefined): string {
   return typeof ms === "number" && Number.isFinite(ms) && ms >= 0 ? `${ms} ms` : "—";
@@ -75,13 +82,7 @@ function DetailField({ label, children }: { label: string; children: React.React
  * Instance-admin-only destructive action on a request log: soft-deletes the
  * underlying request (hides it from customer views, keeps billing records).
  */
-function RemoveLogButton({
-  requestId,
-  onRemoved,
-}: {
-  requestId: string;
-  onRemoved: () => void;
-}) {
+function RemoveLogButton({ requestId, onRemoved }: { requestId: string; onRemoved: () => void }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const remove = useMutation({
@@ -204,9 +205,7 @@ export default function LogsPage() {
 
   const visible = visibleRows(query.data);
   const models = Array.from(new Set(visible.map((r) => r.public_model))).sort();
-  const keys = Array.from(
-    new Set(visible.map((r) => r.key_prefix ?? "—")),
-  ).sort();
+  const keys = Array.from(new Set(visible.map((r) => r.key_prefix ?? "—"))).sort();
   const filtered = applyLogFilters(visible, filters);
   const hiddenCount = query.data.length - visible.length;
   const { page: safePage, pageCount, slice } = paginateLogs(filtered, page);
@@ -248,10 +247,7 @@ export default function LogsPage() {
               onChange={(v) => setFilter({ model: v })}
               options={models}
             />
-            <Select
-              value={filters.status}
-              onValueChange={(v) => setFilter({ status: v })}
-            >
+            <Select value={filters.status} onValueChange={(v) => setFilter({ status: v })}>
               <SelectTrigger aria-label="Statuses" className="h-8 w-[120px] text-xs">
                 <SelectValue placeholder="All statuses" />
               </SelectTrigger>
@@ -309,8 +305,7 @@ export default function LogsPage() {
                   </TableRow>
                 )}
                 {slice.map((r) => {
-                  const cost =
-                    formatUsdFromVnd(r.charged_vnd, rate) ?? formatVnd(r.charged_vnd);
+                  const cost = formatUsdFromVnd(r.charged_vnd, rate) ?? formatVnd(r.charged_vnd);
                   return (
                     <TableRow
                       key={r.id}
@@ -348,7 +343,9 @@ export default function LogsPage() {
                         </span>
                       </TableCell>
                       <TableCell className="font-mono text-xs">{r.public_model}</TableCell>
-                      <TableCell className="hidden font-mono text-xs md:table-cell">{r.key_prefix ?? "—"}</TableCell>
+                      <TableCell className="hidden font-mono text-xs md:table-cell">
+                        {r.key_prefix ?? "—"}
+                      </TableCell>
                       <TableCell className="text-right font-mono text-xs whitespace-nowrap">
                         {formatTokens(r.input_tokens)} → {formatTokens(r.output_tokens)}
                       </TableCell>
@@ -404,9 +401,7 @@ export default function LogsPage() {
       <Sheet open={selected != null} onOpenChange={(open) => !open && setSelected(null)}>
         <SheetContent>
           <SheetTitle className="font-mono text-sm break-all">{selected?.request_id}</SheetTitle>
-          <SheetDescription className="sr-only">
-            Request usage details
-          </SheetDescription>
+          <SheetDescription className="sr-only">Request usage details</SheetDescription>
           {selected && (
             <div className="pb-3 border-b border-border">
               <CopyButton value={selected.request_id} label="Copy request ID" />
@@ -436,10 +431,7 @@ export default function LogsPage() {
             </div>
           )}
           {selected && isAdmin === true && (
-            <RemoveLogButton
-              requestId={selected.request_id}
-              onRemoved={() => setSelected(null)}
-            />
+            <RemoveLogButton requestId={selected.request_id} onRemoved={() => setSelected(null)} />
           )}
         </SheetContent>
       </Sheet>

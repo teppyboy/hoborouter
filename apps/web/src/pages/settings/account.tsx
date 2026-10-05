@@ -38,7 +38,8 @@ const passwordSchema = z
   .object({
     currentPassword: z.string().min(1, "Current password is required"),
     newPassword: z.string().refine((v) => checkPassword(v).length === 0, {
-      message: "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
+      message:
+        "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
     }),
     confirmPassword: z.string().min(1, "Confirm your new password"),
   })
@@ -231,12 +232,7 @@ function PasswordSection() {
             </FormItem>
           )}
         />
-        <Button
-          type="submit"
-          size="sm"
-          className="w-fit"
-          disabled={form.formState.isSubmitting}
-        >
+        <Button type="submit" size="sm" className="w-fit" disabled={form.formState.isSubmitting}>
           Change password
         </Button>
       </form>
@@ -301,11 +297,7 @@ function AvatarSection({ user }: { user: SessionUser }) {
       <h3 className="text-sm font-medium">Avatar</h3>
       <div className="flex items-center gap-4">
         {user.image ? (
-          <img
-            src={user.image}
-            alt=""
-            className="size-16 rounded-full object-cover"
-          />
+          <img src={user.image} alt="" className="size-16 rounded-full object-cover" />
         ) : showGravatar ? (
           <img
             src={gravatar!}

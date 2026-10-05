@@ -4,9 +4,7 @@ import { lazy } from "react";
  * React.lazy with a .preload() so nav chunks can be warmed on hover/focus
  * or during idle time, instead of loading on first render (skeleton flash).
  */
-export function lazyRoute<T extends React.ComponentType>(
-  loader: () => Promise<{ default: T }>,
-) {
+export function lazyRoute<T extends React.ComponentType>(loader: () => Promise<{ default: T }>) {
   const Component = lazy(loader);
   return Object.assign(Component, { preload: () => loader() });
 }

@@ -28,7 +28,12 @@ describe("publishSnapshot", () => {
       now,
     });
     expect(typeof snapshotId).toBe("string");
-    const rows = await db.execute<{ binding_id: string; price_input: number; price_output: number; created_at: number }>(
+    const rows = await db.execute<{
+      binding_id: string;
+      price_input: number;
+      price_output: number;
+      created_at: number;
+    }>(
       sql`SELECT binding_id, price_input, price_output, created_at FROM price_snapshots WHERE id = ${snapshotId}`,
     );
     const row = rows[0]!;

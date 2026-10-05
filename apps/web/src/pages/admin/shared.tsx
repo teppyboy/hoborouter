@@ -15,6 +15,8 @@ export interface AdminModel {
   context_window: number | null;
   enabled: boolean;
   published: boolean;
+  /** Marks the model as a hoborouter/auto routing candidate (list always returns it). */
+  auto_eligible: boolean;
   /** 'inherit' (follows global flag) | 'on' | 'off'. */
   prompt_caching?: string;
   has_price: boolean;

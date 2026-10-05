@@ -1,0 +1,145 @@
+// Locale core contract: typed area dictionaries (translate/useT), the persisted
+// hbr-locale store, and <html lang> mirroring. Real jsdom (the tests
+// devDependency) is installed as the global before the store module is
+// imported so zustand persist finds a real localStorage; originals are
+// restored in afterAll so other test files in this process are unaffected.
+import { test, expect, beforeAll, afterAll } from "bun:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import { JSDOM } from "jsdom";
+
+const GLOBAL_KEYS = ["window", "document", "localStorage", "location"] as const;
+const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
+let jsdomWindow: { close: () => void } | null = null;
+
+let translate: (typeof import("../apps/web/src/lib/i18n/t"))["translate"];
+let applyLocale: (typeof import("../apps/web/src/lib/i18n/locale"))["applyLocale"];
+let useLocaleStore: (typeof import("../apps/web/src/lib/i18n/locale"))["useLocaleStore"];
+let LanguageToggle: (typeof import("../apps/web/src/components/language-toggle"))["LanguageToggle"];
+
+beforeAll(async () => {
+  // Real URL: modules reading location.origin see the actual dev origin.
+  const win = new JSDOM("", { url: "http://localhost:5173" }).window as unknown as {
+    document: object;
+    localStorage: Storage;
+    location: unknown;
+    close: () => void;
+  };
+  for (const k of GLOBAL_KEYS) {
+    originals[k] = Object.getOwnPropertyDescriptor(globalThis, k);
+  }
+  const values: Record<string, unknown> = {
+    window: win,
+    document: win.document,
+    localStorage: win.localStorage,
+    location: win.location,
+  };
+  for (const [k, v] of Object.entries(values)) {
+    (globalThis as Record<string, unknown>)[k] = v;
+  }
+  jsdomWindow = win;
+  // Import AFTER the jsdom globals exist: zustand persist binds its storage
+  // (localStorage) when the store module first loads.
+  ({ translate } = await import("../apps/web/src/lib/i18n/t"));
+  ({ applyLocale, useLocaleStore } = await import("../apps/web/src/lib/i18n/locale"));
+  ({ LanguageToggle } = await import("../apps/web/src/components/language-toggle"));
+});
+
+afterAll(() => {
+  for (const k of GLOBAL_KEYS) {
+    const d = originals[k];
+    if (d) Object.defineProperty(globalThis, k, d);
+    else delete (globalThis as Record<string, unknown>)[k];
+  }
+  jsdomWindow?.close();
+  jsdomWindow = null;
+});
+
+const dict = {
+  greeting: {
+    en: "Hello {name}, you have {count} keys",
+    vi: "Xin chào {name}, bạn có {count} khoá",
+  },
+  plain: { en: "Save", vi: "Lưu" },
+} as const;
+
+// --- pure translate -------------------------------------------------------
+
+test("translate returns the English and Vietnamese strings", () => {
+  expect(translate(dict, "plain", "en")).toBe("Save");
+  expect(translate(dict, "plain", "vi")).toBe("Lưu");
+});
+
+test("translate replaces {placeholders} with string and number vars literally", () => {
+  expect(translate(dict, "greeting", "en", { name: "Minh", count: 3 })).toBe(
+    "Hello Minh, you have 3 keys",
+  );
+  expect(translate(dict, "greeting", "vi", { name: "Minh", count: 0 })).toBe(
+    "Xin chào Minh, bạn có 0 khoá",
+  );
+});
+
+test("translate never interprets var values as HTML or regex", () => {
+  const htmlDict = { msg: { en: "Value: {v}", vi: "Giá trị: {v}" } } as const;
+  expect(translate(htmlDict, "msg", "en", { v: "<img src=x onerror=alert(1)> $& (a)" })).toBe(
+    "Value: <img src=x onerror=alert(1)> $& (a)",
+  );
+});
+
+test("translate leaves unknown {tokens} untouched and falls back to en", () => {
+  expect(translate(dict, "plain", "en", { missing: 1 })).toBe("Save");
+  const partial = { only: { en: "Only EN", vi: undefined as unknown as string } } as const;
+  expect(translate(partial, "only", "vi")).toBe("Only EN");
+});
+
+// --- locale store -----------------------------------------------------------
+
+test("locale store defaults to en and persists changes to hbr-locale", () => {
+  expect(useLocaleStore.getState().locale).toBe("en");
+  useLocaleStore.getState().setLocale("vi");
+  expect(useLocaleStore.getState().locale).toBe("vi");
+  const raw = window.localStorage.getItem("hbr-locale");
+  expect(raw).toContain('"locale":"vi"');
+  useLocaleStore.getState().setLocale("en");
+});
+
+test("persist rehydrates the stored locale into a reset store", async () => {
+  useLocaleStore.getState().setLocale("vi");
+  useLocaleStore.setState({ locale: "en" }); // simulate a fresh session state
+  window.localStorage.setItem(
+    "hbr-locale",
+    JSON.stringify({ state: { locale: "vi" }, version: 0 }),
+  );
+  await useLocaleStore.persist.rehydrate();
+  expect(useLocaleStore.getState().locale).toBe("vi");
+  useLocaleStore.getState().setLocale("en");
+});
+
+test("invalid locales are rejected and a corrupt persisted value cannot crash translation", async () => {
+  useLocaleStore.getState().setLocale("fr" as "en");
+  expect(useLocaleStore.getState().locale).toBe("en");
+  window.localStorage.setItem(
+    "hbr-locale",
+    JSON.stringify({ state: { locale: "xx" }, version: 0 }),
+  );
+  await useLocaleStore.persist.rehydrate();
+  // Unknown locale degrades to the English string instead of crashing.
+  expect(translate(dict, "plain", useLocaleStore.getState().locale as "en")).toBe("Save");
+  useLocaleStore.getState().setLocale("en");
+});
+
+// --- html.lang --------------------------------------------------------------
+
+test("applyLocale mirrors the locale onto <html lang>", () => {
+  applyLocale("vi");
+  expect(document.documentElement.lang).toBe("vi");
+  applyLocale("en");
+  expect(document.documentElement.lang).toBe("en");
+});
+
+// --- LanguageToggle ---------------------------------------------------------
+
+test("LanguageToggle renders an accessible VI/EN button", () => {
+  const html = renderToStaticMarkup(<LanguageToggle />);
+  expect(html).toContain('aria-label="Switch to Vietnamese"');
+  expect(html).toContain(">VI<"); // shows the locale you can switch TO
+});

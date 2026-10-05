@@ -57,9 +57,6 @@ test("self row keeps Edit/Reset but never Remove", () => {
 });
 
 test("action buttons carry accessible labels built from the email", () => {
-  const html = renderUsers(
-    [user({ email: "ada@example.com", id: "u_other" })],
-    "u_self",
-  );
+  const html = renderUsers([user({ email: "ada@example.com", id: "u_other" })], "u_self");
   expect(html).toContain('aria-label="Remove ada@example.com"');
 });

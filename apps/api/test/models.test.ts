@@ -196,7 +196,13 @@ describe("PUT /api/v1/admin/models/:id (price change → NEW snapshot)", () => {
   });
 
   test("price-only PUT preserves existing disabled status; explicit published reactivates", async () => {
-    await seedBinding({ id: "mb-dis", wsId: null, publicModel: "d", cpaAlias: "d", status: "disabled" });
+    await seedBinding({
+      id: "mb-dis",
+      wsId: null,
+      publicModel: "d",
+      cpaAlias: "d",
+      status: "disabled",
+    });
     const res = await req(app, "/api/v1/admin/models/mb-dis", {
       method: "PUT",
       cookie: iadmin,
@@ -235,9 +241,7 @@ describe("GET /v1/models + /v1/models/:id (canonical catalog, Bearer sk-hbr- key
   test("revoked key → 401", async () => {
     const plaintext = await makeKey(owner, A, "revoke-me");
     expect((await req(app, "/v1/models", bearer(plaintext))).status).toBe(200);
-    const [row] = await q<{ id: string }>(
-      sql`SELECT id FROM api_keys WHERE name = 'revoke-me'`,
-    );
+    const [row] = await q<{ id: string }>(sql`SELECT id FROM api_keys WHERE name = 'revoke-me'`);
     await db.execute(sql`UPDATE api_keys SET status = 'revoked' WHERE id = ${row!.id}`);
     expect((await req(app, "/v1/models", bearer(plaintext))).status).toBe(401);
   });

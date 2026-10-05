@@ -48,9 +48,7 @@ const fakeCpa = Bun.serve({
       id: "chatcmpl-x",
       object: "chat.completion",
       model: parsed.model,
-      choices: [
-        { index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" },
-      ],
+      choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
       usage: {
         prompt_tokens: 10,
         completion_tokens: 2,
@@ -133,15 +131,11 @@ async function seedWalletAndKey(db: Db) {
 describe("public model id -> upstream mapping", () => {
   test("chat JSON: outbound model is upstream, response model is public id", async () => {
     const { app } = await setup();
-    const res = await req(
-      app,
-      "/v1/chat/completions",
-      {
-        method: "POST",
-        headers: { authorization: `Bearer ${PLAINTEXT}` },
-        body: { model: "hoborouter/auto", messages: [{ role: "user", content: "hi" }] },
-      },
-    );
+    const res = await req(app, "/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${PLAINTEXT}` },
+      body: { model: "hoborouter/auto", messages: [{ role: "user", content: "hi" }] },
+    });
     expect(res.status).toBe(200);
     expect(JSON.parse(captured[0]!.body).model).toBe("z-ai/glm-5.3-flash");
     expect(((await res.json()) as { model: string }).model).toBe("hoborouter/auto");

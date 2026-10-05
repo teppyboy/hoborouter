@@ -38,7 +38,9 @@ function startFakeCpa() {
           id: "chatcmpl-rn",
           object: "chat.completion",
           model: NEW_ID,
-          choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
+          choices: [
+            { index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" },
+          ],
           usage: chatUsage(),
         }),
         { headers: { "content-type": "application/json" } },
@@ -48,10 +50,12 @@ function startFakeCpa() {
 }
 
 const lastCharge = async () =>
-  (await q(
-    db,
-    "SELECT br.status, le.amount FROM billing_reservations br LEFT JOIN ledger_entries le ON le.billing_reservation_id = br.id ORDER BY br.ctid DESC LIMIT 1",
-  ))[0] as { status: string; amount: number | null };
+  (
+    await q(
+      db,
+      "SELECT br.status, le.amount FROM billing_reservations br LEFT JOIN ledger_entries le ON le.billing_reservation_id = br.id ORDER BY br.ctid DESC LIMIT 1",
+    )
+  )[0] as { status: string; amount: number | null };
 
 beforeAll(async () => {
   const made = await makeApp();
@@ -62,7 +66,11 @@ beforeAll(async () => {
   owner = await signUp(app, "rename-owner@example.com", "O");
 
   const now = Date.now();
-  await q(db, "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-rn','rn','active',?)", now);
+  await q(
+    db,
+    "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-rn','rn','active',?)",
+    now,
+  );
   await q(
     db,
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-rn','ws-rn','VND',1000000000,0,0,?)",
@@ -124,10 +132,16 @@ describe("model public_id rename", () => {
   test("pre-rename request bills old name; usage_logs snapshots old public_model", async () => {
     const res = await chat(OLD_ID);
     expect(res.status).toBe(200);
-    const reqRow = (await q<{ id: string }>(db, "SELECT id FROM requests WHERE model_id = 'mdl-rn'"))[0]!;
+    const reqRow = (
+      await q<{ id: string }>(db, "SELECT id FROM requests WHERE model_id = 'mdl-rn'")
+    )[0]!;
     PRE_RENAME_REQUEST_ID = reqRow.id;
     const ul = (
-      await q<{ public_model: string }>(db, "SELECT public_model FROM usage_logs WHERE request_id = ?", reqRow.id)
+      await q<{ public_model: string }>(
+        db,
+        "SELECT public_model FROM usage_logs WHERE request_id = ?",
+        reqRow.id,
+      )
     )[0]!;
     expect(ul.public_model).toBe(OLD_ID);
   });
@@ -153,7 +167,9 @@ describe("model public_id rename", () => {
     )[0]!;
     // audit_log.detail is a jsonb column that stores a JSON string scalar.
     const detail =
-      typeof auditRow.detail === "string" ? (JSON.parse(auditRow.detail) as Record<string, string>) : auditRow.detail;
+      typeof auditRow.detail === "string"
+        ? (JSON.parse(auditRow.detail) as Record<string, string>)
+        : auditRow.detail;
     expect(detail).toMatchObject({ from: OLD_ID, to: NEW_ID });
   });
 
@@ -202,7 +218,9 @@ describe("model public_id rename", () => {
     });
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("DUPLICATE");
-    const row = (await q<{ public_id: string }>(db, "SELECT public_id FROM models WHERE id = 'mdl-rn'"))[0]!;
+    const row = (
+      await q<{ public_id: string }>(db, "SELECT public_id FROM models WHERE id = 'mdl-rn'")
+    )[0]!;
     expect(row.public_id).toBe(NEW_ID);
   });
 
@@ -214,7 +232,9 @@ describe("model public_id rename", () => {
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("INVALID");
-    const row = (await q<{ public_id: string }>(db, "SELECT public_id FROM models WHERE id = 'mdl-rn'"))[0]!;
+    const row = (
+      await q<{ public_id: string }>(db, "SELECT public_id FROM models WHERE id = 'mdl-rn'")
+    )[0]!;
     expect(row.public_id).toBe(NEW_ID);
   });
 
@@ -246,7 +266,10 @@ describe("model public_id rename", () => {
     if (b.status === 409)
       expect(((await b.json()) as { error: { code: string } }).error.code).toBe("DUPLICATE");
     else expect(((await a.json()) as { error: { code: string } }).error.code).toBe("DUPLICATE");
-    const rows = await q<{ id: string }>(db, "SELECT id FROM models WHERE public_id = 'openai/clash'");
+    const rows = await q<{ id: string }>(
+      db,
+      "SELECT id FROM models WHERE public_id = 'openai/clash'",
+    );
     expect(rows.length).toBe(1);
     // Restore pre-test state for later tests.
     const winner = rows[0]!.id;
@@ -276,7 +299,10 @@ describe("model public_id rename", () => {
     if (b.status === 409)
       expect(((await b.json()) as { error: { code: string } }).error.code).toBe("DUPLICATE");
     else expect(((await a.json()) as { error: { code: string } }).error.code).toBe("DUPLICATE");
-    const rows = await q<{ id: string }>(db, "SELECT id FROM models WHERE public_id = 'openai/create-clash'");
+    const rows = await q<{ id: string }>(
+      db,
+      "SELECT id FROM models WHERE public_id = 'openai/create-clash'",
+    );
     expect(rows.length).toBe(1);
     await q(db, "DELETE FROM models WHERE id = ?", rows[0]!.id);
   });

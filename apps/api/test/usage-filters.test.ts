@@ -50,7 +50,13 @@ const summary = async (q = "", c = cookie) => {
   const res = await req(app, `/api/v1/workspaces/${ws}/usage-summary${q}`, { cookie: c });
   expect(res.status).toBe(200);
   return (await res.json()) as {
-    totals: { requests: number; spend_vnd: number; errors: number; visible_requests: number; visible_errors: number };
+    totals: {
+      requests: number;
+      spend_vnd: number;
+      errors: number;
+      visible_requests: number;
+      visible_errors: number;
+    };
     daily: { day: string; requests: number; spend_vnd: number; tokens: number; errors: number }[];
     by_model: { public_model: string; requests: number; spend_vnd: number; tokens: number }[];
   };
@@ -77,7 +83,8 @@ describe("usage-summary model filter", () => {
     expect(body.totals.visible_errors).toBe(1);
     // Success rate over visible rows only: (3-1)/3 = 66.7%, NOT (5-2)/5.
     expect(
-      ((body.totals.visible_requests - body.totals.visible_errors) / body.totals.visible_requests) * 100,
+      ((body.totals.visible_requests - body.totals.visible_errors) / body.totals.visible_requests) *
+        100,
     ).toBeCloseTo(66.7, 0);
   });
 

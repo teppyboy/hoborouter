@@ -308,7 +308,9 @@ describe("email verification (SMTP configured)", () => {
       const res = await req(app, "/api/v1/public-config");
       expect(res.status).toBe(200);
       const raw = await res.text();
-      const body = JSON.parse(raw) as { emailVerification: { enabled: boolean; required: boolean } };
+      const body = JSON.parse(raw) as {
+        emailVerification: { enabled: boolean; required: boolean };
+      };
       expect(body.emailVerification).toEqual({ enabled: true, required: false });
       expect(raw).not.toContain("hbr.test-from-secret");
       expect(raw).not.toContain("SMTP_HOST");

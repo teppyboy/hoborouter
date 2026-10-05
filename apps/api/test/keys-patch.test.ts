@@ -70,7 +70,9 @@ async function makeKey(ws: string, cookie: string, name: string) {
 describe("POST keys — enabled status + new prefix format", () => {
   test("new key created with status 'enabled'", async () => {
     const body = await makeKey(A, owner, "st");
-    const row = (await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id = ?", body.id))[0]!;
+    const row = (
+      await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id = ?", body.id)
+    )[0]!;
     expect(row.status).toBe("enabled");
   });
 
@@ -136,14 +138,18 @@ describe("PATCH /api/v1/workspaces/:id/keys/:keyId", () => {
       body: { status: "disabled" },
     });
     expect(d.status).toBe(200);
-    expect((await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id=?", k.id))[0]!.status).toBe("disabled");
+    expect(
+      (await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id=?", k.id))[0]!.status,
+    ).toBe("disabled");
     const e = await req(app, `/api/v1/workspaces/${A}/keys/${k.id}`, {
       method: "PATCH",
       cookie: owner,
       body: { status: "enabled" },
     });
     expect(e.status).toBe(200);
-    expect((await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id=?", k.id))[0]!.status).toBe("enabled");
+    expect(
+      (await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id=?", k.id))[0]!.status,
+    ).toBe("enabled");
   });
 
   test("revoked is terminal: 409 on disable/enable of revoked", async () => {
@@ -157,7 +163,9 @@ describe("PATCH /api/v1/workspaces/:id/keys/:keyId", () => {
       });
       expect(res.status).toBe(409);
     }
-    const row = (await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id=?", k.id))[0]!;
+    const row = (
+      await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id=?", k.id)
+    )[0]!;
     expect(row.status).toBe("revoked");
   });
 
@@ -174,7 +182,11 @@ describe("PATCH /api/v1/workspaces/:id/keys/:keyId", () => {
       body: { status: "enabled" },
     });
     const actions = (
-      await q<{ action: string }>(db, "SELECT action FROM audit_log WHERE target = ? ORDER BY id", k.id)
+      await q<{ action: string }>(
+        db,
+        "SELECT action FROM audit_log WHERE target = ? ORDER BY id",
+        k.id,
+      )
     ).map((r) => r.action);
     expect(actions).toContain("key.disable");
     expect(actions).toContain("key.enable");
@@ -278,11 +290,13 @@ describe("model restrictions GET/PUT /api/v1/workspaces/:id/keys/:keyId/models",
 
   test("audit detail carries no plaintext or hash", async () => {
     const k = await makeKey(A, owner, "msec");
-    const detail = (await q<{ detail: unknown }>(
-      db,
-      "SELECT detail FROM audit_log WHERE target = ? AND action='key.create'",
-      k.id,
-    ))[0]!.detail;
+    const detail = (
+      await q<{ detail: unknown }>(
+        db,
+        "SELECT detail FROM audit_log WHERE target = ? AND action='key.create'",
+        k.id,
+      )
+    )[0]!.detail;
     // detail is jsonb (parsed object) — no secret material anywhere in it.
     expect(JSON.stringify(detail)).not.toContain(k.plaintext);
     expect(JSON.stringify(detail)).not.toMatch(/^[0-9a-f]{64}$/);

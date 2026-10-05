@@ -6,6 +6,8 @@ import {
   startManagedChatKey,
   clearManagedChatKey,
   chatKeyStorageKey,
+  deviceChatName,
+  deviceLabel,
   ManagedKeyError,
   type KeyStorage,
   type ManagedKeyFailure,
@@ -37,18 +39,39 @@ class MapStorage implements KeyStorage {
   }
 }
 
+class UnavailableStorage implements KeyStorage {
+  get length(): number {
+    return 0;
+  }
+  key(): string | null {
+    return null;
+  }
+  getItem(): string | null {
+    return null;
+  }
+  setItem(): void {
+    throw new Error("storage unavailable");
+  }
+  removeItem(): void {
+    throw new Error("storage unavailable");
+  }
+}
+
 interface FetchSpy {
   fetch: typeof fetch;
   urls: string[];
+  bodies: unknown[];
 }
 
 function fetchSpy(handler: (init?: RequestInit) => Promise<Response>): FetchSpy {
   const urls: string[] = [];
+  const bodies: unknown[] = [];
   const fn = ((input: string, init?: RequestInit) => {
     urls.push(input);
+    bodies.push(init?.body);
     return handler(init);
   }) as unknown as typeof fetch;
-  return { fetch: fn, urls };
+  return { fetch: fn, urls, bodies };
 }
 
 /** Assert the promise rejects with a ManagedKeyError of exactly `kind`. */
@@ -75,6 +98,23 @@ function keyResponse(n: number, status = 201): Response {
     { status, headers: { "content-type": "application/json" } },
   );
 }
+
+test("persists the browser key and reuses it in a new browser session without minting", async () => {
+  seq = 0;
+  const spy = okFetch();
+  const local = new MapStorage(); // stands in for localStorage
+  const opts = { userId: U1, workspaceId: W1, storage: local, fetch: spy.fetch };
+  const first = await startManagedChatKey(opts);
+  expect(spy.urls).toHaveLength(1);
+  expect(local.getItem(`hbr-managed-key:${U1}:${W1}`)).toContain(first.id);
+  // New browser session: memory cache cleared (clearManagedChatKey() touches
+  // only globals, not the injected store), storage survives — the stored key
+  // is reused, never a second POST.
+  clearManagedChatKey();
+  const again = await startManagedChatKey(opts);
+  expect(again).toEqual(first);
+  expect(spy.urls).toHaveLength(1);
+});
 
 // The helper's cache is module-level; reset it between tests.
 beforeEach(() => {
@@ -129,7 +169,7 @@ test("restores the tab key from sessionStorage without a request", async () => {
   expect(spy.urls).toHaveLength(0);
 });
 
-test("plaintext never appears in storage keys and localStorage stays untouched", async () => {
+test("plaintext never appears in storage key names; only the target store is written", async () => {
   seq = 0;
   const spy = okFetch();
   const session = new MapStorage();
@@ -137,14 +177,124 @@ test("plaintext never appears in storage keys and localStorage stays untouched",
   const key = await startManagedChatKey({
     userId: U1,
     workspaceId: W1,
-    storage: session,
+    storage: local,
     fetch: spy.fetch,
   });
-  const k = session.key(0);
-  expect(k).not.toBeNull();
+  const k = local.key(0);
+  expect(k).toBe(`hbr-managed-key:${U1}:${W1}`);
   expect(k).not.toContain(key.plaintext);
   expect(k).not.toContain(key.id);
-  expect(local.length).toBe(0);
+  expect(local.length).toBe(1);
+  expect(session.length).toBe(0);
+});
+
+test("stored browser keys are scoped per identity: another user never reuses one", async () => {
+  seq = 0;
+  const spy = okFetch();
+  const storage = new MapStorage();
+  const u1 = await startManagedChatKey({
+    userId: U1,
+    workspaceId: W1,
+    storage,
+    fetch: spy.fetch,
+  });
+  expect(spy.urls).toHaveLength(1);
+  clearManagedChatKey(); // fresh memory, storage intact
+  const u2 = await startManagedChatKey({
+    userId: "user-2",
+    workspaceId: W1,
+    storage,
+    fetch: spy.fetch,
+  });
+  // A different user gets its own key (own POST), never user-1's stored copy.
+  expect(spy.urls).toHaveLength(2);
+  expect(u2.plaintext).not.toEqual(u1.plaintext);
+  expect(storage.getItem(`hbr-managed-key:user-2:${W1}`)).toContain(u2.id);
+});
+
+test("storage unavailable: in-memory key serves this tab without persistence", async () => {
+  seq = 0;
+  const spy = okFetch();
+  const opts = {
+    userId: U1,
+    workspaceId: W1,
+    storage: new UnavailableStorage(),
+    fetch: spy.fetch,
+  };
+  const key = await startManagedChatKey(opts);
+  expect(key.plaintext).toMatch(/^sk-hbr-/);
+  expect(spy.urls).toHaveLength(1);
+  // Same tab: memory cache serves without a second POST despite no storage.
+  const again = await startManagedChatKey(opts);
+  expect(again).toEqual(key);
+  expect(spy.urls).toHaveLength(1);
+});
+
+test("unwritable primary store falls back to the next store and restores from it", async () => {
+  seq = 0;
+  const spy = okFetch();
+  const fallback = new MapStorage();
+  const key = await startManagedChatKey({
+    userId: U1,
+    workspaceId: W1,
+    storage: [new UnavailableStorage(), fallback],
+    fetch: spy.fetch,
+  });
+  expect(fallback.length).toBe(1);
+  clearManagedChatKey(); // fresh memory
+  const again = await startManagedChatKey({
+    userId: U1,
+    workspaceId: W1,
+    storage: [new UnavailableStorage(), fallback],
+    fetch: spy.fetch,
+  });
+  expect(again).toEqual(key);
+  expect(spy.urls).toHaveLength(1);
+});
+
+test("minted key uses the caller-provided device name in the POST body", async () => {
+  seq = 0;
+  const spy = okFetch();
+  await startManagedChatKey({
+    userId: U1,
+    workspaceId: W1,
+    storage: new MapStorage(),
+    fetch: spy.fetch,
+    name: "Chat - iPhone 13",
+  });
+  expect(spy.bodies).toHaveLength(1);
+  expect(JSON.parse(String(spy.bodies[0]))).toEqual({ name: "Chat - iPhone 13" });
+});
+
+test("deviceLabel derives a safe display label from the User-Agent alone", () => {
+  expect(
+    deviceLabel(
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+    ),
+  ).toBe("iPhone");
+  expect(
+    deviceLabel(
+      "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+    ),
+  ).toBe("Android SM-G991B");
+  expect(
+    deviceLabel(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    ),
+  ).toBe("Windows");
+  expect(
+    deviceLabel(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    ),
+  ).toBe("Mac");
+  expect(deviceLabel("")).toBe("Browser");
+  expect(deviceChatName("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)")).toBe(
+    "Chat - iPhone",
+  );
+  // Allowlist sanitization: hostile UA text cannot inject markup into a name.
+  expect(deviceLabel("Mozilla/5.0 (Linux; Android 13; <script>x</script>) Chrome/120")).toBe(
+    "Android scriptxscript",
+  );
 });
 
 test("403 fails without caching and surfaces a workspace-permission message", async () => {

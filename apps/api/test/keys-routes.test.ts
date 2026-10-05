@@ -78,12 +78,16 @@ function leakScan(plaintext: string, except: string) {
 async function leakScanDb(plaintext: string) {
   for (const row of await q<Record<string, unknown>>(db, "SELECT * FROM api_keys")) {
     for (const v of Object.values(row)) {
-      expect(JSON.stringify(v ?? null).includes(plaintext), "plaintext in api_keys row").toBe(false);
+      expect(JSON.stringify(v ?? null).includes(plaintext), "plaintext in api_keys row").toBe(
+        false,
+      );
     }
   }
   // audit_log detail must not carry plaintext
   for (const row of await q<{ detail: unknown }>(db, "SELECT detail FROM audit_log")) {
-    expect(JSON.stringify(row.detail ?? null).includes(plaintext), "plaintext in audit_log").toBe(false);
+    expect(JSON.stringify(row.detail ?? null).includes(plaintext), "plaintext in audit_log").toBe(
+      false,
+    );
   }
 }
 
@@ -134,7 +138,9 @@ describe("POST /api/v1/workspaces/:wsId/keys", () => {
     const secret = body.plaintext.slice("sk-hbr-".length);
     expect(body.key_prefix).toBe("sk-hbr-" + secret.slice(0, 4) + "..." + secret.slice(-6));
     // stored hash matches
-    const row = (await q<{ key_hash: string }>(db, "SELECT key_hash FROM api_keys WHERE id = ?", body.id))[0]!;
+    const row = (
+      await q<{ key_hash: string }>(db, "SELECT key_hash FROM api_keys WHERE id = ?", body.id)
+    )[0]!;
     expect(row.key_hash).toBe(hashApiKey(body.plaintext));
   });
 
@@ -168,8 +174,165 @@ describe("GET /api/v1/workspaces/:wsId/keys", () => {
       expect(k.status).toBe("enabled");
     }
     // no B keys in A's list — asserted by count of rows bound to A
-    const count = (await q<{ c: string }>(db, "SELECT count(*) c FROM api_keys WHERE workspace_id = ?", A))[0]!.c;
+    const count = (
+      await q<{ c: string }>(db, "SELECT count(*) c FROM api_keys WHERE workspace_id = ?", A)
+    )[0]!.c;
     expect(list.length).toBe(Number(count));
+  });
+});
+
+describe("PATCH /api/v1/workspaces/:wsId/keys/:keyId", () => {
+  async function makeKey(name: string): Promise<{ id: string }> {
+    const res = await areq(`/api/v1/workspaces/${A}/keys`, {
+      method: "POST",
+      cookie: admin,
+      body: { name },
+    });
+    expect(res.status).toBe(201);
+    return (await res.json()) as { id: string };
+  }
+
+  test("member → 403", async () => {
+    const key = await makeKey("rename-403");
+    expect(
+      (
+        await areq(`/api/v1/workspaces/${A}/keys/${key.id}`, {
+          method: "PATCH",
+          cookie: member,
+          body: { name: "x" },
+        })
+      ).status,
+    ).toBe(403);
+  });
+
+  test("name-only PATCH renames; response and DB updated; key.rename audit with safe metadata", async () => {
+    const key = await makeKey("rename-me");
+    const res = await areq(`/api/v1/workspaces/${A}/keys/${key.id}`, {
+      method: "PATCH",
+      cookie: admin,
+      body: { name: "  renamed-key  " },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { id: string; name: string; status: string };
+    expect(body).toEqual({ id: key.id, name: "renamed-key", status: "enabled" });
+    const row = (
+      await q<{ name: string; status: string }>(
+        db,
+        "SELECT name, status FROM api_keys WHERE id = ?",
+        key.id,
+      )
+    )[0]!;
+    expect(row.name).toBe("renamed-key");
+    expect(row.status).toBe("enabled");
+    const audit = (
+      await q<{ detail: string }>(
+        db,
+        "SELECT detail FROM audit_log WHERE target = ? AND action = 'key.rename' ORDER BY created_at DESC LIMIT 1",
+        key.id,
+      )
+    )[0]!;
+    const detail = JSON.parse(audit.detail) as { name?: string; previous_name?: string };
+    expect(detail.name).toBe("renamed-key");
+    expect(detail.previous_name).toBe("rename-me");
+    // safe metadata only: no hash, no plaintext
+    expect(audit.detail).not.toContain("sk-hbr-");
+    expect(audit.detail).not.toContain("key_hash");
+  });
+
+  test("status-only PATCH keeps original shape and behavior", async () => {
+    const key = await makeKey("status-only");
+    const res = await areq(`/api/v1/workspaces/${A}/keys/${key.id}`, {
+      method: "PATCH",
+      cookie: admin,
+      body: { status: "disabled" },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: key.id, status: "disabled" });
+  });
+
+  test("status + name in one PATCH applies both", async () => {
+    const key = await makeKey("both-fields");
+    const res = await areq(`/api/v1/workspaces/${A}/keys/${key.id}`, {
+      method: "PATCH",
+      cookie: admin,
+      body: { status: "disabled", name: "both-renamed" },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { name: string; status: string };
+    expect(body.name).toBe("both-renamed");
+    expect(body.status).toBe("disabled");
+  });
+
+  test("name-only PATCH on revoked key renames (cosmetic, not resurrection)", async () => {
+    const key = await makeKey("revoke-rename");
+    expect(
+      (await areq(`/api/v1/workspaces/${A}/keys/${key.id}`, { method: "DELETE", cookie: admin }))
+        .status,
+    ).toBe(200);
+    const res = await areq(`/api/v1/workspaces/${A}/keys/${key.id}`, {
+      method: "PATCH",
+      cookie: admin,
+      body: { name: "still-revoked" },
+    });
+    expect(res.status).toBe(200);
+    const row = (
+      await q<{ name: string; status: string }>(
+        db,
+        "SELECT name, status FROM api_keys WHERE id = ?",
+        key.id,
+      )
+    )[0]!;
+    expect(row.name).toBe("still-revoked");
+    expect(row.status).toBe("revoked");
+  });
+
+  test("status PATCH on revoked key → 409 (terminal unchanged)", async () => {
+    const key = await makeKey("revoke-status");
+    await areq(`/api/v1/workspaces/${A}/keys/${key.id}`, { method: "DELETE", cookie: admin });
+    const res = await areq(`/api/v1/workspaces/${A}/keys/${key.id}`, {
+      method: "PATCH",
+      cookie: admin,
+      body: { status: "enabled" },
+    });
+    expect(res.status).toBe(409);
+  });
+
+  test("validation: whitespace-only, too long, unknown status, empty body → 400", async () => {
+    const key = await makeKey("validation");
+    const patch = (body: unknown) =>
+      areq(`/api/v1/workspaces/${A}/keys/${key.id}`, {
+        method: "PATCH",
+        cookie: admin,
+        body,
+      });
+    expect((await patch({ name: "   " })).status).toBe(400);
+    expect((await patch({ name: "x".repeat(129) })).status).toBe(400);
+    expect((await patch({ status: "paused" })).status).toBe(400);
+    expect((await patch({})).status).toBe(400);
+    // bound edge: exactly 128 chars is accepted
+    expect((await patch({ name: "y".repeat(128) })).status).toBe(200);
+  });
+
+  test("cross-workspace: B owner cannot rename A key; unknown key → 404", async () => {
+    const key = await makeKey("cross-ws");
+    expect(
+      (
+        await areq(`/api/v1/workspaces/${A}/keys/${key.id}`, {
+          method: "PATCH",
+          cookie: bowner,
+          body: { name: "nope" },
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await areq(`/api/v1/workspaces/${A}/keys/does-not-exist`, {
+          method: "PATCH",
+          cookie: admin,
+          body: { name: "nope" },
+        })
+      ).status,
+    ).toBe(404);
   });
 });
 
@@ -204,7 +367,9 @@ describe("DELETE /api/v1/workspaces/:wsId/keys/:keyId", () => {
     });
     expect([404, 403]).toContain(viaA.status);
     // and B's key still usable (legacy assertion: not revoked)
-    const row = (await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id = ?", bKey.id))[0]!;
+    const row = (
+      await q<{ status: string }>(db, "SELECT status FROM api_keys WHERE id = ?", bKey.id)
+    )[0]!;
     expect(row.status).toBe("enabled");
   });
 

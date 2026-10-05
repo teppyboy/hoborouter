@@ -34,7 +34,11 @@ async function makeAdmin() {
   return { db, app, cookie };
 }
 
-async function login(app: Awaited<ReturnType<typeof makeApp>>["app"], email: string, password = PASSWORD) {
+async function login(
+  app: Awaited<ReturnType<typeof makeApp>>["app"],
+  email: string,
+  password = PASSWORD,
+) {
   return app.handle(
     new Request("http://localhost/api/auth/sign-in/email", {
       method: "POST",
@@ -268,12 +272,24 @@ describe("DELETE /api/v1/admin/users/:id", () => {
       })
     ).json();
     const now = Date.now();
-    await db.execute(sql`insert into workspaces (id, name, status, created_at) values ('ws-h','H','active',${now})`);
-    await db.execute(sql`insert into workspace_members (workspace_id, user_id, role) values ('ws-h',${created.id},'member')`);
-    await db.execute(sql`insert into wallets (id, workspace_id, balance, reserved, created_at) values ('w-h','ws-h',1000,0,${now})`);
-    await db.execute(sql`insert into ledger_entries (id, wallet_id, direction, amount, kind, balance_after, created_at) values ('le-h','w-h','credit',1000,'topup',1000,${now})`);
-    await db.execute(sql`insert into payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) values ('p-h','ws-h',1000,'succeeded','manual','ord-h',${now})`);
-    await db.execute(sql`insert into audit_log (id, actor_user_id, action, target, created_at) values ('au-h',${created.id}, 'user.create', 'x', ${now})`);
+    await db.execute(
+      sql`insert into workspaces (id, name, status, created_at) values ('ws-h','H','active',${now})`,
+    );
+    await db.execute(
+      sql`insert into workspace_members (workspace_id, user_id, role) values ('ws-h',${created.id},'member')`,
+    );
+    await db.execute(
+      sql`insert into wallets (id, workspace_id, balance, reserved, created_at) values ('w-h','ws-h',1000,0,${now})`,
+    );
+    await db.execute(
+      sql`insert into ledger_entries (id, wallet_id, direction, amount, kind, balance_after, created_at) values ('le-h','w-h','credit',1000,'topup',1000,${now})`,
+    );
+    await db.execute(
+      sql`insert into payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) values ('p-h','ws-h',1000,'succeeded','manual','ord-h',${now})`,
+    );
+    await db.execute(
+      sql`insert into audit_log (id, actor_user_id, action, target, created_at) values ('au-h',${created.id}, 'user.create', 'x', ${now})`,
+    );
     const snap = async () =>
       (
         await q<{

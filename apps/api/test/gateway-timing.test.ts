@@ -18,24 +18,40 @@ let savedEnv: Record<string, string | undefined> = {};
 
 async function seedGateway(db: Awaited<ReturnType<typeof makeApp>>["db"]) {
   const now = Date.now();
-  await q(db, 
+  await q(
+    db,
     "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-gw-t','gw-t','active',?)",
-now);
-  await q(db, 
+    now,
+  );
+  await q(
+    db,
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-gw-t','ws-gw-t','VND',1000000000,0,0,?)",
-now);
-  await q(db, 
+    now,
+  );
+  await q(
+    db,
     "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key-gw-t','ws-gw-t',?,?,'gw-t','active',?)",
-hashApiKey(PLAINTEXT), "sk-hbr-gw...", now);
-  await q(db, 
+    hashApiKey(PLAINTEXT),
+    "sk-hbr-gw...",
+    now,
+  );
+  await q(
+    db,
     "INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-t','anthropic/claude-mythos-5','claude-mythos-5','Mythos 5','anthropic',128000,true,true,?,?)",
-now, now);
-  await q(db, 
+    now,
+    now,
+  );
+  await q(
+    db,
     "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-t','mdl-t','anthropic','claude-mythos-5-upstream',true,?,?)",
-now, now);
-  await q(db, 
+    now,
+    now,
+  );
+  await q(
+    db,
     "INSERT INTO model_prices (id, model_id, input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at, retired_at) VALUES ('price-t','mdl-t',1000000,1000000,100000,100000,1000000,?,NULL)",
-now - 1000);
+    now - 1000,
+  );
 }
 
 let db: Awaited<ReturnType<typeof makeApp>>["db"];
@@ -87,9 +103,9 @@ function startFakeCpa(handler: () => Response) {
 }
 
 const lastUsageLog = async () =>
-  (await q(db, 
-      "SELECT status, latency_ms, ttft_ms FROM usage_logs ORDER BY ctid DESC LIMIT 1",
-    ))[0] as { status: string; latency_ms: number | null; ttft_ms: number | null };
+  (
+    await q(db, "SELECT status, latency_ms, ttft_ms FROM usage_logs ORDER BY ctid DESC LIMIT 1")
+  )[0] as { status: string; latency_ms: number | null; ttft_ms: number | null };
 
 const finitePositive = (n: number | null) => n !== null && Number.isFinite(n) && n >= 0;
 
@@ -119,7 +135,10 @@ afterAll(() => {
 describe("gateway timing fields", () => {
   test("stream: ttft positive finite, latency >= ttft, persisted in usage_logs", async () => {
     startFakeCpa(
-      () => new Response(sse() as unknown as ReadableStream, { headers: { "content-type": "text/event-stream" } }),
+      () =>
+        new Response(sse() as unknown as ReadableStream, {
+          headers: { "content-type": "text/event-stream" },
+        }),
     );
     const res = await gwr({
       model: "anthropic/claude-mythos-5",
@@ -176,7 +195,9 @@ describe("gateway timing fields", () => {
               {
                 index: 0,
                 delta: {
-                  tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "f" } }],
+                  tool_calls: [
+                    { index: 0, id: "call_1", type: "function", function: { name: "f" } },
+                  ],
                 },
                 finish_reason: null,
               },
@@ -305,7 +326,10 @@ describe("gateway timing fields", () => {
           { headers: { "content-type": "application/json" } },
         ),
     );
-    const res = await gwr({ model: "anthropic/claude-mythos-5", messages: [{ role: "user", content: "hi" }] });
+    const res = await gwr({
+      model: "anthropic/claude-mythos-5",
+      messages: [{ role: "user", content: "hi" }],
+    });
     expect(res.status).toBe(200);
     const log = await lastUsageLog();
     expect(log.status).toBe("ok");

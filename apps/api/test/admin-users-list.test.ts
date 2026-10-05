@@ -2,13 +2,7 @@
 // number (epoch ms) and workspace_count a JSON number — Bun SQL returns PG
 // bigint/count(*) as strings, which broke the web Joined column.
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  makeApp,
-  makeInstanceAdmin,
-  req,
-  signUp,
-  userIdByEmail,
-} from "./helpers";
+import { makeApp, makeInstanceAdmin, req, signUp, userIdByEmail } from "./helpers";
 
 let drops: (() => Promise<void>)[] = [];
 afterEach(async () => {

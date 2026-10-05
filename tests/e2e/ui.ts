@@ -608,10 +608,10 @@ async function main() {
       // Muted border verified as a computed color equal to the border-border
       // token — never from class text or screenshot pixels.
       const border = await evaluate<{
-      card: string | null;
-      probe: string | null;
-      width: string | null;
-    }>(`(() => {
+        card: string | null;
+        probe: string | null;
+        width: string | null;
+      }>(`(() => {
       const card = [...document.querySelectorAll('div')].find(
         (d) => d.className.includes('rounded-lg') && d.className.includes('border-border'));
       if (!card) return { card: null, probe: null, width: null };
@@ -626,23 +626,25 @@ async function main() {
       probe.remove();
       return out;
     })()`);
-    assert(!!border.card, "auth card element found");
-    assert(
-      border.card === border.probe,
-      `card border color equals border-border token (got ${border.card})`,
-    );
-    assert(
-      border.card !== "rgba(0, 0, 0, 0)" && border.width === "1px",
-      `card has a real 1px border (width ${border.width}, color ${border.card})`,
-    );
-    const inputH = await evaluate<number>(
-      `document.querySelector('form input').getBoundingClientRect().height`,
-    );
+      assert(!!border.card, "auth card element found");
+      assert(
+        border.card === border.probe,
+        `card border color equals border-border token (got ${border.card})`,
+      );
+      assert(
+        border.card !== "rgba(0, 0, 0, 0)" && border.width === "1px",
+        `card has a real 1px border (width ${border.width}, color ${border.card})`,
+      );
+      const inputH = await evaluate<number>(
+        `document.querySelector('form input').getBoundingClientRect().height`,
+      );
       assert(inputH === 44, `login input height 44px under coarse pointer, got ${inputH}`);
     });
   });
 
-  await step("mobile auth: landscape signup footer reachable, mismatch is client-only", async () => {
+  await step(
+    "mobile auth: landscape signup footer reachable, mismatch is client-only",
+    async () => {
       await withViewport(844, 390, true, async () => {
         // phone landscape
         await goto("/signup");
@@ -671,10 +673,11 @@ async function main() {
         assert(footer, "terms footer reachable by scroll in landscape");
         await assertNoPageHScroll("signup 844x390");
       });
-    // Leave without completing a real signup; later fixtures re-navigate.
-    await goto("/login");
-    await page.waitForText("Sign in");
-  });
+      // Leave without completing a real signup; later fixtures re-navigate.
+      await goto("/login");
+      await page.waitForText("Sign in");
+    },
+  );
 
   // --- signup admin ---
   await step("signup admin", async () => {
@@ -1025,7 +1028,7 @@ async function main() {
     );
   });
 
-  // --- chat: session catalog + managed "Browser Chat" auto-key flow ---
+  // --- chat: session catalog + managed browser-key reuse flow ---
   let chatWsId = "";
   let chatUserId = "";
   let chatId = "";
@@ -1068,41 +1071,43 @@ async function main() {
     );
   const PLAINTEXT_KEY_RE = /sk-hbr-[A-Za-z0-9_-]{43}/; // full plaintext shape; key_prefix is far shorter
 
-  await step("chat: session catalog, model pick, auto Browser Chat key, streamed reply", async () => {
-    await goto("/chat");
-    await page.waitForText("What would you like to build?");
-    assert(
-      await page.has('"Browser Chat"'),
-      "empty state discloses the managed auto chat key",
-    );
-    const session = await browserFetchJson<{ user?: { id?: string } } | null>(
-      "/api/auth/get-session",
-    );
-    chatUserId = session?.user?.id ?? "";
-    chatWsId =
-      (await browserFetchJson<{ id: string; name: string }[]>("/api/v1/workspaces")).find(
-        (w) => w.name === wsName,
-      )?.id ?? "";
-    assert(!!chatUserId && !!chatWsId, "session user + main workspace id resolved");
-    // Catalog is session-scoped: the picker is usable before any key exists.
-    await waitForExpr(
-      `document.getElementById('chat-model')?.textContent === 'Choose a model'`,
-      "model catalog loaded without a key",
-    );
-    await selectOption("#chat-model", "Fake Test");
-    const keysBefore = await chatKeys();
-    await typeMessage("hi");
-    await page.clickAria('[aria-label="Send message"]');
-    // Streamed reply from the fake CPA (the gateway echoes the public model id).
-    await page.waitForText("Hello from fake/test-model: hi");
-    await replyDone();
-    // Viewport contract after a send: the page itself never scrolls (the log
-    // is the only scroller) and the composer stays visible at the bottom.
-    const chatLayout = await evaluate<{
-      composerBottom: number;
-      scrollHeight: number;
-      innerHeight: number;
-    }>(`(() => {
+  await step(
+    "chat: session catalog, model pick, managed browser key, streamed reply",
+    async () => {
+      await goto("/chat");
+      await page.waitForText("What would you like to build?");
+      assert(
+        await page.has('stored in this browser'),
+        "empty state discloses browser-key reuse",
+      );
+      const session = await browserFetchJson<{ user?: { id?: string } } | null>(
+        "/api/auth/get-session",
+      );
+      chatUserId = session?.user?.id ?? "";
+      chatWsId =
+        (await browserFetchJson<{ id: string; name: string }[]>("/api/v1/workspaces")).find(
+          (w) => w.name === wsName,
+        )?.id ?? "";
+      assert(!!chatUserId && !!chatWsId, "session user + main workspace id resolved");
+      // Catalog is session-scoped: the picker is usable before any key exists.
+      await waitForExpr(
+        `document.getElementById('chat-model')?.textContent === 'Choose a model'`,
+        "model catalog loaded without a key",
+      );
+      await selectOption("#chat-model", "Fake Test");
+      const keysBefore = await chatKeys();
+      await typeMessage("hi");
+      await page.clickAria('[aria-label="Send message"]');
+      // Streamed reply from the fake CPA (the gateway echoes the public model id).
+      await page.waitForText("Hello from fake/test-model: hi");
+      await replyDone();
+      // Viewport contract after a send: the page itself never scrolls (the log
+      // is the only scroller) and the composer stays visible at the bottom.
+      const chatLayout = await evaluate<{
+        composerBottom: number;
+        scrollHeight: number;
+        innerHeight: number;
+      }>(`(() => {
       const ta = document.querySelector('textarea[aria-label="Message"]');
       return {
         composerBottom: ta ? ta.getBoundingClientRect().bottom : -1,
@@ -1110,57 +1115,59 @@ async function main() {
         innerHeight: window.innerHeight,
       };
     })()`);
-    assert(
-      chatLayout.composerBottom > 0 && chatLayout.composerBottom <= chatLayout.innerHeight,
-      `composer bottom within viewport, got ${chatLayout.composerBottom} vs ${chatLayout.innerHeight}`,
-    );
-    assert(
-      chatLayout.scrollHeight <= chatLayout.innerHeight + 1,
-      `page does not scroll: scrollHeight ${chatLayout.scrollHeight} vs innerHeight ${chatLayout.innerHeight}`,
-    );
-    const conv = await convLog();
-    assert(!!conv, "conversation log rendered");
-    assert(conv!.n === 2, `two bubbles (user + assistant), got ${conv!.n}`);
-    assert(conv!.first === "hi", "user bubble shows the sent message");
-    assert(
-      conv!.last!.includes("Hello from fake/test-model: hi"),
-      `assistant bubble has streamed reply, got "${conv!.last!.slice(0, 120)}"`,
-    );
-    // The send itself minted exactly one normal workspace API key.
-    const keysAfter = await chatKeys();
-    assert(
-      keysAfter.length === keysBefore.length + 1,
-      `exactly one key created by the chat flow (before ${keysBefore.length}, after ${keysAfter.length})`,
-    );
-    const created = keysAfter.filter((k) => !keysBefore.some((b) => b.id === k.id));
-    assert(
-      created.length === 1 && created[0]!.name === "Browser Chat" && created[0]!.status === "enabled",
-      "the new key is the enabled Browser Chat key",
-    );
-    assert(
-      !PLAINTEXT_KEY_RE.test(JSON.stringify(keysAfter)),
-      "keys list response never carries a plaintext secret",
-    );
-    // History list shows the literal first-turn title, and the snapshot matches.
-    await waitForExpr(
-      `!!document.querySelector('[aria-label="Rename conversation: hi"]')`,
-      "sidebar lists the conversation titled hi",
-    );
-    chatId =
-      (await browserFetchJson<{ data: { id: string }[] }>(
-        `/api/v1/workspaces/${chatWsId}/chats`,
-      )).data[0]?.id ?? "";
-    assert(!!chatId, "conversation persisted server-side");
-    const snap = await chatSnapshot();
-    assert(snap.title === "hi", `first-turn title is the literal prompt, got "${snap.title}"`);
-    assert(snap.model === MODEL_ID, "snapshot records the selected model");
-    assert(
-      snap.messages.length === 2 &&
-        snap.messages[0]?.role === "user" &&
-        snap.messages[1]?.role === "assistant",
-      "snapshot has the user + assistant turn",
-    );
-  });
+      assert(
+        chatLayout.composerBottom > 0 && chatLayout.composerBottom <= chatLayout.innerHeight,
+        `composer bottom within viewport, got ${chatLayout.composerBottom} vs ${chatLayout.innerHeight}`,
+      );
+      assert(
+        chatLayout.scrollHeight <= chatLayout.innerHeight + 1,
+        `page does not scroll: scrollHeight ${chatLayout.scrollHeight} vs innerHeight ${chatLayout.innerHeight}`,
+      );
+      const conv = await convLog();
+      assert(!!conv, "conversation log rendered");
+      assert(conv!.n === 2, `two bubbles (user + assistant), got ${conv!.n}`);
+      assert(conv!.first === "hi", "user bubble shows the sent message");
+      assert(
+        conv!.last!.includes("Hello from fake/test-model: hi"),
+        `assistant bubble has streamed reply, got "${conv!.last!.slice(0, 120)}"`,
+      );
+      // The send itself minted exactly one normal workspace API key.
+      const keysAfter = await chatKeys();
+      assert(
+        keysAfter.length === keysBefore.length + 1,
+        `exactly one key created by the chat flow (before ${keysBefore.length}, after ${keysAfter.length})`,
+      );
+      const created = keysAfter.filter((k) => !keysBefore.some((b) => b.id === k.id));
+      assert(
+        created.length === 1 &&
+          created[0]!.name.startsWith("Chat - ") &&
+          created[0]!.status === "enabled",
+        "the new key is the enabled device-named chat key",
+      );
+      assert(
+        !PLAINTEXT_KEY_RE.test(JSON.stringify(keysAfter)),
+        "keys list response never carries a plaintext secret",
+      );
+      // History list shows the literal first-turn title, and the snapshot matches.
+      await waitForExpr(
+        `!!document.querySelector('[aria-label="Rename conversation: hi"]')`,
+        "sidebar lists the conversation titled hi",
+      );
+      chatId =
+        (await browserFetchJson<{ data: { id: string }[] }>(`/api/v1/workspaces/${chatWsId}/chats`))
+          .data[0]?.id ?? "";
+      assert(!!chatId, "conversation persisted server-side");
+      const snap = await chatSnapshot();
+      assert(snap.title === "hi", `first-turn title is the literal prompt, got "${snap.title}"`);
+      assert(snap.model === MODEL_ID, "snapshot records the selected model");
+      assert(
+        snap.messages.length === 2 &&
+          snap.messages[0]?.role === "user" &&
+          snap.messages[1]?.role === "assistant",
+        "snapshot has the user + assistant turn",
+      );
+    },
+  );
 
   await step("chat: full reload reopens the saved conversation with messages + model", async () => {
     await goto("/chat");
@@ -1174,8 +1181,13 @@ async function main() {
     const conv = await convLog();
     assert(!!conv && conv.n === 2, `reopened log has both messages, got ${conv?.n ?? "none"}`);
     assert(conv!.first === "hi", "saved user message restored");
-    assert(conv!.last!.includes("Hello from fake/test-model: hi"), "saved assistant reply restored");
-    const model = (await evaluate<string>(`document.getElementById('chat-model')?.textContent ?? ''`));
+    assert(
+      conv!.last!.includes("Hello from fake/test-model: hi"),
+      "saved assistant reply restored",
+    );
+    const model = await evaluate<string>(
+      `document.getElementById('chat-model')?.textContent ?? ''`,
+    );
     assert(model.includes("Fake Test"), `model restored from snapshot, got "${model}"`);
   });
 
@@ -1198,81 +1210,92 @@ async function main() {
     );
   });
 
-  await step("chat: explicit Stop keeps the partial, Retry does not duplicate the user turn", async () => {
-    await typeMessage("stop me");
-    await page.clickAria('[aria-label="Send message"]');
-    // 300ms fake-CPA chunk pacing: wait for the first content token, stop mid-stream.
-    await waitForExpr(
-      `(() => { const log = document.querySelector('[aria-label="Conversation"]');
+  await step(
+    "chat: explicit Stop keeps the partial, Retry does not duplicate the user turn",
+    async () => {
+      await typeMessage("stop me");
+      await page.clickAria('[aria-label="Send message"]');
+      // 300ms fake-CPA chunk pacing: wait for the first content token, stop mid-stream.
+      await waitForExpr(
+        `(() => { const log = document.querySelector('[aria-label="Conversation"]');
         const last = log?.children[log.children.length - 1];
         return !!last && last.textContent.includes('Hello from'); })()`,
-      "first assistant content token",
-    );
-    await page.clickAria('[aria-label="Stop generating"]');
-    // The stop path persists the partial before it re-enables the composer.
-    await waitForExpr(
-      `!!document.querySelector('[aria-label="Send message"]')`,
-      "streaming ended after Stop",
-    );
-    const afterStop = await chatSnapshot();
-    assert(
-      afterStop.messages.some((m) => m.role === "assistant" && m.content.includes("Hello from")),
-      "stopped partial reply was saved",
-    );
-    const baseVersion = afterStop.version;
-    await page.click("Retry last reply");
-    const deadline = Date.now() + 10000;
-    let snap = await chatSnapshot();
-    while (snap.version <= baseVersion) {
-      if (Date.now() > deadline)
-        throw new Error(`retry save did not land (version ${snap.version} <= ${baseVersion})`);
-      await sleep(300);
-      snap = await chatSnapshot();
-    }
-    const userTurns = snap.messages.filter((m) => m.role === "user" && m.content === "stop me");
-    assert(
-      userTurns.length === 1,
-      `retry must not duplicate the original user turn, got ${userTurns.length}`,
-    );
-    const replies = snap.messages.filter(
-      (m) => m.role === "assistant" && m.content.includes("Hello from fake/test-model: stop me"),
-    );
-    assert(replies.length === 1, `exactly one saved reply for the retried turn, got ${replies.length}`);
-  });
+        "first assistant content token",
+      );
+      await page.clickAria('[aria-label="Stop generating"]');
+      // The stop path persists the partial before it re-enables the composer.
+      await waitForExpr(
+        `!!document.querySelector('[aria-label="Send message"]')`,
+        "streaming ended after Stop",
+      );
+      const afterStop = await chatSnapshot();
+      assert(
+        afterStop.messages.some((m) => m.role === "assistant" && m.content.includes("Hello from")),
+        "stopped partial reply was saved",
+      );
+      const baseVersion = afterStop.version;
+      await page.click("Retry last reply");
+      const deadline = Date.now() + 10000;
+      let snap = await chatSnapshot();
+      while (snap.version <= baseVersion) {
+        if (Date.now() > deadline)
+          throw new Error(`retry save did not land (version ${snap.version} <= ${baseVersion})`);
+        await sleep(300);
+        snap = await chatSnapshot();
+      }
+      const userTurns = snap.messages.filter((m) => m.role === "user" && m.content === "stop me");
+      assert(
+        userTurns.length === 1,
+        `retry must not duplicate the original user turn, got ${userTurns.length}`,
+      );
+      const replies = snap.messages.filter(
+        (m) => m.role === "assistant" && m.content.includes("Hello from fake/test-model: stop me"),
+      );
+      assert(
+        replies.length === 1,
+        `exactly one saved reply for the retried turn, got ${replies.length}`,
+      );
+    },
+  );
 
-  await step("chat: archive removes from the active list, server retains messages (no delete)", async () => {
-    await page.clickAria('[aria-label="Archive conversation: Saved E2E chat"]');
-    await page.waitForText("What would you like to build?");
-    await page.waitForText("No conversations yet.");
-    const list = await browserFetchJson<{ data: { id: string }[] }>(
-      `/api/v1/workspaces/${chatWsId}/chats`,
-    );
-    assert(list.data.length === 0, "active conversation list is empty after archive");
-    const snap = await chatSnapshot();
-    assert(snap.archived_at !== null, "conversation is archived server-side, not deleted");
-    assert(
-      snap.messages.length >= 6,
-      `all messages retained after archive, got ${snap.messages.length}`,
-    );
-    assert(
-      snap.messages.some((m) => m.role === "user" && m.content === "hi"),
-      "original user message retained",
-    );
-  });
+  await step(
+    "chat: archive removes from the active list, server retains messages (no delete)",
+    async () => {
+      await page.clickAria('[aria-label="Archive conversation: Saved E2E chat"]');
+      await page.waitForText("What would you like to build?");
+      await page.waitForText("No conversations yet.");
+      const list = await browserFetchJson<{ data: { id: string }[] }>(
+        `/api/v1/workspaces/${chatWsId}/chats`,
+      );
+      assert(list.data.length === 0, "active conversation list is empty after archive");
+      const snap = await chatSnapshot();
+      assert(snap.archived_at !== null, "conversation is archived server-side, not deleted");
+      assert(
+        snap.messages.length >= 6,
+        `all messages retained after archive, got ${snap.messages.length}`,
+      );
+      assert(
+        snap.messages.some((m) => m.role === "user" && m.content === "hi"),
+        "original user message retained",
+      );
+    },
+  );
 
-  await step("chat: New chat welcome, advanced manual key is memory/tab-scoped, no legacy global", async () => {
-    const keysBeforeManual = await chatKeys();
-    await evaluate(`(() => {
+  await step(
+    "chat: New chat welcome, advanced manual key is memory/tab-scoped, no legacy global",
+    async () => {
+      const keysBeforeManual = await chatKeys();
+      await evaluate(`(() => {
       const s = [...document.querySelectorAll('details > summary')]
         .find(el => el.textContent.includes('Advanced: use your own API key'));
       if (!s) throw new Error('advanced key summary not found');
       s.click();
       return true;
     })()`);
-    await page.setInputById("chat-api-key", apiKey);
-    // Memory-only by default: the pasted key exists in no storage entry at all.
-    assert(
-      await evaluate<boolean>(`(() => {
+      await page.setInputById("chat-api-key", apiKey);
+      // Memory-only by default: the pasted key exists in no storage entry at all.
+      assert(
+        await evaluate<boolean>(`(() => {
         for (let i = 0; i < sessionStorage.length; i++) {
           const k = sessionStorage.key(i);
           if (k === 'hbr-chat-key' || k.startsWith('hbr-chat-key:')) return false;
@@ -1280,55 +1303,58 @@ async function main() {
         }
         return true;
       })()`),
-      "pasted manual key stays memory-only before remember",
-    );
-    await typeMessage("manual hi");
-    await page.clickAria('[aria-label="Send message"]');
-    await page.waitForText("Hello from fake/test-model: manual hi");
-    await replyDone();
-    const keysAfterManual = await chatKeys();
-    assert(
-      keysAfterManual.length === keysBeforeManual.length,
-      "manual key path creates no additional key",
-    );
-    await page.click("New chat");
-    await page.waitForText("What would you like to build?");
-    assert(
-      !(await evaluate<boolean>(`!!document.querySelector('[aria-label="Conversation"]')`)),
-      "conversation log cleared after New chat",
-    );
-    // Remember opts into sessionStorage namespaced by user+workspace — never
-    // the legacy unscoped key (cross-user leak on shared browsers).
-    await page.clickSwitch("chat-remember");
-    const scopedKey = `hbr-chat-key:${chatUserId}:${chatWsId}`;
-    assert(
-      await evaluate<boolean>(`(() => {
+        "pasted manual key stays memory-only before remember",
+      );
+      await typeMessage("manual hi");
+      await page.clickAria('[aria-label="Send message"]');
+      await page.waitForText("Hello from fake/test-model: manual hi");
+      await replyDone();
+      const keysAfterManual = await chatKeys();
+      assert(
+        keysAfterManual.length === keysBeforeManual.length,
+        "manual key path creates no additional key",
+      );
+      await page.click("New chat");
+      await page.waitForText("What would you like to build?");
+      assert(
+        !(await evaluate<boolean>(`!!document.querySelector('[aria-label="Conversation"]')`)),
+        "conversation log cleared after New chat",
+      );
+      // Remember opts into sessionStorage namespaced by user+workspace — never
+      // the legacy unscoped key (cross-user leak on shared browsers).
+      await page.clickSwitch("chat-remember");
+      const scopedKey = `hbr-chat-key:${chatUserId}:${chatWsId}`;
+      assert(
+        await evaluate<boolean>(`(() => {
         const scoped = sessionStorage.getItem(${JSON.stringify(scopedKey)});
         if (scoped === null || !scoped.includes('sk-hbr-')) return false;
         return sessionStorage.getItem('hbr-chat-key') === null;
       })()`),
-      "remembered key stored under the user+workspace scoped key only",
-    );
-  });
+        "remembered key stored under the user+workspace scoped key only",
+      );
+    },
+  );
 
-  await step("chat: markdown engine sanitizes model output in the browser (no script/js-href/img fetch, no overflow)", async () => {
-    // The fake CPA echoes the prompt into the reply, so the markdown payload
-    // travels as chat content only — no provider or fake-CPA change, and the
-    // send uses the remembered manual key (no new key, fake model, no charge).
-    await typeMessage(
-      '**bold** <script>alert(1)</script> [click](javascript:alert(1)) ![px](https://evil.example/track.png)',
-    );
-    await page.clickAria('[aria-label="Send message"]');
-    await page.waitForText("Hello from fake/test-model:");
-    await replyDone();
-    const md = await evaluate<{
-      strong: string;
-      scripts: number;
-      jsLinks: number;
-      imgs: number;
-      imgAlt: boolean;
-      overflow: boolean;
-    }>(`(() => {
+  await step(
+    "chat: markdown engine sanitizes model output in the browser (no script/js-href/img fetch, no overflow)",
+    async () => {
+      // The fake CPA echoes the prompt into the reply, so the markdown payload
+      // travels as chat content only — no provider or fake-CPA change, and the
+      // send uses the remembered manual key (no new key, fake model, no charge).
+      await typeMessage(
+        "**bold** <script>alert(1)</script> [click](javascript:alert(1)) ![px](https://evil.example/track.png)",
+      );
+      await page.clickAria('[aria-label="Send message"]');
+      await page.waitForText("Hello from fake/test-model:");
+      await replyDone();
+      const md = await evaluate<{
+        strong: string;
+        scripts: number;
+        jsLinks: number;
+        imgs: number;
+        imgAlt: boolean;
+        overflow: boolean;
+      }>(`(() => {
       const log = document.querySelector('[aria-label="Conversation"]');
       const last = log?.firstElementChild?.lastElementChild;
       const mdEl = last?.querySelector('.wrap-anywhere');
@@ -1341,28 +1367,31 @@ async function main() {
         imgAlt: !!mdEl.querySelector('.md-img-alt'),
         overflow: mdEl.scrollWidth > mdEl.clientWidth + 1,
       };
-    })()`, );
-    assert(md.strong === "bold", `markdown emphasis rendered, got "${md.strong}"`);
-    assert(md.scripts === 0, `injected <script> stripped, got ${md.scripts}`);
-    assert(md.jsLinks === 0, `javascript: href stripped, got ${md.jsLinks}`);
-    assert(
-      md.imgs === 0 && md.imgAlt,
-      `remote image never fetched, alt text survives (imgs ${md.imgs}, alt ${md.imgAlt})`,
-    );
-    assert(!md.overflow, "markdown output does not overflow the log horizontally");
-  });
+    })()`);
+      assert(md.strong === "bold", `markdown emphasis rendered, got "${md.strong}"`);
+      assert(md.scripts === 0, `injected <script> stripped, got ${md.scripts}`);
+      assert(md.jsLinks === 0, `javascript: href stripped, got ${md.jsLinks}`);
+      assert(
+        md.imgs === 0 && md.imgAlt,
+        `remote image never fetched, alt text survives (imgs ${md.imgs}, alt ${md.imgAlt})`,
+      );
+      assert(!md.overflow, "markdown output does not overflow the log horizontally");
+    },
+  );
 
-  await step("chat: workspace switch aborts context, chat key storage stays identity-scoped", async () => {
-    await selectOption('[aria-label="Workspace"]', `${throwaway} 2`);
-    // Nothing from the funded workspace's chat may leak into the other one.
-    await page.waitForText("What would you like to build?");
-    await page.waitForText("No conversations yet.");
-    assert(
-      !(await page.has("Hello from fake")),
-      "no prior conversation content after the workspace switch",
-    );
-    assert(
-      await evaluate<boolean>(`(() => {
+  await step(
+    "chat: workspace switch aborts context, chat key storage stays identity-scoped",
+    async () => {
+      await selectOption('[aria-label="Workspace"]', `${throwaway} 2`);
+      // Nothing from the funded workspace's chat may leak into the other one.
+      await page.waitForText("What would you like to build?");
+      await page.waitForText("No conversations yet.");
+      assert(
+        !(await page.has("Hello from fake")),
+        "no prior conversation content after the workspace switch",
+      );
+      assert(
+        await evaluate<boolean>(`(() => {
         if (sessionStorage.getItem('hbr-chat-key') !== null) return false;
         for (let i = 0; i < sessionStorage.length; i++) {
           const k = sessionStorage.key(i);
@@ -1370,11 +1399,12 @@ async function main() {
         }
         return true;
       })()`),
-      "remembered manual key dropped on switch; no legacy unscoped global",
-    );
-    await selectOption('[aria-label="Workspace"]', wsName);
-    await page.waitForText("What would you like to build?");
-  });
+        "remembered manual key dropped on switch; no legacy unscoped global",
+      );
+      await selectOption('[aria-label="Workspace"]', wsName);
+      await page.waitForText("What would you like to build?");
+    },
+  );
 
   // --- gateway calls (Bun fetch, not UI) ---
   await step("gateway chat completions (non-stream)", async () => {
@@ -1900,7 +1930,10 @@ async function main() {
         await page.waitForText(MODEL_ID);
         // Escape closes and focus returns to the trigger.
         await page.clickAria('[aria-label="Open navigation"]');
-        await waitForExpr(`!!document.querySelector('[role="dialog"]')`, "mobile nav sheet reopened");
+        await waitForExpr(
+          `!!document.querySelector('[role="dialog"]')`,
+          "mobile nav sheet reopened",
+        );
         await pressEscape();
         await waitForExpr(`!document.querySelector('[role="dialog"]')`, "sheet closed on Escape");
         // Radix restores focus asynchronously after unmount, so wait for it.

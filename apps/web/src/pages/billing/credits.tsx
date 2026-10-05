@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -12,6 +12,7 @@ import { formatVnd, formatUsdFromVnd, formatDate } from "../../lib/format";
 import { formatLedgerKindLabel, formatLedgerMemoLabel } from "../../lib/display";
 import { partitionLedger, signedLedgerAmount, formatLedgerSourceLabel } from "./ledger-display";
 import { PageHeader, EmptyState, ErrorState, DataTable } from "../../components/page";
+import RedeemPromo from "../../components/redeem-promo";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
@@ -66,6 +67,28 @@ const schema = z.object({
 });
 type Values = z.infer<typeof schema>;
 
+/** Display-safe payment limits from GET /api/v1/payment-config (hints only — the server enforces the real limits). */
+export interface PaymentConfig {
+  timeout_minutes: number;
+  max_amount_vnd: number;
+  usd_vnd_rate: number;
+}
+
+/** Union sent to POST payments; USD input stays a string end to end. */
+type TopUpPayload = { currency: "VND"; amount: number } | { currency: "USD"; usdAmount: string };
+
+// USD input validation without numeric parsing: plain digits, at most 2
+// decimals, at least one nonzero digit. The exact cents→VND conversion happens
+// only on the server (BigInt cents at the configured rate).
+const USD_INPUT_RE = /^\d+(\.\d{1,2})?$/;
+function validateUsdInput(text: string): string | null {
+  const t = text.trim();
+  if (t === "") return "Enter a USD amount";
+  if (!USD_INPUT_RE.test(t)) return "USD amount must be a number with at most 2 decimals";
+  if (!/[1-9]/.test(t)) return "USD amount must be greater than zero";
+  return null;
+}
+
 const PRESETS = [50_000, 100_000, 200_000, 500_000];
 
 export default function BillingCreditsPage() {
@@ -80,6 +103,15 @@ export default function BillingCreditsPage() {
 
   // FX rate for USD display; undefined (older backend) -> VND fallback.
   const rate = wallet.data?.usd_vnd_rate;
+
+  // Display-safe limits for cap/timeout hints and the approximate USD→VND
+  // readback; a load failure just hides the hints (the server still enforces).
+  const paymentConfig = useQuery({
+    queryKey: ["payment-config"],
+    queryFn: () => api<PaymentConfig>("/api/v1/payment-config"),
+    staleTime: 60_000,
+    retry: false,
+  });
 
   const ledger = useQuery({
     queryKey: ["ledger", workspaceId],
@@ -252,12 +284,16 @@ export default function BillingCreditsPage() {
           </CardHeader>
           <CardContent>
             {workspaceId ? (
-              <TopUpForm
-                workspaceId={workspaceId}
-                payosAvailable={payosAvailable}
-                rate={rate}
-                onNavigate={(href) => void navigate({ href })}
-              />
+              <>
+                <TopUpForm
+                  workspaceId={workspaceId}
+                  payosAvailable={payosAvailable}
+                  rate={rate}
+                  paymentConfig={paymentConfig.data ?? null}
+                  onNavigate={(href) => void navigate({ href })}
+                />
+                <RedeemPromo workspaceId={workspaceId} />
+              </>
             ) : null}
           </CardContent>
         </Card>
@@ -274,11 +310,14 @@ export function TopUpForm({
   workspaceId,
   payosAvailable,
   rate,
+  paymentConfig,
   onNavigate,
 }: {
   workspaceId: string;
   payosAvailable: boolean;
   rate: number | undefined;
+  /** Display-safe payment limits (null while loading / on load error). */
+  paymentConfig?: PaymentConfig | null;
   onNavigate: (href: string) => void;
 }) {
   const queryClient = useQueryClient();
@@ -290,21 +329,42 @@ export function TopUpForm({
   const amount = Number(form.watch("amount")) || 0;
   const usdEquiv = amount > 0 ? formatUsdFromVnd(amount, rate) : null;
 
+  // VND is the default and the behavior-preserving path; USD input is a raw
+  // string sent as usd_amount — no client money conversion anywhere.
+  const [currency, setCurrency] = useState<"VND" | "USD">("VND");
+  const [usdText, setUsdText] = useState("");
+  const [usdError, setUsdError] = useState<string | null>(null);
+  const usdProblem = validateUsdInput(usdText);
+
+  // Approximate VND readback for the USD input, using ONLY the configured
+  // rate; display-only, never sent — the server computes the exact credit.
+  const configRate = paymentConfig?.usd_vnd_rate;
+  const usdApproxVnd =
+    currency === "USD" && usdProblem === null && configRate !== undefined && configRate > 0
+      ? Math.round(Number(usdText.trim()) * configRate)
+      : null;
+
   // Manual stays the default; the choice collapses back to manual whenever
   // the backend stops advertising PayOS.
   const [providerChoice, setProviderChoice] = useState<"manual" | "payos">("manual");
   const provider = payosAvailable && providerChoice === "payos" ? "payos" : "manual";
 
   const topUp = useMutation({
-    // provider is sent only for PayOS, so the manual request body is byte
-    // identical to the pre-PayOS shape.
-    mutationFn: (values: Values) =>
+    // provider is sent only for PayOS, so the manual bodies keep their
+    // pre-existing shapes byte-identical: {amount} for VND, {usd_amount} for USD.
+    mutationFn: (payload: TopUpPayload) =>
       api<{ id: string; status: string; checkout_url: string }>(
         `/api/v1/workspaces/${workspaceId}/payments`,
         {
           method: "POST",
           body: JSON.stringify(
-            provider === "payos" ? { amount: values.amount, provider } : { amount: values.amount },
+            payload.currency === "USD"
+              ? provider === "payos"
+                ? { usd_amount: payload.usdAmount, provider }
+                : { usd_amount: payload.usdAmount }
+              : provider === "payos"
+                ? { amount: payload.amount, provider }
+                : { amount: payload.amount },
           ),
         },
       ),
@@ -323,52 +383,125 @@ export function TopUpForm({
       toast("Payment created — waiting for admin confirmation");
       onNavigate(`/billing/payments?payment=${payment.id}`);
     },
-    onError: (err) => {
+    onError: (err, payload) => {
       const message = err instanceof ApiError ? err.message : "Top-up failed";
-      form.setError("amount", { message });
+      // Server errors stay visible next to whichever input produced them.
+      if (payload.currency === "USD") setUsdError(message);
+      else form.setError("amount", { message });
     },
   });
 
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (currency === "USD") {
+      const problem = validateUsdInput(usdText);
+      if (problem !== null) {
+        setUsdError(problem);
+        return;
+      }
+      setUsdError(null);
+      topUp.mutate({ currency: "USD", usdAmount: usdText.trim() });
+      return;
+    }
+    void form.handleSubmit((v: Values) => topUp.mutate({ currency: "VND", amount: v.amount }))(e);
+  };
+
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit((v: Values) => topUp.mutateAsync(v))} className="space-y-4">
-        <FormField
-          control={form.control}
-          name="amount"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Amount (VND)</FormLabel>
-              <FormControl>
-                <Input
-                  type="number"
-                  min={10_000}
-                  step={1_000}
-                  className="font-mono"
-                  {...field}
-                  value={field.value == null ? "" : Number(field.value)}
-                />
-              </FormControl>
-              <FormMessage />
-              <p className="font-mono text-xs text-muted-foreground">
-                {usdEquiv ? `≈ ${usdEquiv}` : ""}
-              </p>
-            </FormItem>
-          )}
-        />
-        <div className="flex flex-wrap gap-2">
-          {PRESETS.map((p) => (
+      <form onSubmit={submit} className="space-y-4">
+        <div className="flex gap-1" role="group" aria-label="Top-up currency">
+          {(["VND", "USD"] as const).map((c) => (
             <Button
-              key={p}
+              key={c}
               type="button"
-              variant="outline"
               size="sm"
-              className="font-mono"
-              onClick={() => form.setValue("amount", p, { shouldValidate: true })}
+              variant={currency === c ? "default" : "outline"}
+              onClick={() => {
+                setCurrency(c);
+                setUsdError(null);
+              }}
             >
-              {formatVnd(p)}
+              {c}
             </Button>
           ))}
         </div>
+        {currency === "VND" ? (
+          <>
+            <FormField
+              control={form.control}
+              name="amount"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Amount (VND)</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      min={10_000}
+                      step={1_000}
+                      className="font-mono"
+                      {...field}
+                      value={field.value == null ? "" : Number(field.value)}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                  <p className="font-mono text-xs text-muted-foreground">
+                    {usdEquiv ? `≈ ${usdEquiv}` : ""}
+                  </p>
+                </FormItem>
+              )}
+            />
+            <div className="flex flex-wrap gap-2">
+              {PRESETS.map((p) => (
+                <Button
+                  key={p}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="font-mono"
+                  onClick={() => form.setValue("amount", p, { shouldValidate: true })}
+                >
+                  {formatVnd(p)}
+                </Button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <FormItem>
+              <FormLabel htmlFor="topup_usd_amount">Amount (USD)</FormLabel>
+              <FormControl>
+                <Input
+                  id="topup_usd_amount"
+                  value={usdText}
+                  onChange={(e) => {
+                    setUsdText(e.target.value);
+                    setUsdError(null);
+                  }}
+                  inputMode="decimal"
+                  placeholder="5.00"
+                  aria-invalid={usdError !== null || (usdText.trim() !== "" && usdProblem !== null)}
+                  className={
+                    usdError !== null || (usdText.trim() !== "" && usdProblem !== null)
+                      ? "border-destructive"
+                      : undefined
+                  }
+                />
+              </FormControl>
+              <FormMessage>{usdError ?? undefined}</FormMessage>
+              <p className="font-mono text-xs text-muted-foreground">
+                {usdApproxVnd !== null
+                  ? `≈ ${formatVnd(usdApproxVnd)} (approximate — the server calculates the exact credit)`
+                  : ""}
+              </p>
+            </FormItem>
+          </>
+        )}
+        {paymentConfig && (
+          <p className="text-xs text-muted-foreground">
+            Max top-up {formatVnd(paymentConfig.max_amount_vnd)} · pending payments expire after{" "}
+            {paymentConfig.timeout_minutes} minutes.
+          </p>
+        )}
         {payosAvailable && (
           <fieldset className="space-y-2">
             <legend className="text-sm font-medium">Payment method</legend>
@@ -439,7 +572,9 @@ export function SubscriptionCard({
         <p className="text-sm font-semibold">Subscription credit</p>
         <p className="text-xs text-muted-foreground">{subscription.plan_name}</p>
       </div>
-      <p className={`mt-1 font-mono text-2xl font-semibold ${subscription.expired ? "text-muted-foreground" : ""}`}>
+      <p
+        className={`mt-1 font-mono text-2xl font-semibold ${subscription.expired ? "text-muted-foreground" : ""}`}
+      >
         {usd ?? formatVnd(subscription.balance)}
       </p>
       <p className="mt-1 text-sm">

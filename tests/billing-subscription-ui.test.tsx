@@ -82,7 +82,9 @@ test("subscription card shows balance, period end, rate limit and the forfeit no
   expect(html).toContain("250.000");
   expect(html).toContain("2030"); // formatDate(period_end) (vi-VN medium date)
   expect(html).toContain("15 requests per minute");
-  expect(html).toContain("Unused subscription credit is lost when the period ends without a renewal.");
+  expect(html).toContain(
+    "Unused subscription credit is lost when the period ends without a renewal.",
+  );
 });
 
 test("expired subscription memo label", () => {

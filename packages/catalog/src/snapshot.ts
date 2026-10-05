@@ -26,8 +26,12 @@ export async function publishSnapshot(
     throw new Error(`model binding not found: ${bindingId}`);
   }
   const snapshotId = crypto.randomUUID();
-  await db
-    .insert(priceSnapshots)
-    .values({ id: snapshotId, binding_id: bindingId, price_input: priceInput, price_output: priceOutput, created_at: now });
+  await db.insert(priceSnapshots).values({
+    id: snapshotId,
+    binding_id: bindingId,
+    price_input: priceInput,
+    price_output: priceOutput,
+    created_at: now,
+  });
   return { snapshotId };
 }

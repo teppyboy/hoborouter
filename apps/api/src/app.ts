@@ -24,9 +24,17 @@ import { payosWebhookRoutes } from "./routes/webhooks-payos";
 import { dashboardRoutes } from "./routes/dashboard";
 import { adminExtraRoutes } from "./routes/admin-extra";
 import { adminPaymentRejectRoutes } from "./routes/admin-payment-reject";
+import { adminPaymentLateCreditRoutes } from "./routes/admin-payment-late-credit";
 import { adminUserEditRoutes } from "./routes/admin-user-edit";
 import { adminSettingsRoutes } from "./routes/admin-settings";
 import { adminRequestsRoutes } from "./routes/admin-requests";
+import { adminBusinessRoutes } from "./routes/admin-business";
+import { adminPromotionsRoutes } from "./routes/admin-promotions";
+import { adminSupportLeadRoutes } from "./routes/admin-support-leads";
+import { promotionsRoutes } from "./routes/promotions";
+import { supportLeadRoutes } from "./routes/support-leads";
+import { supportSettingsRoutes } from "./routes/support-settings";
+import { publicCatalogRoutes } from "./routes/public-catalog";
 import { catalogPublicRoutes } from "./routes/catalog-public";
 import { publicConfigRoutes } from "./routes/public-config";
 import { accountRoutes } from "./routes/account";
@@ -106,44 +114,58 @@ export const buildApp = async (deps: AppDeps = {}) => {
     // Elysia 2.0.0-exp.64: the method-specific .get("/api/*") 404 wildcard
     // beats .all("/api/auth/*") for GET, so register GET explicitly.
     .get("/api/auth/*", authHandler)
-    .all("/api/auth/*", authHandler)
-    .use(workspacesRoutes(db, auth))
-    .use(membersRoutes(db, auth))
-    .use(auditRoutes(db, auth))
-    .use(keysRoutes(db, auth))
-    .use(chatsRoutes(db, auth))
-    .use(paymentsRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch))
-    .use(bundlesRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch))
-    .use(mockWebhookRoutes(db, mockPayments))
-    .use(payosWebhookRoutes(db, payosConfigFromEnv()))
-    .use(cpaHealthRoutes(db, auth))
-    .use(adminModelsRoutes(db, auth))
-    .use(adminCatalogRoutes(db, auth))
-    .use(dashboardRoutes(db, auth))
-    .use(adminExtraRoutes(db, auth))
-    .use(adminPaymentRejectRoutes(db, auth))
-    .use(adminUserEditRoutes(db, auth))
-    .use(adminSettingsRoutes(db, auth))
-    .use(adminBundlesRoutes(db, auth))
-    .use(adminRequestsRoutes(db, auth))
-    .use(catalogPublicRoutes(db, auth))
-    .use(publicConfigRoutes())
-    .use(accountRoutes(db, auth))
-    .use(v1ModelsRoutes(db))
-    .use(gatewayRoutes(db))
-    .get(
-      "/api/*",
-      () =>
-        new Response(
-          JSON.stringify({
-            error: { code: "NOT_FOUND", message: "Not found" },
-          }),
-          {
-            status: 404,
-            headers: { "content-type": "application/json" },
-          },
-        ),
-    );
+    .all("/api/auth/*", authHandler);
+  // Registered via loop instead of a .use() chain: chaining 30+ route groups
+  // nests Elysia's instance type past TS's instantiation-depth limit (TS2589).
+  // Same registration order as before; only the type surface is flatter.
+  const routeGroups = [
+    workspacesRoutes(db, auth),
+    membersRoutes(db, auth),
+    auditRoutes(db, auth),
+    keysRoutes(db, auth),
+    chatsRoutes(db, auth),
+    paymentsRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch),
+    bundlesRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch),
+    mockWebhookRoutes(db, mockPayments),
+    payosWebhookRoutes(db, payosConfigFromEnv()),
+    cpaHealthRoutes(db, auth),
+    adminModelsRoutes(db, auth),
+    adminCatalogRoutes(db, auth),
+    dashboardRoutes(db, auth),
+    adminExtraRoutes(db, auth),
+    adminPaymentRejectRoutes(db, auth),
+    adminPaymentLateCreditRoutes(db, auth),
+    adminUserEditRoutes(db, auth),
+    adminSettingsRoutes(db, auth),
+    adminBundlesRoutes(db, auth),
+    adminRequestsRoutes(db, auth),
+    catalogPublicRoutes(db, auth),
+    publicConfigRoutes(),
+    accountRoutes(db, auth),
+    publicCatalogRoutes(db),
+    supportSettingsRoutes(db, auth),
+    adminBusinessRoutes(db, auth),
+    adminPromotionsRoutes(db, auth),
+    adminSupportLeadRoutes(db, auth),
+    promotionsRoutes(db, auth),
+    supportLeadRoutes(db, auth),
+    v1ModelsRoutes(db),
+    gatewayRoutes(db),
+  ];
+  for (const group of routeGroups) app.use(group);
+  app.get(
+    "/api/*",
+    () =>
+      new Response(
+        JSON.stringify({
+          error: { code: "NOT_FOUND", message: "Not found" },
+        }),
+        {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+  );
 
   // CI runs tests before building the web app; a missing dist must not crash
   // boot — log once and serve the API without the SPA.

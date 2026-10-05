@@ -47,7 +47,10 @@ interface CatalogModelItem {
   public_id: string;
 }
 
-const nameSchema = z.object({ name: z.string().min(1, "Name is required") });
+const nameSchema = z.object({
+  // matches the API bound in apps/api/src/routes/keys.ts (MAX_KEY_NAME)
+  name: z.string().trim().min(1, "Name is required").max(128, "At most 128 characters"),
+});
 type NameValues = z.infer<typeof nameSchema>;
 
 const is403 = (e: unknown) => e instanceof ApiError && e.status === 403;
@@ -61,6 +64,7 @@ export default function KeysPage() {
   const [created, setCreated] = useState<{ name: string; plaintext: string } | null>(null);
   const [showCreated, setShowCreated] = useState(false);
   const [restrictFor, setRestrictFor] = useState<ApiKey | null>(null);
+  const [renameFor, setRenameFor] = useState<ApiKey | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null);
   const [filter, setFilter] = useState("");
 
@@ -98,6 +102,20 @@ export default function KeysPage() {
       invalidate();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
+  });
+
+  const renameMutation = useMutation({
+    mutationFn: ({ keyId, name }: { keyId: string; name: string }) =>
+      api(`/api/v1/workspaces/${workspaceId}/keys/${keyId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: () => {
+      toast("Key renamed");
+      setRenameFor(null);
+      invalidate();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Rename failed"),
   });
 
   const revokeMutation = useMutation({
@@ -167,6 +185,7 @@ export default function KeysPage() {
               >
                 {key.status === "enabled" ? "Disable" : "Enable"}
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setRenameFor(key)}>Rename</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setRestrictFor(key)}>
                 Model restrictions
               </DropdownMenuItem>
@@ -265,6 +284,17 @@ export default function KeysPage() {
         </DialogContent>
       </Dialog>
 
+      {renameFor && (
+        <RenameKeyDialog
+          apiKey={renameFor}
+          pending={renameMutation.isPending}
+          onSubmit={(name) => renameMutation.mutate({ keyId: renameFor.id, name })}
+          onOpenChange={(open) => {
+            if (!open) setRenameFor(null);
+          }}
+        />
+      )}
+
       {restrictFor && (
         <ModelRestrictionsDialog
           workspaceId={workspaceId}
@@ -307,6 +337,65 @@ export default function KeysPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function RenameKeyDialog({
+  apiKey,
+  pending,
+  onSubmit,
+  onOpenChange,
+}: {
+  apiKey: ApiKey;
+  pending: boolean;
+  onSubmit: (name: string) => void;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const form = useForm<NameValues>({
+    resolver: zodResolver(nameSchema),
+    defaultValues: { name: apiKey.name },
+  });
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next) form.reset();
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Rename key</DialogTitle>
+          <DialogDescription>
+            Current name: “{apiKey.name}”. Renaming does not change the key value.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={form.handleSubmit((v) => onSubmit(v.name))} className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="rename-key-name">Name</Label>
+            <Input id="rename-key-name" autoFocus {...form.register("name")} />
+            {form.formState.errors.name && (
+              <p className="text-sm text-destructive">{form.formState.errors.name.message}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={pending}
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" disabled={pending}>
+              Rename
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

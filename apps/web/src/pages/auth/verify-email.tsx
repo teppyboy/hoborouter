@@ -9,26 +9,20 @@ import { Link } from "@tanstack/react-router";
 import { useSession, type SessionUser } from "../../lib/auth";
 import { ResendVerificationButton } from "../../components/resend-verification";
 import { Button } from "../../components/ui/button";
+import { useAuthT } from "./copy";
 
-export function VerifyEmailView({
-  user,
-  loading,
-}: {
-  user: SessionUser | null;
-  loading: boolean;
-}) {
+export function VerifyEmailView({ user, loading }: { user: SessionUser | null; loading: boolean }) {
+  const t = useAuthT();
   if (loading) {
-    return <p className="text-sm text-muted-foreground">Checking your sign-in status…</p>;
+    return <p className="text-sm text-muted-foreground">{t("verifyLoading")}</p>;
   }
   if (user && user.emailVerified === true) {
     return (
       <div className="grid gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Email verified</h1>
-        <p className="text-sm text-muted-foreground">
-          Your email address is confirmed. Everything is ready to go.
-        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">{t("verifiedTitle")}</h1>
+        <p className="text-sm text-muted-foreground">{t("verifiedBody")}</p>
         <Button asChild size="sm" className="w-fit">
-          <Link to="/">Go to Hoborouter</Link>
+          <Link to="/">{t("goHome")}</Link>
         </Button>
       </div>
     );
@@ -36,26 +30,27 @@ export function VerifyEmailView({
   if (user) {
     return (
       <div className="grid gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Email not verified yet</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{t("unverifiedTitle")}</h1>
         <p className="text-sm text-muted-foreground">
-          The verification link may have expired or already been used. You can keep using
-          Hoborouter either way{user.email ? <> — a new link can be sent to {user.email}</> : null}.
+          {user.email
+            ? t("unverifiedBodyWithEmail", { email: user.email })
+            : t("unverifiedBodyNoEmail")}
         </p>
-        {user.email && <ResendVerificationButton email={user.email} />}
+        {user.email && (
+          <ResendVerificationButton email={user.email} label={t("resendVerificationEmail")} />
+        )}
         <Link to="/" className="text-sm underline">
-          Back to Hoborouter
+          {t("backHome")}
         </Link>
       </div>
     );
   }
   return (
     <div className="grid gap-3">
-      <h1 className="text-2xl font-semibold tracking-tight">Verification link processed</h1>
-      <p className="text-sm text-muted-foreground">
-        Verification link processed; sign in to check your email status.
-      </p>
+      <h1 className="text-2xl font-semibold tracking-tight">{t("processedTitle")}</h1>
+      <p className="text-sm text-muted-foreground">{t("processedBody")}</p>
       <Button asChild size="sm" className="w-fit">
-        <Link to="/login">Sign in</Link>
+        <Link to="/login">{t("signIn")}</Link>
       </Button>
     </div>
   );

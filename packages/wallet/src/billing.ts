@@ -18,12 +18,7 @@ import {
   usageLogs,
   wallets,
 } from "@hoborouter/db";
-import {
-  WalletError,
-  lockWallet,
-  requirePositiveSafeInteger,
-  runInImmediate,
-} from "./wallet";
+import { WalletError, lockWallet, requirePositiveSafeInteger, runInImmediate } from "./wallet";
 import { calculateCharge, maxStoredMoney, type PriceSnapshot, type UsageTokens } from "./money";
 import {
   applySubscriptionExpiry,
@@ -185,7 +180,12 @@ export async function reserveRequest(
       const mappings = await tx
         .select({ model_id: providerModelMappings.model_id })
         .from(providerModelMappings)
-        .where(and(eq(providerModelMappings.id, args.mappingId), eq(providerModelMappings.enabled, true)));
+        .where(
+          and(
+            eq(providerModelMappings.id, args.mappingId),
+            eq(providerModelMappings.enabled, true),
+          ),
+        );
       const mapping = mappings[0];
       if (!mapping || mapping.model_id !== args.modelId) {
         throw new WalletError(
@@ -303,11 +303,7 @@ export async function markDispatching(db: Db | Tx, requestId: string, now: numbe
  * reservation 'released', wallet reserved -= cap, request terminal, no ledger.
  * Idempotent: a second call on an already-released request is a no-op.
  */
-export async function releaseRequest(
-  db: Db | Tx,
-  requestId: string,
-  now: number,
-): Promise<void> {
+export async function releaseRequest(db: Db | Tx, requestId: string, now: number): Promise<void> {
   await runInImmediate(db, async (tx) => {
     const rows = await tx
       .select({
@@ -630,7 +626,11 @@ export async function settleRequest(
       // CAS on full (balance, reserved, version); wallet row already locked.
       const casWallet = await tx
         .update(wallets)
-        .set({ balance: balanceAfter, reserved: wallet.reserved - row.cap_vnd, version: sql`${wallets.version} + 1` })
+        .set({
+          balance: balanceAfter,
+          reserved: wallet.reserved - row.cap_vnd,
+          version: sql`${wallets.version} + 1`,
+        })
         .where(
           and(
             eq(wallets.id, row.wallet_id),

@@ -5,7 +5,8 @@ import { ThemeToggle } from "../../components/theme-toggle";
 // Renders a small, safe subset of inline markdown: links, bold, code.
 function inline(text: string, keyBase: string) {
   const parts: React.ReactNode[] = [];
-  const re = /\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|`([^`]+)`|\*([^*\s](?:[^*]*[^*\s])?)\*(?!\*)/g;
+  const re =
+    /\[([^\]]+)\]\(([^)]+)\)|\*\*([^*]+)\*\*|`([^`]+)`|\*([^*\s](?:[^*]*[^*\s])?)\*(?!\*)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
@@ -19,11 +20,19 @@ function inline(text: string, keyBase: string) {
       const safe = /^(https?:\/\/|\/(?!\/))/.test(href);
       parts.push(
         safe ? (
-          <a key={`${keyBase}-${i++}`} href={href} target={href.startsWith("/") ? undefined : "_blank"} rel={href.startsWith("/") ? undefined : "noopener noreferrer"} className="text-primary underline underline-offset-2">
+          <a
+            key={`${keyBase}-${i++}`}
+            href={href}
+            target={href.startsWith("/") ? undefined : "_blank"}
+            rel={href.startsWith("/") ? undefined : "noopener noreferrer"}
+            className="text-primary underline underline-offset-2"
+          >
             {m[1]}
           </a>
         ) : (
-          <span key={`${keyBase}-${i++}`} className="text-primary underline underline-offset-2">{m[1]}</span>
+          <span key={`${keyBase}-${i++}`} className="text-primary underline underline-offset-2">
+            {m[1]}
+          </span>
         ),
       );
     } else if (m[3] !== undefined) {
@@ -34,7 +43,14 @@ function inline(text: string, keyBase: string) {
       // markers simply stay literal (streaming-safe).
       parts.push(<em key={`${keyBase}-${i++}`}>{m[5]}</em>);
     } else {
-      parts.push(<code key={`${keyBase}-${i++}`} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]">{m[4]}</code>);
+      parts.push(
+        <code
+          key={`${keyBase}-${i++}`}
+          className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]"
+        >
+          {m[4]}
+        </code>,
+      );
     }
     last = re.lastIndex;
   }
@@ -43,12 +59,19 @@ function inline(text: string, keyBase: string) {
 }
 
 const slug = (s: string) =>
-  s.toLowerCase().replace(/[^a-z0-9\s-]/g, "").trim().replace(/\s+/g, "-");
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
 
 /** Tiny safe markdown renderer: headings, paragraphs, lists, blockquotes, bold, links, code. No HTML injection. */
 export function renderMarkdown(md: string) {
   // Strip HTML comments (including multi-line) so malformed comment syntax can never leak into rendered text.
-  const lines = md.replace(/<!--[\s\S]*?-->/g, "").replace(/<!--|-->/g, "").split("\n");
+  const lines = md
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<!--|-->/g, "")
+    .split("\n");
   const at = (n: number): string => lines[n] ?? "";
   const out: React.ReactNode[] = [];
   let i = 0;
@@ -64,7 +87,10 @@ export function renderMarkdown(md: string) {
       while (i < lines.length && !at(i).startsWith("```")) buf.push(at(i++));
       if (i < lines.length) i++; // consume the closing fence
       out.push(
-        <pre key={k++} className="my-3 max-w-full overflow-x-auto rounded-md bg-muted p-3 font-mono text-sm leading-6">
+        <pre
+          key={k++}
+          className="my-3 max-w-full overflow-x-auto rounded-md bg-muted p-3 font-mono text-sm leading-6"
+        >
           <code>{buf.join("\n")}</code>
         </pre>,
       );
@@ -74,7 +100,15 @@ export function renderMarkdown(md: string) {
       const id = slug(text);
       const Tag = `h${Math.min(level + 1, 6)}` as "h2" | "h3" | "h4";
       out.push(
-        <Tag key={k++} id={id} className={level <= 2 ? "mt-8 scroll-mt-8 text-xl font-semibold" : "mt-6 scroll-mt-8 text-base font-semibold"}>
+        <Tag
+          key={k++}
+          id={id}
+          className={
+            level <= 2
+              ? "mt-8 scroll-mt-8 text-xl font-semibold"
+              : "mt-6 scroll-mt-8 text-base font-semibold"
+          }
+        >
           {inline(text, `h${k}`)}
         </Tag>,
       );
@@ -84,30 +118,49 @@ export function renderMarkdown(md: string) {
       while (i < lines.length && /^[-*]\s/.test(at(i))) items.push(at(i++).replace(/^[-*]\s*/, ""));
       out.push(
         <ul key={k++} className="my-3 list-disc space-y-1 pl-6">
-          {items.map((it, j) => <li key={j}>{inline(it, `l${k}-${j}`)}</li>)}
+          {items.map((it, j) => (
+            <li key={j}>{inline(it, `l${k}-${j}`)}</li>
+          ))}
         </ul>,
       );
     } else if (/^\d+\.\s/.test(line)) {
       const items: string[] = [];
-      while (i < lines.length && /^\d+\.\s/.test(at(i))) items.push(at(i++).replace(/^\d+\.\s*/, ""));
+      while (i < lines.length && /^\d+\.\s/.test(at(i)))
+        items.push(at(i++).replace(/^\d+\.\s*/, ""));
       out.push(
         <ol key={k++} className="my-3 list-decimal space-y-1 pl-6">
-          {items.map((it, j) => <li key={j}>{inline(it, `o${k}-${j}`)}</li>)}
+          {items.map((it, j) => (
+            <li key={j}>{inline(it, `o${k}-${j}`)}</li>
+          ))}
         </ol>,
       );
     } else if (line.startsWith(">")) {
       out.push(
-        <blockquote key={k++} className="my-4 border-l-2 border-border pl-4 text-sm text-muted-foreground">
+        <blockquote
+          key={k++}
+          className="my-4 border-l-2 border-border pl-4 text-sm text-muted-foreground"
+        >
           {inline(line.replace(/^>\s*/, ""), `q${k}`)}
         </blockquote>,
       );
       i++;
-    } else if (line.trim() === "" || line.startsWith("  ") || line.startsWith("**Operator:**") || line.startsWith("**Contact:**") || line.startsWith("**Effective date:**")) {
+    } else if (
+      line.trim() === "" ||
+      line.startsWith("  ") ||
+      line.startsWith("**Operator:**") ||
+      line.startsWith("**Contact:**") ||
+      line.startsWith("**Effective date:**")
+    ) {
       i++;
     } else {
       const para: string[] = [];
-      while (i < lines.length && at(i).trim() !== "" && !/^([#>-]|\d+\.\s|```)/.test(at(i))) para.push(at(i++));
-      out.push(<p key={k++} className="my-3 leading-7">{inline(para.join(" "), `p${k}`)}</p>);
+      while (i < lines.length && at(i).trim() !== "" && !/^([#>-]|\d+\.\s|```)/.test(at(i)))
+        para.push(at(i++));
+      out.push(
+        <p key={k++} className="my-3 leading-7">
+          {inline(para.join(" "), `p${k}`)}
+        </p>,
+      );
     }
   }
   return out;
@@ -147,11 +200,17 @@ export function LegalPage({ title, md }: { title: string; md: string }) {
         )}
         <article>{renderMarkdown(content)}</article>
         <footer className="mt-12 border-t pt-4 text-sm text-muted-foreground">
-          <Link to="/" className="hover:text-foreground">Hoborouter</Link>
+          <Link to="/" className="hover:text-foreground">
+            Hoborouter
+          </Link>
           {" · "}
-          <Link to="/terms" className="hover:text-foreground">Terms</Link>
+          <Link to="/terms" className="hover:text-foreground">
+            Terms
+          </Link>
           {" · "}
-          <Link to="/privacy" className="hover:text-foreground">Privacy</Link>
+          <Link to="/privacy" className="hover:text-foreground">
+            Privacy
+          </Link>
         </footer>
       </div>
     </div>

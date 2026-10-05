@@ -75,7 +75,9 @@ export async function seedFixture(db: Db): Promise<Fixture> {
     [f.wsA, "A"],
     [f.wsB, "B"],
   ] as const) {
-    await db.execute(sql`INSERT INTO workspaces (id, name, status, created_at) VALUES (${id}, ${name}, 'active', ${NOW})`);
+    await db.execute(
+      sql`INSERT INTO workspaces (id, name, status, created_at) VALUES (${id}, ${name}, 'active', ${NOW})`,
+    );
   }
   const keys: Array<[string, string, string, string, string]> = [
     [f.keyA, f.wsA, "hash-a", "key a", "active"],

@@ -24,7 +24,7 @@ lines.
   `UsageTokens {inputTokens,outputTokens,cachedInputTokens,reasoningTokens: bigint}`;
   `calculateCharge(usage,price): {upstreamCostUsdMicro:bigint;chargedVnd:bigint}`.
 - Formula: `(input-cached)*p_input + cached*p_cached +
-  (output-reasoning)*p_output + reasoning*p_reasoning`; divide USD by 1e6,
+(output-reasoning)*p_output + reasoning*p_reasoning`; divide USD by 1e6,
   then VND conversion by 1e12, with customer-facing ceiling.
 - Set `maxStoredMoney=9223372036854775807n`; reject negatives, invalid subsets,
   and final stored values above it. Fixed price snapshots. Missing split handling

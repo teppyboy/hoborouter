@@ -71,8 +71,7 @@ export const membersRoutes = (db: Db, auth: BetterAuthInstance) =>
           .from(workspaces)
           .where(eq(workspaces.id, params.id))
           .limit(1);
-        if (!wsRow[0])
-          return jsonError(404, "NOT_FOUND", "Workspace not found");
+        if (!wsRow[0]) return jsonError(404, "NOT_FOUND", "Workspace not found");
         const emailRaw = (body as { email?: unknown } | null)?.email;
         const email = typeof emailRaw === "string" ? emailRaw : "";
         const role =

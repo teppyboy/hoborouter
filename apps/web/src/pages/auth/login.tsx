@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -18,14 +18,20 @@ import {
   FormLabel,
   FormMessage,
 } from "../../components/ui/form";
+import { useAuthT, type AuthT } from "./copy";
 
-const schema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
-});
-type Values = z.infer<typeof schema>;
+/** Zod schema whose validation messages come from the active locale. */
+export function makeLoginSchema(t: AuthT) {
+  return z.object({
+    email: z.string().email(t("emailInvalid")),
+    password: z.string().min(8, t("passwordMin")),
+  });
+}
+type Values = z.infer<ReturnType<typeof makeLoginSchema>>;
 
 export default function LoginPage() {
+  const t = useAuthT();
+  const schema = useMemo(() => makeLoginSchema(t), [t]);
   const navigate = useNavigate();
   // Captcha is required only when the backend advertises a Turnstile site
   // key. While the config is pending or failed the submit stays disabled:
@@ -46,7 +52,7 @@ export default function LoginPage() {
       headers: captchaRequired && token ? { "x-captcha-response": token } : undefined,
     });
     if (error) {
-      form.setError("password", { message: error.message ?? "Sign in failed" });
+      form.setError("password", { message: error.message ?? t("signInFailed") });
       // Tokens are one-shot: reset so the next attempt gets a fresh one.
       if (captchaRequired) {
         setToken(null);
@@ -54,7 +60,7 @@ export default function LoginPage() {
       }
       return;
     }
-    toast("Signed in");
+    toast(t("signedInToast"));
     // Session identity changed: drop all cached workspace-scoped data so no
     // stale (or unauthorized) queries from the previous session refetch.
     queryClient.clear();
@@ -63,11 +69,11 @@ export default function LoginPage() {
 
   return (
     <AuthLayout>
-      <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">{t("signInTitle")}</h1>
       <p className="mt-2 text-sm text-muted-foreground">
-        Welcome back. No account?{" "}
+        {t("signInPrompt")}{" "}
         <Link to="/signup" className="underline">
-          Sign up
+          {t("signUp")}
         </Link>
       </p>
       <Form {...form}>
@@ -82,7 +88,7 @@ export default function LoginPage() {
                   className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both"
                   style={{ animationDelay: `${120 + i * 80}ms` }}
                 >
-                  <FormLabel>{name === "email" ? "Email" : "Password"}</FormLabel>
+                  <FormLabel>{name === "email" ? t("emailLabel") : t("passwordLabel")}</FormLabel>
                   <FormControl>
                     <Input
                       type={name}
@@ -95,20 +101,18 @@ export default function LoginPage() {
               )}
             />
           ))}
-          {isPending && (
-            <p className="text-sm text-muted-foreground">Checking security options…</p>
-          )}
+          {isPending && <p className="text-sm text-muted-foreground">{t("checkingSecurity")}</p>}
           {isError && (
             <p role="alert" className="text-sm text-destructive">
-              Could not load security options. {" "}
+              {t("securityLoadFailed")}{" "}
               <button type="button" className="underline" onClick={() => void refetch()}>
-                Retry
+                {t("retry")}
               </button>
             </p>
           )}
           {scriptError && (
             <p role="alert" className="text-sm text-destructive">
-              Could not load the captcha check. {" "}
+              {t("captchaLoadFailed")}{" "}
               <button
                 type="button"
                 className="underline"
@@ -117,7 +121,7 @@ export default function LoginPage() {
                   setResetKey((k) => k + 1);
                 }}
               >
-                Retry
+                {t("retry")}
               </button>
             </p>
           )}
@@ -139,12 +143,16 @@ export default function LoginPage() {
               (captchaRequired && !token)
             }
           >
-            Sign in
+            {t("signIn")}
           </Button>
           <p className="text-xs text-muted-foreground">
-            <Link to="/terms" className="underline underline-offset-2">Terms</Link>
+            <Link to="/terms" className="underline underline-offset-2">
+              {t("termsLink")}
+            </Link>
             {" · "}
-            <Link to="/privacy" className="underline underline-offset-2">Privacy</Link>
+            <Link to="/privacy" className="underline underline-offset-2">
+              {t("privacyLink")}
+            </Link>
           </p>
         </form>
       </Form>

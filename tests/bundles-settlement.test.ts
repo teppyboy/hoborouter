@@ -3,7 +3,18 @@
 // credit; plain top-up path unchanged (regression gate).
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { createTestDb, type Db } from "../packages/db/src/index";
-import { processMockPaymentEvent } from "../packages/payments/src/credit";
+import {
+  processMockPaymentEvent,
+  type ProcessMockEventResult,
+} from "../packages/payments/src/credit";
+
+// Narrow the discriminated result union so `balanceAfter` reads type-check;
+// throws (failing the test) on any non-credited outcome.
+function assertCredited(
+  r: ProcessMockEventResult,
+): asserts r is Extract<ProcessMockEventResult, { outcome: "credited" }> {
+  if (r.outcome !== "credited") throw new Error(`expected credited outcome, got ${r.outcome}`);
+}
 
 const NOW = 1_700_000_000_000;
 
@@ -70,10 +81,9 @@ async function seedPayment(opts: {
 }
 
 async function balance(ws: string): Promise<number> {
-  const rows = await q<{ balance: string }>(
-    `SELECT balance FROM wallets WHERE workspace_id = $1`,
-    [ws],
-  );
+  const rows = await q<{ balance: string }>(`SELECT balance FROM wallets WHERE workspace_id = $1`, [
+    ws,
+  ]);
   return Number(rows[0]!.balance);
 }
 
@@ -121,6 +131,7 @@ describe("plain top-up regression (unchanged path)", () => {
     await seedPayment({ id: "pay-plain", ws: "ws-plain", amount: 50_000, orderCode: "ORD-PLAIN" });
     const r = await processMockPaymentEvent(db, ev("ORD-PLAIN", "evt-plain", 50_000));
     expect(r.outcome).toBe("credited");
+    assertCredited(r);
     expect(r.balanceAfter).toBe(50_000);
     expect(await balance("ws-plain")).toBe(50_000);
     expect(await ledger("pay-plain")).toEqual([
@@ -142,6 +153,7 @@ describe("bundle settlement", () => {
     });
     const r = await processMockPaymentEvent(db, ev("ORD-B1", "evt-b1", 40_000));
     expect(r.outcome).toBe("credited");
+    assertCredited(r);
     expect(r.balanceAfter).toBe(40_000);
     expect(await balance("ws-bundle")).toBe(40_000);
     expect(await ledger("pay-b1", "topup")).toEqual([

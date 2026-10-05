@@ -9,7 +9,9 @@ const { renderMarkdown } = await import("../apps/web/src/pages/legal/legal-page"
 const html = (md: string) => renderToStaticMarkup(<>{renderMarkdown(md)}</>);
 
 test("fenced code block renders pre/code with exact code text and newlines", () => {
-  const out = html("Before\n```typescript\nconst a = 1;\nif (a) {\n  console.log(a);\n}\n```\nAfter");
+  const out = html(
+    "Before\n```typescript\nconst a = 1;\nif (a) {\n  console.log(a);\n}\n```\nAfter",
+  );
   expect(out).toContain("<pre");
   expect(out).toContain("<code>");
   // Newlines and indentation survive verbatim; the fence lines themselves
@@ -101,9 +103,7 @@ test("mixed bold, italic, and code render predictably", () => {
 });
 
 test("legal-page basics unchanged: paragraphs, bold, links, blockquote", () => {
-  const out = html(
-    "Plain **bold** text.\n\n[Docs](https://example.com) link.\n\n> quoted line",
-  );
+  const out = html("Plain **bold** text.\n\n[Docs](https://example.com) link.\n\n> quoted line");
   expect(out).toContain("<strong>bold</strong>");
   expect(out).toContain('href="https://example.com"');
   expect(out).toContain("<blockquote");

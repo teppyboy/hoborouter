@@ -22,8 +22,20 @@ function drizzleFolder(): string {
 const PRE_0004_JOURNAL = [
   { idx: 0, version: "7", when: 1790958908090, tag: "0000_baseline", breakpoints: true },
   { idx: 1, version: "7", when: 1791048280723, tag: "0001_chat_conversations", breakpoints: true },
-  { idx: 2, version: "7", when: 1791075737874, tag: "0002_bundles_subscriptions", breakpoints: true },
-  { idx: 3, version: "7", when: 1791083037023, tag: "0003_wallet_kinds_subscription_expiries", breakpoints: true },
+  {
+    idx: 2,
+    version: "7",
+    when: 1791075737874,
+    tag: "0002_bundles_subscriptions",
+    breakpoints: true,
+  },
+  {
+    idx: 3,
+    version: "7",
+    when: 1791083037023,
+    tag: "0003_wallet_kinds_subscription_expiries",
+    breakpoints: true,
+  },
 ];
 
 async function createThrowawayDb(): Promise<{ db: Db; adminUrl: string; name: string }> {
@@ -37,7 +49,11 @@ async function createThrowawayDb(): Promise<{ db: Db; adminUrl: string; name: st
   } finally {
     admin.close();
   }
-  return { db: createDb(`${u.protocol}//${u.username}:${u.password}@${u.host}/${name}`, { max: 4 }), adminUrl, name };
+  return {
+    db: createDb(`${u.protocol}//${u.username}:${u.password}@${u.host}/${name}`, { max: 4 }),
+    adminUrl,
+    name,
+  };
 }
 
 async function dropDb(adminUrl: string, name: string): Promise<void> {
@@ -66,7 +82,10 @@ describe("migrate restart on pre-0004 database", () => {
     for (const entry of PRE_0004_JOURNAL) {
       copyFileSync(join(drizzleFolder(), `${entry.tag}.sql`), join(dir, `${entry.tag}.sql`));
     }
-    writeFileSync(join(dir, "meta", "_journal.json"), JSON.stringify({ version: "7", dialect: "postgresql", entries: PRE_0004_JOURNAL }));
+    writeFileSync(
+      join(dir, "meta", "_journal.json"),
+      JSON.stringify({ version: "7", dialect: "postgresql", entries: PRE_0004_JOURNAL }),
+    );
 
     const created = await createThrowawayDb();
     db = created.db;
@@ -95,11 +114,16 @@ describe("migrate restart on pre-0004 database", () => {
       sql`SELECT conname, pg_get_constraintdef(oid) def FROM pg_constraint WHERE conrelid = 'subscription_expiries'::regclass AND contype = 'p'`,
     );
     expect(r).toEqual([
-      { conname: "subscription_expiries_subscription_id_period_end_pk", def: "PRIMARY KEY (subscription_id, period_end)" },
+      {
+        conname: "subscription_expiries_subscription_id_period_end_pk",
+        def: "PRIMARY KEY (subscription_id, period_end)",
+      },
     ]);
 
     // Data written before the restart survives the PK swap.
-    const rows = await db.execute<{ count: string }>(sql`SELECT count(*)::text count FROM subscription_expiries`);
+    const rows = await db.execute<{ count: string }>(
+      sql`SELECT count(*)::text count FROM subscription_expiries`,
+    );
     expect(rows[0]!.count).toBe("0");
 
     await expect(migrate(db, { migrationsFolder: drizzleFolder() })).resolves.toBeUndefined();
@@ -118,7 +142,10 @@ describe("migrate fresh database twice", () => {
         sql`SELECT conname, pg_get_constraintdef(oid) def FROM pg_constraint WHERE conrelid = 'subscription_expiries'::regclass AND contype = 'p'`,
       );
       expect(r).toEqual([
-        { conname: "subscription_expiries_subscription_id_period_end_pk", def: "PRIMARY KEY (subscription_id, period_end)" },
+        {
+          conname: "subscription_expiries_subscription_id_period_end_pk",
+          def: "PRIMARY KEY (subscription_id, period_end)",
+        },
       ]);
     } finally {
       await closeDb(fresh);

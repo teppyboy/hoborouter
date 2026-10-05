@@ -27,7 +27,9 @@ export const workspacesRoutes = (db: Db, auth: BetterAuthInstance) =>
         const name = typeof raw === "string" ? raw.trim() : "";
         if (!name) return jsonError(400, "INVALID", "name is required");
         await db.transaction(async (tx) => {
-          await tx.insert(workspaces).values({ id, name, status: "active", created_at: Date.now() });
+          await tx
+            .insert(workspaces)
+            .values({ id, name, status: "active", created_at: Date.now() });
           await tx
             .insert(workspaceMembers)
             .values({ workspace_id: id, user_id: userId, role: "owner" });
@@ -170,6 +172,20 @@ export const workspacesRoutes = (db: Db, auth: BetterAuthInstance) =>
         if (!ws[0]) return jsonError(404, "NOT_FOUND", "Workspace not found");
         try {
           await db.transaction(async (tx) => {
+            // Lock the workspace row FIRST. Promo redeem locks workspace →
+            // promo → wallet; if this path locked the wallet before the
+            // workspace, concurrent redeem+delete could cycle
+            // (redeem holds ws, wants wallet; delete holds wallet, wants ws)
+            // and Postgres would abort one with a deadlock.
+            // A row that vanished between the 404 check and here (concurrent
+            // owner delete won) leaves every statement below a no-op: the
+            // request still answers 200, same as the pre-fix idempotent path.
+            await tx
+              .select({ id: workspaces.id })
+              .from(workspaces)
+              .where(eq(workspaces.id, params.id))
+              .for("update")
+              .limit(1);
             // Detach audit history (audit_log.workspace_id is a live FK) before delete.
             await tx
               .update(auditLog)
@@ -186,9 +202,7 @@ export const workspacesRoutes = (db: Db, auth: BetterAuthInstance) =>
             if (wallet[0] && wallet[0].balance === 0 && wallet[0].reserved === 0) {
               await tx.delete(wallets).where(eq(wallets.id, wallet[0].id));
             }
-            await tx
-              .delete(workspaceMembers)
-              .where(eq(workspaceMembers.workspace_id, params.id));
+            await tx.delete(workspaceMembers).where(eq(workspaceMembers.workspace_id, params.id));
             await tx.delete(workspaces).where(eq(workspaces.id, params.id));
           });
         } catch {

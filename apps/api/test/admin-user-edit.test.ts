@@ -557,7 +557,11 @@ describe("POST /api/v1/admin/users/:id/reset-password", () => {
       expect((await login(app, email, PASSWORD)).status).toBe(200);
       expect((await getSession(app, targetCookie)).status).toBe(200);
       expect(
-        await q(db, "select 1 from audit_log where target = ? and action = 'user.password_reset'", uid),
+        await q(
+          db,
+          "select 1 from audit_log where target = ? and action = 'user.password_reset'",
+          uid,
+        ),
       ).toEqual([]);
     });
     // Trigger dropped: reset succeeds and takes effect.

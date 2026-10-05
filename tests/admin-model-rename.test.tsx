@@ -44,7 +44,9 @@ test("DUPLICATE maps to a field error with the fixed copy", () => {
 });
 
 test("INVALID maps to the server's format message on the ID field", () => {
-  expect(renameFieldError("INVALID", "public_id must be a lowercase slug or '<provider>/<name>'")).toEqual({
+  expect(
+    renameFieldError("INVALID", "public_id must be a lowercase slug or '<provider>/<name>'"),
+  ).toEqual({
     field: "public_id",
     message: "public_id must be a lowercase slug or '<provider>/<name>'",
   });

@@ -1,4 +1,5 @@
 import { buildApp } from "./app";
+import { startPaymentExpirySweep } from "./payment-expiry";
 import { bootstrapFirstInstanceAdmin } from "./instance-admin";
 import { createDb, migrate, closeDb } from "@hoborouter/db";
 
@@ -14,6 +15,7 @@ if (process.env.HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL) {
   await bootstrapFirstInstanceAdmin(db, process.env.HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL);
 }
 const app = await buildApp({ db });
+const stopPaymentExpirySweep = startPaymentExpirySweep(db);
 const port = Number(process.env.PORT ?? 3000);
 const idleRaw = Number(process.env.HBR_IDLE_TIMEOUT_S);
 
@@ -26,4 +28,7 @@ Bun.serve({
 });
 
 console.log(`hoborouter api listening on :${port}`);
-process.on("SIGTERM", () => closeDb(db).then(() => process.exit(0)));
+process.on("SIGTERM", () => {
+  stopPaymentExpirySweep();
+  closeDb(db).then(() => process.exit(0));
+});

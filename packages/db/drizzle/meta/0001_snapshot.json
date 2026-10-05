@@ -109,12 +109,8 @@
           "name": "account_user_id_users_id_fk",
           "tableFrom": "account",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -154,12 +150,8 @@
           "name": "api_key_model_permissions_api_key_id_api_keys_id_fk",
           "tableFrom": "api_key_model_permissions",
           "tableTo": "api_keys",
-          "columnsFrom": [
-            "api_key_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["api_key_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -167,12 +159,8 @@
           "name": "api_key_model_permissions_model_id_models_id_fk",
           "tableFrom": "api_key_model_permissions",
           "tableTo": "models",
-          "columnsFrom": [
-            "model_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["model_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -180,10 +168,7 @@
       "compositePrimaryKeys": {
         "api_key_model_permissions_api_key_id_model_id_pk": {
           "name": "api_key_model_permissions_api_key_id_model_id_pk",
-          "columns": [
-            "api_key_id",
-            "model_id"
-          ]
+          "columns": ["api_key_id", "model_id"]
         }
       },
       "uniqueConstraints": {},
@@ -273,12 +258,8 @@
           "name": "api_keys_workspace_id_workspaces_id_fk",
           "tableFrom": "api_keys",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -347,12 +328,8 @@
           "name": "audit_log_actor_user_id_users_id_fk",
           "tableFrom": "audit_log",
           "tableTo": "users",
-          "columnsFrom": [
-            "actor_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -360,12 +337,8 @@
           "name": "audit_log_workspace_id_workspaces_id_fk",
           "tableFrom": "audit_log",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -459,12 +432,8 @@
           "name": "billing_reservations_wallet_id_wallets_id_fk",
           "tableFrom": "billing_reservations",
           "tableTo": "wallets",
-          "columnsFrom": [
-            "wallet_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["wallet_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -472,12 +441,8 @@
           "name": "billing_reservations_request_id_requests_id_fk",
           "tableFrom": "billing_reservations",
           "tableTo": "requests",
-          "columnsFrom": [
-            "request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["request_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -485,12 +450,8 @@
           "name": "billing_reservations_api_key_id_api_keys_id_fk",
           "tableFrom": "billing_reservations",
           "tableTo": "api_keys",
-          "columnsFrom": [
-            "api_key_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["api_key_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -498,12 +459,8 @@
           "name": "billing_reservations_model_id_models_id_fk",
           "tableFrom": "billing_reservations",
           "tableTo": "models",
-          "columnsFrom": [
-            "model_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["model_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -511,12 +468,8 @@
           "name": "billing_reservations_model_price_id_model_prices_id_fk",
           "tableFrom": "billing_reservations",
           "tableTo": "model_prices",
-          "columnsFrom": [
-            "model_price_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["model_price_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -526,9 +479,7 @@
         "billing_reservations_request_id_unique": {
           "name": "billing_reservations_request_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "request_id"
-          ]
+          "columns": ["request_id"]
         }
       },
       "policies": {},
@@ -657,12 +608,8 @@
           "name": "chat_conversations_user_id_users_id_fk",
           "tableFrom": "chat_conversations",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -670,12 +617,8 @@
           "name": "chat_conversations_workspace_id_workspaces_id_fk",
           "tableFrom": "chat_conversations",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -732,12 +675,8 @@
           "name": "instance_admins_user_id_users_id_fk",
           "tableFrom": "instance_admins",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -808,12 +747,8 @@
           "name": "key_rate_limits_api_key_id_api_keys_id_fk",
           "tableFrom": "key_rate_limits",
           "tableTo": "api_keys",
-          "columnsFrom": [
-            "api_key_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["api_key_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -986,12 +921,8 @@
           "name": "ledger_entries_wallet_id_wallets_id_fk",
           "tableFrom": "ledger_entries",
           "tableTo": "wallets",
-          "columnsFrom": [
-            "wallet_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["wallet_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -999,12 +930,8 @@
           "name": "ledger_entries_billing_reservation_id_billing_reservations_id_fk",
           "tableFrom": "ledger_entries",
           "tableTo": "billing_reservations",
-          "columnsFrom": [
-            "billing_reservation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["billing_reservation_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1012,12 +939,8 @@
           "name": "ledger_entries_reservation_id_reservations_id_fk",
           "tableFrom": "ledger_entries",
           "tableTo": "reservations",
-          "columnsFrom": [
-            "reservation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["reservation_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1025,12 +948,8 @@
           "name": "ledger_entries_original_ledger_entry_id_ledger_entries_id_fk",
           "tableFrom": "ledger_entries",
           "tableTo": "ledger_entries",
-          "columnsFrom": [
-            "original_ledger_entry_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["original_ledger_entry_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1038,12 +957,8 @@
           "name": "ledger_entries_payment_id_payments_id_fk",
           "tableFrom": "ledger_entries",
           "tableTo": "payments",
-          "columnsFrom": [
-            "payment_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["payment_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1138,12 +1053,8 @@
           "name": "model_bindings_workspace_id_workspaces_id_fk",
           "tableFrom": "model_bindings",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1232,12 +1143,8 @@
           "name": "model_prices_model_id_models_id_fk",
           "tableFrom": "model_prices",
           "tableTo": "models",
-          "columnsFrom": [
-            "model_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["model_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1447,12 +1354,8 @@
           "name": "payment_events_payment_id_payments_id_fk",
           "tableFrom": "payment_events",
           "tableTo": "payments",
-          "columnsFrom": [
-            "payment_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["payment_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1544,12 +1447,8 @@
           "name": "payments_workspace_id_workspaces_id_fk",
           "tableFrom": "payments",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1606,12 +1505,8 @@
           "name": "price_snapshots_binding_id_model_bindings_id_fk",
           "tableFrom": "price_snapshots",
           "tableTo": "model_bindings",
-          "columnsFrom": [
-            "binding_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["binding_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1685,12 +1580,8 @@
           "name": "provider_model_mappings_model_id_models_id_fk",
           "tableFrom": "provider_model_mappings",
           "tableTo": "models",
-          "columnsFrom": [
-            "model_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["model_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1803,12 +1694,8 @@
           "name": "refund_operations_original_ledger_entry_id_ledger_entries_id_fk",
           "tableFrom": "refund_operations",
           "tableTo": "ledger_entries",
-          "columnsFrom": [
-            "original_ledger_entry_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["original_ledger_entry_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1816,12 +1703,8 @@
           "name": "refund_operations_request_id_requests_id_fk",
           "tableFrom": "refund_operations",
           "tableTo": "requests",
-          "columnsFrom": [
-            "request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["request_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1829,12 +1712,8 @@
           "name": "refund_operations_reservation_id_reservations_id_fk",
           "tableFrom": "refund_operations",
           "tableTo": "reservations",
-          "columnsFrom": [
-            "reservation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["reservation_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1842,12 +1721,8 @@
           "name": "refund_operations_actor_user_id_users_id_fk",
           "tableFrom": "refund_operations",
           "tableTo": "users",
-          "columnsFrom": [
-            "actor_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1999,12 +1874,8 @@
           "name": "requests_workspace_id_workspaces_id_fk",
           "tableFrom": "requests",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2012,12 +1883,8 @@
           "name": "requests_api_key_id_api_keys_id_fk",
           "tableFrom": "requests",
           "tableTo": "api_keys",
-          "columnsFrom": [
-            "api_key_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["api_key_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2025,12 +1892,8 @@
           "name": "requests_model_binding_id_model_bindings_id_fk",
           "tableFrom": "requests",
           "tableTo": "model_bindings",
-          "columnsFrom": [
-            "model_binding_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["model_binding_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2038,12 +1901,8 @@
           "name": "requests_model_id_models_id_fk",
           "tableFrom": "requests",
           "tableTo": "models",
-          "columnsFrom": [
-            "model_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["model_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2051,12 +1910,8 @@
           "name": "requests_provider_model_mapping_id_provider_model_mappings_id_fk",
           "tableFrom": "requests",
           "tableTo": "provider_model_mappings",
-          "columnsFrom": [
-            "provider_model_mapping_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["provider_model_mapping_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2181,12 +2036,8 @@
           "name": "reservations_wallet_id_wallets_id_fk",
           "tableFrom": "reservations",
           "tableTo": "wallets",
-          "columnsFrom": [
-            "wallet_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["wallet_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2194,12 +2045,8 @@
           "name": "reservations_gateway_request_id_requests_id_fk",
           "tableFrom": "reservations",
           "tableTo": "requests",
-          "columnsFrom": [
-            "gateway_request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["gateway_request_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2207,12 +2054,8 @@
           "name": "reservations_api_key_id_api_keys_id_fk",
           "tableFrom": "reservations",
           "tableTo": "api_keys",
-          "columnsFrom": [
-            "api_key_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["api_key_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2220,12 +2063,8 @@
           "name": "reservations_price_snapshot_id_price_snapshots_id_fk",
           "tableFrom": "reservations",
           "tableTo": "price_snapshots",
-          "columnsFrom": [
-            "price_snapshot_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["price_snapshot_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2320,12 +2159,8 @@
           "name": "session_user_id_users_id_fk",
           "tableFrom": "session",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2335,9 +2170,7 @@
         "session_token_unique": {
           "name": "session_token_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "token"
-          ]
+          "columns": ["token"]
         }
       },
       "policies": {},
@@ -2383,12 +2216,8 @@
           "name": "settlement_usage_events_settlement_id_settlements_id_fk",
           "tableFrom": "settlement_usage_events",
           "tableTo": "settlements",
-          "columnsFrom": [
-            "settlement_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["settlement_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2396,12 +2225,8 @@
           "name": "settlement_usage_events_usage_event_id_usage_events_id_fk",
           "tableFrom": "settlement_usage_events",
           "tableTo": "usage_events",
-          "columnsFrom": [
-            "usage_event_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["usage_event_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2409,10 +2234,7 @@
       "compositePrimaryKeys": {
         "settlement_usage_events_settlement_id_usage_event_id_pk": {
           "name": "settlement_usage_events_settlement_id_usage_event_id_pk",
-          "columns": [
-            "settlement_id",
-            "usage_event_id"
-          ]
+          "columns": ["settlement_id", "usage_event_id"]
         }
       },
       "uniqueConstraints": {},
@@ -2528,12 +2350,8 @@
           "name": "settlements_reservation_id_reservations_id_fk",
           "tableFrom": "settlements",
           "tableTo": "reservations",
-          "columnsFrom": [
-            "reservation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["reservation_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2541,12 +2359,8 @@
           "name": "settlements_billing_reservation_id_billing_reservations_id_fk",
           "tableFrom": "settlements",
           "tableTo": "billing_reservations",
-          "columnsFrom": [
-            "billing_reservation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["billing_reservation_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2554,12 +2368,8 @@
           "name": "settlements_usage_log_id_usage_logs_id_fk",
           "tableFrom": "settlements",
           "tableTo": "usage_logs",
-          "columnsFrom": [
-            "usage_log_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["usage_log_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2687,12 +2497,8 @@
           "name": "unknown_resolutions_request_id_requests_id_fk",
           "tableFrom": "unknown_resolutions",
           "tableTo": "requests",
-          "columnsFrom": [
-            "request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["request_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2700,12 +2506,8 @@
           "name": "unknown_resolutions_reservation_id_reservations_id_fk",
           "tableFrom": "unknown_resolutions",
           "tableTo": "reservations",
-          "columnsFrom": [
-            "reservation_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["reservation_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -2713,12 +2515,8 @@
           "name": "unknown_resolutions_actor_user_id_users_id_fk",
           "tableFrom": "unknown_resolutions",
           "tableTo": "users",
-          "columnsFrom": [
-            "actor_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_user_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2823,12 +2621,8 @@
           "name": "usage_events_gateway_request_id_requests_id_fk",
           "tableFrom": "usage_events",
           "tableTo": "requests",
-          "columnsFrom": [
-            "gateway_request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["gateway_request_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2987,12 +2781,8 @@
           "name": "usage_logs_request_id_requests_id_fk",
           "tableFrom": "usage_logs",
           "tableTo": "requests",
-          "columnsFrom": [
-            "request_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["request_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3000,12 +2790,8 @@
           "name": "usage_logs_api_key_id_api_keys_id_fk",
           "tableFrom": "usage_logs",
           "tableTo": "api_keys",
-          "columnsFrom": [
-            "api_key_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["api_key_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3013,12 +2799,8 @@
           "name": "usage_logs_workspace_id_workspaces_id_fk",
           "tableFrom": "usage_logs",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3028,16 +2810,12 @@
         "usage_logs_idempotency_key_unique": {
           "name": "usage_logs_idempotency_key_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "idempotency_key"
-          ]
+          "columns": ["idempotency_key"]
         },
         "usage_logs_request_id_unique": {
           "name": "usage_logs_request_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "request_id"
-          ]
+          "columns": ["request_id"]
         }
       },
       "policies": {},
@@ -3108,9 +2886,7 @@
         "users_email_unique": {
           "name": "users_email_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "email"
-          ]
+          "columns": ["email"]
         }
       },
       "policies": {},
@@ -3253,12 +3029,8 @@
           "name": "wallets_workspace_id_workspaces_id_fk",
           "tableFrom": "wallets",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3315,12 +3087,8 @@
           "name": "workspace_members_workspace_id_workspaces_id_fk",
           "tableFrom": "workspace_members",
           "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["workspace_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -3328,12 +3096,8 @@
           "name": "workspace_members_user_id_users_id_fk",
           "tableFrom": "workspace_members",
           "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3341,10 +3105,7 @@
       "compositePrimaryKeys": {
         "workspace_members_workspace_id_user_id_pk": {
           "name": "workspace_members_workspace_id_user_id_pk",
-          "columns": [
-            "workspace_id",
-            "user_id"
-          ]
+          "columns": ["workspace_id", "user_id"]
         }
       },
       "uniqueConstraints": {},

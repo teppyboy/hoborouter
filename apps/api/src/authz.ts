@@ -29,15 +29,16 @@ export async function requireSession(auth: BetterAuthInstance, request: Request)
   return { session } as const;
 }
 
-export async function wsRole(db: Db | Tx, workspaceId: string, userId: string): Promise<WsRole | null> {
+export async function wsRole(
+  db: Db | Tx,
+  workspaceId: string,
+  userId: string,
+): Promise<WsRole | null> {
   const row = await db
     .select({ role: workspaceMembers.role })
     .from(workspaceMembers)
     .where(
-      and(
-        eq(workspaceMembers.workspace_id, workspaceId),
-        eq(workspaceMembers.user_id, userId),
-      ),
+      and(eq(workspaceMembers.workspace_id, workspaceId), eq(workspaceMembers.user_id, userId)),
     )
     .limit(1);
   return row[0]?.role ?? null;

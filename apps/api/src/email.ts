@@ -247,7 +247,12 @@ class SmtpSession {
     return this.accept(reply, expect, label);
   }
 
-  async command(text: string, deadlineMs: number, expect: number[], label: string): Promise<SmtpReply> {
+  async command(
+    text: string,
+    deadlineMs: number,
+    expect: number[],
+    label: string,
+  ): Promise<SmtpReply> {
     this.socket.write(text + "\r\n");
     const reply = await this.readReply(deadlineMs, expect, label);
     return this.accept(reply, expect, label);
@@ -375,7 +380,10 @@ export async function sendVerificationEmail(
   }
   const mode = secureRaw;
   if (mode === "none" && env.NODE_ENV === "production") {
-    throw new SmtpError(null, "HBR_SMTP_SECURE=none is refused in production (cleartext transport)");
+    throw new SmtpError(
+      null,
+      "HBR_SMTP_SECURE=none is refused in production (cleartext transport)",
+    );
   }
   const user = env.SMTP_USER;
   const password = env.SMTP_PASSWORD;

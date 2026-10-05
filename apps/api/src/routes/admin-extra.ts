@@ -545,6 +545,17 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
             409,
           );
         }
+        if (String(p.status) === "expired") {
+          return json(
+            {
+              error: {
+                code: "INVALID_STATE",
+                message: "timed-out payments require retained late-paid evidence and admin review",
+              },
+            },
+            409,
+          );
+        }
         try {
           const result = await processMockPaymentEvent(db, {
             provider: p.provider,

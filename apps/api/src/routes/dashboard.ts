@@ -140,21 +140,32 @@ export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
             gte(usageLogs.created_at, since),
             ...(model ? [eq(usageLogs.public_model, model)] : []),
           );
-        const errExpr = sql<number>`case when ${usageLogs.status} != 'ok' then 1 else 0 end`.mapWith(Number);
+        const errExpr =
+          sql<number>`case when ${usageLogs.status} != 'ok' then 1 else 0 end`.mapWith(Number);
         // Visibility gate — mirrors web/src/pages/logs/filters.ts visibleRows:
         // hide rows with missing/blank public_model, or with both token counts 0.
         // Soft-deleted requests are excluded from visibility-gated counts only.
         // Financial totals (spend/tokens/requests) deliberately include them:
         // removing a log never moves money or rewrites spend history.
         const notDeletedSql = sql`not exists (select 1 from requests r where r.id = ${usageLogs.request_id} and r.deleted_at is not null)`;
-        const visibleExpr = sql<number>`case when ${usageLogs.public_model} is not null and trim(${usageLogs.public_model}) != '' and not (${usageLogs.input_tokens} = 0 and ${usageLogs.output_tokens} = 0) and ${notDeletedSql} then 1 else 0 end`.mapWith(Number);
-        const visibleErrExpr = sql<number>`case when ${usageLogs.status} != 'ok' and ${usageLogs.public_model} is not null and trim(${usageLogs.public_model}) != '' and not (${usageLogs.input_tokens} = 0 and ${usageLogs.output_tokens} = 0) and ${notDeletedSql} then 1 else 0 end`.mapWith(Number);
+        const visibleExpr =
+          sql<number>`case when ${usageLogs.public_model} is not null and trim(${usageLogs.public_model}) != '' and not (${usageLogs.input_tokens} = 0 and ${usageLogs.output_tokens} = 0) and ${notDeletedSql} then 1 else 0 end`.mapWith(
+            Number,
+          );
+        const visibleErrExpr =
+          sql<number>`case when ${usageLogs.status} != 'ok' and ${usageLogs.public_model} is not null and trim(${usageLogs.public_model}) != '' and not (${usageLogs.input_tokens} = 0 and ${usageLogs.output_tokens} = 0) and ${notDeletedSql} then 1 else 0 end`.mapWith(
+            Number,
+          );
         const totalsRows = await db
           .select({
             requests: sql<number>`count(*)`.mapWith(Number),
-            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`.mapWith(Number),
+            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`.mapWith(
+              Number,
+            ),
             input_tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens}), 0)`.mapWith(Number),
-            output_tokens: sql<number>`coalesce(sum(${usageLogs.output_tokens}), 0)`.mapWith(Number),
+            output_tokens: sql<number>`coalesce(sum(${usageLogs.output_tokens}), 0)`.mapWith(
+              Number,
+            ),
             errors: sql<number>`coalesce(sum(${errExpr}), 0)`.mapWith(Number),
             visible_requests: sql<number>`coalesce(sum(${visibleExpr}), 0)`.mapWith(Number),
             visible_errors: sql<number>`coalesce(sum(${visibleErrExpr}), 0)`.mapWith(Number),
@@ -170,8 +181,13 @@ export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
           .select({
             day: dayExpr.as("day"),
             requests: sql<number>`count(*)`.mapWith(Number),
-            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`.mapWith(Number),
-            tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`.mapWith(Number),
+            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`.mapWith(
+              Number,
+            ),
+            tokens:
+              sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`.mapWith(
+                Number,
+              ),
             errors: sql<number>`coalesce(sum(${errExpr}), 0)`.mapWith(Number),
           })
           .from(usageLogs)
@@ -182,8 +198,13 @@ export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
           .select({
             public_model: usageLogs.public_model,
             requests: sql<number>`count(*)`.mapWith(Number),
-            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`.mapWith(Number),
-            tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`.mapWith(Number),
+            spend_vnd: sql<number>`coalesce(sum(coalesce(${usageLogs.charged_vnd}, 0)), 0)`.mapWith(
+              Number,
+            ),
+            tokens:
+              sql<number>`coalesce(sum(${usageLogs.input_tokens} + ${usageLogs.output_tokens}), 0)`.mapWith(
+                Number,
+              ),
           })
           .from(usageLogs)
           .where(scope())
@@ -235,9 +256,14 @@ export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
             .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, subscriptions.plan_id))
             .innerJoin(
               wallets,
-              and(eq(wallets.workspace_id, subscriptions.workspace_id), eq(wallets.kind, "subscription")),
+              and(
+                eq(wallets.workspace_id, subscriptions.workspace_id),
+                eq(wallets.kind, "subscription"),
+              ),
             )
-            .where(and(eq(subscriptions.workspace_id, params.id), eq(subscriptions.status, "active")))
+            .where(
+              and(eq(subscriptions.workspace_id, params.id), eq(subscriptions.status, "active")),
+            )
             .limit(1);
           return rows[0] ?? null;
         });
@@ -311,7 +337,10 @@ export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
           })
           .from(ledgerEntries)
           .innerJoin(wallets, eq(wallets.id, ledgerEntries.wallet_id))
-          .leftJoin(billingReservations, eq(billingReservations.id, ledgerEntries.billing_reservation_id))
+          .leftJoin(
+            billingReservations,
+            eq(billingReservations.id, ledgerEntries.billing_reservation_id),
+          )
           .where(eq(wallets.workspace_id, params.id))
           .orderBy(desc(ledgerEntries.created_at))
           .limit(limit);

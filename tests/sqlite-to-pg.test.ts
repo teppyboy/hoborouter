@@ -43,7 +43,20 @@ async function applyOldMigrations(db: InstanceType<typeof Database>) {
 function seedLegacy(db: InstanceType<typeof Database>) {
   db.run(
     "INSERT INTO users (id, name, email, email_verified, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)",
-    ["u1", "Owner", "owner@example.com", 0, NOW, NOW, "u2", "Admin", "admin@example.com", 1, NOW, NOW],
+    [
+      "u1",
+      "Owner",
+      "owner@example.com",
+      0,
+      NOW,
+      NOW,
+      "u2",
+      "Admin",
+      "admin@example.com",
+      1,
+      NOW,
+      NOW,
+    ],
   );
   db.run("INSERT INTO workspaces (id, name, status, created_at) VALUES (?, ?, ?, ?)", [
     "w1",
@@ -89,10 +102,13 @@ function seedLegacy(db: InstanceType<typeof Database>) {
     "INSERT INTO usage_events (id, source_request_id, tokens_input, tokens_output, tokens_reasoning, tokens_cached, tokens_total, failed, ingested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ["e1", "r1", 100, 50, 0, 10, 150, 0, NOW],
   );
-  db.run(
-    "INSERT INTO audit_log (id, action, target, detail, created_at) VALUES (?, ?, ?, ?, ?)",
-    ["a1", "test.action", "w1", '{"ip":"127.0.0.1"}', NOW],
-  );
+  db.run("INSERT INTO audit_log (id, action, target, detail, created_at) VALUES (?, ?, ?, ?, ?)", [
+    "a1",
+    "test.action",
+    "w1",
+    '{"ip":"127.0.0.1"}',
+    NOW,
+  ]);
 }
 
 function runScript(extraArgs: string[]): { exitCode: number; stdout: string; stderr: string } {
@@ -146,9 +162,7 @@ describe("sqlite-to-pg", () => {
         )
       )[0] as unknown as Record<string, number>;
       // Bun.SQL returns counts as strings; normalize before comparing.
-      const normalized = Object.fromEntries(
-        Object.entries(counts).map(([k, v]) => [k, Number(v)]),
-      );
+      const normalized = Object.fromEntries(Object.entries(counts).map(([k, v]) => [k, Number(v)]));
       expect(normalized).toEqual({
         users: 2,
         workspaces: 1,
@@ -160,7 +174,9 @@ describe("sqlite-to-pg", () => {
       });
 
       // 0/1 -> boolean conversions.
-      const user = (await db.execute("SELECT email_verified FROM users WHERE id = 'u2'"))[0] as unknown as {
+      const user = (
+        await db.execute("SELECT email_verified FROM users WHERE id = 'u2'")
+      )[0] as unknown as {
         email_verified: boolean;
       };
       expect(user.email_verified).toBe(true);
@@ -173,7 +189,9 @@ describe("sqlite-to-pg", () => {
           ? JSON.parse(model.capabilities)
           : model.capabilities,
       ).toEqual({ context: 128000 });
-      const event = (await db.execute("SELECT failed FROM usage_events WHERE id = 'e1'"))[0] as unknown as {
+      const event = (
+        await db.execute("SELECT failed FROM usage_events WHERE id = 'e1'")
+      )[0] as unknown as {
         failed: boolean;
       };
       expect(event.failed).toBe(false);
@@ -198,9 +216,9 @@ describe("sqlite-to-pg", () => {
       const audit = (await db.execute("SELECT detail FROM audit_log WHERE id = 'a1'"))[0] as {
         detail: unknown;
       };
-      expect(
-        typeof audit.detail === "string" ? JSON.parse(audit.detail) : audit.detail,
-      ).toEqual({ ip: "127.0.0.1" });
+      expect(typeof audit.detail === "string" ? JSON.parse(audit.detail) : audit.detail).toEqual({
+        ip: "127.0.0.1",
+      });
     } finally {
       await closeDb(db);
     }
@@ -218,7 +236,9 @@ describe("sqlite-to-pg", () => {
     const { createDb, closeDb } = await import("../packages/db/src/index");
     const db = createDb(targetUrl);
     try {
-      const counts = (await db.execute("SELECT COUNT(*) AS c FROM ledger_entries"))[0] as unknown as unknown as { c: number };
+      const counts = (
+        await db.execute("SELECT COUNT(*) AS c FROM ledger_entries")
+      )[0] as unknown as unknown as { c: number };
       expect(Number(counts.c)).toBe(2);
     } finally {
       await closeDb(db);

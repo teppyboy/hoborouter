@@ -26,14 +26,8 @@ export async function bootstrapInstanceAdmin(
 // missing user (returns false) so the startup call is safe before first signup.
 // Safe against the zero-admins race: only the single bootstrap email is
 // grantable and user emails are unique, so at most one grant can ever land.
-export async function bootstrapFirstInstanceAdmin(
-  db: Db,
-  email: string,
-): Promise<boolean> {
-  const admins = await db
-    .select({ user_id: instanceAdmins.user_id })
-    .from(instanceAdmins)
-    .limit(1);
+export async function bootstrapFirstInstanceAdmin(db: Db, email: string): Promise<boolean> {
+  const admins = await db.select({ user_id: instanceAdmins.user_id }).from(instanceAdmins).limit(1);
   if (admins.length > 0) return false;
   const rows = await db
     .select({ id: users.id, email: users.email })

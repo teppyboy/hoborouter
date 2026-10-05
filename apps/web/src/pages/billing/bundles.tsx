@@ -56,13 +56,10 @@ export default function BillingBundlesPage() {
   const wallet = useQuery({
     queryKey: ["wallet", workspaceId],
     queryFn: () =>
-      api<{ subscription?: SubscriptionInfo | null }>(
-        `/api/v1/workspaces/${workspaceId}/wallet`,
-      ),
+      api<{ subscription?: SubscriptionInfo | null }>(`/api/v1/workspaces/${workspaceId}/wallet`),
     enabled: !!workspaceId,
   });
-  const subscribed =
-    !!wallet.data?.subscription && !wallet.data.subscription.expired;
+  const subscribed = !!wallet.data?.subscription && !wallet.data.subscription.expired;
 
   // Same provider-availability pattern as the Credits top-up: the backend
   // gates PayOS on its credentials; manual is the default and the fallback.
@@ -219,8 +216,8 @@ export function BundleCards({
             <span>
               PayOS
               <span className="block text-xs text-muted-foreground">
-                Pay by bank app or QR at PayOS; you will be redirected there and the payment
-                status here updates from the server.
+                Pay by bank app or QR at PayOS; you will be redirected there and the payment status
+                here updates from the server.
               </span>
             </span>
           </label>
@@ -350,8 +347,8 @@ export function PlanCards({
             <span>
               PayOS
               <span className="block text-xs text-muted-foreground">
-                Pay by bank app or QR at PayOS; you will be redirected there and the payment
-                status here updates from the server.
+                Pay by bank app or QR at PayOS; you will be redirected there and the payment status
+                here updates from the server.
               </span>
             </span>
           </label>
@@ -371,7 +368,9 @@ export function PlanCards({
                 <p className="font-mono text-xl font-semibold">{formatVnd(plan.price_vnd)}</p>
               </div>
               <div className="text-sm">
-                <p className="font-mono">{formatVnd(plan.credit_per_period_vnd)} credit / {plan.period_days} days</p>
+                <p className="font-mono">
+                  {formatVnd(plan.credit_per_period_vnd)} credit / {plan.period_days} days
+                </p>
                 {!!plan.rate_limit_per_minute && (
                   <p className="text-xs text-muted-foreground">
                     Up to {plan.rate_limit_per_minute} requests per minute on subscription credit

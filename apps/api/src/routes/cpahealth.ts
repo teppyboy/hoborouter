@@ -61,7 +61,8 @@ export const cpaHealthRoutes = (db: Db, auth: BetterAuthInstance) =>
           checked_at: new Date().toISOString(),
         };
       } catch (err) {
-        const detail = err instanceof Error && err.name === "TimeoutError" ? "timed out" : "did not respond";
+        const detail =
+          err instanceof Error && err.name === "TimeoutError" ? "timed out" : "did not respond";
         return jsonError(502, "CPA_UNREACHABLE", `CPA at ${host} ${detail}`);
       }
     },

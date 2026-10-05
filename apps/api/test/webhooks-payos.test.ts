@@ -50,9 +50,15 @@ function makeTestApp(db: Awaited<ReturnType<typeof makeApp>>["db"], cfg: PayosWe
 
 async function seedPayment(orderCode: string, amount: number) {
   const id = crypto.randomUUID();
-  await q(db, 
+  await q(
+    db,
     "INSERT INTO payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) VALUES (?,?,?,'pending','payos',?,?)",
-id, ws, amount, orderCode, Date.now());
+    id,
+    ws,
+    amount,
+    orderCode,
+    Date.now(),
+  );
   return id;
 }
 
@@ -63,17 +69,27 @@ beforeAll(async () => {
   const t = await createTestDb();
   db = t.db;
   trackDrop(t.drop);
-  await q(db, "INSERT INTO workspaces (id, name, status, created_at) VALUES (?,?, 'active', ?)", ws,
+  await q(
+    db,
+    "INSERT INTO workspaces (id, name, status, created_at) VALUES (?,?, 'active', ?)",
+    ws,
     "ws",
-    Date.now(),);
-  await q(db, 
+    Date.now(),
+  );
+  await q(
+    db,
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
-`wal-${ws}`, ws, Date.now());
+    `wal-${ws}`,
+    ws,
+    Date.now(),
+  );
   // Disable the default-on first-topup bonus: these tests assert exact plain
   // top-up balances and are about webhook behavior, not the bonus.
-  await q(db,
+  await q(
+    db,
     "INSERT INTO instance_settings (key, value, updated_at) VALUES ('first_topup_bonus_enabled','false',?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-    Date.now());
+    Date.now(),
+  );
   app = makeTestApp(db, { available: true, checksumKey: KEY });
 });
 
@@ -87,8 +103,11 @@ const post = (raw: string, app2 = app) =>
   );
 
 const balance = async () =>
-  ((await q(db, "SELECT balance FROM wallets WHERE workspace_id = ?", ws))[0] as { balance: number })
-    .balance;
+  (
+    (await q(db, "SELECT balance FROM wallets WHERE workspace_id = ?", ws))[0] as {
+      balance: number;
+    }
+  ).balance;
 
 describe("payos webhook route", () => {
   test("valid signed paid event -> 200 {success:true}, credited once", async () => {
@@ -147,7 +166,8 @@ describe("payos webhook route", () => {
     expect(res.status).toBe(200);
     expect(await balance()).toBe(before);
     expect(
-      ((await q(db, "SELECT status FROM payments WHERE id = ?", id))[0] as { status: string }).status,
+      ((await q(db, "SELECT status FROM payments WHERE id = ?", id))[0] as { status: string })
+        .status,
     ).toBe("pending");
   });
 

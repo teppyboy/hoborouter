@@ -124,8 +124,7 @@ export function PaymentsTable({
       header: "User",
       cell: (c) => {
         const email = c.getValue<string>();
-        if (!email)
-          return <span className={`${truncate} font-mono text-muted-foreground`}>—</span>;
+        if (!email) return <span className={`${truncate} font-mono text-muted-foreground`}>—</span>;
         const ini = c.row.original.initiator;
         return (
           <Tooltip>

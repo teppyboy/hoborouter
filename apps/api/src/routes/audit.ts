@@ -102,7 +102,10 @@ async function enrich(rows: AuditRow[], db: Db) {
   );
   const modelsById = await lookup(
     (ids) =>
-      db.select({ id: models.id, public_id: models.public_id }).from(models).where(inArray(models.id, ids)),
+      db
+        .select({ id: models.id, public_id: models.public_id })
+        .from(models)
+        .where(inArray(models.id, ids)),
     modelIds,
   );
 

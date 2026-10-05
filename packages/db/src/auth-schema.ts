@@ -1,13 +1,7 @@
 // Better Auth-generated tables (via @better-auth/cli + drizzle-kit, user table
 // named `users`). schema.ts re-exports these bindings for FK builders.
 import { relations } from "drizzle-orm";
-import {
-  boolean,
-  customType,
-  index,
-  pgTable,
-  text,
-} from "drizzle-orm/pg-core";
+import { boolean, customType, index, pgTable, text } from "drizzle-orm/pg-core";
 
 // Better Auth passes/expects Date objects for its timestamp fields while the
 // canonical storage contract is epoch-ms bigint. This type bridges both:

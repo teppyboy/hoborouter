@@ -280,7 +280,15 @@ describe("payOS credit path — replay/idempotency via payment_events", () => {
       rawPayload: "{}",
     });
     expect(r1.outcome).toBe("credited");
-    expect(Number((await q<{ balance: number }>(sql`SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'`))[0]!.balance)).toBe(70000);
+    expect(
+      Number(
+        (
+          await q<{ balance: number }>(
+            sql`SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'`,
+          )
+        )[0]!.balance,
+      ),
+    ).toBe(70000);
 
     // replay same reference: already_processed, no second credit
     const r2 = await processMockPaymentEvent(db, {
@@ -291,7 +299,15 @@ describe("payOS credit path — replay/idempotency via payment_events", () => {
       rawPayload: "{}",
     });
     expect(r2.outcome).toBe("already_processed");
-    expect(Number((await q<{ balance: number }>(sql`SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'`))[0]!.balance)).toBe(70000);
+    expect(
+      Number(
+        (
+          await q<{ balance: number }>(
+            sql`SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'`,
+          )
+        )[0]!.balance,
+      ),
+    ).toBe(70000);
 
     // amount mismatch -> 400-class error, no credit, payment stays pending
     const id2 = await seedPayosPayment("444555666", 80000);
@@ -305,17 +321,21 @@ describe("payOS credit path — replay/idempotency via payment_events", () => {
         rawPayload: "{}",
       }),
     ).rejects.toThrow(MockPaymentError);
-    expect(Number((await q<{ balance: number }>(sql`SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'`))[0]!.balance)).toBe(70000);
     expect(
-      (await q<{ status: string }>(sql`SELECT status FROM payments WHERE id = ${id2}`))[0]!
-        .status,
+      Number(
+        (
+          await q<{ balance: number }>(
+            sql`SELECT balance FROM wallets WHERE workspace_id = 'ws-payos'`,
+          )
+        )[0]!.balance,
+      ),
+    ).toBe(70000);
+    expect(
+      (await q<{ status: string }>(sql`SELECT status FROM payments WHERE id = ${id2}`))[0]!.status,
     ).toBe("pending");
     expect(
-      (
-        await q(
-          sql`SELECT 1 FROM ledger_entries WHERE payment_id = ${id} AND kind = 'topup'`,
-        )
-      ).length,
+      (await q(sql`SELECT 1 FROM ledger_entries WHERE payment_id = ${id} AND kind = 'topup'`))
+        .length,
     ).toBe(1);
   });
 

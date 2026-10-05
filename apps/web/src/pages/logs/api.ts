@@ -57,10 +57,7 @@ export interface UsageSummary {
 
 /** Success rate label over visibility-gated rows — same rule as Overview.
  *  Em dash when counts are absent (older backend) or denominator is zero. */
-export function successRateLabel(
-  visibleRequests?: number,
-  visibleErrors?: number,
-): string {
+export function successRateLabel(visibleRequests?: number, visibleErrors?: number): string {
   if (visibleRequests == null || visibleErrors == null || visibleRequests <= 0) return "—";
   return `${(((visibleRequests - visibleErrors) / visibleRequests) * 100).toFixed(1)}%`;
 }
@@ -81,11 +78,7 @@ export function useRequestLogs(workspaceId: string | null, limit = 100) {
   });
 }
 
-export function useUsageSummary(
-  workspaceId: string | null,
-  days = 30,
-  model?: string,
-) {
+export function useUsageSummary(workspaceId: string | null, days = 30, model?: string) {
   return useQuery({
     queryKey: ["usage-summary", workspaceId, days, model ?? null],
     queryFn: () =>

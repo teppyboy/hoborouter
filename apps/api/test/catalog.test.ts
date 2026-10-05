@@ -95,7 +95,11 @@ describe("POST /api/v1/admin/catalog/models", () => {
     const { res, id } = await createModel();
     expect(res.status).toBe(201);
     expect(id).toBeDefined();
-    const audit = await q(db, "SELECT * FROM audit_log WHERE target = ? AND action = 'catalog.model.create'", id);
+    const audit = await q(
+      db,
+      "SELECT * FROM audit_log WHERE target = ? AND action = 'catalog.model.create'",
+      id,
+    );
     expect(audit.length).toBe(1);
   });
 
@@ -125,7 +129,13 @@ describe("POST /api/v1/admin/catalog/models", () => {
         provider: "p",
       });
       expect(res.status, public_id).toBe(201);
-      const row = (await q<{ public_id: string; slug: string }>(db, "SELECT public_id, slug FROM models WHERE id = ?", id))[0]!;
+      const row = (
+        await q<{ public_id: string; slug: string }>(
+          db,
+          "SELECT public_id, slug FROM models WHERE id = ?",
+          id,
+        )
+      )[0]!;
       expect(row.public_id).toBe(public_id);
       expect(row.slug).toBe(expectedSlug);
     }
@@ -163,9 +173,15 @@ describe("PUT /api/v1/admin/catalog/models/:id", () => {
       body: { display_name: "Renamed", published: true },
     });
     expect(res.status).toBe(200);
-    const row = (await q<{ display_name: string }>(db, "SELECT display_name FROM models WHERE id = ?", id))[0]!;
+    const row = (
+      await q<{ display_name: string }>(db, "SELECT display_name FROM models WHERE id = ?", id)
+    )[0]!;
     expect(row.display_name).toBe("Renamed");
-    const audit = await q(db, "SELECT * FROM audit_log WHERE target = ? AND action = 'catalog.model.update'", id);
+    const audit = await q(
+      db,
+      "SELECT * FROM audit_log WHERE target = ? AND action = 'catalog.model.update'",
+      id,
+    );
     expect(audit.length).toBe(1);
   });
 
@@ -191,11 +207,13 @@ describe("mappings + prices", () => {
       id,
     );
     expect(prices.length).toBe(1);
-    const audit = (await q<{ c: string }>(
-      db,
-      "SELECT COUNT(*) c FROM audit_log WHERE target = ? AND action LIKE 'catalog.%'",
-      id,
-    ))[0]!;
+    const audit = (
+      await q<{ c: string }>(
+        db,
+        "SELECT COUNT(*) c FROM audit_log WHERE target = ? AND action LIKE 'catalog.%'",
+        id,
+      )
+    )[0]!;
     expect(Number(audit.c)).toBe(3); // create + mapping + price
 
     // Price change = NEW row; old row unchanged.
@@ -314,7 +332,12 @@ describe("PUT public_id collision + /v1/models/:id gating", () => {
     const a = await createModel({ slug: "col-a", public_id: "openai/col-a" });
     await createModel({ slug: "col-b", public_id: "openai/col-b" });
     const auditsBefore = Number(
-      (await q<{ c: string }>(db, "SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'"))[0]!.c,
+      (
+        await q<{ c: string }>(
+          db,
+          "SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'",
+        )
+      )[0]!.c,
     );
     const res = await req(app, `/api/v1/admin/catalog/models/${a.id}`, {
       method: "PUT",
@@ -322,13 +345,20 @@ describe("PUT public_id collision + /v1/models/:id gating", () => {
       body: { public_id: "openai/col-b" },
     });
     expect(res.status).toBe(409);
-    expect(
-      ((await res.json()) as { error: { code: string } }).error,
-    ).toMatchObject({ code: "DUPLICATE" });
-    const row = (await q<{ public_id: string }>(db, "SELECT public_id FROM models WHERE id = ?", a.id))[0]!;
+    expect(((await res.json()) as { error: { code: string } }).error).toMatchObject({
+      code: "DUPLICATE",
+    });
+    const row = (
+      await q<{ public_id: string }>(db, "SELECT public_id FROM models WHERE id = ?", a.id)
+    )[0]!;
     expect(row.public_id).toBe("openai/col-a");
     const auditsAfter = Number(
-      (await q<{ c: string }>(db, "SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'"))[0]!.c,
+      (
+        await q<{ c: string }>(
+          db,
+          "SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.model.update'",
+        )
+      )[0]!.c,
     );
     expect(auditsAfter).toBe(auditsBefore);
   });
@@ -341,14 +371,22 @@ describe("PUT public_id collision + /v1/models/:id gating", () => {
       body: { public_id: "openai/renamed-id" },
     });
     expect(res.status).toBe(200);
-    const row = (await q<{ public_id: string; slug: string }>(db, "SELECT public_id, slug FROM models WHERE id = ?", m.id))[0]!;
+    const row = (
+      await q<{ public_id: string; slug: string }>(
+        db,
+        "SELECT public_id, slug FROM models WHERE id = ?",
+        m.id,
+      )
+    )[0]!;
     expect(row.public_id).toBe("openai/renamed-id");
     expect(row.slug).toBe("renamed-id");
-    const audit = (await q<{ detail: string }>(
-      db,
-      "SELECT detail FROM audit_log WHERE target = ? AND action = 'catalog.model.rename'",
-      m.id,
-    ))[0]!;
+    const audit = (
+      await q<{ detail: string }>(
+        db,
+        "SELECT detail FROM audit_log WHERE target = ? AND action = 'catalog.model.rename'",
+        m.id,
+      )
+    )[0]!;
     expect(JSON.parse(audit.detail)).toMatchObject({
       from: "openai/immutable-id",
       to: "openai/renamed-id",

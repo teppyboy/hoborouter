@@ -35,12 +35,20 @@ beforeAll(async () => {
   await createWorkspace(db, wsB, await userIdByEmail(db, "pay-owner-b@test.dev"));
   // keep cookie var used
   void ownerB;
-  await q(db, 
+  await q(
+    db,
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
-`wal-${wsA}`, wsA, Date.now());
-  await q(db, 
+    `wal-${wsA}`,
+    wsA,
+    Date.now(),
+  );
+  await q(
+    db,
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
-`wal-${wsB}`, wsB, Date.now());
+    `wal-${wsB}`,
+    wsB,
+    Date.now(),
+  );
 });
 
 describe("POST /api/v1/workspaces/:id/payments", () => {
@@ -114,9 +122,13 @@ describe("POST /api/v1/workspaces/:id/payments", () => {
     const fresh = await buildApp({ db: d });
     const cookie = await signUp(fresh, "pay-prod@test.dev", "P");
     await createWorkspace(d, "ws-prod", await userIdByEmail(d, "pay-prod@test.dev"));
-    await q(d,
+    await q(
+      d,
       "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
-"wal-ws-prod", "ws-prod", Date.now());
+      "wal-ws-prod",
+      "ws-prod",
+      Date.now(),
+    );
     const res = await req(fresh, "/api/v1/workspaces/ws-prod/payments", {
       method: "POST",
       cookie,
@@ -128,9 +140,11 @@ describe("POST /api/v1/workspaces/:id/payments", () => {
     expect(body.status).toBe("pending");
     // No fund change: wallet balance untouched at creation.
     expect(
-      ((await q(d, "SELECT balance FROM wallets WHERE workspace_id = 'ws-prod'"))[0] as {
-        balance: number;
-      }).balance,
+      (
+        (await q(d, "SELECT balance FROM wallets WHERE workspace_id = 'ws-prod'"))[0] as {
+          balance: number;
+        }
+      ).balance,
     ).toBe(0);
     if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = savedNodeEnv;

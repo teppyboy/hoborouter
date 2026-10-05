@@ -13,8 +13,7 @@ export function ThemeToggle() {
   // Guard window: renders in SSR tests under Bun where window is undefined.
   const [systemDark, setSystemDark] = useState(
     () =>
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches,
+      typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches,
   );
 
   const dark = theme === "dark" || (theme === "system" && systemDark);

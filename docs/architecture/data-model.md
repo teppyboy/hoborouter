@@ -75,9 +75,9 @@ reason, created_at)`; `usage_log_id` is nullable for every full-hold
   uses `charged_vnd = cap_vnd` and releases the full hold.
 - `refund_operations` references an original ledger entry whose `kind` is
   `settle` and represents `AI_USAGE`; this is enforced in service code and by a
-DB CHECK/trigger in the target schema. Refunds append a wallet credit referencing
-that original debit, capped at the original debit, one refund per debit, and
-validated in one transaction.
+  DB CHECK/trigger in the target schema. Refunds append a wallet credit referencing
+  that original debit, capped at the original debit, one refund per debit, and
+  validated in one transaction.
 
 Reservation transaction inserts request/reservation, then conditionally adds
 `cap_vnd` to `wallets.reserved` only when `balance-reserved >= cap_vnd`.

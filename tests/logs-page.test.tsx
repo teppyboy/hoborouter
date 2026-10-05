@@ -1,7 +1,12 @@
 // Logs page filter + pagination helpers: pure client-side behavior over the
 // loaded page of 100 requests. No network involved.
 import { test, expect } from "bun:test";
-import { applyLogFilters, paginateLogs, visibleRows, LOG_PAGE_SIZE } from "../apps/web/src/pages/logs/filters";
+import {
+  applyLogFilters,
+  paginateLogs,
+  visibleRows,
+  LOG_PAGE_SIZE,
+} from "../apps/web/src/pages/logs/filters";
 import type { UsageLogRow } from "../apps/web/src/pages/logs/api";
 
 function row(partial: Partial<UsageLogRow>): UsageLogRow {
@@ -27,16 +32,26 @@ function row(partial: Partial<UsageLogRow>): UsageLogRow {
 
 const rows = [
   row({ id: "1", request_id: "req_aaa", public_model: "gpt-5", status: "ok", key_prefix: "sk-a" }),
-  row({ id: "2", request_id: "req_bbb", public_model: "claude-4", status: "error", key_prefix: "sk-b" }),
+  row({
+    id: "2",
+    request_id: "req_bbb",
+    public_model: "claude-4",
+    status: "error",
+    key_prefix: "sk-b",
+  }),
   row({ id: "3", request_id: "req_ccc", public_model: "gpt-5", status: "ok", key_prefix: null }),
 ];
 
 test("applyLogFilters: search matches request id", () => {
-  expect(applyLogFilters(rows, { search: "bbb", model: "all", status: "all", key: "all" })).toHaveLength(1);
+  expect(
+    applyLogFilters(rows, { search: "bbb", model: "all", status: "all", key: "all" }),
+  ).toHaveLength(1);
 });
 
 test("applyLogFilters: model filter", () => {
-  expect(applyLogFilters(rows, { search: "", model: "gpt-5", status: "all", key: "all" })).toHaveLength(2);
+  expect(
+    applyLogFilters(rows, { search: "", model: "gpt-5", status: "all", key: "all" }),
+  ).toHaveLength(2);
 });
 
 test("applyLogFilters: status error excludes ok rows", () => {
@@ -46,8 +61,12 @@ test("applyLogFilters: status error excludes ok rows", () => {
 });
 
 test("applyLogFilters: key prefix filter, null prefix bucketed as —", () => {
-  expect(applyLogFilters(rows, { search: "", model: "all", status: "all", key: "—" })).toHaveLength(1);
-  expect(applyLogFilters(rows, { search: "", model: "all", status: "all", key: "sk-b" })).toHaveLength(1);
+  expect(applyLogFilters(rows, { search: "", model: "all", status: "all", key: "—" })).toHaveLength(
+    1,
+  );
+  expect(
+    applyLogFilters(rows, { search: "", model: "all", status: "all", key: "sk-b" }),
+  ).toHaveLength(1);
 });
 
 test("applyLogFilters: combined filters intersect", () => {
@@ -81,4 +100,3 @@ test("paginateLogs: page size and clamping", () => {
   expect(p5.slice).toHaveLength(5);
   expect(paginateLogs([], 0).pageCount).toBe(1);
 });
-

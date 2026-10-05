@@ -98,16 +98,17 @@ describe("migrations", () => {
     const res = await d.execute<{ column_name: string }>(
       sql`SELECT column_name FROM information_schema.columns WHERE table_name = 'requests' AND column_name IN ('deleted_at','deleted_by')`,
     );
-    expect(res.map((r) => r.column_name).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(["deleted_at", "deleted_by"]);
+    expect(res.map((r) => r.column_name).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual([
+      "deleted_at",
+      "deleted_by",
+    ]);
   });
 });
 
 describe("money CHECK constraints", () => {
   test("wallet balance rejects negative", async () => {
     await d.insert(workspaces).values(wsRow("ws-c")).onConflictDoNothing();
-    expectReject(
-      d.insert(wallets).values(walletRow("w-neg", "ws-c", { balance: -1 })),
-    );
+    expectReject(d.insert(wallets).values(walletRow("w-neg", "ws-c", { balance: -1 })));
   });
 
   test(`wallet balance rejects > 2^53-1 (${MAX_SAFE_INTEGER_MONEY + 1})`, async () => {
@@ -117,17 +118,13 @@ describe("money CHECK constraints", () => {
   });
 
   test("wallet balance accepts exactly MAX_SAFE_INTEGER_MONEY", async () => {
-    await d
-      .insert(wallets)
-      .values(walletRow("w-max", "ws-c", { balance: MAX_SAFE_INTEGER_MONEY }));
+    await d.insert(wallets).values(walletRow("w-max", "ws-c", { balance: MAX_SAFE_INTEGER_MONEY }));
     await d.delete(wallets).where(eq(wallets.id, "w-max"));
   });
 
   test("ledger amount rejects negative and zero", async () => {
     await d.insert(wallets).values(walletRow("w-l", "ws-c")).onConflictDoNothing();
-    expectReject(
-      d.insert(ledgerEntries).values(ledgerRow("l-neg", "w-l", { amount: -5 })),
-    );
+    expectReject(d.insert(ledgerEntries).values(ledgerRow("l-neg", "w-l", { amount: -5 })));
   });
 });
 
@@ -193,12 +190,18 @@ describe("partial unique ledger indexes (one settle/topup/refund per key)", () =
         created_at: 1,
       },
     ]);
-    await d.insert(ledgerEntries).values(ledgerRow("l-s1", "w-l", { kind: "settle", reservation_id: "r1" }));
+    await d
+      .insert(ledgerEntries)
+      .values(ledgerRow("l-s1", "w-l", { kind: "settle", reservation_id: "r1" }));
     expectReject(
-      d.insert(ledgerEntries).values(ledgerRow("l-s2", "w-l", { kind: "settle", reservation_id: "r1" })),
+      d
+        .insert(ledgerEntries)
+        .values(ledgerRow("l-s2", "w-l", { kind: "settle", reservation_id: "r1" })),
     );
     // a settle for a different reservation is fine
-    await d.insert(ledgerEntries).values(ledgerRow("l-s3", "w-l", { kind: "settle", reservation_id: "r2" }));
+    await d
+      .insert(ledgerEntries)
+      .values(ledgerRow("l-s3", "w-l", { kind: "settle", reservation_id: "r2" }));
   });
 
   test("one topup per payment", async () => {
@@ -211,7 +214,9 @@ describe("partial unique ledger indexes (one settle/topup/refund per key)", () =
       provider_order_code: "po1",
       created_at: 1,
     });
-    await d.insert(ledgerEntries).values(ledgerRow("l-t1", "w-l", { kind: "topup", payment_id: "p1" }));
+    await d
+      .insert(ledgerEntries)
+      .values(ledgerRow("l-t1", "w-l", { kind: "topup", payment_id: "p1" }));
     expectReject(
       d.insert(ledgerEntries).values(ledgerRow("l-t2", "w-l", { kind: "topup", payment_id: "p1" })),
     );
@@ -221,15 +226,21 @@ describe("partial unique ledger indexes (one settle/topup/refund per key)", () =
     await d
       .insert(ledgerEntries)
       .values(ledgerRow("l-o", "w-l", { kind: "adjustment", direction: "debit" }));
-    await d
-      .insert(ledgerEntries)
-      .values(ledgerRow("l-r1", "w-l", { kind: "refund", direction: "debit", original_ledger_entry_id: "l-o" }));
+    await d.insert(ledgerEntries).values(
+      ledgerRow("l-r1", "w-l", {
+        kind: "refund",
+        direction: "debit",
+        original_ledger_entry_id: "l-o",
+      }),
+    );
     expectReject(
-      d
-        .insert(ledgerEntries)
-        .values(
-          ledgerRow("l-r2", "w-l", { kind: "refund", direction: "debit", original_ledger_entry_id: "l-o" }),
-        ),
+      d.insert(ledgerEntries).values(
+        ledgerRow("l-r2", "w-l", {
+          kind: "refund",
+          direction: "debit",
+          original_ledger_entry_id: "l-o",
+        }),
+      ),
     );
   });
 });
@@ -255,9 +266,7 @@ describe("foreign keys", () => {
 
 describe("append-only ledger", () => {
   test("ledger_entries update and delete rejected", async () => {
-    expectReject(
-      d.update(ledgerEntries).set({ memo: "x" }).where(eq(ledgerEntries.id, "l-s1")),
-    );
+    expectReject(d.update(ledgerEntries).set({ memo: "x" }).where(eq(ledgerEntries.id, "l-s1")));
     expectReject(d.delete(ledgerEntries).where(eq(ledgerEntries.id, "l-s1")));
   });
 });

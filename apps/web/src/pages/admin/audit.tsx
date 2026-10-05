@@ -74,8 +74,7 @@ const ACTION_LABELS: Record<string, string> = {
 
 function humanizeAction(action: string): string {
   return (
-    ACTION_LABELS[action] ??
-    (action.charAt(0).toUpperCase() + action.slice(1).replaceAll(".", " "))
+    ACTION_LABELS[action] ?? action.charAt(0).toUpperCase() + action.slice(1).replaceAll(".", " ")
   );
 }
 
@@ -90,13 +89,7 @@ function relativeTime(ms: number): string {
 }
 
 /** Monochrome cell wrapper with a hover tooltip. */
-function Hover({
-  tip,
-  children,
-}: {
-  tip: React.ReactNode;
-  children: React.ReactNode;
-}) {
+function Hover({ tip, children }: { tip: React.ReactNode; children: React.ReactNode }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -110,7 +103,9 @@ function Hover({
 /** One-line, truncating cell content. The table row is whitespace-nowrap. */
 const truncate = "block max-w-full truncate";
 
-type DetailView = { kind: "object"; value: Record<string, unknown> } | { kind: "text"; value: string };
+type DetailView =
+  | { kind: "object"; value: Record<string, unknown> }
+  | { kind: "text"; value: string };
 
 /** jsonb object (Postgres) or legacy JSON string -> object view, else plain text. */
 function readDetail(detail: unknown): DetailView {
@@ -162,7 +157,13 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
       const ms = c.getValue<number>();
       const iso = new Date(ms).toISOString();
       return (
-        <Hover tip={<span className="font-mono">{iso} · {formatDate(ms)}</span>}>
+        <Hover
+          tip={
+            <span className="font-mono">
+              {iso} · {formatDate(ms)}
+            </span>
+          }
+        >
           <span className={`${truncate} font-mono text-xs`}>{relativeTime(ms)}</span>
         </Hover>
       );
@@ -251,16 +252,21 @@ export default function AdminAuditPage() {
   const [selected, setSelected] = useState<AuditEntry | null>(null);
 
   const rows = query.data ?? [];
-  const actions = useMemo(
-    () => [...new Set(rows.map((r) => r.action))].sort(),
-    [rows],
-  );
+  const actions = useMemo(() => [...new Set(rows.map((r) => r.action))].sort(), [rows]);
   const filtered = useMemo(() => {
     const s = search.trim().toLowerCase();
     return rows.filter((r) => {
       if (actionFilter !== "all" && !r.action.startsWith(actionFilter)) return false;
       if (!s) return true;
-      return [r.action, r.actor?.name, r.actor?.email, r.target_label, r.target, r.workspace?.name, detailSummary(r.detail)]
+      return [
+        r.action,
+        r.actor?.name,
+        r.actor?.email,
+        r.target_label,
+        r.target,
+        r.workspace?.name,
+        detailSummary(r.detail),
+      ]
         .filter(Boolean)
         .some((v) => (v as string).toLowerCase().includes(s));
     });
@@ -335,7 +341,10 @@ export default function AdminAuditPage() {
                 <TableBody>
                   {table.getRowModel().rows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={columns.length} className="text-center text-muted-foreground">
+                      <TableCell
+                        colSpan={columns.length}
+                        className="text-center text-muted-foreground"
+                      >
                         No audit entries
                       </TableCell>
                     </TableRow>
@@ -385,8 +394,7 @@ export default function AdminAuditPage() {
               </div>
               <div className="space-y-3">
                 <Field label="Time">
-                  {formatDate(selected.created_at)}{" "}
-                  ({new Date(selected.created_at).toISOString()})
+                  {formatDate(selected.created_at)} ({new Date(selected.created_at).toISOString()})
                 </Field>
                 <Field label="Event ID">{selected.id}</Field>
                 <Field label="Action">{selected.action}</Field>
@@ -437,7 +445,9 @@ export default function AdminAuditPage() {
                     ? "—"
                     : (() => {
                         const view = readDetail(selected.detail);
-                        return view.kind === "text" ? view.value : JSON.stringify(view.value, null, 2);
+                        return view.kind === "text"
+                          ? view.value
+                          : JSON.stringify(view.value, null, 2);
                       })()}
                 </Field>
               </div>

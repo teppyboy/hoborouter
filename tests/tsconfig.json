@@ -8,12 +8,30 @@
       "bun:sqlite": ["../apps/api/node_modules/bun-types/sqlite.d.ts"],
       "bun": ["../apps/api/node_modules/bun-types/bun.d.ts"],
       "react": ["../apps/web/node_modules/@types/react", "../apps/web/node_modules/react"],
-      "react/jsx-runtime": ["../apps/web/node_modules/@types/react/jsx-runtime", "../apps/web/node_modules/react/jsx-runtime.js"],
-      "react/jsx-dev-runtime": ["../apps/web/node_modules/@types/react/jsx-dev-runtime", "../apps/web/node_modules/react/jsx-dev-runtime.js"],
-      "react-dom/server": ["../apps/web/node_modules/@types/react-dom/server", "../apps/web/node_modules/react-dom/server.js"],
-      "@tanstack/react-query": ["../apps/web/node_modules/@tanstack/react-query/build/modern/index.d.ts", "../apps/web/node_modules/@tanstack/react-query/build/modern/index.js"],
+      "react/jsx-runtime": [
+        "../apps/web/node_modules/@types/react/jsx-runtime",
+        "../apps/web/node_modules/react/jsx-runtime.js"
+      ],
+      "react/jsx-dev-runtime": [
+        "../apps/web/node_modules/@types/react/jsx-dev-runtime",
+        "../apps/web/node_modules/react/jsx-dev-runtime.js"
+      ],
+      "react-dom/server": [
+        "../apps/web/node_modules/@types/react-dom/server",
+        "../apps/web/node_modules/react-dom/server.js"
+      ],
+      "react-dom/client": [
+        "../apps/web/node_modules/@types/react-dom/client",
+        "../apps/web/node_modules/react-dom/client.js"
+      ],
+      "@tanstack/react-query": [
+        "../apps/web/node_modules/@tanstack/react-query/build/modern/index.d.ts",
+        "../apps/web/node_modules/@tanstack/react-query/build/modern/index.js"
+      ],
       "@tanstack/react-router": ["../apps/web/node_modules/@tanstack/react-router/dist/esm/index"],
-      "@tanstack/react-router/dist/esm/routerContext.js": ["../apps/web/node_modules/@tanstack/react-router/dist/esm/routerContext"]
+      "@tanstack/react-router/dist/esm/routerContext.js": [
+        "../apps/web/node_modules/@tanstack/react-router/dist/esm/routerContext"
+      ]
     }
   },
   "include": ["."]

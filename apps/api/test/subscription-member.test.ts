@@ -59,11 +59,11 @@ beforeAll(async () => {
 describe("plan purchase route", () => {
   test("manual purchase creates pending payment with plan id at server price", async () => {
     const plan = (await createPlan({ name: "Buyable" })).body;
-    const res = await req(
-      app,
-      `/api/v1/workspaces/${ws}/subscription-plans/${plan.id}/purchase`,
-      { method: "POST", cookie: memberCookie, body: { provider: "manual" } },
-    );
+    const res = await req(app, `/api/v1/workspaces/${ws}/subscription-plans/${plan.id}/purchase`, {
+      method: "POST",
+      cookie: memberCookie,
+      body: { provider: "manual" },
+    });
     expect(res.status).toBe(201);
     const body = (await res.json()) as {
       id: string;
@@ -76,7 +76,12 @@ describe("plan purchase route", () => {
     expect(body.status).toBe("pending");
     expect(body.provider).toBe("manual");
     expect(body.provider_order_code.startsWith("MANUAL-")).toBe(true);
-    const rows = await q<{ subscription_plan_id: string; bundle_id: null; status: string; amount: number }>(
+    const rows = await q<{
+      subscription_plan_id: string;
+      bundle_id: null;
+      status: string;
+      amount: number;
+    }>(
       db,
       "SELECT subscription_plan_id, bundle_id, status, amount FROM payments WHERE id = ?",
       body.id,
@@ -86,7 +91,11 @@ describe("plan purchase route", () => {
     expect(rows[0]!.status).toBe("pending");
     expect(rows[0]!.amount).toBe(200000);
     // Purchase created no wallet movement: topup still 50000, no ledger rows.
-    const ledger = await q(db, "SELECT * FROM ledger_entries le JOIN wallets w ON w.id = le.wallet_id WHERE w.workspace_id = ?", ws);
+    const ledger = await q(
+      db,
+      "SELECT * FROM ledger_entries le JOIN wallets w ON w.id = le.wallet_id WHERE w.workspace_id = ?",
+      ws,
+    );
     expect(ledger.length).toBe(0);
   });
 
@@ -99,11 +108,11 @@ describe("plan purchase route", () => {
       body: { active: false },
     });
     expect(deact.status).toBe(200);
-    const res = await req(
-      app,
-      `/api/v1/workspaces/${ws}/subscription-plans/${plan.id}/purchase`,
-      { method: "POST", cookie: memberCookie, body: { provider: "manual" } },
-    );
+    const res = await req(app, `/api/v1/workspaces/${ws}/subscription-plans/${plan.id}/purchase`, {
+      method: "POST",
+      cookie: memberCookie,
+      body: { provider: "manual" },
+    });
     expect(res.status).toBe(409);
   });
 
@@ -136,11 +145,11 @@ describe("wallet GET subscription shape", () => {
 
   beforeAll(async () => {
     plan = (await createPlan({ name: "Shape", rate_limit_per_minute: 42 })).body;
-    const res = await req(
-      app,
-      `/api/v1/workspaces/${ws}/subscription-plans/${plan.id}/purchase`,
-      { method: "POST", cookie: memberCookie, body: { provider: "manual" } },
-    );
+    const res = await req(app, `/api/v1/workspaces/${ws}/subscription-plans/${plan.id}/purchase`, {
+      method: "POST",
+      cookie: memberCookie,
+      body: { provider: "manual" },
+    });
     paymentId = ((await res.json()) as { id: string }).id;
   });
 

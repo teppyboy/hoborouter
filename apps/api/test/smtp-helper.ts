@@ -38,11 +38,7 @@ export function startFakeSmtp(opts: FakeSmtpOptions = {}): FakeSmtpState {
     messages: [] as FakeSmtpState["messages"],
     stop: () => {},
   };
-  const reply = (
-    sock: { write: (s: string) => unknown },
-    code: number,
-    lines: string[],
-  ): void => {
+  const reply = (sock: { write: (s: string) => unknown }, code: number, lines: string[]): void => {
     const body = lines
       .map((l, i) => (i === lines.length - 1 ? `${code} ${l}` : `${code}-${l}`))
       .join("\r\n");
@@ -54,7 +50,15 @@ export function startFakeSmtp(opts: FakeSmtpOptions = {}): FakeSmtpState {
     socket: {
       open(sock) {
         state.connections++;
-        conns.set(sock, { buffer: "", inData: false, dataBuf: "", mailFrom: null, rcptTo: null, authed: false, loginStep: 0 });
+        conns.set(sock, {
+          buffer: "",
+          inData: false,
+          dataBuf: "",
+          mailFrom: null,
+          rcptTo: null,
+          authed: false,
+          loginStep: 0,
+        });
         if (opts.greetingCode !== undefined) {
           sock.write(`${opts.greetingCode} service unavailable\r\n`);
         } else if (opts.fragmentGreeting) {
@@ -159,7 +163,18 @@ export function startFakeSmtp(opts: FakeSmtpOptions = {}): FakeSmtpState {
       },
     },
   });
-  const conns = new Map<object, { buffer: string; inData: boolean; dataBuf: string; mailFrom: string | null; rcptTo: string | null; authed: boolean; loginStep: number }>();
+  const conns = new Map<
+    object,
+    {
+      buffer: string;
+      inData: boolean;
+      dataBuf: string;
+      mailFrom: string | null;
+      rcptTo: string | null;
+      authed: boolean;
+      loginStep: number;
+    }
+  >();
   state.port = server.port;
   state.stop = () => server.stop(true);
   return state;

@@ -44,7 +44,7 @@ function fence(lang: string, body: string): string {
 }
 
 const FENCE_BODIES = [
-  "// update the gateway\nexport function route(req: Request): Response {\n  if (!req.headers.get(\"x-api-key\")) {\n    throw new Error(\"missing key\"); // 401\n  }\n  return new Response(\"ok\");\n}",
+  '// update the gateway\nexport function route(req: Request): Response {\n  if (!req.headers.get("x-api-key")) {\n    throw new Error("missing key"); // 401\n  }\n  return new Response("ok");\n}',
   "SELECT id, balance FROM wallet /* snapshot read */\nWHERE user_id = $1\nORDER BY updated_at DESC\nLIMIT 10;",
   "const xs = [1, 2, 3].map((n) => n * n); // [1, 4, 9]\nif (xs.length > 2) {\n  console.log(xs.join(', '));\n}",
 ];
@@ -72,7 +72,10 @@ function buildDoc(targetBytes: number): string {
     const section = [
       PROSE[i % PROSE.length],
       TABLE_SECTIONS[i % TABLE_SECTIONS.length],
-      fence(["ts", "sql", "js"][i % 3] ?? "ts", FENCE_BODIES[i % FENCE_BODIES.length] ?? "const a = 1;"),
+      fence(
+        ["ts", "sql", "js"][i % 3] ?? "ts",
+        FENCE_BODIES[i % FENCE_BODIES.length] ?? "const a = 1;",
+      ),
       LIST_SECTIONS[i % LIST_SECTIONS.length],
     ].join("\n");
     parts.push(section);
@@ -89,7 +92,9 @@ function median(xs: number[]): number {
 }
 
 function bench(label: string, runs: number[], round = (n: number) => n.toFixed(3)) {
-  console.log(`${label}: median=${round(median(runs))}ms min=${round(Math.min(...runs))}ms max=${round(Math.max(...runs))}ms n=${runs.length}`);
+  console.log(
+    `${label}: median=${round(median(runs))}ms min=${round(Math.min(...runs))}ms max=${round(Math.max(...runs))}ms n=${runs.length}`,
+  );
 }
 
 // --- fixed-size documents -------------------------------------------------
@@ -143,7 +148,9 @@ function streamRun(): number[] {
 const coldStream = streamRun(); // cold: engine JIT + fresh strings
 bench("stream grow cold, median per update (100 updates)", coldStream);
 bench("stream grow warm, median per update (100 updates)", streamRun());
-bench("stream update 100 total ms (cold)", [coldStream.reduce((a, b) => a + b, 0)], (n) => n.toFixed(1));
+bench("stream update 100 total ms (cold)", [coldStream.reduce((a, b) => a + b, 0)], (n) =>
+  n.toFixed(1),
+);
 
 // --- module size (no WASM in this engine) ---------------------------------
 
@@ -151,7 +158,9 @@ for (const name of ["marked", "dompurify"] as const) {
   try {
     const buf = readFileSync(webRequire.resolve(name));
     const gz = gzipSync(buf).length;
-    console.log(`${name} dist entry: ${(buf.length / 1024).toFixed(1)}KB raw, ${(gz / 1024).toFixed(1)}KB gzipped (unminified dist; bundled output is smaller)`);
+    console.log(
+      `${name} dist entry: ${(buf.length / 1024).toFixed(1)}KB raw, ${(gz / 1024).toFixed(1)}KB gzipped (unminified dist; bundled output is smaller)`,
+    );
   } catch {
     console.log(`${name}: (dist file not found)`);
   }

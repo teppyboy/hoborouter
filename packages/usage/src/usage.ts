@@ -32,9 +32,8 @@ const cleanChatFinishes = new Set(["stop", "length", "tool_calls", "content_filt
  * For chat stream:true requests set stream_options.include_usage=true when
  * absent. Never mutates the input; non-stream bodies returned unchanged.
  */
-export function injectChatUsageOption(
-  body: Record<string, unknown> | unknown,
-): Record<string, unknown> | unknown {
+/** Upstream chat request body: arbitrary JSON object; non-records are returned unchanged. */
+export function injectChatUsageOption(body: Record<string, unknown>): Record<string, unknown> {
   if (
     typeof body !== "object" ||
     body === null ||
@@ -368,5 +367,7 @@ export function resolveBillableUsage(result: UsageResult, price: SplitRates): Bi
     cachedInputTokens,
     reasoningTokens,
   };
-  return assumed.length === 0 ? { billable: true, usage: resolved } : { billable: true, usage: resolved, assumed };
+  return assumed.length === 0
+    ? { billable: true, usage: resolved }
+    : { billable: true, usage: resolved, assumed };
 }

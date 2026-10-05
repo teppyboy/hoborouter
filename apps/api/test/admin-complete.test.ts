@@ -23,7 +23,9 @@ beforeAll(async () => {
   await db.execute(
     sql`INSERT INTO users (id, name, email, email_verified, created_at, updated_at) VALUES (${userId}, 'Admin', 'admin@test.dev', true, ${now}, ${now})`,
   );
-  await db.execute(sql`INSERT INTO instance_admins (user_id, created_at) VALUES (${userId}, ${now})`);
+  await db.execute(
+    sql`INSERT INTO instance_admins (user_id, created_at) VALUES (${userId}, ${now})`,
+  );
 });
 
 afterAll(async () => {

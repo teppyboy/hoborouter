@@ -16,11 +16,22 @@ const wsA = "ws-hook-a";
 const order = "MOCK-HOOK-1";
 const ref = "evt-hook-1";
 
-async function seedPayment(db: Awaited<ReturnType<typeof makeApp>>["db"], orderCode: string, amount: number, wsId = wsA) {
+async function seedPayment(
+  db: Awaited<ReturnType<typeof makeApp>>["db"],
+  orderCode: string,
+  amount: number,
+  wsId = wsA,
+) {
   const id = crypto.randomUUID();
-  await q(db, 
+  await q(
+    db,
     "INSERT INTO payments (id, workspace_id, amount, status, provider, provider_order_code, created_at) VALUES (?,?,?,'pending','mock',?,?)",
-id, wsId, amount, orderCode, Date.now());
+    id,
+    wsId,
+    amount,
+    orderCode,
+    Date.now(),
+  );
   return id;
 }
 
@@ -47,14 +58,20 @@ beforeAll(async () => {
   memberCookie = await signUp(app, "hook-member@test.dev", "M");
   void memberCookie;
   await createWorkspace(db, wsA, await userIdByEmail(db, "hook-member@test.dev"));
-  await q(db, 
+  await q(
+    db,
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES (?,?, 'VND', 0, 0, 0, ?)",
-`wal-${wsA}`, wsA, Date.now());
+    `wal-${wsA}`,
+    wsA,
+    Date.now(),
+  );
   // Disable the default-on first-topup bonus: these tests assert exact plain
   // top-up balances and are about webhook behavior, not the bonus.
-  await q(db,
+  await q(
+    db,
     "INSERT INTO instance_settings (key, value, updated_at) VALUES ('first_topup_bonus_enabled','false',?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-    Date.now());
+    Date.now(),
+  );
 });
 
 afterAll(() => {
@@ -81,16 +98,20 @@ describe("mock webhook — happy path & idempotency", () => {
     );
     expect(res.status).toBe(200);
     expect(await walletBalance(db, wsA)).toBe(50000);
-    const ledger = await q(db, 
-        "SELECT kind, amount, payment_id FROM ledger_entries WHERE payment_id = ? AND kind = 'topup'",
-(
-          (await q(db, "SELECT id FROM payments WHERE provider_order_code = ?", order))[0] as {
-            id: string;
-          }
-        ).id,) as { kind: string; amount: number; payment_id: string }[];
+    const ledger = (await q(
+      db,
+      "SELECT kind, amount, payment_id FROM ledger_entries WHERE payment_id = ? AND kind = 'topup'",
+      (
+        (await q(db, "SELECT id FROM payments WHERE provider_order_code = ?", order))[0] as {
+          id: string;
+        }
+      ).id,
+    )) as { kind: string; amount: number; payment_id: string }[];
     expect(ledger.length).toBe(1);
     if (ledger[0]) expect(ledger[0].amount).toBe(50000);
-    const pay = (await q(db, "SELECT status FROM payments WHERE provider_order_code = ?", order))[0] as {
+    const pay = (
+      await q(db, "SELECT status FROM payments WHERE provider_order_code = ?", order)
+    )[0] as {
       status: string;
     };
     expect(pay.status).toBe("succeeded");
@@ -107,10 +128,20 @@ describe("mock webhook — happy path & idempotency", () => {
         id: string;
       }
     ).id;
-    const ledger = await q(db, "SELECT 1 FROM ledger_entries WHERE payment_id = ? AND kind = 'topup'", pay);
+    const ledger = await q(
+      db,
+      "SELECT 1 FROM ledger_entries WHERE payment_id = ? AND kind = 'topup'",
+      pay,
+    );
     expect(ledger.length).toBe(1);
     expect(
-      (await q(db, "SELECT 1 FROM payment_events WHERE provider = 'mock' AND provider_reference = ?", ref)).length,
+      (
+        await q(
+          db,
+          "SELECT 1 FROM payment_events WHERE provider = 'mock' AND provider_reference = ?",
+          ref,
+        )
+      ).length,
     ).toBe(1);
   });
 
@@ -121,8 +152,15 @@ describe("mock webhook — happy path & idempotency", () => {
       }
     ).id;
     await expect(
-      q(db, "INSERT INTO payment_events (id, payment_id, provider, provider_reference, processed_at) VALUES (?,?,?,?,?)",
-        crypto.randomUUID(), payId, "mock", ref, Date.now()),
+      q(
+        db,
+        "INSERT INTO payment_events (id, payment_id, provider, provider_reference, processed_at) VALUES (?,?,?,?,?)",
+        crypto.randomUUID(),
+        payId,
+        "mock",
+        ref,
+        Date.now(),
+      ),
     ).rejects.toThrow();
   });
 });
@@ -155,7 +193,9 @@ describe("mock webhook — rejections, no credit", () => {
     );
     expect(res.status).toBe(400);
     expect(await walletBalance(db, wsA)).toBe(50000);
-    const pay = (await q(db, "SELECT status FROM payments WHERE provider_order_code = 'MOCK-AMT'"))[0] as {
+    const pay = (
+      await q(db, "SELECT status FROM payments WHERE provider_order_code = 'MOCK-AMT'")
+    )[0] as {
       status: string;
     };
     expect(pay.status).toBe("pending");
@@ -224,10 +264,14 @@ describe("mock webhook — error funnel hardening (P1)", () => {
     const { processMockPaymentEvent, MockPaymentError } = await import("@hoborouter/payments");
     await seedPayment(db, "MOCK-BOOM", 6000);
     const before = await walletBalance(db, wsA);
-    await q(db,
-    "CREATE FUNCTION payment_events_boom_fn() RETURNS trigger AS 'BEGIN RAISE EXCEPTION ''boom''; END' LANGUAGE plpgsql");
-    await q(db,
-      "CREATE TRIGGER payment_events_boom BEFORE INSERT ON payment_events FOR EACH ROW EXECUTE FUNCTION payment_events_boom_fn()");
+    await q(
+      db,
+      "CREATE FUNCTION payment_events_boom_fn() RETURNS trigger AS 'BEGIN RAISE EXCEPTION ''boom''; END' LANGUAGE plpgsql",
+    );
+    await q(
+      db,
+      "CREATE TRIGGER payment_events_boom BEFORE INSERT ON payment_events FOR EACH ROW EXECUTE FUNCTION payment_events_boom_fn()",
+    );
     try {
       let caught: unknown;
       try {
@@ -302,7 +346,8 @@ describe("mock webhook — error funnel hardening (P1)", () => {
     expect(res.status).toBe(400);
     expect(await walletBalance(db, wsA)).toBe(before);
     expect(
-      (await q(db, "SELECT 1 FROM payment_events WHERE provider_reference = 'evt-hook-1-distinct'")).length,
+      (await q(db, "SELECT 1 FROM payment_events WHERE provider_reference = 'evt-hook-1-distinct'"))
+        .length,
     ).toBe(0);
   });
 
@@ -344,7 +389,9 @@ describe("transaction composition — late failure rolls back credit", () => {
       (await q(db, "SELECT 1 FROM payment_events WHERE provider_reference = 'evt-latefail'"))
         .length,
     ).toBe(0);
-    const pay = (await q(db, "SELECT status FROM payments WHERE provider_order_code = 'MOCK-LATEFAIL'"))[0] as {
+    const pay = (
+      await q(db, "SELECT status FROM payments WHERE provider_order_code = 'MOCK-LATEFAIL'")
+    )[0] as {
       status: string;
     };
     expect(pay.status).toBe("pending");

@@ -22,10 +22,7 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 const withTimeout = <T>(p: Promise<T>, ms: number, msg: string): Promise<T> =>
-  Promise.race([
-    p,
-    new Promise<never>((_, rej) => setTimeout(() => rej(new Error(msg)), ms)),
-  ]);
+  Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]);
 
 const chatChunkLine = (content: string) =>
   `data: ${JSON.stringify({
@@ -65,7 +62,8 @@ const responsesEvent = (obj: Record<string, unknown>) =>
 
 let db: Awaited<ReturnType<typeof createTestDb>>["db"];
 let app: Awaited<ReturnType<typeof buildApp>>;
-let handler: (req: Request) => Response | Promise<Response> = () => new Response(null, { status: 500 });
+let handler: (req: Request) => Response | Promise<Response> = () =>
+  new Response(null, { status: 500 });
 let fakeServer: ReturnType<typeof Bun.serve> | null = null;
 
 const post = (path: string, body: unknown, signal?: AbortSignal) =>
@@ -82,17 +80,14 @@ const post = (path: string, body: unknown, signal?: AbortSignal) =>
   );
 
 const lastCharge = async () =>
-  (
-    await q(
-      db,
-      "SELECT status FROM billing_reservations ORDER BY ctid DESC LIMIT 1",
-    )
-  )[0] as { status: string };
+  (await q(db, "SELECT status FROM billing_reservations ORDER BY ctid DESC LIMIT 1"))[0] as {
+    status: string;
+  };
 
 const lastRequestStatus = async () =>
-  (
-    await q(db, "SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1")
-  )[0] as { status: string };
+  (await q(db, "SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1"))[0] as {
+    status: string;
+  };
 
 async function waitFor(fn: () => Promise<boolean>, ms = 2000) {
   const end = Date.now() + ms;
@@ -108,7 +103,11 @@ beforeAll(async () => {
   db = t.db;
   trackDrop(t.drop);
   const now = Date.now();
-  await q(db, "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-s','s','active',?)", now);
+  await q(
+    db,
+    "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-s','s','active',?)",
+    now,
+  );
   await q(
     db,
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-s','ws-s','VND',1000000000,0,0,?)",
@@ -190,7 +189,11 @@ describe("gateway streaming through the app boundary", () => {
     expect(res.status).toBe(200);
     const reader = res.body!.getReader();
     // With the buffering bug this read blocks until the gate opens (test timeout).
-    const first = await withTimeout(reader.read(), 2000, "first chunk blocked until upstream finished");
+    const first = await withTimeout(
+      reader.read(),
+      2000,
+      "first chunk blocked until upstream finished",
+    );
     expect(dec.decode(first.value!)).toContain('"content":"A"');
     release();
     let rest = "";
@@ -235,7 +238,9 @@ describe("gateway streaming through the app boundary", () => {
           id: "c1",
           object: "chat.completion",
           model: PUBLIC_MODEL,
-          choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
+          choices: [
+            { index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" },
+          ],
           usage: {
             prompt_tokens: 10,
             completion_tokens: 5,
@@ -338,7 +343,10 @@ describe("gateway streaming through the app boundary", () => {
           async start(c) {
             c.enqueue(
               enc.encode(
-                responsesEvent({ type: "response.created", response: { id: "r1", status: "in_progress" } }),
+                responsesEvent({
+                  type: "response.created",
+                  response: { id: "r1", status: "in_progress" },
+                }),
               ),
             );
             await gate;
@@ -368,7 +376,11 @@ describe("gateway streaming through the app boundary", () => {
     const res = await post(RESPONSES_PATH, { model: PUBLIC_MODEL, input: "hi", stream: true });
     expect(res.status).toBe(200);
     const reader = res.body!.getReader();
-    const first = await withTimeout(reader.read(), 2000, "first chunk blocked until upstream finished");
+    const first = await withTimeout(
+      reader.read(),
+      2000,
+      "first chunk blocked until upstream finished",
+    );
     expect(dec.decode(first.value!)).toContain("response.created");
     release();
     let rest = "";

@@ -8,7 +8,12 @@ let db: Db;
 let drop: () => Promise<void>;
 const NOW = Date.now();
 
-async function seedModel(o: { id: string; publicId: string; enabled?: boolean; published?: boolean }) {
+async function seedModel(o: {
+  id: string;
+  publicId: string;
+  enabled?: boolean;
+  published?: boolean;
+}) {
   await db.execute(sql`
     INSERT INTO models (id, public_id, slug, display_name, provider, enabled, published, created_at, updated_at)
     VALUES (${o.id}, ${o.publicId}, ${o.publicId.split("/")[1]!}, ${o.publicId}, ${o.publicId.split("/")[0]!},

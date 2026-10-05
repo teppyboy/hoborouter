@@ -57,10 +57,12 @@ afterAll(async () => {
 
 describe("wallets kind", () => {
   test("allows two wallets per workspace with different kinds", async () => {
-    await d.insert(wallets).values([
-      walletRow("w-a-top", "ws-a", { kind: "topup" }),
-      walletRow("w-a-sub", "ws-a", { kind: "subscription" }),
-    ]);
+    await d
+      .insert(wallets)
+      .values([
+        walletRow("w-a-top", "ws-a", { kind: "topup" }),
+        walletRow("w-a-sub", "ws-a", { kind: "subscription" }),
+      ]);
     const rows = await d.select().from(wallets);
     expect(rows).toHaveLength(2);
   });
@@ -99,8 +101,22 @@ describe("subscription_plans.rate_limit_per_minute", () => {
 
   test("accepts bounds 1 and 600, rejects 0 and 601", async () => {
     await d.insert(subscriptionPlans).values([
-      { id: "sp-lo", name: "lo", price_vnd: 1, credit_per_period_vnd: 1, rate_limit_per_minute: 1, created_at: 1 },
-      { id: "sp-hi", name: "hi", price_vnd: 1, credit_per_period_vnd: 1, rate_limit_per_minute: 600, created_at: 1 },
+      {
+        id: "sp-lo",
+        name: "lo",
+        price_vnd: 1,
+        credit_per_period_vnd: 1,
+        rate_limit_per_minute: 1,
+        created_at: 1,
+      },
+      {
+        id: "sp-hi",
+        name: "hi",
+        price_vnd: 1,
+        credit_per_period_vnd: 1,
+        rate_limit_per_minute: 600,
+        created_at: 1,
+      },
     ]);
     const loErr = await expectReject(
       d.insert(subscriptionPlans).values({

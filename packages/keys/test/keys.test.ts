@@ -34,7 +34,9 @@ let drop: () => Promise<void>;
 
 beforeAll(async () => {
   ({ db, drop } = await createTestDb());
-  await db.execute(sql`INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws1','w','active',1)`);
+  await db.execute(
+    sql`INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws1','w','active',1)`,
+  );
 });
 
 afterAll(async () => {
@@ -77,7 +79,9 @@ describe("verifyApiKey", () => {
 
   test("unknown plaintext → null", async () => {
     await seededKey("enabled");
-    expect(await verifyApiKey(db, "sk-hbr-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")).toBeNull();
+    expect(
+      await verifyApiKey(db, "sk-hbr-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
+    ).toBeNull();
   });
 });
 

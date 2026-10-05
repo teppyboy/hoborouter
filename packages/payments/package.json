@@ -8,8 +8,8 @@
   },
   "dependencies": {
     "@hoborouter/db": "workspace:",
-    "drizzle-orm": "0.45.3",
-    "@hoborouter/wallet": "workspace:"
+    "@hoborouter/wallet": "workspace:",
+    "drizzle-orm": "0.45.3"
   },
   "devDependencies": {
     "bun-types": "^1.4.2"

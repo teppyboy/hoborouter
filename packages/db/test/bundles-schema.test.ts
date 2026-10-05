@@ -32,7 +32,15 @@ function walletRow(id: string, workspaceId: string): typeof wallets.$inferInsert
 }
 
 function bundleRow(id: string): typeof creditBundles.$inferInsert {
-  return { id, name: id, price_vnd: 100, credit_vnd: 100, bonus_vnd: 0, active: true, created_at: 1 };
+  return {
+    id,
+    name: id,
+    price_vnd: 100,
+    credit_vnd: 100,
+    bonus_vnd: 0,
+    active: true,
+    created_at: 1,
+  };
 }
 
 function planRow(id: string): typeof subscriptionPlans.$inferInsert {
@@ -133,9 +141,13 @@ describe("subscriptions", () => {
   });
 
   test("allows one active plus a canceled subscription per workspace", async () => {
-    await d
-      .insert(subscriptions)
-      .values(subscriptionRow("s-3", { status: "canceled", current_period_start: 0, current_period_end: 1 }));
+    await d.insert(subscriptions).values(
+      subscriptionRow("s-3", {
+        status: "canceled",
+        current_period_start: 0,
+        current_period_end: 1,
+      }),
+    );
     // s-1 above is still active; a canceled row coexists, a second active does not.
     await expectReject(d.insert(subscriptions).values(subscriptionRow("s-4")));
   });
@@ -144,9 +156,9 @@ describe("subscriptions", () => {
 describe("payments purchase kind", () => {
   test("rejects both bundle_id and subscription_plan_id set", async () => {
     await expectReject(
-      d.insert(payments).values(
-        paymentRow("p-both", { bundle_id: "cb-x", subscription_plan_id: "sp-x" }),
-      ),
+      d
+        .insert(payments)
+        .values(paymentRow("p-both", { bundle_id: "cb-x", subscription_plan_id: "sp-x" })),
     );
   });
 
@@ -163,7 +175,9 @@ describe("ledger adjustment idempotency (payment_id, memo)", () => {
       .insert(ledgerEntries)
       .values(ledgerRow("l-a1", { payment_id: "p-bundle", memo: "bundle bonus" }));
     const err = await expectReject(
-      d.insert(ledgerEntries).values(ledgerRow("l-a2", { payment_id: "p-bundle", memo: "bundle bonus" })),
+      d
+        .insert(ledgerEntries)
+        .values(ledgerRow("l-a2", { payment_id: "p-bundle", memo: "bundle bonus" })),
     );
     expect(isUniqueViolation(err)).toBe(true);
   });
@@ -186,13 +200,21 @@ describe("ledger adjustment idempotency (payment_id, memo)", () => {
 
 describe("first_topup_bonuses", () => {
   test("rejects a second bonus row for the same workspace", async () => {
-    await d
-      .insert(firstTopupBonuses)
-      .values({ workspace_id: "ws-b", payment_id: "p-base", ledger_entry_id: "l-a1", amount: 1, created_at: 1 });
+    await d.insert(firstTopupBonuses).values({
+      workspace_id: "ws-b",
+      payment_id: "p-base",
+      ledger_entry_id: "l-a1",
+      amount: 1,
+      created_at: 1,
+    });
     const err = await expectReject(
-      d
-        .insert(firstTopupBonuses)
-        .values({ workspace_id: "ws-b", payment_id: "p-base", ledger_entry_id: "l-a3", amount: 1, created_at: 1 }),
+      d.insert(firstTopupBonuses).values({
+        workspace_id: "ws-b",
+        payment_id: "p-base",
+        ledger_entry_id: "l-a3",
+        amount: 1,
+        created_at: 1,
+      }),
     );
     expect(isUniqueViolation(err)).toBe(true);
   });
@@ -200,9 +222,13 @@ describe("first_topup_bonuses", () => {
   test("rejects amount <= 0", async () => {
     await d.insert(workspaces).values(wsRow("ws-b3"));
     await expectReject(
-      d
-        .insert(firstTopupBonuses)
-        .values({ workspace_id: "ws-b3", payment_id: "p-base", ledger_entry_id: "l-a1", amount: 0, created_at: 1 }),
+      d.insert(firstTopupBonuses).values({
+        workspace_id: "ws-b3",
+        payment_id: "p-base",
+        ledger_entry_id: "l-a1",
+        amount: 0,
+        created_at: 1,
+      }),
     );
   });
 });

@@ -153,10 +153,7 @@ export function DataTable<TData>({
         <TableBody>
           {table.getRowModel().rows.length === 0 ? (
             <TableRow>
-              <TableCell
-                colSpan={columns.length}
-                className="p-0 text-center text-muted-foreground"
-              >
+              <TableCell colSpan={columns.length} className="p-0 text-center text-muted-foreground">
                 <div className="py-2">
                   <EmptyState icon={Inbox} title={typeof empty === "string" ? empty : "No data"} />
                 </div>

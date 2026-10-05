@@ -122,9 +122,7 @@ const cacheBody = {
   messages: [
     {
       role: "system",
-      content: [
-        { type: "text", text: "big system prompt", cache_control: { type: "ephemeral" } },
-      ],
+      content: [{ type: "text", text: "big system prompt", cache_control: { type: "ephemeral" } }],
     },
     { role: "user", content: "hi" },
   ],
@@ -147,9 +145,7 @@ beforeEach(async () => {
   process.env.HBR_USD_VND_RATE = "26000";
   await await setGlobal(null);
   await await setModel("inherit");
-  await db.execute(
-    sql`UPDATE wallets SET balance = 1000000000, reserved = 0 WHERE id = 'wal-c'`,
-  );
+  await db.execute(sql`UPDATE wallets SET balance = 1000000000, reserved = 0 WHERE id = 'wal-c'`);
 });
 
 afterEach(() => {
@@ -203,19 +199,22 @@ describe("gateway prompt caching billing", () => {
   });
 
   test("explicit cached_tokens: 0 is not assumed", async () => {
-    startFakeCpa(() =>
-      new Response(
-        JSON.stringify({
-          choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
-          usage: {
-            prompt_tokens: 1000,
-            completion_tokens: 10,
-            prompt_tokens_details: { cached_tokens: 0 },
-            completion_tokens_details: { reasoning_tokens: 0 },
-          },
-        }),
-        { headers: { "content-type": "application/json" } },
-      ),
+    startFakeCpa(
+      () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              { index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" },
+            ],
+            usage: {
+              prompt_tokens: 1000,
+              completion_tokens: 10,
+              prompt_tokens_details: { cached_tokens: 0 },
+              completion_tokens_details: { reasoning_tokens: 0 },
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
     );
     await gwr(CHAT_PATH, cacheBody);
     const log = await lastUsageLog();
@@ -309,6 +308,9 @@ describe("admin settings endpoints", () => {
       prompt_caching_enabled: true,
       first_topup_bonus_enabled: true,
       first_topup_bonus_amount_vnd: 20000,
+      payment_timeout_minutes: 30,
+      payment_max_amount_vnd: 100000000,
+      payment_usd_vnd_rate: 26000,
     });
     const p = await req(ctx.app, "/api/v1/admin/settings", {
       method: "PUT",
@@ -330,6 +332,9 @@ describe("admin settings endpoints", () => {
       prompt_caching_enabled: false,
       first_topup_bonus_enabled: true,
       first_topup_bonus_amount_vnd: 20000,
+      payment_timeout_minutes: 30,
+      payment_max_amount_vnd: 100000000,
+      payment_usd_vnd_rate: 26000,
     });
   });
 
@@ -340,5 +345,45 @@ describe("admin settings endpoints", () => {
       body: { prompt_caching_enabled: "nope" },
     });
     expect(p.status).toBe(400);
+  });
+
+  test("GET returns exactly the expected settings keys (no additive leaks)", async () => {
+    const g = await req(ctx.app, "/api/v1/admin/settings", { cookie: admin });
+    expect(g.status).toBe(200);
+    const body = (await g.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual([
+      "first_topup_bonus_amount_vnd",
+      "first_topup_bonus_enabled",
+      "payment_max_amount_vnd",
+      "payment_timeout_minutes",
+      "payment_usd_vnd_rate",
+      "prompt_caching_enabled",
+    ]);
+  });
+
+  test("PUT validates the WHOLE body before persisting: mixed valid+invalid writes nothing", async () => {
+    const [auditsBefore] = await q<{ c: number }>(
+      ctx.db,
+      sql`SELECT COUNT(*)::int AS c FROM audit_log WHERE action = 'settings.update'`,
+    );
+    // Start clean so 'absent' means untouched.
+    await q(ctx.db, sql`DELETE FROM instance_settings WHERE key = 'prompt_caching_enabled'`);
+    const p = await req(ctx.app, "/api/v1/admin/settings", {
+      method: "PUT",
+      cookie: admin,
+      body: { prompt_caching_enabled: false, first_topup_bonus_amount_vnd: "not-a-number" },
+    });
+    expect(p.status).toBe(400);
+    // Neither the valid key nor the invalid one was persisted.
+    const rows = await q(
+      ctx.db,
+      sql`SELECT key FROM instance_settings WHERE key = 'prompt_caching_enabled'`,
+    );
+    expect(rows).toHaveLength(0);
+    const [auditsAfter] = await q<{ c: number }>(
+      ctx.db,
+      sql`SELECT COUNT(*)::int AS c FROM audit_log WHERE action = 'settings.update'`,
+    );
+    expect(auditsAfter!.c).toBe(auditsBefore!.c);
   });
 });

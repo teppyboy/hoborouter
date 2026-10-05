@@ -37,7 +37,8 @@ export function useConversations() {
     retry: false,
   });
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: conversationsKey(userId, workspaceId) });
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: conversationsKey(userId, workspaceId) });
 
   const create = useMutation({
     mutationFn: () => createConversation(workspaceId),

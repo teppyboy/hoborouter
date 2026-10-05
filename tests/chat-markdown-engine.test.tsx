@@ -50,7 +50,8 @@ afterAll(() => {
 });
 
 const { ChatMarkdown } = await import("../apps/web/src/components/chat-markdown");
-const { renderMarkdownHtml, fallbackNoticeHtml } = await import("../apps/web/src/lib/chat-markdown");
+const { renderMarkdownHtml, fallbackNoticeHtml } =
+  await import("../apps/web/src/lib/chat-markdown");
 
 const html = (md: string) => renderToStaticMarkup(<ChatMarkdown content={md} />);
 
@@ -147,7 +148,7 @@ test("event handler attributes never render", () => {
 });
 
 test("svg and iframe are stripped", () => {
-  const out = html("<svg><circle/></svg><iframe src=\"https://evil.example\"></iframe>");
+  const out = html('<svg><circle/></svg><iframe src="https://evil.example"></iframe>');
   expect(out).not.toContain("<svg");
   expect(out).not.toContain("<iframe");
 });
@@ -255,7 +256,11 @@ test("fragment and uppercase-HTTP hrefs survive", () => {
 });
 
 test("raw model inputs are denied; only GFM tasklist checkboxes survive", () => {
-  for (const md of ['<input type="password" name="pw">', '<input type="text" value="enter password">', "<input>"]) {
+  for (const md of [
+    '<input type="password" name="pw">',
+    '<input type="text" value="enter password">',
+    "<input>",
+  ]) {
     const out = html(md);
     expect(out).not.toContain("<input");
   }

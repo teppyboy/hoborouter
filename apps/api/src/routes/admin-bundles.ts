@@ -62,7 +62,11 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
         if (!posInt(body.price_vnd))
           return jsonError(400, "INVALID", "price_vnd must be a positive integer VND amount");
         if (!nonNegInt(body.credit_vnd) || !nonNegInt(body.bonus_vnd ?? 0))
-          return jsonError(400, "INVALID", "credit_vnd and bonus_vnd must be non-negative integers");
+          return jsonError(
+            400,
+            "INVALID",
+            "credit_vnd and bonus_vnd must be non-negative integers",
+          );
         const id = crypto.randomUUID();
         const row = {
           id,
@@ -177,7 +181,11 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
         if (body.period_days !== undefined && !(body.period_days >= 1))
           return jsonError(400, "INVALID", "period_days must be >= 1");
         if (body.rate_limit_per_minute !== undefined && !validRateLimit(body.rate_limit_per_minute))
-          return jsonError(400, "INVALID", "rate_limit_per_minute must be an integer between 1 and 600");
+          return jsonError(
+            400,
+            "INVALID",
+            "rate_limit_per_minute must be an integer between 1 and 600",
+          );
         const id = crypto.randomUUID();
         const row = {
           id,
@@ -235,7 +243,11 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
         if (body.active !== undefined) set.active = body.active;
         if (body.rate_limit_per_minute !== undefined) {
           if (!validRateLimit(body.rate_limit_per_minute))
-            return jsonError(400, "INVALID", "rate_limit_per_minute must be an integer between 1 and 600");
+            return jsonError(
+              400,
+              "INVALID",
+              "rate_limit_per_minute must be an integer between 1 and 600",
+            );
           set.rate_limit_per_minute = body.rate_limit_per_minute;
         }
         if (Object.keys(set).length === 0) return json(before);

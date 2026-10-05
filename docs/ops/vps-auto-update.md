@@ -31,7 +31,7 @@ Invoked by the systemd timer; idempotent; all state under
    nothing to do. (The container's image ID only changes at `compose up`.)
 3. **DB backup before restart** (Postgres, compose service `db`):
    `docker compose exec -T db pg_dump -U hoborouter -Fc hoborouter >
-   $BACKUP_DIR/hoborouter-<ts>.dump`. If the dump fails or is empty, the
+$BACKUP_DIR/hoborouter-<ts>.dump`. If the dump fails or is empty, the
    deploy aborts with a non-zero exit and the container is NOT restarted.
    Last 10 backups are kept. SQLite backup support was removed — the DB is
    Postgres only.

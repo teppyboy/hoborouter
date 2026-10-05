@@ -7,10 +7,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { createTestDb, type Db } from "../packages/db/src/index";
 import { processMockPaymentEvent } from "../packages/payments/src/credit";
-import {
-  applySubscriptionExpiry,
-  runInImmediate,
-} from "../packages/wallet/src/index";
+import { applySubscriptionExpiry, runInImmediate } from "../packages/wallet/src/index";
 import { MockPaymentError } from "../packages/payments/src/credit";
 
 const NOW = 1_700_000_000_000;
@@ -112,7 +109,13 @@ async function subscription(ws: string): Promise<{
 }
 
 async function ledgerFor(walletId: string): Promise<
-  { kind: string; direction: string; amount: number; memo: string | null; payment_id: string | null }[]
+  {
+    kind: string;
+    direction: string;
+    amount: number;
+    memo: string | null;
+    payment_id: string | null;
+  }[]
 > {
   const rows = await q<{
     kind: string;
@@ -266,11 +269,23 @@ describe("plan payment settlement", () => {
 
 describe("renewal", () => {
   test("renewal BEFORE period end keeps leftover credit and extends from period end", async () => {
-    await seedPayment({ id: "pay-r1", ws: "ws-renew", amount: 150_000, orderCode: "ORD-R1", planId: "plan-30" });
+    await seedPayment({
+      id: "pay-r1",
+      ws: "ws-renew",
+      amount: 150_000,
+      orderCode: "ORD-R1",
+      planId: "plan-30",
+    });
     await processMockPaymentEvent(db, ev("ORD-R1", "evt-r1", 150_000));
     const first = (await subscription("ws-renew"))!;
     // Renew while the first period is still active.
-    await seedPayment({ id: "pay-r2", ws: "ws-renew", amount: 150_000, orderCode: "ORD-R2", planId: "plan-30" });
+    await seedPayment({
+      id: "pay-r2",
+      ws: "ws-renew",
+      amount: 150_000,
+      orderCode: "ORD-R2",
+      planId: "plan-30",
+    });
     await processMockPaymentEvent(db, ev("ORD-R2", "evt-r2", 150_000));
     const second = (await subscription("ws-renew"))!;
     expect(second.start).toBe(first.end); // extends from period end
@@ -282,7 +297,13 @@ describe("renewal", () => {
   });
 
   test("renewal AFTER expiry forfeits leftover first, then starts a fresh period from now", async () => {
-    await seedPayment({ id: "pay-e1", ws: "ws-expired", amount: 150_000, orderCode: "ORD-E1", planId: "plan-30" });
+    await seedPayment({
+      id: "pay-e1",
+      ws: "ws-expired",
+      amount: 150_000,
+      orderCode: "ORD-E1",
+      planId: "plan-30",
+    });
     await processMockPaymentEvent(db, ev("ORD-E1", "evt-e1", 150_000));
     // Simulate the period lapsing without renewal: move the whole period into
     // the past (start < end CHECK still holds).
@@ -290,7 +311,13 @@ describe("renewal", () => {
       `UPDATE subscriptions SET current_period_start = $1, current_period_end = $2 WHERE workspace_id = 'ws-expired'`,
       [NOW - 40 * DAY_MS, NOW - 5_000] as never[],
     );
-    await seedPayment({ id: "pay-e2", ws: "ws-expired", amount: 150_000, orderCode: "ORD-E2", planId: "plan-30" });
+    await seedPayment({
+      id: "pay-e2",
+      ws: "ws-expired",
+      amount: 150_000,
+      orderCode: "ORD-E2",
+      planId: "plan-30",
+    });
     await processMockPaymentEvent(db, ev("ORD-E2", "evt-e2", 150_000));
     // Forfeit happened exactly once as an adjustment debit on the sub wallet.
     const forfeits = (await ledgerFor("ws-expired")).filter(

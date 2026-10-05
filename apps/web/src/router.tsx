@@ -32,11 +32,10 @@ import { queryClient } from "./lib/query-client";
 
 const AdminAudit = lazy(() => import("./pages/admin/audit"));
 const AdminBundles = lazy(() => import("./pages/admin/bundles"));
+const AdminPromotions = lazy(() => import("./pages/admin/promotions"));
 
 // Chat page exports a named component; remap to default for lazyRoute.
-const Chat = lazyRoute(() =>
-  import("./pages/chat").then((m) => ({ default: m.ChatPage })),
-);
+const Chat = lazyRoute(() => import("./pages/chat").then((m) => ({ default: m.ChatPage })));
 
 // Public auth pages (not part of nav prefetching).
 const Login = lazy(() => import("./pages/auth/login"));
@@ -45,6 +44,9 @@ const VerifyEmail = lazy(() => import("./pages/auth/verify-email"));
 // Public legal pages.
 const Terms = lazy(() => import("./pages/legal/terms"));
 const Privacy = lazy(() => import("./pages/legal/privacy"));
+// Public marketing/support pages (each renders its own PublicLayout).
+const Pricing = lazy(() => import("./pages/public/pricing"));
+const Quickstart = lazy(() => import("./pages/public/quickstart"));
 
 function Page({ children }: { children: React.ReactNode }) {
   return <div className="p-4 sm:p-6">{children}</div>;
@@ -163,6 +165,17 @@ const publicRoutes = [
     path: "/privacy",
     component: () => <Privacy />,
   }),
+  // Pages render their own PublicLayout (same contract as Terms/Privacy).
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/pricing",
+    component: () => <Pricing />,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/docs/quickstart",
+    component: () => <Quickstart />,
+  }),
 ];
 
 const protectedRoutes = [
@@ -187,6 +200,7 @@ const protectedRoutes = [
   redirectRoute("/admin/providers", "/admin/models"),
   redirectRoute("/admin/pricing", "/admin/models"),
   protectedRoute("/admin/bundles", AdminBundles),
+  protectedRoute("/admin/promotions", AdminPromotions),
   protectedRoute("/admin/payments", adminPayments),
   protectedRoute("/admin/system", adminSystem),
   protectedRoute("/admin/audit", AdminAudit),

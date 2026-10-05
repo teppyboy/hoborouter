@@ -55,9 +55,7 @@ exit 0
   for (const f of ["docker", "curl"]) Bun.spawnSync(["chmod", "+x", join(bin, f)]);
 }
 
-function setup(
-  opts: { newImage: boolean; healthFail: boolean; noBackup?: boolean },
-): void {
+function setup(opts: { newImage: boolean; healthFail: boolean; noBackup?: boolean }): void {
   tmp = join("/tmp", `vps-deploy-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(join(tmp, "bin"), { recursive: true });
   mkdirSync(join(tmp, "compose"), { recursive: true });

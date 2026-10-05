@@ -6,18 +6,12 @@ import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatStatusLabel } from "../../lib/display";
 import { useUsageSummary } from "../logs/api";
 
-function StatTile({
-  label,
-  value,
-  title,
-}: {
-  label: string;
-  value: string;
-  title?: string;
-}) {
+function StatTile({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
     <div className="rounded-md border border-border px-4 py-3">
-      <p className="text-xs text-muted-foreground" title={title}>{label}</p>
+      <p className="text-xs text-muted-foreground" title={title}>
+        {label}
+      </p>
       <p className="mt-1 font-mono text-xl tabular-nums">{value}</p>
     </div>
   );
@@ -115,7 +109,10 @@ export default function OverviewPage() {
       />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile label="Requests" value={String(t.requests)} />
-        <StatTile label="Spend" value={formatUsdFromVnd(t.spend_vnd, rate) ?? formatVnd(t.spend_vnd)} />
+        <StatTile
+          label="Spend"
+          value={formatUsdFromVnd(t.spend_vnd, rate) ?? formatVnd(t.spend_vnd)}
+        />
         <StatTile label="Tokens" value={formatTokens(t.input_tokens + t.output_tokens)} />
         <StatTile
           label="Success rate"

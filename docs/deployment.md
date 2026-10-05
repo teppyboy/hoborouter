@@ -56,13 +56,13 @@ nothing changes. There is no third-party email provider: the app ships a
 minimal SMTP client (`apps/api/src/email.ts`, `node:net`/`node:tls` only) with
 `AUTH PLAIN`/`AUTH LOGIN` and STARTTLS/implicit SSL.
 
-| Variable | Meaning |
-| --- | --- |
-| `SMTP_HOST` | SMTP server hostname; half of the on-switch |
-| `SMTP_PORT` | Default 587; when unset, port 465 implies `ssl` mode |
-| `SMTP_USER` / `SMTP_PASSWORD` | AUTH credentials; must be set together or both omitted |
-| `HBR_SMTP_SECURE` | `starttls` (default, mandatory), `ssl` (implicit TLS, e.g. 465), or `none` (cleartext, dev/local testing only — refused in production) |
-| `HBR_EMAIL_FROM` | Bare address or display form (`Hoborouter <no-reply@example.com>`); the envelope `MAIL FROM` uses the bare address |
+| Variable                      | Meaning                                                                                                                                |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `SMTP_HOST`                   | SMTP server hostname; half of the on-switch                                                                                            |
+| `SMTP_PORT`                   | Default 587; when unset, port 465 implies `ssl` mode                                                                                   |
+| `SMTP_USER` / `SMTP_PASSWORD` | AUTH credentials; must be set together or both omitted                                                                                 |
+| `HBR_SMTP_SECURE`             | `starttls` (default, mandatory), `ssl` (implicit TLS, e.g. 465), or `none` (cleartext, dev/local testing only — refused in production) |
+| `HBR_EMAIL_FROM`              | Bare address or display form (`Hoborouter <no-reply@example.com>`); the envelope `MAIL FROM` uses the bare address                     |
 
 Security behavior: in the default `starttls` mode a send fails **before AUTH**
 if the server does not offer STARTTLS; TLS certificate verification is always
@@ -132,10 +132,10 @@ below assumes a working production deploy (reverse proxy + public HTTPS per
 All three go into gitignored `deploy/.env`, copied from
 `deploy/.env.example`:
 
-| Variable | Meaning |
-| --- | --- |
-| `PAYOS_CLIENT_ID` | payOS client ID from the payOS dashboard |
-| `PAYOS_API_KEY` | payOS API key from the payOS dashboard |
+| Variable             | Meaning                                                                         |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `PAYOS_CLIENT_ID`    | payOS client ID from the payOS dashboard                                        |
+| `PAYOS_API_KEY`      | payOS API key from the payOS dashboard                                          |
 | `PAYOS_CHECKSUM_KEY` | payOS checksum key; signs checkout requests and verifies webhooks (HMAC-SHA256) |
 
 payOS is enabled **only when all three are set**; any one missing leaves

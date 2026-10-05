@@ -10,6 +10,9 @@ import { generateApiKey } from "@hoborouter/keys";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { type Db, workspaces, apiKeys, models, apiKeyModelPermissions } from "@hoborouter/db";
 
+// Shared display-name bound for create and rename; keeps the two paths consistent.
+const MAX_KEY_NAME = 128;
+
 export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "keys" })
     .post(
@@ -38,22 +41,22 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
         const raw = (body as { name?: unknown } | null)?.name;
         const name = typeof raw === "string" ? raw.trim() : "";
         if (!name) return jsonError(400, "INVALID", "name is required");
+        if (name.length > MAX_KEY_NAME)
+          return jsonError(400, "INVALID", `name must be at most ${MAX_KEY_NAME} characters`);
 
         const { plaintext, hash, prefix } = generateApiKey();
         const id = crypto.randomUUID();
         const now = Date.now();
         await db.transaction(async (tx) => {
-          await tx
-            .insert(apiKeys)
-            .values({
-              id,
-              workspace_id: params.id,
-              key_hash: hash,
-              key_prefix: prefix,
-              name,
-              status: "enabled",
-              created_at: now,
-            });
+          await tx.insert(apiKeys).values({
+            id,
+            workspace_id: params.id,
+            key_hash: hash,
+            key_prefix: prefix,
+            name,
+            status: "enabled",
+            created_at: now,
+          });
           // audit detail carries only non-secret metadata — never plaintext or full hash
           await writeAudit(tx, {
             actorUserId: userId,
@@ -110,10 +113,10 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
       "/api/v1/workspaces/:id/keys/:keyId",
       {
         params: t.Object({ id: t.String(), keyId: t.String() }),
-        body: t.Object({ status: t.Optional(t.String()) }),
+        body: t.Object({ status: t.Optional(t.String()), name: t.Optional(t.String()) }),
         detail: {
           tags: ["Keys"],
-          summary: "Enable or disable API key",
+          summary: "Update API key (enable/disable, rename)",
           security: [{ cookieAuth: [] }],
         },
       },
@@ -123,41 +126,82 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
         const userId = gate.session.user.id;
         const denied = await requireWsRole(db, params.id, userId, "admin");
         if (denied) return denied;
-        const requested = (body as { status?: unknown } | null)?.status;
-        if (requested !== "enabled" && requested !== "disabled")
+        const rawBody = (body as { status?: unknown; name?: unknown } | null) ?? {};
+        const requested = rawBody.status;
+        const hasStatus = requested !== undefined;
+        const hasName = rawBody.name !== undefined;
+        if (!hasStatus && !hasName) return jsonError(400, "INVALID", "status or name is required");
+        let name: string | undefined;
+        if (hasName) {
+          if (typeof rawBody.name !== "string")
+            return jsonError(400, "INVALID", "name must be a string");
+          name = rawBody.name.trim();
+          // Same validation as create: trimmed, nonempty, bounded.
+          if (!name) return jsonError(400, "INVALID", "name is required");
+          if (name.length > MAX_KEY_NAME)
+            return jsonError(400, "INVALID", `name must be at most ${MAX_KEY_NAME} characters`);
+        }
+        if (hasStatus && requested !== "enabled" && requested !== "disabled")
           return jsonError(400, "INVALID", "status must be 'enabled' or 'disabled'");
         let updated = 0;
         let terminal = false;
+        // Plain strings instead of a nullable row object: closure assignments
+        // are invisible to TS flow analysis, which would narrow an object
+        // variable to never after the null check.
+        let finalName = "";
+        let finalStatus = "";
         await db.transaction(async (tx) => {
           const key = await tx
-            .select({ status: apiKeys.status })
+            .select({ status: apiKeys.status, name: apiKeys.name })
             .from(apiKeys)
             .where(and(eq(apiKeys.id, params.keyId), eq(apiKeys.workspace_id, params.id)))
             .limit(1);
           if (!key[0]) return;
-          if (key[0].status === "revoked") {
+          // Revoked stays terminal for status changes; a name-only rename is
+          // cosmetic and does not resurrect the key, so it is allowed.
+          if (key[0].status === "revoked" && hasStatus) {
             terminal = true;
             return;
           }
           const changed = await tx
             .update(apiKeys)
-            .set({ status: requested })
+            .set({
+              ...(hasStatus ? { status: requested as "enabled" | "disabled" } : {}),
+              ...(hasName ? { name: name! } : {}),
+            })
             .where(and(eq(apiKeys.id, params.keyId), eq(apiKeys.workspace_id, params.id)))
-            .returning({ id: apiKeys.id });
+            .returning({ id: apiKeys.id, name: apiKeys.name, status: apiKeys.status });
           updated = changed.length;
-          if (updated === 1)
-            await writeAudit(tx, {
-              actorUserId: userId,
-              workspaceId: params.id,
-              action: requested === "enabled" ? "key.enable" : "key.disable",
-              target: params.keyId,
-            });
+          if (updated === 1) {
+            finalName = changed[0]!.name;
+            finalStatus = changed[0]!.status;
+            if (hasStatus)
+              await writeAudit(tx, {
+                actorUserId: userId,
+                workspaceId: params.id,
+                action: requested === "enabled" ? "key.enable" : "key.disable",
+                target: params.keyId,
+              });
+            if (hasName)
+              // audit detail carries only display names — never hash or plaintext
+              await writeAudit(tx, {
+                actorUserId: userId,
+                workspaceId: params.id,
+                action: "key.rename",
+                target: params.keyId,
+                detail: { name, previous_name: key[0].name },
+              });
+          }
         });
         if (updated === 0)
           return terminal
             ? jsonError(409, "REVOKED", "Revoked keys cannot be re-enabled or disabled")
             : jsonError(404, "NOT_FOUND", "Key not found");
-        return new Response(JSON.stringify({ id: params.keyId, status: requested }), {
+        // status-only PATCH keeps its original response shape
+        const resBody = hasName
+          ? { id: params.keyId, name: finalName, status: finalStatus }
+          : { id: params.keyId, status: requested };
+        return new Response(JSON.stringify(resBody), {
           status: 200,
           headers: { "content-type": "application/json" },
         });
@@ -222,10 +266,7 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
         const knownIds = new Set(
           modelIds.length
             ? (
-                await db
-                  .select({ id: models.id })
-                  .from(models)
-                  .where(inArray(models.id, modelIds))
+                await db.select({ id: models.id }).from(models).where(inArray(models.id, modelIds))
               ).map((k) => k.id)
             : [],
         );
@@ -238,9 +279,11 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
             .where(eq(apiKeyModelPermissions.api_key_id, params.keyId));
           const now = Date.now();
           if (modelIds.length) {
-            await tx.insert(apiKeyModelPermissions).values(
-              modelIds.map((m) => ({ api_key_id: params.keyId, model_id: m, created_at: now })),
-            );
+            await tx
+              .insert(apiKeyModelPermissions)
+              .values(
+                modelIds.map((m) => ({ api_key_id: params.keyId, model_id: m, created_at: now })),
+              );
           }
           await writeAudit(tx, {
             actorUserId: userId,

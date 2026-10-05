@@ -1,7 +1,7 @@
 // Chat page SSR regression: the redesigned empty state must render
 // server-side (no window beyond the module-load stub, no fetch) and carry the
 // ChatGPT-style welcome contract: centered headline, the three real prompt
-// chips, the managed-key ("Browser Chat") auto credentials notice, and the
+// chips, the managed-key reuse notice (device-named browser key), and the
 // collapsed Advanced manual-key section (native <details>, so its summary is
 // assertable without grepping CSS).
 import { test, expect } from "bun:test";
@@ -34,10 +34,13 @@ test("ChatPage SSR renders the centered welcome with headline and prompt chips",
   }
 });
 
-test("ChatPage SSR carries the managed-key auto credentials notice", () => {
+test("ChatPage SSR carries the managed-key reuse notice", () => {
   const html = render();
-  expect(html).toContain("Browser Chat");
-  expect(html).toContain("created automatically");
+  // Reuse-first contract: a browser-stored key is reused; a new one is minted
+  // only once, never automatically on render.
+  expect(html).toContain("stored in this browser");
+  expect(html).toContain("Chat - iPhone");
+  expect(html).toContain("created only once");
   // Charging is disclosed on the empty state, not just mid-conversation.
   expect(html).toContain("Usage is charged to your selected workspace.");
 });

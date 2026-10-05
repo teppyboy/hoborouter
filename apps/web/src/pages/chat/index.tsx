@@ -714,8 +714,8 @@ export function ChatPage() {
                 size="sm"
                 className={toolbarTouch}
                 onClick={() => void resolveKey()}
-                aria-label="Connect"
-                title="Connect"
+                aria-label="Connect chat key"
+                title="Reuse this browser's chat key — one is created only if none is stored yet"
               >
                 <KeyRound className="size-4" aria-hidden />
                 <span className="hidden sm:inline">Connect</span>
@@ -777,8 +777,9 @@ export function ChatPage() {
               ))}
             </div>
             <p className="max-w-md text-sm text-muted-foreground">
-              A workspace chat key ("Browser Chat") is created automatically on your first message —
-              no need to paste a key. Usage is charged to your selected workspace.
+              Chat reuses a workspace key stored in this browser, named after this device (e.g.
+              "Chat - iPhone"). A key is created only once, when you connect or send your first
+              message. Usage is charged to your selected workspace.
             </p>
             {!userId && (
               <p className="text-sm text-muted-foreground">

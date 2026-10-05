@@ -266,10 +266,14 @@ describe("members CRUD", () => {
   });
 
   test("owner DELETE member → 200", async () => {
-    const res = await req(ctx.app, `/api/v1/workspaces/${A}/members/${await userIdByEmail(db, NEWBIE)}`, {
-      method: "DELETE",
-      cookie: owner,
-    });
+    const res = await req(
+      ctx.app,
+      `/api/v1/workspaces/${A}/members/${await userIdByEmail(db, NEWBIE)}`,
+      {
+        method: "DELETE",
+        cookie: owner,
+      },
+    );
     expect(res.status).toBe(200);
     const rows = (await db.execute(
       sql`SELECT count(*) AS c FROM workspace_members WHERE user_id = ${await userIdByEmail(db, NEWBIE)} AND workspace_id = ${A}`,

@@ -155,7 +155,8 @@ export const adminUserEditRoutes = (db: Db, auth: BetterAuthInstance) =>
           });
         } catch (err) {
           // Concurrent signup could still win the unique email race.
-          if (isUniqueViolation(err)) return jsonError(409, "EMAIL_TAKEN", "Email already registered");
+          if (isUniqueViolation(err))
+            return jsonError(409, "EMAIL_TAKEN", "Email already registered");
           throw err;
         }
         // Committed: notify the target's NEW address (never the admin's session

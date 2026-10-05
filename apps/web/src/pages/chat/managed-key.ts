@@ -1,9 +1,15 @@
-// Managed chat key: lazily mints exactly one "Browser Chat" key per session
-// user + workspace via POST /api/v1/workspaces/:id/keys (owner/admin only —
-// members get 403 and fall back to the manual key UI, never a weaker endpoint).
-// Plaintext is cached in memory and mirrored to sessionStorage for this tab
-// only. Never localStorage, never URLs, never logs. Failures are never cached;
-// every retry is an explicit caller action.
+// Managed chat key: lazily mints exactly one device-named key ("Chat -
+// iPhone") per user + workspace via POST /api/v1/workspaces/:id/keys
+// (owner/admin only — members get 403 and fall back to the manual key UI,
+// never a weaker endpoint). Plaintext is cached in memory and persisted to
+// localStorage (sessionStorage fallback when localStorage is unavailable)
+// under a user+workspace-scoped key, so the SAME identity reuses its browser
+// chat key across sessions instead of minting a duplicate on every visit.
+// The server can never return a stored plaintext again, so local persistence
+// is the only reuse path: no stored copy ⇒ mint once, then persist. Storage
+// is always namespaced by user id — switching identity never serves another
+// user's key, and logout wipes every stored copy. Never URLs, never logs.
+// Failures are never cached; every retry is an explicit caller action.
 import * as React from "react";
 
 export interface ManagedKey {
@@ -32,6 +38,37 @@ export class ManagedKeyError extends Error {
 /** Minimal storage surface so unit tests can inject a Map-backed fake. */
 export type KeyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem" | "key" | "length">;
 
+/** Display label for this device, derived only from the public User-Agent —
+ *  no IDs, no secrets. Used in the minted key name ("Chat - iPhone") so the
+ *  owner can recognize which device created a key. Unknown browsers degrade
+ *  to "Browser". */
+export function deviceLabel(userAgent?: string): string {
+  const ua = userAgent ?? (typeof navigator === "undefined" ? "" : navigator.userAgent);
+  const u = ua.toLowerCase();
+  const has = (s: string) => u.includes(s);
+  if (has("iphone")) return "iPhone";
+  if (has("ipad")) return "iPad";
+  if (has("android")) {
+    // Android UAs usually carry the model, e.g. "; SM-G991B)". The model
+    // becomes part of a stored name, so keep a strict allowlist charset and
+    // a short cap — hostile UA text cannot inject quotes/HTML into it.
+    const m = /Android[^;)]*;\s*([^;)]+?)(?:\s+Build\/|\))/.exec(ua);
+    const model = m?.[1]
+      ?.replace(/[^A-Za-z0-9 ._-]/g, "")
+      .trim()
+      .slice(0, 32);
+    return model ? `Android ${model}` : "Android";
+  }
+  if (has("windows")) return "Windows";
+  if (has("mac os") || has("macintosh")) return "Mac";
+  if (has("cros")) return "Chromebook";
+  if (has("linux")) return "Linux";
+  return "Browser";
+}
+
+/** Name for the minted browser chat key, e.g. "Chat - iPhone 13". */
+export const deviceChatName = (userAgent?: string): string => `Chat - ${deviceLabel(userAgent)}`;
+
 const STORAGE_PREFIX = "hbr-managed-key:";
 
 // Per-tab plaintext cache, keyed by `${userId}:${workspaceId}`. Keying by both
@@ -51,10 +88,16 @@ const inflight = new Map<string, InflightEntry>();
 
 const cacheKey = (userId: string, workspaceId: string) => `${userId}:${workspaceId}`;
 
-function resolveStorage(storage?: KeyStorage): KeyStorage {
-  const s = storage ?? globalThis.sessionStorage;
-  if (!s) throw new ManagedKeyError("invalid", "sessionStorage is not available.");
-  return s;
+function resolveStorages(preferred?: KeyStorage | KeyStorage[]): KeyStorage[] {
+  if (preferred) return Array.isArray(preferred) ? preferred : [preferred];
+  // Ordered candidates: localStorage persists across browser sessions (so the
+  // same user+workspace reuses its chat key), sessionStorage is the fallback
+  // when localStorage is unavailable (private mode, quota errors). Any access
+  // is best-effort: total storage failure degrades to the in-memory cache for
+  // this tab only.
+  const list: KeyStorage[] = [];
+  for (const s of [globalThis.localStorage, globalThis.sessionStorage]) if (s) list.push(s);
+  return list;
 }
 
 // Server returns { id, name, key_prefix, status, plaintext }; plaintext always
@@ -72,20 +115,61 @@ function parseManagedKey(body: unknown): ManagedKey {
   throw new ManagedKeyError("invalid", "Key service returned an unexpected response. Try again.");
 }
 
+/** First valid stored copy across the ordered stores; corrupt entries are
+ *  dropped (best-effort) so a fresh key can be minted below. */
+function restoreManagedKey(storages: KeyStorage[], ck: string): ManagedKey | null {
+  for (const s of storages) {
+    let raw: string | null = null;
+    try {
+      raw = s.getItem(STORAGE_PREFIX + ck);
+    } catch {
+      continue; // unreadable store: try the next candidate
+    }
+    if (!raw) continue;
+    try {
+      return parseManagedKey(JSON.parse(raw));
+    } catch {
+      // Corrupt or stale entry: drop it and mint a fresh key below.
+      try {
+        s.removeItem(STORAGE_PREFIX + ck);
+      } catch {
+        // Read-only store: the entry is simply ignored on every read.
+      }
+    }
+  }
+  return null;
+}
+
+/** Persist to the first writable store; failure degrades to memory-only. */
+function persistManagedKey(storages: KeyStorage[], ck: string, key: ManagedKey): void {
+  for (const s of storages) {
+    try {
+      s.setItem(STORAGE_PREFIX + ck, JSON.stringify(key));
+      return;
+    } catch {
+      // Unavailable or full: try the next store; memory still holds the key.
+    }
+  }
+}
+
 export interface StartManagedChatKeyOptions {
   userId: string;
   workspaceId: string;
-  storage?: KeyStorage;
+  /** Test seam: one store (or ordered candidates) replacing the globals. */
+  storage?: KeyStorage | KeyStorage[];
   fetch?: typeof fetch;
   /** Best-effort cancel: aborted creation fails and caches nothing. */
   signal?: AbortSignal;
+  /** Key name override (tests). Defaults to the device-derived name. */
+  name?: string;
 }
 
 /**
  * Resolve the managed chat key for this user+workspace: cached in memory,
- * else restored from sessionStorage, else created once (parallel callers
- * share the in-flight promise). Throws ManagedKeyError on failure and caches
- * nothing in that case — retry is explicit.
+ * else restored from persistent storage (localStorage, then sessionStorage),
+ * else created once (parallel callers share the in-flight promise). Throws
+ * ManagedKeyError on failure and caches nothing in that case — retry is
+ * explicit.
  */
 export async function startManagedChatKey(opts: StartManagedChatKeyOptions): Promise<ManagedKey> {
   const { userId, workspaceId } = opts;
@@ -98,7 +182,7 @@ export async function startManagedChatKey(opts: StartManagedChatKeyOptions): Pro
   const pending = inflight.get(ck);
   if (pending) return pending.promise;
 
-  const storage = resolveStorage(opts.storage);
+  const storages = resolveStorages(opts.storage);
   const doFetch = opts.fetch ?? fetch;
 
   // The entry is assigned synchronously right after the IIFE suspends at its
@@ -107,16 +191,10 @@ export async function startManagedChatKey(opts: StartManagedChatKeyOptions): Pro
   let entry: InflightEntry | null = null;
   const isInvalidated = () => entry?.invalid ?? false;
   const task = (async (): Promise<ManagedKey> => {
-    const stored = storage.getItem(STORAGE_PREFIX + ck);
+    const stored = restoreManagedKey(storages, ck);
     if (stored) {
-      try {
-        const key = parseManagedKey(JSON.parse(stored));
-        cache.set(ck, key);
-        return key;
-      } catch {
-        // Corrupt or stale entry: drop it and mint a fresh key below.
-        storage.removeItem(STORAGE_PREFIX + ck);
-      }
+      cache.set(ck, stored);
+      return stored;
     }
 
     let res: Response;
@@ -125,7 +203,7 @@ export async function startManagedChatKey(opts: StartManagedChatKeyOptions): Pro
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "Browser Chat" }),
+        body: JSON.stringify({ name: opts.name ?? deviceChatName() }),
         signal: opts.signal,
       });
     } catch {
@@ -159,7 +237,7 @@ export async function startManagedChatKey(opts: StartManagedChatKeyOptions): Pro
     const key = parseManagedKey(body);
     if (isInvalidated()) return key; // cleared mid-flight: persist nothing
     cache.set(ck, key);
-    storage.setItem(STORAGE_PREFIX + ck, JSON.stringify(key));
+    persistManagedKey(storages, ck, key);
     return key;
   })();
 
@@ -178,22 +256,28 @@ function clearPrefixedEntries(storage: KeyStorage): void {
     const k = storage.key(i);
     if (k?.startsWith(STORAGE_PREFIX)) doomed.push(k);
   }
-  for (const k of doomed) storage.removeItem(k);
+  for (const k of doomed) {
+    try {
+      storage.removeItem(k);
+    } catch {
+      // Unavailable store: nothing to remove; memory is already cleared.
+    }
+  }
 }
 
 /**
  * With an identity: clear only that user+workspace's cached key (the 401
  * "reconnect" path — the next explicit start creates a fresh key). Without:
- * wipe every managed key from memory and sessionStorage (logout path, so the
- * next person on this browser cannot reuse the previous user's key).
+ * wipe every managed key from memory and persistent storage (logout path, so
+ * the next person on this browser cannot reuse the previous user's key).
  */
 export function clearManagedChatKey(
   identity?: { userId: string; workspaceId: string },
   storage?: KeyStorage,
 ): void {
   // Storage is best-effort: the in-memory cache is the primary clearing target
-  // and sessionStorage may not exist (tests, non-browser contexts).
-  const s = storage ?? globalThis.sessionStorage ?? null;
+  // and the stores may not exist (tests, non-browser contexts).
+  const storages = storage ? [storage] : resolveStorages();
   if (identity) {
     const ck = cacheKey(identity.userId, identity.workspaceId);
     cache.delete(ck);
@@ -202,12 +286,18 @@ export function clearManagedChatKey(
       pendingEntry.invalid = true;
       inflight.delete(ck);
     }
-    s?.removeItem(STORAGE_PREFIX + ck);
+    for (const s of storages) {
+      try {
+        s.removeItem(STORAGE_PREFIX + ck);
+      } catch {
+        // Unavailable store: the scoped entry just stays unreferenced.
+      }
+    }
   } else {
     cache.clear();
     for (const e of inflight.values()) e.invalid = true;
     inflight.clear();
-    if (s) clearPrefixedEntries(s);
+    for (const s of storages) clearPrefixedEntries(s);
   }
 }
 
@@ -225,7 +315,8 @@ export const chatKeyStorageKey = (userId: string, workspaceId: string): string =
  * UI seam for the chat page. Pass the session user id and the resolved
  * workspace id from useCurrentWorkspaceId(). Clears all managed keys when the
  * session goes null (logout). ensureKey creates lazily on first explicit call
- * (first send/connect), never on render.
+ * (first send/connect) — never on render — and reuses the locally stored
+ * browser key first, so an existing key is never minted twice.
  */
 export function useManagedChatKey(userId: string | null, workspaceId: string | null) {
   const prevUserId = React.useRef<string | null>(null);

@@ -18,6 +18,8 @@ export interface PaymentRequestArgs {
   cancelUrl: string;
   /** Explicit orderCode (used by tests); generated when omitted. */
   orderCode?: number;
+  /** Provider-side expiry (payOS `expiredAt`, unix seconds); undefined = provider default. */
+  expiredAtSec?: number;
 }
 
 export interface CreatedPayment {
@@ -35,6 +37,10 @@ export interface VerifiedPaymentEvent {
   eventId: string;
   /** Order code as string, for lookup against payments.provider_order_code. */
   orderCode: string;
+  /** Signed payOS transactionDateTime, verbatim; absent for mock/manual. */
+  transactionDateTime?: string;
+  /** transactionDateTime parsed at the FIXED +07:00 payOS offset (no tz guessing). */
+  transactionAtMs?: number;
 }
 
 export interface PaymentProvider {
@@ -142,7 +148,10 @@ export class PayOSProvider implements PaymentProvider {
       description: args.description,
       returnUrl: args.returnUrl,
       cancelUrl: args.cancelUrl,
+      ...(args.expiredAtSec !== undefined ? { expiredAt: args.expiredAtSec } : {}),
     };
+    // payOS signs exactly the five documented fields; expiredAt is optional
+    // and stays outside the request signature.
     const signature = payosRequestSignature(body, this.cfg.checksumKey);
     const res = await this.fetchImpl(`${PAYOS_API_BASE}/v2/payment-requests`, {
       method: "POST",
@@ -207,12 +216,27 @@ export class PayOSProvider implements PaymentProvider {
     // credit event (cancellation or failure).
     const paid = parsed.code === "00" && parsed.success === true && data.code === "00";
     const ref = (data.reference ?? data.paymentLinkId) as string;
+    // transactionDateTime is signed (part of `data`), so its value is trusted
+    // only after the signature check above. payOS emits it in Asia/Ho_Chi_Minh
+    // wall-clock time; parsing pins the fixed +07:00 offset — never local tz.
+    let transactionDateTime: string | undefined;
+    let transactionAtMs: number | undefined;
+    if (typeof data.transactionDateTime === "string") {
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(data.transactionDateTime)) {
+        const ms = Date.parse(`${data.transactionDateTime.replace(" ", "T")}+07:00`);
+        if (!Number.isNaN(ms)) {
+          transactionDateTime = data.transactionDateTime;
+          transactionAtMs = ms;
+        }
+      }
+    }
     return {
       providerRef: ref,
       amountVnd: data.amount,
       status: paid ? "paid" : "cancelled",
       eventId: ref,
       orderCode: String(data.orderCode),
+      ...(transactionDateTime !== undefined ? { transactionDateTime, transactionAtMs } : {}),
     };
   }
 }

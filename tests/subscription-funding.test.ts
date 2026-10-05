@@ -333,16 +333,12 @@ describe("expiry with reserved holds (O5)", () => {
       `UPDATE subscriptions SET current_period_start = $1, current_period_end = $2 WHERE id = 'sub-fund'`,
       [NOW - 40 * DAY_MS, NOW - 5_000] as never[],
     );
-    const forfeited1 = await runInImmediate(db, (tx) =>
-      applySubscriptionExpiry(tx, FIX.ws, NOW),
-    );
+    const forfeited1 = await runInImmediate(db, (tx) => applySubscriptionExpiry(tx, FIX.ws, NOW));
     expect(forfeited1).toBe(80_000);
     // Hold releases: the freed 20_000 is still expired-period credit.
     await releaseRequest(db, args.requestId, NOW);
     expect(await walletOf(subId)).toEqual({ balance: 20_000, reserved: 0 });
-    const forfeited2 = await runInImmediate(db, (tx) =>
-      applySubscriptionExpiry(tx, FIX.ws, NOW),
-    );
+    const forfeited2 = await runInImmediate(db, (tx) => applySubscriptionExpiry(tx, FIX.ws, NOW));
     expect(forfeited2).toBe(20_000);
     expect(await walletOf(subId)).toEqual({ balance: 0, reserved: 0 });
     // Idempotent: further applications forfeit nothing.

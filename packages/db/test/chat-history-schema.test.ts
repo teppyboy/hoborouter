@@ -66,7 +66,14 @@ function convoRow(
 async function seedChatOwner(db: Db): Promise<void> {
   await db
     .insert(users)
-    .values({ id: "u-chat", name: "u", email: "chat@test.local", emailVerified: true, createdAt: new Date(1), updatedAt: new Date(1) })
+    .values({
+      id: "u-chat",
+      name: "u",
+      email: "chat@test.local",
+      emailVerified: true,
+      createdAt: new Date(1),
+      updatedAt: new Date(1),
+    })
     .onConflictDoNothing();
   await db
     .insert(workspaces)
@@ -103,7 +110,10 @@ describe("chat_conversations schema", () => {
       created_at: 1,
       updated_at: 1,
     });
-    const row = await d.select().from(chatConversations).where(sql`${chatConversations.id} = 'cc-def'`);
+    const row = await d
+      .select()
+      .from(chatConversations)
+      .where(sql`${chatConversations.id} = 'cc-def'`);
     expect(row).toHaveLength(1);
     expect(row[0]!.messages).toEqual([]);
     expect(row[0]!.version).toBe(1);
@@ -119,9 +129,7 @@ describe("chat_conversations schema", () => {
   test("timestamp CHECKs reject negative epoch-ms", async () => {
     await expectReject(d.insert(chatConversations).values(convoRow("cc-c", { created_at: -1 })));
     await expectReject(d.insert(chatConversations).values(convoRow("cc-u", { updated_at: -1 })));
-    await expectReject(
-      d.insert(chatConversations).values(convoRow("cc-a", { archived_at: -1 })),
-    );
+    await expectReject(d.insert(chatConversations).values(convoRow("cc-a", { archived_at: -1 })));
   });
 
   test("FKs protect against orphan conversations", async () => {
@@ -162,7 +170,10 @@ describe("additive migration from pre-0001 baseline", () => {
     dir = mkdtempSync(join(tmpdir(), "hbr-pre0001-"));
     mkdirSync(join(dir, "meta"));
     copyFileSync(join(drizzleFolder(), "0000_baseline.sql"), join(dir, "0000_baseline.sql"));
-    copyFileSync(join(drizzleFolder(), "meta", "0000_snapshot.json"), join(dir, "meta", "0000_snapshot.json"));
+    copyFileSync(
+      join(drizzleFolder(), "meta", "0000_snapshot.json"),
+      join(dir, "meta", "0000_snapshot.json"),
+    );
     // Journal as it existed before 0001: baseline entry only.
     writeFileSync(
       join(dir, "meta", "_journal.json"),

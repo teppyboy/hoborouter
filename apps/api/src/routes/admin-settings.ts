@@ -4,9 +4,20 @@
 import { Elysia, t } from "elysia";
 import { type Db } from "@hoborouter/db";
 import { eq } from "drizzle-orm";
-import { instanceSettings } from "@hoborouter/db";import type { BetterAuthInstance } from "../auth-types";
+import { instanceSettings } from "@hoborouter/db";
+import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, writeAudit } from "../authz";
 import { isFirstTopupBonusEnabled } from "@hoborouter/payments";
+import {
+  PAYMENT_TIMEOUT_MINUTES_KEY,
+  PAYMENT_MAX_AMOUNT_VND_KEY,
+  PAYMENT_USD_VND_RATE_KEY,
+  MIN_PAYMENT_TIMEOUT_MINUTES,
+  MAX_PAYMENT_TIMEOUT_MINUTES,
+  parsePaymentTimeoutMinutes,
+  parsePaymentMaxAmountVnd,
+  parsePaymentUsdVndRate,
+} from "@hoborouter/payments";
 
 const KEY = "prompt_caching_enabled";
 const BONUS_ENABLED_KEY = "first_topup_bonus_enabled";
@@ -45,6 +56,18 @@ async function getFirstTopupBonusAmount(db: Db): Promise<number | null> {
   return parseBonusAmount(raw);
 }
 
+async function getPaymentTimeoutMinutes(db: Db): Promise<number> {
+  return parsePaymentTimeoutMinutes(await getSettingValue(db, PAYMENT_TIMEOUT_MINUTES_KEY));
+}
+
+async function getPaymentMaxAmountVnd(db: Db): Promise<number> {
+  return parsePaymentMaxAmountVnd(await getSettingValue(db, PAYMENT_MAX_AMOUNT_VND_KEY));
+}
+
+async function getPaymentUsdVndRate(db: Db): Promise<number> {
+  return parsePaymentUsdVndRate(await getSettingValue(db, PAYMENT_USD_VND_RATE_KEY));
+}
+
 export const adminSettingsRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "admin-settings" })
     .get(
@@ -66,6 +89,9 @@ export const adminSettingsRoutes = (db: Db, auth: BetterAuthInstance) =>
             prompt_caching_enabled: await getPromptCachingEnabled(db),
             first_topup_bonus_enabled: await getFirstTopupBonusEnabled(db),
             first_topup_bonus_amount_vnd: await getFirstTopupBonusAmount(db),
+            payment_timeout_minutes: await getPaymentTimeoutMinutes(db),
+            payment_max_amount_vnd: await getPaymentMaxAmountVnd(db),
+            payment_usd_vnd_rate: await getPaymentUsdVndRate(db),
           }),
           { headers: { "content-type": "application/json" } },
         );
@@ -80,6 +106,11 @@ export const adminSettingsRoutes = (db: Db, auth: BetterAuthInstance) =>
           // are ignored (only whitelisted keys are ever persisted).
           first_topup_bonus_enabled: t.Optional(t.Boolean()),
           first_topup_bonus_amount_vnd: t.Optional(t.Union([t.Integer(), t.String()])),
+          // Payment controls: timeout bounds 1..1440 minutes; max amount and
+          // USD FX rate are positive safe integers.
+          payment_timeout_minutes: t.Optional(t.Union([t.Integer(), t.String()])),
+          payment_max_amount_vnd: t.Optional(t.Union([t.Integer(), t.String()])),
+          payment_usd_vnd_rate: t.Optional(t.Union([t.Integer(), t.String()])),
         }),
         detail: {
           tags: ["Admin"],
@@ -94,40 +125,10 @@ export const adminSettingsRoutes = (db: Db, auth: BetterAuthInstance) =>
         const denied = await requireInstanceAdmin(db, userId);
         if (denied) return denied;
 
-        const setSetting = async (key: string, value: string) => {
-          await db
-            .insert(instanceSettings)
-            .values({ key, value, updated_at: Date.now() })
-            .onConflictDoUpdate({
-              target: instanceSettings.key,
-              set: { value, updated_at: Date.now() },
-            });
-        };
-
-        if (body.prompt_caching_enabled !== undefined) {
-          const before = await getPromptCachingEnabled(db);
-          await setSetting(KEY, body.prompt_caching_enabled ? "true" : "false");
-          await writeAudit(db, {
-            actorUserId: userId,
-            workspaceId: null,
-            action: "settings.update",
-            target: KEY,
-            detail: { before, after: body.prompt_caching_enabled },
-          });
-        }
-
-        if (body.first_topup_bonus_enabled !== undefined) {
-          const before = await getFirstTopupBonusEnabled(db);
-          await setSetting(BONUS_ENABLED_KEY, body.first_topup_bonus_enabled ? "true" : "false");
-          await writeAudit(db, {
-            actorUserId: userId,
-            workspaceId: null,
-            action: "settings.update",
-            target: BONUS_ENABLED_KEY,
-            detail: { before, after: body.first_topup_bonus_enabled },
-          });
-        }
-
+        // Trust boundary: validate the ENTIRE body before persisting anything.
+        // A mixed valid/invalid PUT (e.g. valid prompt_caching + invalid bonus
+        // amount) must fail with NO keys written (no partial persistence).
+        let bonusAmount: number | null = null;
         if (body.first_topup_bonus_amount_vnd !== undefined) {
           // Accept an integer or a decimal-string of one; stored canonically
           // as a string (instance_settings is a KV of strings).
@@ -144,30 +145,154 @@ export const adminSettingsRoutes = (db: Db, auth: BetterAuthInstance) =>
               { status: 400, headers: { "content-type": "application/json" } },
             );
           }
-          const before = await getFirstTopupBonusAmount(db);
-          await setSetting(BONUS_AMOUNT_KEY, String(n));
-          await writeAudit(db, {
-            actorUserId: userId,
-            workspaceId: null,
-            action: "settings.update",
-            target: BONUS_AMOUNT_KEY,
-            detail: { before, after: n },
-          });
-          return new Response(
-            JSON.stringify({
-              prompt_caching_enabled: await getPromptCachingEnabled(db),
-              first_topup_bonus_enabled: await getFirstTopupBonusEnabled(db),
-              first_topup_bonus_amount_vnd: n,
-            }),
-            { headers: { "content-type": "application/json" } },
-          );
+          bonusAmount = n;
         }
+
+        // Trust boundary: validate the ENTIRE body before persisting anything
+        // (no partial persistence on mixed valid/invalid PUTs).
+        const invalid = (message: string) =>
+          new Response(JSON.stringify({ error: { code: "INVALID", message } }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          });
+        const asInt = (raw: number | string): number | null => {
+          const n = typeof raw === "string" ? Number(raw.trim()) : raw;
+          return typeof n === "number" && Number.isSafeInteger(n) ? n : null;
+        };
+        let timeoutMinutes: number | null = null;
+        if (body.payment_timeout_minutes !== undefined) {
+          const n = asInt(body.payment_timeout_minutes);
+          if (n === null || n < MIN_PAYMENT_TIMEOUT_MINUTES || n > MAX_PAYMENT_TIMEOUT_MINUTES) {
+            return invalid(
+              `payment_timeout_minutes must be an integer between ${MIN_PAYMENT_TIMEOUT_MINUTES} and ${MAX_PAYMENT_TIMEOUT_MINUTES}`,
+            );
+          }
+          timeoutMinutes = n;
+        }
+        let maxAmountVnd: number | null = null;
+        if (body.payment_max_amount_vnd !== undefined) {
+          const n = asInt(body.payment_max_amount_vnd);
+          if (n === null || n <= 0) {
+            return invalid("payment_max_amount_vnd must be a positive safe integer");
+          }
+          maxAmountVnd = n;
+        }
+        let usdVndRate: number | null = null;
+        if (body.payment_usd_vnd_rate !== undefined) {
+          const n = asInt(body.payment_usd_vnd_rate);
+          if (n === null || n <= 0) {
+            return invalid("payment_usd_vnd_rate must be a positive safe integer");
+          }
+          usdVndRate = n;
+        }
+
+        const setSetting = async (
+          tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+          key: string,
+          value: string,
+        ) => {
+          await tx
+            .insert(instanceSettings)
+            .values({ key, value, updated_at: Date.now() })
+            .onConflictDoUpdate({
+              target: instanceSettings.key,
+              set: { value, updated_at: Date.now() },
+            });
+        };
+
+        // One transaction: settings writes + their audit rows commit or roll
+        // back together (same guarantee as support-settings PUT) — a mid-PUT
+        // failure can never leave a key persisted without its audit row.
+        await db.transaction(async (tx) => {
+          if (body.prompt_caching_enabled !== undefined) {
+            const before = await getPromptCachingEnabled(db);
+            await setSetting(tx, KEY, body.prompt_caching_enabled ? "true" : "false");
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "settings.update",
+              target: KEY,
+              detail: { before, after: body.prompt_caching_enabled },
+            });
+          }
+
+          if (body.first_topup_bonus_enabled !== undefined) {
+            const before = await getFirstTopupBonusEnabled(db);
+            await setSetting(
+              tx,
+              BONUS_ENABLED_KEY,
+              body.first_topup_bonus_enabled ? "true" : "false",
+            );
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "settings.update",
+              target: BONUS_ENABLED_KEY,
+              detail: { before, after: body.first_topup_bonus_enabled },
+            });
+          }
+
+          if (bonusAmount !== null) {
+            const before = await getFirstTopupBonusAmount(db);
+            await setSetting(tx, BONUS_AMOUNT_KEY, String(bonusAmount));
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "settings.update",
+              target: BONUS_AMOUNT_KEY,
+              detail: { before, after: bonusAmount },
+            });
+          }
+
+          if (timeoutMinutes !== null) {
+            const before = await getPaymentTimeoutMinutes(db);
+            await setSetting(tx, PAYMENT_TIMEOUT_MINUTES_KEY, String(timeoutMinutes));
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "settings.update",
+              target: PAYMENT_TIMEOUT_MINUTES_KEY,
+              detail: { before, after: timeoutMinutes },
+            });
+          }
+
+          if (maxAmountVnd !== null) {
+            const before = await getPaymentMaxAmountVnd(db);
+            await setSetting(tx, PAYMENT_MAX_AMOUNT_VND_KEY, String(maxAmountVnd));
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "settings.update",
+              target: PAYMENT_MAX_AMOUNT_VND_KEY,
+              detail: { before, after: maxAmountVnd },
+            });
+          }
+
+          if (usdVndRate !== null) {
+            const before = await getPaymentUsdVndRate(db);
+            await setSetting(tx, PAYMENT_USD_VND_RATE_KEY, String(usdVndRate));
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "settings.update",
+              target: PAYMENT_USD_VND_RATE_KEY,
+              detail: { before, after: usdVndRate },
+            });
+          }
+        });
 
         return new Response(
           JSON.stringify({
-            prompt_caching_enabled: body.prompt_caching_enabled ?? (await getPromptCachingEnabled(db)),
+            prompt_caching_enabled:
+              body.prompt_caching_enabled ?? (await getPromptCachingEnabled(db)),
             first_topup_bonus_enabled: await getFirstTopupBonusEnabled(db),
-            first_topup_bonus_amount_vnd: await getFirstTopupBonusAmount(db),
+            first_topup_bonus_amount_vnd:
+              bonusAmount !== null ? bonusAmount : await getFirstTopupBonusAmount(db),
+            payment_timeout_minutes:
+              timeoutMinutes !== null ? timeoutMinutes : await getPaymentTimeoutMinutes(db),
+            payment_max_amount_vnd:
+              maxAmountVnd !== null ? maxAmountVnd : await getPaymentMaxAmountVnd(db),
+            payment_usd_vnd_rate: usdVndRate !== null ? usdVndRate : await getPaymentUsdVndRate(db),
           }),
           { headers: { "content-type": "application/json" } },
         );

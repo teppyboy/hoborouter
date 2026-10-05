@@ -143,10 +143,7 @@ describe("calculateCharge", () => {
       new RangeError("upstreamCostUsdMicro exceeds maxStoredMoney"),
     );
     expect(() =>
-      charged(
-        { ...usage, inputTokens: maxStoredMoney },
-        { ...p, usdVndRate: 2_000_000_000_000n },
-      ),
+      charged({ ...usage, inputTokens: maxStoredMoney }, { ...p, usdVndRate: 2_000_000_000_000n }),
     ).toThrow(new RangeError("chargedVnd exceeds maxStoredMoney"));
   });
 });

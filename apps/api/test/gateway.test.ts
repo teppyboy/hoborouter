@@ -24,24 +24,40 @@ let savedEnv: Record<string, string | undefined> = {};
 
 async function seedGateway(db: Awaited<ReturnType<typeof makeApp>>["db"]) {
   const now = Date.now();
-  await q(db, 
+  await q(
+    db,
     "INSERT INTO workspaces (id, name, status, created_at) VALUES ('ws-gw','gw','active',?)",
-now);
-  await q(db, 
+    now,
+  );
+  await q(
+    db,
     "INSERT INTO wallets (id, workspace_id, currency, balance, reserved, version, created_at) VALUES ('wal-gw','ws-gw','VND',1000000000,0,0,?)",
-now);
-  await q(db, 
+    now,
+  );
+  await q(
+    db,
     "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at) VALUES ('key-gw','ws-gw',?,?,'gw','active',?)",
-hashApiKey(PLAINTEXT), "sk-hbr-gw...", now);
-  await q(db, 
+    hashApiKey(PLAINTEXT),
+    "sk-hbr-gw...",
+    now,
+  );
+  await q(
+    db,
     "INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-a','openai/gw-test','gw-test','GW Test','openai',128000,true,true,?,?)",
-now, now);
-  await q(db, 
+    now,
+    now,
+  );
+  await q(
+    db,
     "INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES ('map-a','mdl-a','openai', 'gpt-4o-upstream',true,?,?)",
-now, now);
-  await q(db, 
+    now,
+    now,
+  );
+  await q(
+    db,
     "INSERT INTO model_prices (id, model_id, input_usd_micro_per_1m, output_usd_micro_per_1m, cached_input_usd_micro_per_1m, reasoning_usd_micro_per_1m, markup_ppm, effective_at, retired_at) VALUES ('price-a','mdl-a',1000000,2000000,500000,3000000,1200000,?,NULL)",
-now - 1000);
+    now - 1000,
+  );
 }
 
 let db: Awaited<ReturnType<typeof makeApp>>["db"];
@@ -123,11 +139,15 @@ const chatSse = () => {
 };
 
 const lastCharge = async () =>
-  (await q(db, 
+  (
+    await q(
+      db,
       "SELECT br.cap_vnd, br.status, le.amount FROM billing_reservations br LEFT JOIN ledger_entries le ON le.billing_reservation_id = br.id ORDER BY br.ctid DESC LIMIT 1",
-    ))[0] as { cap_vnd: number; status: string; amount: number | null };
+    )
+  )[0] as { cap_vnd: number; status: string; amount: number | null };
 
-const requestCount = async () => ((await q(db, "SELECT COUNT(*) c FROM requests"))[0] as { c: number }).c;
+const requestCount = async () =>
+  ((await q(db, "SELECT COUNT(*) c FROM requests"))[0] as { c: number }).c;
 
 const walletBalance = async () =>
   (await q(db, "SELECT balance, reserved FROM wallets WHERE id = 'wal-gw'"))[0] as {
@@ -285,7 +305,9 @@ describe("gateway core", () => {
     await reader.cancel();
     await new Promise((r) => setTimeout(r, 100));
     expect(upstreamAborted).toBe(true);
-    const last = (await q(db, "SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1"))[0] as { status: string };
+    const last = (
+      await q(db, "SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1")
+    )[0] as { status: string };
     expect(last.status).toBe("client_abort");
     expect((await lastCharge()).status).toBe("settled_full_hold");
   });
@@ -297,7 +319,9 @@ describe("gateway core", () => {
     const errBody = (await res.json()) as { error: { code: string; message: string } };
     expect(errBody.error.code).toBe("upstream_error");
     expect(errBody.error.message).not.toContain("boom");
-    const last = (await q(db, "SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1"))[0] as { status: string };
+    const last = (
+      await q(db, "SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1")
+    )[0] as { status: string };
     expect(last.status).toBe("upstream_error");
     expect((await lastCharge()).status).toBe("settled_full_hold");
   });

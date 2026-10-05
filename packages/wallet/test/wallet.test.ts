@@ -76,7 +76,10 @@ describe("creditWallet", () => {
     expect(
       creditWallet(db, { walletId: "wallet-b", amount: 100, kind: "topup", paymentId: "pay-of" }),
     ).rejects.toThrow(/overflow/i);
-    const row = await q1<{ b: number }>(db, sql`SELECT balance b FROM wallets WHERE id = 'wallet-b'`);
+    const row = await q1<{ b: number }>(
+      db,
+      sql`SELECT balance b FROM wallets WHERE id = 'wallet-b'`,
+    );
     expect(Number(row.b)).toBe(9007199254740990);
     const { c } = await q1<{ c: number }>(
       db,
@@ -120,7 +123,9 @@ describe("creditWallet", () => {
                     if (typeof v !== "function") return v;
                     return (...args: unknown[]) => {
                       const r = (v as (...a: unknown[]) => unknown).apply(t, args);
-                      return r !== null && typeof r === "object" && typeof (r as { returning?: unknown }).returning === "function"
+                      return r !== null &&
+                        typeof r === "object" &&
+                        typeof (r as { returning?: unknown }).returning === "function"
                         ? wrap(r)
                         : r;
                     };
@@ -133,7 +138,12 @@ describe("creditWallet", () => {
         }),
     };
     await expect(
-      creditWallet(wrapped as never, { walletId: "wallet-a", amount: 5, kind: "topup", paymentId: null }),
+      creditWallet(wrapped as never, {
+        walletId: "wallet-a",
+        amount: 5,
+        kind: "topup",
+        paymentId: null,
+      }),
     ).rejects.toThrow(expect.objectContaining({ code: "conflict" }));
     expect(casHits).toBe(1);
     const { c } = await q1<{ c: number }>(

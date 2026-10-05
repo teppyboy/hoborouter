@@ -48,16 +48,19 @@ Scope note: another worker concurrently adds a requests soft-delete column as **
 ## 2. Decisions (recommendations, lazy-first)
 
 ### D1. Driver: keep sync-shaped app code — use **Bun.SQL via `drizzle-orm/bun-sql`**, not postgres-js
+
 - `drizzle-orm/bun-sql` exists (drizzle-orm ≥0.44) and wraps Bun's native `Bun.SQL` (bundled with Bun 1.4, no new npm dep — important: no new deps allowed this run; the implementation task may add `drizzle-orm/bun-sql` which is already in the installed drizzle-orm).
 - postgres-js would be a second runtime dep for zero benefit here; Bun.SQL is native, faster, and already available. **Skip** node-postgres.
 - Caveat to verify in implementation: `bun-sql` drizzle transaction API is async (`await db.transaction(async tx => …)`), while current call sites use **sync** `db.transaction(() => …)`. See D4.
 
 ### D2. Sync→async blast radius: contain, don't rewrite
+
 - ~45 raw `prepare/exec` call sites in src are synchronous bun:sqlite. Bun.SQL is async. Rewriting all of them to async is the biggest cost (~2 days incl. tests).
 - Containment strategy: introduce a small internal `Db` facade in packages/db with two implementations (sqlite sync / pg async) exposing the ~8 operations the app actually uses: `run(sql, params) -> {changes}`, `get`, `all`, `transaction(fn)`. Wallet/billing/routes code against the facade; sqlite path stays sync internally, pg path returns promises. **Where the facade's API must become async, change signatures once at the facade, not per call site.** Honest estimate: the wallet/billing raw SQL is deeply sync-shaped (compute-then-CAS in JS); the pragmatic call is **make the facade async end-to-end and touch every caller** — see effort in §4. A "keep everything sync via Better-SQLite3-style worker" hack is not available in Bun; do not attempt.
 - Simpler alternative evaluated and **rejected**: run PG through a sync shim. No such shim exists for Bun.SQL; fake-sync via Atomics/worker is 3am-page material.
 
 ### D3. Dual-dialect schema strategy
+
 - Keep `schema.ts` as source of truth. Add `schema-pg.ts` that imports the same table/column names but built with `pgTable/pgText/pgInteger/pgBigint/pgCheck`. Mechanical translation, one table at a time.
 - **Money columns**: use `integer` in PG too (PG int4 is ±2.1B) only where values provably fit (tokens, ms latencies); for VND amounts and USD micros use `bigint({ mode: "number" })` + keep the existing `intBounded` CHECK (`<= 2^53-1`) so JS `number` stays exact. PG bigint is int64; the CHECK is the JS-safety guarantee. Add an app-side `assertSafeInt` helper for write paths (cheap belt-and-braces).
 - **CHECK translation** (`typeof(x)='integer'`): PG has no `typeof`; every type-CHECK becomes a range/null CHECK (`x IS NOT NULL AND x >= 0 AND x <= 9007199254740991`). Enum CHECKs (`IN ('a','b')`) translate verbatim. Count: 20 typeof sites inside 52 checks — mostly mechanical; the `intBounded` helper already composes, so define `pgIntBounded` alongside.
@@ -67,42 +70,47 @@ Scope note: another worker concurrently adds a requests soft-delete column as **
 - Partial unique indexes (`where: sql`) translate 1:1 to PG partial indexes.
 
 ### D4. Transactions / CAS under PG
+
 - `BEGIN IMMEDIATE` doesn't exist in PG. Map `runInImmediate`/`db.transaction` to drizzle PG `db.transaction(async fn)`; nesting (credit.ts) becomes PG SAVEPOINT via nested drizzle transactions — drizzle supports nested tx → the "outermost owns commit" comment semantics carry over.
 - Wallet CAS: the existing conditional-UPDATE patterns (`WHERE balance = ? AND version = ?`, `WHERE balance - reserved >= ?`) are **already correct under READ COMMITTED** as compare-and-swap on a single row (PG row-locking makes the UPDATE atomic; changes==0 → miss). Keep them. For read-modify-write spans (settle recompute), add `SELECT … FOR UPDATE` on the wallet row inside the tx. Default isolation READ COMMITTED is sufficient; do not adopt SERIALIZABLE.
 - `runChanges` keeps its shape; the pg `run()` result exposes `rowCount`/`changes` — retype at the facade.
 - dashboard `date(created_at/1000,'unixepoch')` → PG `to_timestamp(created_at/1000.0)::date` (2 sites).
 
 ### D5. Migrations
+
 - Create `packages/db/drizzle-pg/` with a **single generated baseline** (`drizzle-kit generate --dialect=postgresql`) representing the post-0007 schema (including the concurrent soft-delete column). Do NOT port 0000–0007 SQL by hand; existing PG deploys start from baseline only. Add `__drizzle_migrations` handling via `drizzle-orm/postgresql-js`-style `migrate()` or reuse the custom migrator with PG dialect (custom migrator needs its PG twin: drop sqlite_master/PRAGMA preflight, keep the FK-check intent via `SET CONSTRAINTS ALL DEFERRED` or post-migrate validation query).
 - Keep the users-preflight safety check as a PG query.
 
 ### D6. DATABASE_URL selection
+
 - `packages/db/src/client.ts` gains `createDbFromUrl(url)`: `postgresql://`/`postgres://` → `Bun.SQL`/drizzle-pg handle; otherwise (path or `:memory:`) → current sqlite path. `apps/api/src/app.ts` + `auth.ts` switch from `HBR_DB_PATH` to `DATABASE_URL` (fallback `HBR_DB_PATH` → sqlite so local dev and tests are untouched). Admin health `PRAGMA journal_mode` read (admin-extra.ts:308) becomes dialect-conditional (report `pg` version string for PG).
 
 ### D7. Tests
+
 - Default stays SQLite `:memory:` — zero test churn for the 40 fixture sites.
 - Add opt-in PG suite: `HBR_TEST_PG=postgres://…` env gate; when set, wallet/billing/CAS + migration tests run against a disposable PG database (created/dropped per run). CI: PG service container, gate off by default. Priority tests to cover under PG: wallet CAS concurrency (2 connections, billing.test.ts:619 pattern), settle atomicity, migration baseline idempotence, Better Auth round-trip.
 
 ### D8. Existing-deploy data migration (SQLite → PG)
+
 - One-off script `packages/db/scripts/sqlite-to-pg.ts`: open SQLite read-only (WAL), open PG, wrap per-table copy in PG transaction, `SET session_replication_role = replica` (or `ALTER TABLE … DISABLE TRIGGER ALL`) to bypass FK ordering, copy rows in dependency order, verify row counts + `MAX_SAFE_INTEGER_MONEY` bounds per money column, write a marker row. Estimated ~4h incl. verification. Runs offline during deploy maintenance window; rollback = keep SQLite file until verification passes.
 
 ---
 
 ## 3. Implementation phases (honest hours, single experienced dev)
 
-| Phase | Work | Hours |
-|---|---|---|
-| 0 | Staging: provision PG (staging host or docker-compose on staging only — NOT repo docker-compose.yml, owned by another worker), `DATABASE_URL` secret wiring | 1.5 |
-| 1 | PG schema twin: `schema-pg.ts` + `auth-schema` pg twin, CHECK/typeof translation, partial indexes, bigint money columns; drizzle-kit pg baseline incl. 0007 soft-delete column | 6–8 |
-| 2 | `client.ts` `createDbFromUrl` + facade (`run/get/all/transaction/runChanges`), sqlite path unchanged | 4 |
-| 3 | Async conversion of wallet/billing/reservation/payments raw SQL + call sites; CAS/`FOR UPDATE` review | 8–10 |
-| 4 | apps/api routes: async transactions (admin-catalog 6 blocks, keys 4, workspaces 2, admin-models 2, payments 1), dashboard date SQL, admin-extra health | 5–6 |
-| 5 | Better Auth on pg drizzle instance; boot `migrate` PG twin | 3 |
-| 6 | Opt-in PG test harness + port ~10 highest-value tests (wallet CAS, settle, migrations, auth) | 6–8 |
-| 7 | sqlite→pg migration script + verification | 4 |
-| 8 | Staging deploy: run baseline migrations, run data migration, soak, smoke (gateway reserve/settle round trip, admin, webhooks) | 4–5 |
-| 9 | Production deploy runbook + rollback plan (keep SQLite file, feature-flag `DATABASE_URL`) | 2 |
-| **Total** | | **~43–52 h (1–1.5 weeks)** |
+| Phase     | Work                                                                                                                                                                           | Hours                      |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------- |
+| 0         | Staging: provision PG (staging host or docker-compose on staging only — NOT repo docker-compose.yml, owned by another worker), `DATABASE_URL` secret wiring                    | 1.5                        |
+| 1         | PG schema twin: `schema-pg.ts` + `auth-schema` pg twin, CHECK/typeof translation, partial indexes, bigint money columns; drizzle-kit pg baseline incl. 0007 soft-delete column | 6–8                        |
+| 2         | `client.ts` `createDbFromUrl` + facade (`run/get/all/transaction/runChanges`), sqlite path unchanged                                                                           | 4                          |
+| 3         | Async conversion of wallet/billing/reservation/payments raw SQL + call sites; CAS/`FOR UPDATE` review                                                                          | 8–10                       |
+| 4         | apps/api routes: async transactions (admin-catalog 6 blocks, keys 4, workspaces 2, admin-models 2, payments 1), dashboard date SQL, admin-extra health                         | 5–6                        |
+| 5         | Better Auth on pg drizzle instance; boot `migrate` PG twin                                                                                                                     | 3                          |
+| 6         | Opt-in PG test harness + port ~10 highest-value tests (wallet CAS, settle, migrations, auth)                                                                                   | 6–8                        |
+| 7         | sqlite→pg migration script + verification                                                                                                                                      | 4                          |
+| 8         | Staging deploy: run baseline migrations, run data migration, soak, smoke (gateway reserve/settle round trip, admin, webhooks)                                                  | 4–5                        |
+| 9         | Production deploy runbook + rollback plan (keep SQLite file, feature-flag `DATABASE_URL`)                                                                                      | 2                          |
+| **Total** |                                                                                                                                                                                | **~43–52 h (1–1.5 weeks)** |
 
 Biggest schedule risk: phase 3 async conversion — if `drizzle-orm/bun-sql` transaction semantics fight the sync callers more than expected, fall back to `postgres-js` driver (same drizzle API, different wire driver, no schema change) before considering deeper rewrites.
 

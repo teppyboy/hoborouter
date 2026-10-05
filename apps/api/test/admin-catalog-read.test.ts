@@ -83,7 +83,11 @@ describe("admin catalog list summary", () => {
       sql`INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-2','x/y2','y2','Y2','z-ai',1000,true,true,${Date.now()},${Date.now()})`,
     );
     const res = await req(app, "/api/v1/admin/catalog/models", { cookie });
-    const rows = (await res.json()) as { public_id: string; listed: boolean; hidden_reason: string | null }[];
+    const rows = (await res.json()) as {
+      public_id: string;
+      listed: boolean;
+      hidden_reason: string | null;
+    }[];
     expect(rows.find((r) => r.public_id === "x/y")?.hidden_reason).toBe("missing_price");
     expect(rows.find((r) => r.public_id === "x/y2")?.hidden_reason).toBe("missing_mapping");
     await db.execute(sql`UPDATE models SET published = false, enabled = false WHERE id = 'mdl-1'`);
@@ -123,13 +127,13 @@ describe("GET prices history", () => {
 
   test("404 unknown model; 403 non-admin", async () => {
     const { app, cookie } = await setup();
-    expect(
-      (await req(app, "/api/v1/admin/catalog/models/nope/prices", { cookie })).status,
-    ).toBe(404);
+    expect((await req(app, "/api/v1/admin/catalog/models/nope/prices", { cookie })).status).toBe(
+      404,
+    );
     const { app: app2, cookie: c2 } = await setup({ admin: false });
-    expect(
-      (await req(app2, "/api/v1/admin/catalog/models/x/prices", { cookie: c2 })).status,
-    ).toBe(403);
+    expect((await req(app2, "/api/v1/admin/catalog/models/x/prices", { cookie: c2 })).status).toBe(
+      403,
+    );
   });
 });
 
@@ -147,7 +151,13 @@ describe("GET mappings + PATCH mapping", () => {
       created_at: number;
     }[];
     expect(rows).toEqual([
-      { id: "map-1", provider: "cpa", upstream_model: "up-1", enabled: true, created_at: expect.any(Number) },
+      {
+        id: "map-1",
+        provider: "cpa",
+        upstream_model: "up-1",
+        enabled: true,
+        created_at: expect.any(Number),
+      },
     ]);
     const created = await req(app, "/api/v1/admin/catalog/models/mdl-1/mappings", {
       method: "POST",
@@ -191,21 +201,41 @@ describe("GET mappings + PATCH mapping", () => {
       body: { enabled: false },
     });
     expect(on.status).toBe(200);
+    expect(((await on.json()) as { id: string; enabled: boolean }).enabled).toBe(false);
     expect(
-      ((await on.json()) as { id: string; enabled: boolean }).enabled,
+      (
+        await q<{ enabled: boolean }>(
+          db,
+          "SELECT enabled FROM provider_model_mappings WHERE id = 'map-1'",
+        )
+      )[0]!.enabled,
     ).toBe(false);
     expect(
-      ((await q<{ enabled: boolean }>(db, "SELECT enabled FROM provider_model_mappings WHERE id = 'map-1'"))[0]!).enabled,
-    ).toBe(false);
-    expect(
-      (await q(db, "SELECT 1 FROM audit_log WHERE action = 'catalog.mapping.update' AND target = 'map-1'")).length,
+      (
+        await q(
+          db,
+          "SELECT 1 FROM audit_log WHERE action = 'catalog.mapping.update' AND target = 'map-1'",
+        )
+      ).length,
     ).toBe(1);
     const { app: app2, cookie: c2 } = await setup({ admin: false });
     expect(
-      (await req(app2, "/api/v1/admin/catalog/mappings/map-1", { method: "PATCH", cookie: c2, body: { enabled: true } })).status,
+      (
+        await req(app2, "/api/v1/admin/catalog/mappings/map-1", {
+          method: "PATCH",
+          cookie: c2,
+          body: { enabled: true },
+        })
+      ).status,
     ).toBe(403);
     expect(
-      (await req(app, "/api/v1/admin/catalog/mappings/nope", { method: "PATCH", cookie, body: { enabled: true } })).status,
+      (
+        await req(app, "/api/v1/admin/catalog/mappings/nope", {
+          method: "PATCH",
+          cookie,
+          body: { enabled: true },
+        })
+      ).status,
     ).toBe(404);
     expect(
       (await req(app, "/api/v1/admin/catalog/mappings/map-1", { method: "PATCH", cookie })).status,
@@ -242,7 +272,12 @@ describe("GET /api/v1/admin/cpa/models mapped_public_ids", () => {
         );
       }
       const rows = (await res.json()) as {
-        data: { id: string; owned_by: string | null; mapped: boolean; mapped_public_ids: string[] }[];
+        data: {
+          id: string;
+          owned_by: string | null;
+          mapped: boolean;
+          mapped_public_ids: string[];
+        }[];
       };
       expect(rows.data.length).toBe(2);
       expect(rows.data[0]).toEqual({

@@ -7,10 +7,7 @@ import { createTestDb } from "@hoborouter/db";
 import { hashApiKey } from "@hoborouter/keys";
 import { q, trackDrop } from "./helpers";
 import { gatewayRoutes } from "../src/routes/v1-gateway";
-import {
-  resetSubscriptionRateLimits,
-  setRateLimitClock,
-} from "../src/rate-limit";
+import { resetSubscriptionRateLimits, setRateLimitClock } from "../src/rate-limit";
 
 const PLAINTEXT = "sk-hbr-sub-test-key";
 const CPA_KEY = "test-cpa-secret";
@@ -189,10 +186,9 @@ const delta = (cur: number, key: keyof typeof base) => cur - base[key];
 const subFundedCount = async () =>
   delta(
     (
-      (await q(
-        db,
-        "SELECT COUNT(*) c FROM billing_reservations WHERE wallet_id = 'wal-sub'",
-      ))[0] as { c: number }
+      (
+        await q(db, "SELECT COUNT(*) c FROM billing_reservations WHERE wallet_id = 'wal-sub'")
+      )[0] as { c: number }
     ).c,
     "sub",
   );
@@ -200,10 +196,9 @@ const subFundedCount = async () =>
 const topFundedCount = async () =>
   delta(
     (
-      (await q(
-        db,
-        "SELECT COUNT(*) c FROM billing_reservations WHERE wallet_id = 'wal-top'",
-      ))[0] as { c: number }
+      (
+        await q(db, "SELECT COUNT(*) c FROM billing_reservations WHERE wallet_id = 'wal-top'")
+      )[0] as { c: number }
     ).c,
     "top",
   );
@@ -238,11 +233,9 @@ beforeEach(async () => {
   await setTopup(0);
   const funded = async (id: string) =>
     (
-      (await q(
-        db,
-        "SELECT COUNT(*) c FROM billing_reservations WHERE wallet_id = ?",
-        id,
-      ))[0] as { c: number }
+      (await q(db, "SELECT COUNT(*) c FROM billing_reservations WHERE wallet_id = ?", id))[0] as {
+        c: number;
+      }
     ).c;
   base = {
     requests: await count("requests"),
@@ -283,7 +276,8 @@ describe("subscription gateway rate limit", () => {
   test("N+1 falls back to the topup wallet when topup has credit (not counted)", async () => {
     startFakeCpa(() => chatJson());
     await setTopup(1000000);
-    for (let i = 0; i < RATE_LIMIT; i++) expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
+    for (let i = 0; i < RATE_LIMIT; i++)
+      expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
     const res = await gwr(CHAT_PATH, chatBody());
     expect(res.status).toBe(200);
     expect(await subFundedCount()).toBe(RATE_LIMIT);
@@ -295,7 +289,8 @@ describe("subscription gateway rate limit", () => {
   test("N+1 with empty topup -> 429 with Retry-After and zero new rows", async () => {
     startFakeCpa(() => chatJson());
     await setTopup(0);
-    for (let i = 0; i < RATE_LIMIT; i++) expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
+    for (let i = 0; i < RATE_LIMIT; i++)
+      expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
     const before = {
       requests: await newRequests(),
       reservations: await newReservations(),
@@ -319,7 +314,8 @@ describe("subscription gateway rate limit", () => {
   test("over-limit topup fallback does not erode the count (no extra sub-funded)", async () => {
     startFakeCpa(() => chatJson());
     await setTopup(1000000);
-    for (let i = 0; i < RATE_LIMIT; i++) expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
+    for (let i = 0; i < RATE_LIMIT; i++)
+      expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
     // Over the limit: funded by topup, must NOT free a subscription slot.
     expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
     expect(await topFundedCount()).toBe(1);
@@ -332,7 +328,8 @@ describe("subscription gateway rate limit", () => {
   test("repeated 429s do not erode the count", async () => {
     startFakeCpa(() => chatJson());
     await setTopup(0);
-    for (let i = 0; i < RATE_LIMIT; i++) expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
+    for (let i = 0; i < RATE_LIMIT; i++)
+      expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
     for (let i = 0; i < RATE_LIMIT + 1; i++) {
       expect((await gwr(CHAT_PATH, chatBody())).status).toBe(429);
     }
@@ -343,9 +340,7 @@ describe("subscription gateway rate limit", () => {
   test("concurrent burst of 10: at most N subscription-funded, 429s reserve nothing", async () => {
     startFakeCpa(() => chatJson());
     await setTopup(0);
-    const results = await Promise.all(
-      Array.from({ length: 10 }, () => gwr(CHAT_PATH, chatBody())),
-    );
+    const results = await Promise.all(Array.from({ length: 10 }, () => gwr(CHAT_PATH, chatBody())));
     const ok = results.filter((r) => r.status === 200).length;
     const limited = results.filter((r) => r.status === 429).length;
     expect(ok).toBe(RATE_LIMIT);
@@ -360,7 +355,8 @@ describe("subscription gateway rate limit", () => {
     setRateLimitClock(() => T0);
     startFakeCpa(() => chatJson());
     await setTopup(1000000);
-    for (let i = 0; i < RATE_LIMIT; i++) expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
+    for (let i = 0; i < RATE_LIMIT; i++)
+      expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
     // Over the limit in this window: topup fallback, not counted.
     expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
     await setTopup(0);
@@ -376,7 +372,8 @@ describe("subscription gateway rate limit", () => {
     setRateLimitClock(() => T0);
     startFakeCpa(() => chatJson());
     await setTopup(0);
-    for (let i = 0; i < RATE_LIMIT; i++) expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
+    for (let i = 0; i < RATE_LIMIT; i++)
+      expect((await gwr(CHAT_PATH, chatBody())).status).toBe(200);
     expect((await gwr(CHAT_PATH, chatBody())).status).toBe(429);
     // Next window: the limit is fresh and the subscription funds again.
     setRateLimitClock(() => T0 + 61_000);
@@ -398,7 +395,9 @@ describe("subscription gateway rate limit", () => {
   });
 
   test("streaming requests follow the same rules", async () => {
-    startFakeCpa(() => new Response(chatSse(), { headers: { "content-type": "text/event-stream" } }));
+    startFakeCpa(
+      () => new Response(chatSse(), { headers: { "content-type": "text/event-stream" } }),
+    );
     await setTopup(0);
     for (let i = 0; i < RATE_LIMIT; i++) {
       const res = await gwr(CHAT_PATH, chatBody({ stream: true }));

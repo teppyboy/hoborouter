@@ -3,7 +3,8 @@
 // no upstream model names, no mapping ids. Uses @hoborouter/catalog helpers —
 // no pricing logic here.
 import { Elysia, t } from "elysia";
-import type { Db } from "@hoborouter/db";import type { BetterAuthInstance } from "../auth-types";
+import type { Db } from "@hoborouter/db";
+import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, jsonError } from "../authz";
 import {
   listPublicModels,

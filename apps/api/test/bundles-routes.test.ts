@@ -83,7 +83,11 @@ describe("admin bundle & plan CRUD", () => {
     expect(body.price_vnd).toBe(100000);
     expect(body.bonus_vnd).toBe(10000);
     expect(body.active).toBe(true);
-    const audits = await q(db, "SELECT * FROM audit_log WHERE action = 'bundle.create' AND target = ?", String(body.id));
+    const audits = await q(
+      db,
+      "SELECT * FROM audit_log WHERE action = 'bundle.create' AND target = ?",
+      String(body.id),
+    );
     expect(audits.length).toBe(1);
   });
 
@@ -109,7 +113,11 @@ describe("admin bundle & plan CRUD", () => {
     });
     expect(ok.status).toBe(200);
     const row = (
-      await q(db, "SELECT name, active, price_vnd, credit_vnd, bonus_vnd FROM credit_bundles WHERE id = ?", id)
+      await q(
+        db,
+        "SELECT name, active, price_vnd, credit_vnd, bonus_vnd FROM credit_bundles WHERE id = ?",
+        id,
+      )
     )[0]!;
     expect(row.name).toBe("Renamed");
     expect(row.active).toBe(false);
@@ -156,9 +164,15 @@ describe("admin bundle & plan CRUD", () => {
       body: { rate_limit_per_minute: 600 },
     });
     expect(patch.status).toBe(200);
-    expect(((await patch.json()) as { rate_limit_per_minute: number }).rate_limit_per_minute).toBe(600);
+    expect(((await patch.json()) as { rate_limit_per_minute: number }).rate_limit_per_minute).toBe(
+      600,
+    );
     const row = (
-      await q(db, "SELECT rate_limit_per_minute, price_vnd, credit_per_period_vnd FROM subscription_plans WHERE id = ?", id)
+      await q(
+        db,
+        "SELECT rate_limit_per_minute, price_vnd, credit_per_period_vnd FROM subscription_plans WHERE id = ?",
+        id,
+      )
     )[0]!;
     expect(row.rate_limit_per_minute).toBe(600);
     for (const body of [
@@ -174,11 +188,7 @@ describe("admin bundle & plan CRUD", () => {
       expect(bad.status).toBe(400);
     }
     // Money amounts and period stay immutable on PATCH.
-    for (const body of [
-      { price_vnd: 1 },
-      { credit_per_period_vnd: 1 },
-      { period_days: 7 },
-    ]) {
+    for (const body of [{ price_vnd: 1 }, { credit_per_period_vnd: 1 }, { period_days: 7 }]) {
       const money = await req(app, `/api/v1/admin/subscription-plans/${id}`, {
         method: "PATCH",
         cookie: adminCookie,
@@ -187,7 +197,11 @@ describe("admin bundle & plan CRUD", () => {
       expect(money.status).toBe(400);
     }
     const unchanged = (
-      await q(db, "SELECT rate_limit_per_minute, price_vnd, credit_per_period_vnd, period_days FROM subscription_plans WHERE id = ?", id)
+      await q(
+        db,
+        "SELECT rate_limit_per_minute, price_vnd, credit_per_period_vnd, period_days FROM subscription_plans WHERE id = ?",
+        id,
+      )
     )[0]!;
     expect(unchanged.rate_limit_per_minute).toBe(600);
     expect(unchanged.price_vnd).toBe(200000);
@@ -221,7 +235,11 @@ describe("admin bundle & plan CRUD", () => {
       body: { active: false },
     });
     expect(ok.status).toBe(200);
-    const audits = await q(db, "SELECT * FROM audit_log WHERE action = 'plan.update' AND target = ?", id);
+    const audits = await q(
+      db,
+      "SELECT * FROM audit_log WHERE action = 'plan.update' AND target = ?",
+      id,
+    );
     expect(audits.length).toBe(1);
   });
 });
@@ -256,7 +274,12 @@ describe("member catalog & purchase", () => {
       body: { provider: "manual", amount: 1 },
     });
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { id: string; amount: number; status: string; provider: string };
+    const body = (await res.json()) as {
+      id: string;
+      amount: number;
+      status: string;
+      provider: string;
+    };
     expect(body.amount).toBe(100000);
     expect(body.status).toBe("pending");
     expect(body.provider).toBe("manual");
@@ -264,7 +287,11 @@ describe("member catalog & purchase", () => {
     expect(row.bundle_id).toBe(String(activeBundle.id));
     expect(row.subscription_plan_id).toBeNull();
     expect(row.amount).toBe(100000);
-    const audits = await q(db, "SELECT * FROM audit_log WHERE action = 'payment.create' AND target = ?", body.id);
+    const audits = await q(
+      db,
+      "SELECT * FROM audit_log WHERE action = 'payment.create' AND target = ?",
+      body.id,
+    );
     expect(audits.length).toBe(1);
   });
 
@@ -320,14 +347,24 @@ describe("payos purchase path", () => {
   const calls: { body: Record<string, unknown> }[] = [];
   const fetchImpl = async (_input: string | URL, init?: RequestInit) => {
     calls.push({ body: JSON.parse(String(init?.body)) });
-    return Response.json({ code: "00", desc: "success", data: { checkoutUrl: "https://pay.test/checkout" } });
+    return Response.json({
+      code: "00",
+      desc: "success",
+      data: { checkoutUrl: "https://pay.test/checkout" },
+    });
   };
 
   beforeAll(async () => {
     const { buildApp: build } = await import("../src/app");
     const t = await makeApp();
     payosDb = t.db;
-    payosApp = await build({ db: t.db, payos: { cfg: { available: true, clientId: "c", apiKey: "k", checksumKey: "s" }, fetch: fetchImpl } });
+    payosApp = await build({
+      db: t.db,
+      payos: {
+        cfg: { available: true, clientId: "c", apiKey: "k", checksumKey: "s" },
+        fetch: fetchImpl,
+      },
+    });
     payosMemberCookie = await signUp(payosApp, "payos-bundle@test.dev", "M");
     payosWs = "ws-bundles-payos";
     await createWorkspace(payosDb, payosWs, await userIdByEmail(payosDb, "payos-bundle@test.dev"));
@@ -356,21 +393,31 @@ describe("payos purchase path", () => {
       body: { provider: "payos" },
     });
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { id: string; amount: number; checkout_url: string; provider: string };
+    const body = (await res.json()) as {
+      id: string;
+      amount: number;
+      checkout_url: string;
+      provider: string;
+    };
     expect(body.checkout_url).toBe("https://pay.test/checkout");
     expect(body.amount).toBe(50000);
     const row = (await q(payosDb, "SELECT * FROM payments WHERE id = ?", body.id))[0]!;
     expect(row.provider).toBe("payos");
     expect(row.status).toBe("pending");
     expect(row.bundle_id).toBe(bundleId);
-    const wallet = (await q(payosDb, "SELECT balance FROM wallets WHERE workspace_id = ?", payosWs))[0]!;
+    const wallet = (
+      await q(payosDb, "SELECT balance FROM wallets WHERE workspace_id = ?", payosWs)
+    )[0]!;
     expect(wallet.balance).toBe(0);
   });
 
   test("payos unconfigured -> 503", async () => {
     const { buildApp: build } = await import("../src/app");
     const t = await makeApp();
-    const appNoPayos = await build({ db: t.db, payos: { cfg: { available: false, clientId: "", apiKey: "", checksumKey: "" } } });
+    const appNoPayos = await build({
+      db: t.db,
+      payos: { cfg: { available: false, clientId: "", apiKey: "", checksumKey: "" } },
+    });
     const cookie = await signUp(appNoPayos, "nopayos@test.dev", "M");
     await createWorkspace(t.db, "ws-nopayos", await userIdByEmail(t.db, "nopayos@test.dev"));
     const adminC = await signUp(appNoPayos, "nopayos-admin@test.dev", "A");
@@ -393,7 +440,10 @@ describe("payos purchase path", () => {
 describe("first-topup-bonus settings whitelist", () => {
   test("defaults: enabled, 20000", async () => {
     const res = await req(app, "/api/v1/admin/settings", { cookie: adminCookie });
-    const body = (await res.json()) as { first_topup_bonus_enabled: boolean; first_topup_bonus_amount_vnd: number | null };
+    const body = (await res.json()) as {
+      first_topup_bonus_enabled: boolean;
+      first_topup_bonus_amount_vnd: number | null;
+    };
     expect(body.first_topup_bonus_enabled).toBe(true);
     expect(body.first_topup_bonus_amount_vnd).toBe(20000);
   });
@@ -420,7 +470,10 @@ describe("first-topup-bonus settings whitelist", () => {
     )[0]!;
     expect(enabledRow.value).toBe("false");
     const get = await req(app, "/api/v1/admin/settings", { cookie: adminCookie });
-    const body = (await get.json()) as { first_topup_bonus_enabled: boolean; first_topup_bonus_amount_vnd: number };
+    const body = (await get.json()) as {
+      first_topup_bonus_enabled: boolean;
+      first_topup_bonus_amount_vnd: number;
+    };
     expect(body.first_topup_bonus_amount_vnd).toBe(30000);
     expect(body.first_topup_bonus_enabled).toBe(false);
   });

@@ -10,12 +10,7 @@ import {
   reservations,
   wallets,
 } from "@hoborouter/db";
-import {
-  WalletError,
-  lockWallet,
-  requirePositiveSafeInteger,
-  runInImmediate,
-} from "./wallet";
+import { WalletError, lockWallet, requirePositiveSafeInteger, runInImmediate } from "./wallet";
 export { WalletError } from "./wallet";
 
 export type CreateReservationArgs = {

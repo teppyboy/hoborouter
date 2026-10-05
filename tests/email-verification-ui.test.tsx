@@ -9,11 +9,7 @@
 import { test, expect } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  createRouter,
-  createRootRoute,
-  createMemoryHistory,
-} from "@tanstack/react-router";
+import { createRouter, createRootRoute, createMemoryHistory } from "@tanstack/react-router";
 // routerContext is not part of the package's public surface; providing it
 // directly lets SSR tests render pages that use Link without a full
 // RouterProvider mount (which renders nothing under renderToStaticMarkup).
@@ -97,9 +93,7 @@ test("verify page: logged-in unverified user gets clear state + resend, never 'v
 });
 
 test("verify page: no session shows processed-message with sign-in link, no verified claim", () => {
-  const html = withProviders(() => (
-    <VerifyEmailView user={null} loading={false} />
-  ));
+  const html = withProviders(() => <VerifyEmailView user={null} loading={false} />);
   expect(html).toContain("Verification link processed; sign in to check your email status");
   expect(html).toContain("Sign in");
   expect(html).not.toContain("Email verified");

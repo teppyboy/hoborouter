@@ -103,9 +103,16 @@ DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
   if (data.attr !== "href") return;
   const v = data.keepAttr ? String(data.attrValue) : "";
   const safe = /^https?:\/\//i.test(v) || (v.startsWith("/") && !v.startsWith("//"));
-  if (!safe) { node.removeAttribute("href"); data.keepAttr = false; }
+  if (!safe) {
+    node.removeAttribute("href");
+    data.keepAttr = false;
+  }
 });
-const PURIFY = { FORBID_TAGS: ["img", "style", "iframe", "form"], FORBID_ATTR: ["style"], ALLOWED_URI_REGEXP: /^https?:/i };
+const PURIFY = {
+  FORBID_TAGS: ["img", "style", "iframe", "form"],
+  FORBID_ATTR: ["style"],
+  ALLOWED_URI_REGEXP: /^https?:/i,
+};
 
 const cache = new Map<string, string>(); // memoize completed messages
 export function renderMarkdown(md: string, memoKey?: string): string {

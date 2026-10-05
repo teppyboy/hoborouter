@@ -21,4 +21,3 @@ test("AuthLayout renders SSR without legacy mask/glow classes", () => {
   expect(html).not.toContain("backdrop-blur");
   expect(html).not.toContain("shadow-lg");
 });
-

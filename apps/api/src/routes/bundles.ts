@@ -12,6 +12,12 @@ import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, wsRole, writeAudit, jsonError } from "../authz";
 import { payosConfigFromEnv, type PayosConfig } from "@hoborouter/payments";
 import { makePayosPaymentCreator } from "./payments";
+import {
+  readPaymentLimits,
+  paymentDeadlineMs,
+  withinPaymentCap,
+  snapshotForBundlePrice,
+} from "../payment-creation";
 
 export const bundlesRoutes = (
   db: Db,
@@ -31,14 +37,25 @@ export const bundlesRoutes = (
 
   // Manual (admin-approved) pending purchase; mirrors the top-up manual
   // branch in payments.ts but carries the bundle/plan FK on the payment row.
+  // Deadline snapshot + cap read inside the insert transaction; a price over
+  // the configured cap rejects the purchase before any row exists.
   const createManualPurchase = async (
     workspaceId: string,
     userId: string,
     amount: number,
     purchase: { bundleId?: string; subscriptionPlanId?: string },
-  ) => {
+  ): Promise<Response> => {
     const id = crypto.randomUUID();
+    const now = Date.now();
+    let response: Response | null = null;
     await db.transaction(async (tx) => {
+      const limits = await readPaymentLimits(tx);
+      if (!withinPaymentCap(amount, limits.maxAmountVnd)) {
+        response = jsonError(400, "INVALID", "payment amount exceeds the configured maximum");
+        return;
+      }
+      const deadline = paymentDeadlineMs(now, limits.timeoutMinutes);
+      const snapshot = snapshotForBundlePrice(amount);
       await tx.insert(payments).values({
         id,
         workspace_id: workspaceId,
@@ -46,9 +63,11 @@ export const bundlesRoutes = (
         status: "pending",
         provider: "manual",
         provider_order_code: `MANUAL-${id}`,
-        created_at: Date.now(),
+        created_at: now,
+        expires_at: deadline,
         bundle_id: purchase.bundleId,
         subscription_plan_id: purchase.subscriptionPlanId,
+        ...snapshot,
       });
       await writeAudit(tx, {
         actorUserId: userId,
@@ -58,6 +77,9 @@ export const bundlesRoutes = (
         detail: {
           amount,
           provider: "manual",
+          expires_at: deadline,
+          input_currency: snapshot.input_currency,
+          input_amount_text: snapshot.input_amount_text,
           ...(purchase.bundleId ? { bundle_id: purchase.bundleId } : {}),
           ...(purchase.subscriptionPlanId
             ? { subscription_plan_id: purchase.subscriptionPlanId }
@@ -65,6 +87,7 @@ export const bundlesRoutes = (
         },
       });
     });
+    if (response) return response;
     return new Response(
       JSON.stringify({
         id,
@@ -78,148 +101,156 @@ export const bundlesRoutes = (
     );
   };
 
-  return (
-    new Elysia({ name: "bundles" })
-      .get(
-        "/api/v1/bundles",
-        {
-          detail: {
-            tags: ["Billing"],
-            summary: "List active credit bundles",
-            security: [{ cookieAuth: [] }],
-          },
+  return new Elysia({ name: "bundles" })
+    .get(
+      "/api/v1/bundles",
+      {
+        detail: {
+          tags: ["Billing"],
+          summary: "List active credit bundles",
+          security: [{ cookieAuth: [] }],
         },
-        async ({ request }) => {
-          const gate = await requireSession(auth, request);
-          if (gate.error) return gate.error;
-          const rows = await db
-            .select({
-              id: creditBundles.id,
-              name: creditBundles.name,
-              price_vnd: creditBundles.price_vnd,
-              credit_vnd: creditBundles.credit_vnd,
-              bonus_vnd: creditBundles.bonus_vnd,
-            })
-            .from(creditBundles)
-            .where(eq(creditBundles.active, true))
-            .orderBy(asc(creditBundles.created_at));
-          return new Response(JSON.stringify({ data: rows }), {
-            headers: { "content-type": "application/json" },
-          });
+      },
+      async ({ request }) => {
+        const gate = await requireSession(auth, request);
+        if (gate.error) return gate.error;
+        const rows = await db
+          .select({
+            id: creditBundles.id,
+            name: creditBundles.name,
+            price_vnd: creditBundles.price_vnd,
+            credit_vnd: creditBundles.credit_vnd,
+            bonus_vnd: creditBundles.bonus_vnd,
+          })
+          .from(creditBundles)
+          .where(eq(creditBundles.active, true))
+          .orderBy(asc(creditBundles.created_at));
+        return new Response(JSON.stringify({ data: rows }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+    )
+    .get(
+      "/api/v1/subscription-plans",
+      {
+        detail: {
+          tags: ["Billing"],
+          summary: "List active subscription plans",
+          security: [{ cookieAuth: [] }],
         },
-      )
-      .get(
-        "/api/v1/subscription-plans",
-        {
-          detail: {
-            tags: ["Billing"],
-            summary: "List active subscription plans",
-            security: [{ cookieAuth: [] }],
-          },
+      },
+      async ({ request }) => {
+        const gate = await requireSession(auth, request);
+        if (gate.error) return gate.error;
+        const rows = await db
+          .select({
+            id: subscriptionPlans.id,
+            name: subscriptionPlans.name,
+            price_vnd: subscriptionPlans.price_vnd,
+            credit_per_period_vnd: subscriptionPlans.credit_per_period_vnd,
+            period_days: subscriptionPlans.period_days,
+            rate_limit_per_minute: subscriptionPlans.rate_limit_per_minute,
+          })
+          .from(subscriptionPlans)
+          .where(eq(subscriptionPlans.active, true))
+          .orderBy(asc(subscriptionPlans.created_at));
+        return new Response(JSON.stringify({ data: rows }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+    )
+    .post(
+      "/api/v1/workspaces/:id/bundles/:bundleId/purchase",
+      {
+        params: t.Object({ id: t.String(), bundleId: t.String() }),
+        body: t.Object({
+          provider: t.Optional(t.Union([t.Literal("manual"), t.Literal("payos")])),
+        }),
+        detail: {
+          tags: ["Billing"],
+          summary: "Purchase a credit bundle",
+          description:
+            "Creates a pending payment at the server-side bundle price; provider=payos returns a checkout_url. Credit is applied only on settlement.",
+          security: [{ cookieAuth: [] }],
         },
-        async ({ request }) => {
-          const gate = await requireSession(auth, request);
-          if (gate.error) return gate.error;
-          const rows = await db
-            .select({
-              id: subscriptionPlans.id,
-              name: subscriptionPlans.name,
-              price_vnd: subscriptionPlans.price_vnd,
-              credit_per_period_vnd: subscriptionPlans.credit_per_period_vnd,
-              period_days: subscriptionPlans.period_days,
-              rate_limit_per_minute: subscriptionPlans.rate_limit_per_minute,
-            })
-            .from(subscriptionPlans)
-            .where(eq(subscriptionPlans.active, true))
-            .orderBy(asc(subscriptionPlans.created_at));
-          return new Response(JSON.stringify({ data: rows }), {
-            headers: { "content-type": "application/json" },
-          });
-        },
-      )
-      .post(
-        "/api/v1/workspaces/:id/bundles/:bundleId/purchase",
-        {
-          params: t.Object({ id: t.String(), bundleId: t.String() }),
-          body: t.Object({
-            provider: t.Optional(t.Union([t.Literal("manual"), t.Literal("payos")])),
-          }),
-          detail: {
-            tags: ["Billing"],
-            summary: "Purchase a credit bundle",
-            description:
-              "Creates a pending payment at the server-side bundle price; provider=payos returns a checkout_url. Credit is applied only on settlement.",
-            security: [{ cookieAuth: [] }],
-          },
-        },
-        async ({ request, params, body }) => {
-          const gate = await requireSession(auth, request);
-          if (gate.error) return gate.error;
-          const userId = gate.session.user.id;
-          const denied = await requireWsMember(params.id, userId);
-          if (denied) return denied;
-          const rows = await db
-            .select()
-            .from(creditBundles)
-            .where(eq(creditBundles.id, params.bundleId))
-            .limit(1);
-          const bundle = rows[0];
-          if (!bundle) return jsonError(404, "NOT_FOUND", "Bundle not found");
-          if (!bundle.active) return jsonError(409, "INACTIVE", "Bundle is not available");
-          const provider = (body as { provider?: string } | null)?.provider;
-          if (provider === "payos") {
-            if (!payos.available)
-              return jsonError(503, "PROVIDER_UNAVAILABLE", "payOS is not configured");
-            return createPayosPayment(params.id, userId, bundle.price_vnd, {
-              bundleId: bundle.id,
-            });
+      },
+      async ({ request, params, body }) => {
+        const gate = await requireSession(auth, request);
+        if (gate.error) return gate.error;
+        const userId = gate.session.user.id;
+        const denied = await requireWsMember(params.id, userId);
+        if (denied) return denied;
+        const rows = await db
+          .select()
+          .from(creditBundles)
+          .where(eq(creditBundles.id, params.bundleId))
+          .limit(1);
+        const bundle = rows[0];
+        if (!bundle) return jsonError(404, "NOT_FOUND", "Bundle not found");
+        if (!bundle.active) return jsonError(409, "INACTIVE", "Bundle is not available");
+        const provider = (body as { provider?: string } | null)?.provider;
+        if (provider === "payos") {
+          if (!payos.available)
+            return jsonError(503, "PROVIDER_UNAVAILABLE", "payOS is not configured");
+          // Cap binds before any provider call or row insert.
+          const limits = await readPaymentLimits(db);
+          if (!withinPaymentCap(bundle.price_vnd, limits.maxAmountVnd)) {
+            return jsonError(400, "INVALID", "payment amount exceeds the configured maximum");
           }
-          return createManualPurchase(params.id, userId, bundle.price_vnd, {
+          return createPayosPayment(params.id, userId, bundle.price_vnd, {
             bundleId: bundle.id,
           });
+        }
+        return createManualPurchase(params.id, userId, bundle.price_vnd, {
+          bundleId: bundle.id,
+        });
+      },
+    )
+    .post(
+      "/api/v1/workspaces/:id/subscription-plans/:planId/purchase",
+      {
+        params: t.Object({ id: t.String(), planId: t.String() }),
+        body: t.Object({
+          provider: t.Optional(t.Union([t.Literal("manual"), t.Literal("payos")])),
+        }),
+        detail: {
+          tags: ["Billing"],
+          summary: "Purchase a subscription plan",
+          description:
+            "Creates a pending payment at the server-side plan price; provider=payos returns a checkout_url. Credit is applied only on settlement (subscription wallet + active period).",
+          security: [{ cookieAuth: [] }],
         },
-      )
-      .post(
-        "/api/v1/workspaces/:id/subscription-plans/:planId/purchase",
-        {
-          params: t.Object({ id: t.String(), planId: t.String() }),
-          body: t.Object({
-            provider: t.Optional(t.Union([t.Literal("manual"), t.Literal("payos")])),
-          }),
-          detail: {
-            tags: ["Billing"],
-            summary: "Purchase a subscription plan",
-            description:
-              "Creates a pending payment at the server-side plan price; provider=payos returns a checkout_url. Credit is applied only on settlement (subscription wallet + active period).",
-            security: [{ cookieAuth: [] }],
-          },
-        },
-        async ({ request, params, body }) => {
-          const gate = await requireSession(auth, request);
-          if (gate.error) return gate.error;
-          const userId = gate.session.user.id;
-          const denied = await requireWsMember(params.id, userId);
-          if (denied) return denied;
-          const rows = await db
-            .select()
-            .from(subscriptionPlans)
-            .where(eq(subscriptionPlans.id, params.planId))
-            .limit(1);
-          const plan = rows[0];
-          if (!plan) return jsonError(404, "NOT_FOUND", "Subscription plan not found");
-          if (!plan.active) return jsonError(409, "INACTIVE", "Subscription plan is not available");
-          const provider = (body as { provider?: string } | null)?.provider;
-          if (provider === "payos") {
-            if (!payos.available)
-              return jsonError(503, "PROVIDER_UNAVAILABLE", "payOS is not configured");
-            return createPayosPayment(params.id, userId, plan.price_vnd, {
-              subscriptionPlanId: plan.id,
-            });
+      },
+      async ({ request, params, body }) => {
+        const gate = await requireSession(auth, request);
+        if (gate.error) return gate.error;
+        const userId = gate.session.user.id;
+        const denied = await requireWsMember(params.id, userId);
+        if (denied) return denied;
+        const rows = await db
+          .select()
+          .from(subscriptionPlans)
+          .where(eq(subscriptionPlans.id, params.planId))
+          .limit(1);
+        const plan = rows[0];
+        if (!plan) return jsonError(404, "NOT_FOUND", "Subscription plan not found");
+        if (!plan.active) return jsonError(409, "INACTIVE", "Subscription plan is not available");
+        const provider = (body as { provider?: string } | null)?.provider;
+        if (provider === "payos") {
+          if (!payos.available)
+            return jsonError(503, "PROVIDER_UNAVAILABLE", "payOS is not configured");
+          // Cap binds before any provider call or row insert.
+          const limits = await readPaymentLimits(db);
+          if (!withinPaymentCap(plan.price_vnd, limits.maxAmountVnd)) {
+            return jsonError(400, "INVALID", "payment amount exceeds the configured maximum");
           }
-          return createManualPurchase(params.id, userId, plan.price_vnd, {
+          return createPayosPayment(params.id, userId, plan.price_vnd, {
             subscriptionPlanId: plan.id,
           });
-        },
-      )
-  );
+        }
+        return createManualPurchase(params.id, userId, plan.price_vnd, {
+          subscriptionPlanId: plan.id,
+        });
+      },
+    );
 };

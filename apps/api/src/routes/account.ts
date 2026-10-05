@@ -24,13 +24,31 @@ const EXT_BY_MIME: Record<string, Ext> = {
 
 /** Sniff real image type from magic bytes; client-supplied mime is untrusted. */
 function magicExt(bytes: Uint8Array): Ext | null {
-  if (bytes.length > 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 &&
-    bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 &&
-    bytes[11] === 0x50) return "webp";
+  if (
+    bytes.length > 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  )
+    return "webp";
   if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpg";
-  if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e &&
-    bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a &&
-    bytes[7] === 0x0a) return "png";
+  if (
+    bytes.length > 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  )
+    return "png";
   return null;
 }
 
@@ -72,7 +90,11 @@ export const accountRoutes = (db: Db, auth: BetterAuthInstance) =>
       "/api/v1/account/email",
       {
         body: t.Object({ email: t.String(), currentPassword: t.String() }),
-        detail: { tags: ["System"], summary: "Change account email", security: [{ cookieAuth: [] }] },
+        detail: {
+          tags: ["System"],
+          summary: "Change account email",
+          security: [{ cookieAuth: [] }],
+        },
       },
       async ({ request, body }) => {
         const gate = await requireSession(auth, request);
@@ -132,7 +154,8 @@ export const accountRoutes = (db: Db, auth: BetterAuthInstance) =>
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
         const mime = (request.headers.get("content-type") ?? "").split(";")[0]?.trim() ?? "";
-        if (!(mime in EXT_BY_MIME)) return jsonError(400, "INVALID_IMAGE", "Unsupported image type");
+        if (!(mime in EXT_BY_MIME))
+          return jsonError(400, "INVALID_IMAGE", "Unsupported image type");
         // Size-limited BEFORE buffering (memory DoS guard): reject on declared
         // Content-Length, else stream-count and abort mid-read if over budget.
         const declaredLength = Number(request.headers.get("content-length"));

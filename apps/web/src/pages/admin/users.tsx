@@ -52,7 +52,8 @@ const createSchema = z.object({
   name: z.string().trim().min(1).max(80),
   email: z.string().trim().toLowerCase().email(),
   password: z.string().refine((v) => checkPassword(v).length === 0, {
-    message: "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
+    message:
+      "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
   }),
   instance_admin: z.boolean(),
 });
@@ -67,7 +68,8 @@ type EditValues = z.infer<typeof editSchema>;
 const resetSchema = z
   .object({
     newPassword: z.string().refine((v) => checkPassword(v).length === 0, {
-      message: "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
+      message:
+        "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
     }),
     confirmPassword: z.string().min(8, "At least 8 characters").max(200, "At most 200 characters"),
   })
@@ -134,10 +136,7 @@ export default function AdminUsersPage() {
         }
       />
       <AdminGate query={query}>
-        <UsersTable
-          users={query.data?.data ?? []}
-          currentUserId={session?.user?.id ?? null}
-        />
+        <UsersTable users={query.data?.data ?? []} currentUserId={session?.user?.id ?? null} />
       </AdminGate>
       <CreateUserDialog open={createOpen} onOpenChange={setCreateOpen} />
     </div>
@@ -186,7 +185,11 @@ export function UsersTable({
       accessorKey: "is_instance_admin",
       header: "Role",
       cell: (c) =>
-        c.getValue() ? <Badge variant="default">admin</Badge> : <Badge variant="outline">user</Badge>,
+        c.getValue() ? (
+          <Badge variant="default">admin</Badge>
+        ) : (
+          <Badge variant="outline">user</Badge>
+        ),
     },
     { accessorKey: "workspace_count", header: "Workspaces" },
     {
@@ -256,8 +259,8 @@ export function UsersTable({
           <DialogHeader>
             <DialogTitle>Remove user?</DialogTitle>
             <DialogDescription>
-              Remove {toRemove?.name} ({toRemove?.email})? Their sessions are revoked and
-              they can no longer sign in. Billing history is kept.
+              Remove {toRemove?.name} ({toRemove?.email})? Their sessions are revoked and they can
+              no longer sign in. Billing history is kept.
             </DialogDescription>
           </DialogHeader>
           {removeError && <p className="text-destructive text-sm">{removeError}</p>}
@@ -306,16 +309,13 @@ function EditUserDialog({
 
   const save = useMutation({
     mutationFn: (values: EditValues) =>
-      api<{ user: { id: string; name: string; email: string } }>(
-        `/api/v1/admin/users/${user.id}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            name: values.name.trim(),
-            email: values.email.trim().toLowerCase(),
-          }),
-        },
-      ),
+      api<{ user: { id: string; name: string; email: string } }>(`/api/v1/admin/users/${user.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: values.name.trim(),
+          email: values.email.trim().toLowerCase(),
+        }),
+      }),
     onSuccess: (data) => {
       toast.success(`Updated ${data.user.name}`);
       void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
@@ -353,10 +353,7 @@ function EditUserDialog({
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
-          <form
-            className="space-y-4"
-            onSubmit={form.handleSubmit((values) => save.mutate(values))}
-          >
+          <form className="space-y-4" onSubmit={form.handleSubmit((values) => save.mutate(values))}>
             <FormField
               control={form.control}
               name="name"
@@ -447,8 +444,8 @@ function ResetPasswordDialog({ user, onClose }: { user: AdminUser; onClose: () =
         <DialogHeader>
           <DialogTitle>Reset password</DialogTitle>
           <DialogDescription>
-            Set a new password for {user.name} ({user.email}). No old password is needed. This
-            signs the user out of all their sessions and they must sign in again.
+            Set a new password for {user.name} ({user.email}). No old password is needed. This signs
+            the user out of all their sessions and they must sign in again.
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -624,7 +621,9 @@ function CreateUserDialog({
                 </FormItem>
               )}
             />
-            {create.error && <p className="text-destructive text-sm">{removeErrorMessage(create.error)}</p>}
+            {create.error && (
+              <p className="text-destructive text-sm">{removeErrorMessage(create.error)}</p>
+            )}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel

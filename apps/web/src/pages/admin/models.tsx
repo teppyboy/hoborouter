@@ -18,10 +18,7 @@ import {
 } from "../../components/ui/dialog";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import {
-  Sheet,
-  SheetContent,
-} from "../../components/ui/sheet";
+import { Sheet, SheetContent } from "../../components/ui/sheet";
 import { Switch } from "../../components/ui/switch";
 import {
   Select,
@@ -69,6 +66,9 @@ export const schema = z.object({
   context_window: z.string().optional(), // empty = null
   enabled: z.boolean(),
   published: z.boolean(),
+  // Backend tolerates an absent auto_eligible (update keeps current value,
+  // create defaults false); keep the form schema equally permissive.
+  auto_eligible: z.boolean().optional(),
   prompt_caching: z.enum(["inherit", "on", "off"]),
 });
 type Values = z.infer<typeof schema>;
@@ -87,6 +87,7 @@ export function detailsDefaults(model: AdminModel): Values {
     context_window: model.context_window == null ? "" : String(model.context_window),
     enabled: !!model.enabled,
     published: !!model.published,
+    auto_eligible: !!model.auto_eligible,
     prompt_caching:
       model.prompt_caching === "on" || model.prompt_caching === "off"
         ? model.prompt_caching
@@ -255,11 +256,7 @@ function PriceHistorySection({ model }: { model: AdminModel }) {
   return (
     <div className="space-y-3">
       <AdminGate query={prices}>
-        <DataTable
-          columns={PRICE_COLUMNS}
-          data={prices.data ?? []}
-          empty="No price rows yet."
-        />
+        <DataTable columns={PRICE_COLUMNS} data={prices.data ?? []} empty="No price rows yet." />
       </AdminGate>
       <h3 className="text-sm font-medium">Add price</h3>
       <AddPriceFields modelId={model.id} onDone={() => {}} />
@@ -379,11 +376,13 @@ function RoutingSection({ model }: { model: AdminModel }) {
                 <option key={id} value={id} />
               ))}
             </datalist>
-            {upstreamModel.trim() && cpaIds.length > 0 && !cpaIds.includes(upstreamModel.trim()) && (
-              <p className="flex items-center gap-1 text-xs text-destructive">
-                <AlertTriangle className="size-3" /> Not in CPA&apos;s model list
-              </p>
-            )}
+            {upstreamModel.trim() &&
+              cpaIds.length > 0 &&
+              !cpaIds.includes(upstreamModel.trim()) && (
+                <p className="flex items-center gap-1 text-xs text-destructive">
+                  <AlertTriangle className="size-3" /> Not in CPA&apos;s model list
+                </p>
+              )}
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor={`provider-${model.id}`}>Provider label (optional)</Label>
@@ -393,9 +392,7 @@ function RoutingSection({ model }: { model: AdminModel }) {
               value={provider}
               onChange={(e) => setProvider(e.target.value)}
             />
-            <p className="text-xs text-muted-foreground">
-              Label only — requests always go to CPA.
-            </p>
+            <p className="text-xs text-muted-foreground">Label only — requests always go to CPA.</p>
           </div>
           {error && <p className="text-xs text-destructive">{error}</p>}
           <div>
@@ -407,12 +404,7 @@ function RoutingSection({ model }: { model: AdminModel }) {
       </AdminGate>
       {history.length > 0 && (
         <div>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => setHistoryOpen((v) => !v)}
-          >
+          <Button type="button" size="sm" variant="ghost" onClick={() => setHistoryOpen((v) => !v)}>
             {historyOpen ? "Hide" : "Show"} route history ({history.length})
           </Button>
           {historyOpen && (
@@ -441,13 +433,7 @@ function RoutingSection({ model }: { model: AdminModel }) {
   );
 }
 
-function DetailsSection({
-  model,
-  onSaved,
-}: {
-  model: AdminModel;
-  onSaved: () => void;
-}) {
+function DetailsSection({ model, onSaved }: { model: AdminModel; onSaved: () => void }) {
   const qc = useQueryClient();
   const [confirmRename, setConfirmRename] = useState(false);
   const form = useForm<Values>({
@@ -472,6 +458,7 @@ function DetailsSection({
           context_window: ctx_window,
           enabled: v.enabled,
           published: v.published,
+          auto_eligible: v.auto_eligible,
           prompt_caching: v.prompt_caching,
         }),
       });
@@ -530,9 +517,7 @@ function DetailsSection({
         <Label htmlFor="display_name">Display name</Label>
         <Input id="display_name" {...form.register("display_name")} />
         {form.formState.errors.display_name && (
-          <p className="text-xs text-destructive">
-            {form.formState.errors.display_name.message}
-          </p>
+          <p className="text-xs text-destructive">{form.formState.errors.display_name.message}</p>
         )}
       </div>
       <div className="grid gap-1.5">
@@ -572,6 +557,14 @@ function DetailsSection({
           id="published"
           checked={form.watch("published")}
           onCheckedChange={(c) => form.setValue("published", c)}
+        />
+      </div>
+      <div className="flex items-center justify-between">
+        <Label htmlFor="auto_eligible">Auto routing (hoborouter/auto candidate)</Label>
+        <Switch
+          id="auto_eligible"
+          checked={form.watch("auto_eligible")}
+          onCheckedChange={(c) => form.setValue("auto_eligible", c)}
         />
       </div>
       <div className="grid gap-1.5">
@@ -685,6 +678,7 @@ function CreateModelDialog({
       context_window: "",
       enabled: true,
       published: false,
+      auto_eligible: false,
       prompt_caching: "inherit",
     },
   });
@@ -706,6 +700,7 @@ function CreateModelDialog({
           context_window: ctx_window,
           enabled: v.enabled,
           published: v.published,
+          auto_eligible: v.auto_eligible,
           prompt_caching: v.prompt_caching,
         }),
       });
@@ -785,6 +780,14 @@ function CreateModelDialog({
               onCheckedChange={(c) => form.setValue("published", c)}
             />
           </div>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="auto_eligible">Auto routing (hoborouter/auto candidate)</Label>
+            <Switch
+              id="auto_eligible"
+              checked={form.watch("auto_eligible")}
+              onCheckedChange={(c) => form.setValue("auto_eligible", c)}
+            />
+          </div>
           {form.formState.errors.root && (
             <p className="text-xs text-destructive">{form.formState.errors.root.message}</p>
           )}
@@ -809,7 +812,9 @@ export default function AdminModelsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [selected, setSelected] = useState<AdminModel | null>(null);
   // Keep the sheet contents stable while it is open (list refetches swap objects).
-  const sheetModel = selected ? (query.data ?? []).find((m) => m.id === selected.id) ?? selected : null;
+  const sheetModel = selected
+    ? ((query.data ?? []).find((m) => m.id === selected.id) ?? selected)
+    : null;
 
   const columns: ColumnDef<AdminModel, unknown>[] = [
     {
@@ -892,11 +897,7 @@ export default function AdminModelsPage() {
       header: "",
       enableSorting: false,
       cell: ({ row }) => (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setSelected(row.original)}
-        >
+        <Button variant="ghost" size="sm" onClick={() => setSelected(row.original)}>
           Open
         </Button>
       ),

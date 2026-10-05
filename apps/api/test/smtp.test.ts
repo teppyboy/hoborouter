@@ -76,7 +76,9 @@ describe("buildVerificationMessage", () => {
       "http://hbr.test/verify?token=1&x=<a>..hidden",
       { date: "Mon, 01 Jan 2026 00:00:00 GMT", messageId: "<fixed@hbr.local>" },
     );
-    expect(msg.startsWith("From: Hoborouter <noreply@hbr.test>\r\nTo: user@example.com\r\n")).toBe(true);
+    expect(msg.startsWith("From: Hoborouter <noreply@hbr.test>\r\nTo: user@example.com\r\n")).toBe(
+      true,
+    );
     expect(msg.includes("Date: Mon, 01 Jan 2026 00:00:00 GMT\r\n")).toBe(true);
     expect(msg.includes("Message-ID: <fixed@hbr.local>\r\n")).toBe(true);
     expect(msg.includes("text/plain")).toBe(true);
@@ -101,7 +103,9 @@ describe("buildVerificationMessage", () => {
 
   test("from header must contain a parseable envelope mailbox", () => {
     expect(() => buildVerificationMessage("Hoborouter", "t@t.test", "u")).toThrow(/HBR_EMAIL_FROM/);
-    expect(() => buildVerificationMessage("a@b.test@c.test", "t@t.test", "u")).toThrow(/HBR_EMAIL_FROM/);
+    expect(() => buildVerificationMessage("a@b.test@c.test", "t@t.test", "u")).toThrow(
+      /HBR_EMAIL_FROM/,
+    );
   });
 });
 
@@ -123,10 +127,7 @@ describe("sendVerificationEmail", () => {
       ),
     ).rejects.toThrow(/HBR_SMTP_SECURE/);
     await expect(
-      sendVerificationEmail(
-        { to: "a@b.test", url: "u" },
-        { SMTP_HOST: "h", HBR_EMAIL_FROM: "u" },
-      ),
+      sendVerificationEmail({ to: "a@b.test", url: "u" }, { SMTP_HOST: "h", HBR_EMAIL_FROM: "u" }),
     ).rejects.toThrow(/HBR_EMAIL_FROM/);
     await expect(
       sendVerificationEmail(
@@ -181,7 +182,12 @@ describe("sendVerificationEmail", () => {
       await expect(
         sendVerificationEmail(
           { to: "a@b.test", url: "http://hbr.test/v" },
-          { ...GOOD_ENV, NODE_ENV: "production", HBR_SMTP_SECURE: "none", SMTP_PORT: String(fake.port) },
+          {
+            ...GOOD_ENV,
+            NODE_ENV: "production",
+            HBR_SMTP_SECURE: "none",
+            SMTP_PORT: String(fake.port),
+          },
         ),
       ).rejects.toThrow(/production/);
       expect(fake.connections).toBe(0);
@@ -206,10 +212,10 @@ describe("sendVerificationEmail", () => {
       expect(msg.data).toContain("From: noreply@hbr.test");
       expect(msg.data).toContain("To: user@example.com");
       expect(msg.data).toContain("http://hbr.test/verify?token=secret-token-1");
-    // Dots mid-line are never stuffed; only line-leading dots are (see the
-    // dot-stuffed e2e test below). Quotes around href are template literals;
-    // the URL itself is escaped.
-    expect(msg.data).toContain('href="http://hbr.test/verify?token=secret-token-1"');
+      // Dots mid-line are never stuffed; only line-leading dots are (see the
+      // dot-stuffed e2e test below). Quotes around href are template literals;
+      // the URL itself is escaped.
+      expect(msg.data).toContain('href="http://hbr.test/verify?token=secret-token-1"');
     } finally {
       fake.stop();
     }
@@ -349,30 +355,33 @@ describe("sendVerificationEmail", () => {
     }
   });
 
-  (tlsFixtureReady ? test : test.skip)("ssl mode: self-signed cert rejected (TLS verification on)", async () => {
-    const cert = Bun.file(join(certDir!, "cert.pem"));
-    const key = Bun.file(join(certDir!, "key.pem"));
-    const [certText, keyText] = await Promise.all([cert.text(), key.text()]);
-    const server = Bun.listen({
-      hostname: "127.0.0.1",
-      port: 0,
-      tls: { cert: certText, key: keyText },
-      socket: {
-        open(sock) {
-          sock.write("220 hbr-fake-tls ready\r\n");
+  (tlsFixtureReady ? test : test.skip)(
+    "ssl mode: self-signed cert rejected (TLS verification on)",
+    async () => {
+      const cert = Bun.file(join(certDir!, "cert.pem"));
+      const key = Bun.file(join(certDir!, "key.pem"));
+      const [certText, keyText] = await Promise.all([cert.text(), key.text()]);
+      const server = Bun.listen({
+        hostname: "127.0.0.1",
+        port: 0,
+        tls: { cert: certText, key: keyText },
+        socket: {
+          open(sock) {
+            sock.write("220 hbr-fake-tls ready\r\n");
+          },
+          data() {},
         },
-        data() {},
-      },
-    });
-    try {
-      await expect(
-        sendVerificationEmail(
-          { to: "user@example.com", url: "http://hbr.test/v" },
-          { ...GOOD_ENV, HBR_SMTP_SECURE: "ssl", SMTP_PORT: String(server.port) },
-        ),
-      ).rejects.toThrow();
-    } finally {
-      server.stop(true);
-    }
-  });
+      });
+      try {
+        await expect(
+          sendVerificationEmail(
+            { to: "user@example.com", url: "http://hbr.test/v" },
+            { ...GOOD_ENV, HBR_SMTP_SECURE: "ssl", SMTP_PORT: String(server.port) },
+          ),
+        ).rejects.toThrow();
+      } finally {
+        server.stop(true);
+      }
+    },
+  );
 });

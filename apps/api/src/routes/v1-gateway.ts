@@ -7,7 +7,8 @@
 import { Elysia } from "elysia";
 import type { Db } from "@hoborouter/db";
 import { verifyApiKey, isModelAllowed } from "@hoborouter/keys";
-import { resolveModel } from "@hoborouter/catalog";
+import { AUTO_PUBLIC_ID, resolveModel } from "@hoborouter/catalog";
+import { resolveAutoModel } from "../auto-resolve";
 import {
   estimateCapVnd,
   reserveRequest,
@@ -100,9 +101,7 @@ async function settleFromTap(
   if (billable.billable) {
     // Caching OFF: charge all input at the full rate (cachedInputTokens = 0
     // for calculateCharge) but still STORE the provider-reported cached count.
-    const chargeUsage = cachingOn
-      ? billable.usage
-      : { ...billable.usage, cachedInputTokens: 0n };
+    const chargeUsage = cachingOn ? billable.usage : { ...billable.usage, cachedInputTokens: 0n };
     const metadata: Record<string, unknown> = {
       ...(billable.assumed ? { assumed_splits: billable.assumed } : {}),
       ...(cachingOn ? {} : { caching: "off" }),
@@ -157,7 +156,8 @@ function scrubJsonStrings(
     return out;
   };
   if (typeof value === "string") return scrubString(value);
-  if (Array.isArray(value)) return value.map((v) => scrubJsonStrings(v, upstreamModel, publicModel, extra));
+  if (Array.isArray(value))
+    return value.map((v) => scrubJsonStrings(v, upstreamModel, publicModel, extra));
   if (typeof value === "object" && value !== null) {
     const out: JsonValue = {};
     for (const [k, v] of Object.entries(value))
@@ -208,7 +208,9 @@ function safeUpstreamError(
   try {
     const parsed = JSON.parse(rawText) as JsonValue;
     if (typeof parsed === "object" && parsed !== null) {
-      payload = scrubJsonStrings(parsed, upstreamModel, publicModel, [[providerLabel, publicModel]]);
+      payload = scrubJsonStrings(parsed, upstreamModel, publicModel, [
+        [providerLabel, publicModel],
+      ]);
     }
   } catch {
     // not JSON — keep the generic payload
@@ -253,8 +255,10 @@ function isFirstTokenEvent(obj: JsonValue, protocol: "chat" | "responses"): bool
           (tc as Record<string, unknown>).function !== null &&
           typeof ((tc as Record<string, unknown>).function as Record<string, unknown>).arguments ===
             "string" &&
-            (((tc as Record<string, unknown>).function as Record<string, unknown>).arguments as string)
-              .length > 0,
+          (
+            ((tc as Record<string, unknown>).function as Record<string, unknown>)
+              .arguments as string
+          ).length > 0,
       )
     );
   }
@@ -327,7 +331,10 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
     const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
     const key = token ? await verifyApiKey(db, token) : null;
     if (!key) return openAiError(401, "Invalid API key provided.", "invalid_api_key");
-    await db.update(apiKeys).set({ last_used_at: Date.now() }).where(eq(apiKeys.id, key.api_key_id));
+    await db
+      .update(apiKeys)
+      .set({ last_used_at: Date.now() })
+      .where(eq(apiKeys.id, key.api_key_id));
 
     // 3. Body validation — size-limited BEFORE buffering (memory DoS guard).
     const declaredLength = Number(request.headers.get("content-length"));
@@ -361,7 +368,19 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
     if (typeof body.model !== "string" || body.model === "") {
       return jsonError(400, "INVALID", "'model' is required");
     }
-    const resolved = await resolveModel(db, body.model);
+    // hoborouter/auto resolves ONCE here to a concrete published model before
+    // cap/reserve; everything downstream (billing, streaming, scrubbing) runs
+    // on the resolved model via the unchanged existing path. No eligible
+    // candidate falls back to the configured auto model's own single route.
+    const resolved =
+      body.model === AUTO_PUBLIC_ID
+        ? ((await resolveAutoModel(db, {
+            apiKeyId: key.api_key_id,
+            body,
+            bodyBytes: Buffer.byteLength(raw),
+            fxRate: intEnv("HBR_USD_VND_RATE", 26000),
+          })) ?? (await resolveModel(db, body.model)))
+        : await resolveModel(db, body.model);
     if (!resolved) return jsonError(404, "model_not_found", `Model '${body.model}' not found`);
     const { model, mapping, price } = resolved;
     const cachingOn = await effectiveCachingOn(db, model.prompt_caching);
@@ -433,14 +452,13 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
       .limit(1);
     const limit = subPlans[0]?.rate ?? null;
     const limiter =
-      limit !== null
-        ? checkSubscriptionRateLimit(key.workspace_id, limit, limNow)
-        : null;
+      limit !== null ? checkSubscriptionRateLimit(key.workspace_id, limit, limNow) : null;
     const rateLimited = (retryAfterSec: number) =>
       new Response(
         JSON.stringify({
           error: {
-            message: "Subscription rate limit exceeded. Retry after the window ends or use top-up credit.",
+            message:
+              "Subscription rate limit exceeded. Retry after the window ends or use top-up credit.",
             type: "rate_limit_error",
             code: "subscription_rate_limited",
           },
@@ -480,7 +498,8 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
       }
     } catch (err) {
       if (err instanceof WalletError) {
-        if (limiter?.underLimit) uncountSubscriptionRateLimit(key.workspace_id, limiter.windowStart);
+        if (limiter?.underLimit)
+          uncountSubscriptionRateLimit(key.workspace_id, limiter.windowStart);
         if (err.code === "insufficient") {
           // Over the limit and the topup wallet cannot fund it -> 429 (O3);
           // a 429 writes no rows. Otherwise 402 as today.
@@ -551,7 +570,12 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
         await settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done);
         return jsonError(499, "client_abort", "Client aborted the request");
       }
-      await settle(db, requestId, { kind: "full_hold", reason: "upstream_error", metadata: err }, done);
+      await settle(
+        db,
+        requestId,
+        { kind: "full_hold", reason: "upstream_error", metadata: err },
+        done,
+      );
       return jsonError(502, "upstream_error", "Upstream dispatch failed");
     }
     clearTimeout(headerTimeout);
@@ -680,12 +704,18 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
     });
     request.signal.addEventListener("abort", () => controller.abort(), { once: true });
     return new Response(
-      sseModelRewriteStream(passthrough, mapping.upstream_model, model.public_id, protocol, (obj) => {
-        if (ttftMs === undefined) ttftMs = roundMs(monotonic() - t0);
-        void obj;
-      }),
+      sseModelRewriteStream(
+        passthrough,
+        mapping.upstream_model,
+        model.public_id,
+        protocol,
+        (obj) => {
+          if (ttftMs === undefined) ttftMs = roundMs(monotonic() - t0);
+          void obj;
+        },
+      ),
       {
-      status: upstream.status,
+        status: upstream.status,
         headers: {
           "content-type": upstream.headers.get("content-type") ?? "text/event-stream",
           // Reverse proxies (nginx, Caddy, Cloudflare) re-buffer SSE without these.

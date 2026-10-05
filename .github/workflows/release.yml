@@ -27,11 +27,10 @@ jobs:
         run: |
           docker run -d --name hbr-ci-pg -e POSTGRES_PASSWORD=postgres \
             -p 55432:5432 postgres:17-alpine -c max_connections=400
-          for i in $(seq 1 30); do
-            docker exec hbr-ci-pg pg_isready -U postgres && break
-            sleep 1
-          done
-          docker exec hbr-ci-pg pg_isready -U postgres
+          # pg_isready probes the unix socket and can succeed against the
+          # init-phase temporary server (v0.4.0 CI failure); the script
+          # probes TCP instead. See scripts/wait-postgres.sh.
+          bash scripts/wait-postgres.sh hbr-ci-pg
       # v0.3.0 CI: 5 files died at exactly 5000ms (bun's default per-test
       # timeout) on their first test, which provisions a throwaway Postgres DB
       # (CREATE DATABASE + migrate) plus scrypt sign-up. The 2-vCPU runner with
@@ -40,8 +39,7 @@ jobs:
       # masking real hangs (whole suite is ~110s here).
       - run: PORT=3998 bun test --parallel=4 --timeout 20000
         env:
-          HBR_TEST_DATABASE_URL:
-            postgres://postgres:postgres@127.0.0.1:55432/postgres
+          HBR_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:55432/postgres
 
   build:
     needs: test

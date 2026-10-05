@@ -19,6 +19,12 @@ import {
   payosNextOrderCode,
   type PayosConfig,
 } from "@hoborouter/payments";
+import {
+  readPaymentLimits,
+  paymentDeadlineMs,
+  resolveTopupAmount,
+  type PaymentSnapshot,
+} from "../payment-creation";
 
 /** Purchase FK columns carried on a bundle/plan purchase; both absent = plain top-up. */
 export interface PayosPurchase {
@@ -32,31 +38,64 @@ export interface PayosPurchase {
 // Exported so bundle/plan purchase routes reuse the identical pipeline; the
 // purchase argument only adds the FK columns and audit fields (both omitted
 // for plain top-ups, whose behavior is unchanged).
-export const makePayosPaymentCreator = (
-  db: Db,
-  payos: PayosConfig,
-  payosFetch?: (input: string | URL, init?: RequestInit) => Promise<Response>,
-) =>
+export const makePayosPaymentCreator =
+  (
+    db: Db,
+    payos: PayosConfig,
+    payosFetch?: (input: string | URL, init?: RequestInit) => Promise<Response>,
+  ) =>
   async (
     workspaceId: string,
     userId: string,
     amount: number,
     purchase?: PayosPurchase,
+    /** USD top-up input (plain top-ups only): the exact text typed by the payer. */
+    usdAmountText?: string,
   ) => {
     const id = crypto.randomUUID();
     const orderCode = payosNextOrderCode();
     const now = Date.now();
+    // Deadline + cap come from one settings read inside the insert
+    // transaction; cap violations and invalid USD input abort the insert
+    // before any row exists.
+    let snapshot: PaymentSnapshot | null = null;
+    let deadlineMs = 0;
+    let overCap = false;
+    let invalidInput = false;
+    let resolvedAmount = 0;
     await db.transaction(async (tx) => {
+      const limits = await readPaymentLimits(tx);
+      const resolved = resolveTopupAmount(
+        amount,
+        purchase ? null : (usdAmountText ?? null),
+        limits,
+      );
+      if (!resolved.ok) {
+        if (resolved.reason === "over_cap") overCap = true;
+        else invalidInput = true;
+        return;
+      }
+      deadlineMs = paymentDeadlineMs(now, limits.timeoutMinutes);
+      resolvedAmount = resolved.amountVnd;
+      snapshot = {
+        input_currency: resolved.inputCurrency,
+        input_amount_text: resolved.inputAmountText,
+        fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd,
+      };
       await tx.insert(payments).values({
         id,
         workspace_id: workspaceId,
-        amount,
+        amount: resolved.amountVnd,
         status: "pending",
         provider: "payos",
         provider_order_code: String(orderCode),
         created_at: now,
+        expires_at: deadlineMs,
         bundle_id: purchase?.bundleId,
         subscription_plan_id: purchase?.subscriptionPlanId,
+        input_currency: resolved.inputCurrency,
+        input_amount_text: resolved.inputAmountText,
+        fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd,
       });
       await writeAudit(tx, {
         actorUserId: userId,
@@ -64,8 +103,14 @@ export const makePayosPaymentCreator = (
         action: "payment.create",
         target: id,
         detail: {
-          amount,
+          amount: resolved.amountVnd,
           provider: "payos",
+          expires_at: deadlineMs,
+          input_currency: resolved.inputCurrency,
+          input_amount_text: resolved.inputAmountText,
+          ...(resolved.fxRateVndPerUsd !== null
+            ? { fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd }
+            : {}),
           ...(purchase?.bundleId ? { bundle_id: purchase.bundleId } : {}),
           ...(purchase?.subscriptionPlanId
             ? { subscription_plan_id: purchase.subscriptionPlanId }
@@ -73,6 +118,16 @@ export const makePayosPaymentCreator = (
         },
       });
     });
+    if (overCap) {
+      return jsonError(400, "INVALID", "payment amount exceeds the configured maximum");
+    }
+    if (invalidInput || !snapshot) {
+      return jsonError(
+        400,
+        "INVALID",
+        "usd_amount must be a decimal amount with at most 2 decimals",
+      );
+    }
     // Same canonical base as auth.ts; redirect pages are display-only (the
     // webhook is the sole credit path).
     const base = process.env.BETTER_AUTH_URL || process.env.HBR_BASE_URL || "http://localhost:3000";
@@ -84,16 +139,18 @@ export const makePayosPaymentCreator = (
     try {
       const created = await client.createPayment({
         paymentId: id,
-        amountVnd: amount,
+        amountVnd: resolvedAmount,
         description: "topup",
         orderCode,
         returnUrl: redirectUrl,
         cancelUrl: redirectUrl,
+        // Provider-side expiry mirrors the local deadline snapshot.
+        expiredAtSec: Math.ceil(deadlineMs / 1000),
       });
       return new Response(
         JSON.stringify({
           id,
-          amount,
+          amount: resolvedAmount,
           status: "pending",
           provider: "payos",
           provider_order_code: String(orderCode),
@@ -124,6 +181,9 @@ export const paymentsRoutes = (
           body: t.Optional(
             t.Object({
               amount: t.Optional(t.Number()),
+              // Optional USD input (plain top-ups only): digits, max 2
+              // decimals. Mutually exclusive with `amount`.
+              usd_amount: t.Optional(t.String()),
               provider: t.Optional(t.Union([t.Literal("manual"), t.Literal("payos")])),
             }),
           ),
@@ -156,50 +216,91 @@ export const paymentsRoutes = (
             .limit(1);
           if (!wsRows[0]) return jsonError(404, "NOT_FOUND", "Workspace not found");
           const raw = (body as { amount?: unknown } | null)?.amount;
-          let amount: number;
-          try {
-            amount = requirePositiveSafeInteger("amount", raw);
-          } catch {
-            return jsonError(400, "INVALID", "amount must be a positive integer VND amount");
+          const usdRaw = (body as { usd_amount?: unknown } | null)?.usd_amount;
+          if (raw !== undefined && usdRaw !== undefined) {
+            return jsonError(400, "INVALID", "amount and usd_amount are mutually exclusive");
+          }
+          const usdAmountText = typeof usdRaw === "string" ? usdRaw : null;
+          let amount = 0;
+          if (usdAmountText === null) {
+            try {
+              amount = requirePositiveSafeInteger("amount", raw);
+            } catch {
+              return jsonError(400, "INVALID", "amount must be a positive integer VND amount");
+            }
           }
           const providerChoice = (body as { provider?: string } | null)?.provider;
           if (providerChoice === "payos") {
             if (!payos.available) {
               return jsonError(503, "PROVIDER_UNAVAILABLE", "payOS is not configured");
             }
-            return createPayosPayment(params.id, userId, amount);
+            return createPayosPayment(
+              params.id,
+              userId,
+              amount,
+              undefined,
+              usdAmountText ?? undefined,
+            );
           }
           const id = crypto.randomUUID();
           const orderCode = `MANUAL-${id}`;
           const now = Date.now();
+          // Settings (deadline/cap/FX) are read inside the insert transaction:
+          // expires_at is a creation-time snapshot and the cap always binds.
+          let resolvedAmount = 0;
+          let checkoutPath = "";
+          let createError: Response | null = null;
           await db.transaction(async (tx) => {
+            const limits = await readPaymentLimits(tx);
+            const resolved = resolveTopupAmount(amount, usdAmountText, limits);
+            if (!resolved.ok) {
+              createError = jsonError(400, "INVALID", resolved.message);
+              return;
+            }
+            const deadline = paymentDeadlineMs(now, limits.timeoutMinutes);
+            resolvedAmount = resolved.amountVnd;
             await tx.insert(payments).values({
               id,
               workspace_id: params.id,
-              amount,
+              amount: resolved.amountVnd,
               status: "pending",
               provider: "manual",
               provider_order_code: orderCode,
               created_at: now,
+              expires_at: deadline,
+              input_currency: resolved.inputCurrency,
+              input_amount_text: resolved.inputAmountText,
+              fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd,
             });
             await writeAudit(tx, {
               actorUserId: userId,
               workspaceId: params.id,
               action: "payment.create",
               target: id,
-              detail: { amount, provider: "manual" },
+              detail: {
+                amount: resolved.amountVnd,
+                provider: "manual",
+                expires_at: deadline,
+                input_currency: resolved.inputCurrency,
+                input_amount_text: resolved.inputAmountText,
+                ...(resolved.fxRateVndPerUsd !== null
+                  ? { fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd }
+                  : {}),
+              },
             });
+            checkoutPath = `/billing/payments?payment=${id}`;
           });
+          if (createError) return createError;
           // No provider checkout: admin approval happens out-of-band; the
           // member tracks status in the billing UI.
           return new Response(
             JSON.stringify({
               id,
-              amount,
+              amount: resolvedAmount,
               status: "pending",
               provider: "manual",
               provider_order_code: orderCode,
-              checkout_url: `/billing/payments?payment=${id}`,
+              checkout_url: checkoutPath,
             }),
             { status: 201, headers: { "content-type": "application/json" } },
           );
@@ -239,6 +340,10 @@ export const paymentsRoutes = (
               provider: payments.provider,
               provider_order_code: payments.provider_order_code,
               created_at: payments.created_at,
+              expires_at: payments.expires_at,
+              input_currency: payments.input_currency,
+              input_amount_text: payments.input_amount_text,
+              fx_rate_vnd_per_usd: payments.fx_rate_vnd_per_usd,
             })
             .from(payments)
             .where(eq(payments.id, params.paymentId))
@@ -248,8 +353,9 @@ export const paymentsRoutes = (
           });
         },
       )
-      // Safe capability endpoint: which payment providers are enabled. No
-      // secrets, no configuration detail — only the boolean.
+      // Safe capability endpoint: which payment providers are enabled plus
+      // the display-safe control values (timeout, cap, FX rate). No secrets,
+      // no provider configuration detail.
       .get(
         "/api/v1/payment-methods",
         {
@@ -266,6 +372,34 @@ export const paymentsRoutes = (
           return new Response(JSON.stringify({ manual: true, payos: payos.available }), {
             headers: { "content-type": "application/json" },
           });
+        },
+      )
+      .get(
+        "/api/v1/payment-config",
+        {
+          response: t.Object({
+            timeout_minutes: t.Number(),
+            max_amount_vnd: t.Number(),
+            usd_vnd_rate: t.Number(),
+          }),
+          detail: {
+            tags: ["Payments"],
+            summary: "Get display-safe payment configuration",
+            security: [{ cookieAuth: [] }],
+          },
+        },
+        async ({ request }) => {
+          const gate = await requireSession(auth, request);
+          if (gate.error) return gate.error;
+          const limits = await readPaymentLimits(db);
+          return new Response(
+            JSON.stringify({
+              timeout_minutes: limits.timeoutMinutes,
+              max_amount_vnd: limits.maxAmountVnd,
+              usd_vnd_rate: limits.usdVndRate,
+            }),
+            { headers: { "content-type": "application/json" } },
+          );
         },
       )
   );

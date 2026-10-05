@@ -86,7 +86,11 @@ export async function q<T = Record<string, unknown>>(
   return rows.map((r) => {
     const o = { ...(r as Record<string, unknown>) };
     for (const k of Object.keys(o)) {
-      if (typeof o[k] === "string" && /^-?\d+$/.test(o[k] as string) && (o[k] as string).length < 16)
+      if (
+        typeof o[k] === "string" &&
+        /^-?\d+$/.test(o[k] as string) &&
+        (o[k] as string).length < 16
+      )
         o[k] = Number(o[k]);
     }
     return o as T;
@@ -117,7 +121,9 @@ export async function makeInstanceAdmin(db: Db, userId: string) {
 }
 
 export async function userIdByEmail(db: Db, email: string): Promise<string> {
-  const res = (await db.execute(sql`SELECT id FROM users WHERE email = ${email} LIMIT 1`)) as unknown as { id: string }[];
+  const res = (await db.execute(
+    sql`SELECT id FROM users WHERE email = ${email} LIMIT 1`,
+  )) as unknown as { id: string }[];
   const row = res[0];
   if (!row) throw new Error("no user " + email);
   return row.id;

@@ -16,9 +16,10 @@ import { type Db, modelBindings, priceSnapshots } from "@hoborouter/db";
 
 async function latestSnapshots(db: Db) {
   // Latest snapshot per binding: ROW_NUMBER over (partition, created_at desc, id desc).
-  const rn = sql<number>`row_number() over (partition by ${priceSnapshots.binding_id} order by ${priceSnapshots.created_at} desc, ${priceSnapshots.id} desc)`.as(
-    "rn",
-  );
+  const rn =
+    sql<number>`row_number() over (partition by ${priceSnapshots.binding_id} order by ${priceSnapshots.created_at} desc, ${priceSnapshots.id} desc)`.as(
+      "rn",
+    );
   const ranked = db
     .select({
       binding_id: priceSnapshots.binding_id,
@@ -119,18 +120,16 @@ export const adminModelsRoutes = (db: Db, auth: BetterAuthInstance) =>
         const id = crypto.randomUUID();
         const now = Date.now();
         await db.transaction(async (tx) => {
-          await tx
-            .insert(modelBindings)
-            .values({
-              id,
-              workspace_id: null,
-              public_model: publicModel,
-              cpa_alias: cpaAlias,
-              status: "published",
-              price_input_per_1m: pin,
-              price_output_per_1m: pout,
-              effective_at: now,
-            });
+          await tx.insert(modelBindings).values({
+            id,
+            workspace_id: null,
+            public_model: publicModel,
+            cpa_alias: cpaAlias,
+            status: "published",
+            price_input_per_1m: pin,
+            price_output_per_1m: pout,
+            effective_at: now,
+          });
           await publishSnapshot(tx, { bindingId: id, priceInput: pin, priceOutput: pout, now });
           await writeAudit(tx, {
             actorUserId: userId,
@@ -202,7 +201,12 @@ export const adminModelsRoutes = (db: Db, auth: BetterAuthInstance) =>
             })
             .where(eq(modelBindings.id, params.id));
           // A price change publishes a NEW immutable snapshot — never edits old rows.
-          await publishSnapshot(tx, { bindingId: params.id, priceInput: pin, priceOutput: pout, now });
+          await publishSnapshot(tx, {
+            bindingId: params.id,
+            priceInput: pin,
+            priceOutput: pout,
+            now,
+          });
           await writeAudit(tx, {
             actorUserId: userId,
             workspaceId: null,

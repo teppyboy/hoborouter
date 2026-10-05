@@ -31,10 +31,12 @@
 ### Task 1: Make the response boundary stream-safe
 
 **Files:**
+
 - Modify: `apps/api/src/app.ts` (`boundaryResponse`, lines ~229–253)
 - Test: `apps/api/test/streaming.test.ts` (new)
 
 **Interfaces:**
+
 - Produces: `boundaryResponse` passes `source.body` through as a stream when `json === false`; only `json === true` builds a buffered body.
 
 - [ ] **Step 1: Write the failing test** `streaming.test.ts > "first SSE chunk arrives before upstream finishes"`: fake CPA returns a `ReadableStream` that enqueues chunk 1 (`data: {"choices":[{"delta":{"content":"A"}}]}`), then waits on a promise the test controls. The test calls `app.handle(...)` for `/v1/chat/completions` with `stream: true`, reads the first chunk from `res.body.getReader()` with a 2 s timeout, asserts it contains `"A"`, then releases chunk 2 + `data: [DONE]` and asserts the rest arrives and the request is settled.
@@ -46,11 +48,13 @@
 ### Task 2: Anti-buffering headers and idle timeout
 
 **Files:**
+
 - Modify: `apps/api/src/routes/v1-gateway.ts` (stream `Response` headers, lines ~617–625)
 - Modify: `apps/api/src/index.ts` (`Bun.serve` options)
 - Test: `apps/api/test/streaming.test.ts`
 
 **Interfaces:**
+
 - Produces: streamed gateway responses carry `content-type: text/event-stream`, `cache-control: no-cache`, `x-accel-buffering: no`, `x-hbr-request-id`.
 - Produces: `Bun.serve({ idleTimeout: Number(process.env.HBR_IDLE_TIMEOUT_S) || 255 })`. 255 s is Bun's maximum.
 
@@ -63,6 +67,7 @@
 ### Task 3: Streaming regression coverage
 
 **Files:**
+
 - Modify: `apps/api/test/streaming.test.ts`
 - Modify: `tests/fake-cpa.ts` (optional `HBR_FAKE_CPA_CHUNK_DELAY_MS` env: delay between SSE chunks, default 0)
 
@@ -77,6 +82,7 @@
 ### Task 4: End-to-end streaming check through the real server
 
 **Files:**
+
 - Modify: `tests/e2e/ui.ts` (one new step) or new `tests/e2e/stream-check.ts` called from the existing E2E step list
 - Uses: `tests/fake-cpa.ts` with `HBR_FAKE_CPA_CHUNK_DELAY_MS=300`
 
@@ -87,11 +93,13 @@
 ### Task 5: Make the release workflow green
 
 **Files:**
+
 - Modify: `.github/workflows/release.yml`
 - Modify: `tests/sqlite-to-pg.test.ts`
 - Test: rerun the workflow on tag `v0.1.0` (delete and recreate the tag only after it passes locally under the same steps)
 
 Root causes from run `37054262196`:
+
 1. 152 of 156 failures: `ENOENT ... apps/web/dist`. `buildApp` mounts `staticSpa(webDist)`, which `realpathSync`s the dist folder, and CI never builds the web app before testing.
 2. `tests/sqlite-to-pg.test.ts` runs `git show 3af6325:...`. `actions/checkout@v4` makes a depth-1 clone, so the commit doesn't exist.
 

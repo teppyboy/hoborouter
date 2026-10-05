@@ -25,7 +25,12 @@ beforeAll(async () => {
   drop = t.drop;
   f = await seedFixture(db);
   await makePayment(db, "pay-res-1", "ws-a");
-  await creditWallet(db, { walletId: f.walletA, amount: 10_000, kind: "topup", paymentId: "pay-res-1" });
+  await creditWallet(db, {
+    walletId: f.walletA,
+    amount: 10_000,
+    kind: "topup",
+    paymentId: "pay-res-1",
+  });
 });
 
 afterAll(async () => {
@@ -165,14 +170,22 @@ describe("releaseHold", () => {
     const ledgerBefore = (
       await q1<{ c: number }>(db, sql`SELECT count(*)::int c FROM ledger_entries`)
     ).c;
-    await releaseHold(db, { reservationId: resId, apiKeyId: f.keyA, workspaceId: f.wsA, now: NOW + 1 });
+    await releaseHold(db, {
+      reservationId: resId,
+      apiKeyId: f.keyA,
+      workspaceId: f.wsA,
+      now: NOW + 1,
+    });
     const after = await getWallet(db, f.walletA);
     expect(after.reserved).toBe(during.reserved - args.capAmount);
     const ledgerAfter = (
       await q1<{ c: number }>(db, sql`SELECT count(*)::int c FROM ledger_entries`)
     ).c;
     expect(ledgerAfter).toBe(ledgerBefore);
-    const row = await q1<{ s: string }>(db, sql`SELECT status s FROM reservations WHERE id = ${resId}`);
+    const row = await q1<{ s: string }>(
+      db,
+      sql`SELECT status s FROM reservations WHERE id = ${resId}`,
+    );
     expect(row.s).toBe("released");
   });
 
@@ -305,9 +318,7 @@ describe("two-connection concurrency gate", () => {
 });
 
 describe("sequential fuzz (500 sequential mixed ops)", () => {
-  test(
-    "invariants hold after every commit; ledger balance_after consistent",
-    async () => {
+  test("invariants hold after every commit; ledger balance_after consistent", async () => {
     const fdb0 = await makeDb();
     const fdb = fdb0.db;
     const ff = await seedFixture(fdb);
@@ -375,10 +386,5 @@ describe("sequential fuzz (500 sequential mixed ops)", () => {
       expect(sum).toBe(after.balance);
     }
     await fdb0.drop();
-    },
-    // ~2000 sequential Postgres round trips; exceeds bun's default 5s timeout
-    // on CI runners. Explicit timeout keeps the full 500-op sweep.
-    60_000,
-  );
+  }, 60_000); // on CI runners. Explicit timeout keeps the full 500-op sweep. // ~2000 sequential Postgres round trips; exceeds bun's default 5s timeout
 });
-

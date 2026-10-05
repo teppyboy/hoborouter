@@ -7,7 +7,15 @@ import type { Db } from "@hoborouter/db";
 import { createTestDb } from "@hoborouter/db";
 import { createAuth } from "../src/auth";
 import { buildApp } from "../src/app";
-import { signUp, req, createWorkspace, addMember, userIdByEmail, makeInstanceAdmin, q } from "./helpers";
+import {
+  signUp,
+  req,
+  createWorkspace,
+  addMember,
+  userIdByEmail,
+  makeInstanceAdmin,
+  q,
+} from "./helpers";
 import { sql } from "drizzle-orm";
 
 const A = "ws-chat-a";
@@ -89,7 +97,11 @@ describe("chat conversations routes", () => {
   });
 
   test("list is per-user: bob sees only his conversations, not alice's", async () => {
-    const bobRes = await req(app, `/api/v1/workspaces/${A}/chats`, { method: "POST", cookie: bob, body: {} });
+    const bobRes = await req(app, `/api/v1/workspaces/${A}/chats`, {
+      method: "POST",
+      cookie: bob,
+      body: {},
+    });
     expect(bobRes.status).toBe(201);
     const res = await req(app, `/api/v1/workspaces/${A}/chats`, { method: "GET", cookie: bob });
     expect(res.status).toBe(200);
@@ -102,17 +114,26 @@ describe("chat conversations routes", () => {
 
   test("other users' chats are 404 to members (even instance admins); non-members 403", async () => {
     // bob is a member AND an instance admin → 404 (no leak, no admin bypass).
-    const res = await req(app, `/api/v1/workspaces/${A}/chats/${aliceChat}`, { method: "GET", cookie: bob });
+    const res = await req(app, `/api/v1/workspaces/${A}/chats/${aliceChat}`, {
+      method: "GET",
+      cookie: bob,
+    });
     expect(res.status).toBe(404);
     // carol/outsider are not members of A → 403 membership gate.
     for (const cookie of [carol, outsider]) {
-      const res = await req(app, `/api/v1/workspaces/${A}/chats/${aliceChat}`, { method: "GET", cookie });
+      const res = await req(app, `/api/v1/workspaces/${A}/chats/${aliceChat}`, {
+        method: "GET",
+        cookie,
+      });
       expect(res.status).toBe(403);
     }
   });
 
   test("chat under a different workspace id is 404 (no existence leak)", async () => {
-    const res = await req(app, `/api/v1/workspaces/${B}/chats/${aliceChat}`, { method: "GET", cookie: carol });
+    const res = await req(app, `/api/v1/workspaces/${B}/chats/${aliceChat}`, {
+      method: "GET",
+      cookie: carol,
+    });
     expect(res.status).toBe(404);
   });
 
@@ -140,7 +161,10 @@ describe("chat conversations routes", () => {
       body: { version: 1, title: "Stale", messages: [{ role: "user", content: "stale" }] },
     });
     expect(res.status).toBe(409);
-    const cur = await req(app, `/api/v1/workspaces/${A}/chats/${aliceChat}`, { method: "GET", cookie: alice });
+    const cur = await req(app, `/api/v1/workspaces/${A}/chats/${aliceChat}`, {
+      method: "GET",
+      cookie: alice,
+    });
     const body = await json(cur);
     expect(body.title).toBe("My chat"); // newer save survived
   });
@@ -152,24 +176,39 @@ describe("chat conversations routes", () => {
         cookie: alice,
         body,
       });
-    expect((await put({ version: 2, messages: [{ role: "system", content: "x" }] })).status).toBe(400);
-    expect((await put({ version: 2, messages: [{ role: "user", content: "x" }, "nope"] })).status).toBe(400);
+    expect((await put({ version: 2, messages: [{ role: "system", content: "x" }] })).status).toBe(
+      400,
+    );
+    expect(
+      (await put({ version: 2, messages: [{ role: "user", content: "x" }, "nope"] })).status,
+    ).toBe(400);
     expect((await put({ version: 2, title: "", messages: [] })).status).toBe(400);
+    expect((await put({ version: 2, title: "a".repeat(121), messages: [] })).status).toBe(400);
     expect(
-      (await put({ version: 2, title: "a".repeat(121), messages: [] })).status,
+      (
+        await put({
+          version: 2,
+          messages: Array.from({ length: 501 }, () => ({ role: "user", content: "x" })),
+        })
+      ).status,
     ).toBe(400);
     expect(
-      (await put({ version: 2, messages: Array.from({ length: 501 }, () => ({ role: "user", content: "x" })) })).status,
-    ).toBe(400);
-    expect(
-      (await put({ version: 2, messages: [{ role: "user", content: "x".repeat(64 * 1024 + 1) }] })).status,
+      (await put({ version: 2, messages: [{ role: "user", content: "x".repeat(64 * 1024 + 1) }] }))
+        .status,
     ).toBe(400);
     // Over the hard body cap → 413 before full processing.
-    const big = JSON.stringify({ version: 2, messages: [{ role: "user", content: "x".repeat(600 * 1024) }] });
+    const big = JSON.stringify({
+      version: 2,
+      messages: [{ role: "user", content: "x".repeat(600 * 1024) }],
+    });
     const res = await app.handle(
       new Request(`http://localhost/api/v1/workspaces/${A}/chats/${aliceChat}`, {
         method: "PUT",
-        headers: { cookie: alice, "content-type": "application/json", "content-length": String(big.length) },
+        headers: {
+          cookie: alice,
+          "content-type": "application/json",
+          "content-length": String(big.length),
+        },
         body: big,
       }),
     );
@@ -195,12 +234,18 @@ describe("chat conversations routes", () => {
     const data = ((await json(list)).data as { id: string }[]).map((c) => c.id);
     expect(data).not.toContain(aliceChat);
     // Archived, not deleted: the snapshot is still loadable by the owner.
-    const load = await req(app, `/api/v1/workspaces/${A}/chats/${aliceChat}`, { method: "GET", cookie: alice });
+    const load = await req(app, `/api/v1/workspaces/${A}/chats/${aliceChat}`, {
+      method: "GET",
+      cookie: alice,
+    });
     expect(load.status).toBe(200);
   });
 
   test("no DELETE data endpoint exists", async () => {
-    const res = await req(app, `/api/v1/workspaces/${A}/chats/${aliceChat}`, { method: "DELETE", cookie: alice });
+    const res = await req(app, `/api/v1/workspaces/${A}/chats/${aliceChat}`, {
+      method: "DELETE",
+      cookie: alice,
+    });
     expect(res.status).toBe(404);
   });
 
@@ -219,7 +264,10 @@ describe("chat conversations routes", () => {
       actor_user_id: string | null;
       workspace_id: string | null;
       detail: unknown;
-    }>(db, "SELECT action, target, actor_user_id, workspace_id, detail FROM audit_log WHERE action LIKE 'chat.%'");
+    }>(
+      db,
+      "SELECT action, target, actor_user_id, workspace_id, detail FROM audit_log WHERE action LIKE 'chat.%'",
+    );
     // Successful title change ("New chat" -> "My chat") audited exactly once;
     // stale (409) and invalid (400) PUTs audit nothing.
     const renames = audits.filter((a) => a.action === "chat.rename" && a.target === aliceChat);

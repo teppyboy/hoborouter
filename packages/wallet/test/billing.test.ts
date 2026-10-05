@@ -197,7 +197,10 @@ describe("reserveRequest", () => {
     expect(req.model_id).toBe(f.model);
     expect(req.provider_model_mapping_id).toBe(f.mapping);
     expect(req.model_binding_id).toBeNull();
-    const res = await q1(db, sql`SELECT * FROM billing_reservations WHERE request_id = ${r.requestId}`);
+    const res = await q1(
+      db,
+      sql`SELECT * FROM billing_reservations WHERE request_id = ${r.requestId}`,
+    );
     expect(res.status).toBe("held");
     expect(Number(res.cap_vnd)).toBe(26_000);
     expect(Number(res.usd_vnd_exchange_rate)).toBe(26000);
@@ -466,9 +469,8 @@ describe("settleRequest", () => {
     expect(second.status).toBe(first.status);
     expect(second.alreadySettled).toBe(true);
     expect((await getWallet(db, f.wallet)).balance).toBe(balAfterFirst);
-    const settleCount = (
-      await q1<{ c: number }>(db, sql`SELECT count(*)::int c FROM settlements`)
-    ).c;
+    const settleCount = (await q1<{ c: number }>(db, sql`SELECT count(*)::int c FROM settlements`))
+      .c;
     expect(settleCount).toBe(1);
     await assertInvariants(db, f.wallet);
   });

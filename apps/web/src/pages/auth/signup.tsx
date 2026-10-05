@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -19,28 +19,35 @@ import {
   FormLabel,
   FormMessage,
 } from "../../components/ui/form";
+import { useAuthT, type AuthT } from "./copy";
 
-const PASSWORD_MESSAGE = "Does not meet the password requirements below";
-
-const schema = z
-  .object({
-    name: z.string().min(1, "Name is required"),
-    email: z.string().email(),
-    password: z.string().refine((v) => checkPassword(v).length === 0, {
-      message: PASSWORD_MESSAGE,
-    }),
-    confirmPassword: z.string().min(1, "Confirm your password"),
-  })
-  .refine((v) => v.password === v.confirmPassword, {
-    message: "Passwords do not match",
-    path: ["confirmPassword"],
-  });
-type Values = z.infer<typeof schema>;
+/** Zod schema whose validation messages come from the active locale. */
+export function makeSignupSchema(t: AuthT) {
+  return z
+    .object({
+      name: z.string().min(1, t("nameRequired")),
+      email: z.string().email(t("emailInvalid")),
+      password: z.string().refine((v) => checkPassword(v).length === 0, {
+        message: t("passwordRuleFailed"),
+      }),
+      confirmPassword: z.string().min(1, t("confirmRequired")),
+    })
+    .refine((v) => v.password === v.confirmPassword, {
+      message: t("passwordMismatch"),
+      path: ["confirmPassword"],
+    });
+}
+type Values = z.infer<ReturnType<typeof makeSignupSchema>>;
 
 const fields = [
-  { name: "name", label: "Name", type: "text", autoComplete: "name" },
-  { name: "email", label: "Email", type: "email", autoComplete: "email" },
-  { name: "password", label: "Password", type: "password", autoComplete: "new-password" },
+  { name: "name", label: "nameLabel", type: "text", autoComplete: "name" },
+  { name: "email", label: "emailLabel", type: "email", autoComplete: "email" },
+  {
+    name: "password",
+    label: "passwordLabel",
+    type: "password",
+    autoComplete: "new-password",
+  },
 ] as const;
 
 /** Live rule checklist under the password field; ticks as rules are satisfied. */
@@ -65,6 +72,8 @@ function PasswordChecklist({ value }: { value: string }) {
 }
 
 export default function SignupPage() {
+  const t = useAuthT();
+  const schema = useMemo(() => makeSignupSchema(t), [t]);
   const navigate = useNavigate();
   // Captcha is required only when the backend advertises a Turnstile site
   // key. While the config is pending or failed the submit stays disabled:
@@ -89,7 +98,7 @@ export default function SignupPage() {
       },
     );
     if (error) {
-      form.setError("email", { message: error.message ?? "Sign up failed" });
+      form.setError("email", { message: error.message ?? t("signUpFailed") });
       // Tokens are one-shot: reset so the next attempt gets a fresh one.
       if (captchaRequired) {
         setToken(null);
@@ -97,11 +106,11 @@ export default function SignupPage() {
       }
       return;
     }
-    toast.success("Account created");
+    toast.success(t("accountCreatedToast"));
     // Optional verification only: with SMTP configured the backend already
     // mailed a signed link on signup. The user can use the app either way.
     if (config?.emailVerification.enabled) {
-      toast("Verification email sent — check your inbox");
+      toast(t("verificationEmailToast"));
     }
     queryClient.clear();
     navigate({ to: "/" });
@@ -109,11 +118,11 @@ export default function SignupPage() {
 
   return (
     <AuthLayout>
-      <h1 className="text-2xl font-semibold tracking-tight">Create account</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">{t("signUpTitle")}</h1>
       <p className="mt-2 text-sm text-muted-foreground">
-        Already have an account?{" "}
+        {t("signUpPrompt")}{" "}
         <Link to="/login" className="underline">
-          Sign in
+          {t("signIn")}
         </Link>
       </p>
       <Form {...form}>
@@ -128,7 +137,7 @@ export default function SignupPage() {
                   className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both"
                   style={{ animationDelay: `${120 + i * 80}ms` }}
                 >
-                  <FormLabel>{f.label}</FormLabel>
+                  <FormLabel>{t(f.label)}</FormLabel>
                   <FormControl>
                     <Input type={f.type} autoComplete={f.autoComplete} {...field} />
                   </FormControl>
@@ -146,7 +155,7 @@ export default function SignupPage() {
                 className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both"
                 style={{ animationDelay: `${120 + 3 * 80}ms` }}
               >
-                <FormLabel>Confirm password</FormLabel>
+                <FormLabel>{t("confirmPasswordLabel")}</FormLabel>
                 <FormControl>
                   <Input type="password" autoComplete="new-password" {...field} />
                 </FormControl>
@@ -154,20 +163,18 @@ export default function SignupPage() {
               </FormItem>
             )}
           />
-          {isPending && (
-            <p className="text-sm text-muted-foreground">Checking security options…</p>
-          )}
+          {isPending && <p className="text-sm text-muted-foreground">{t("checkingSecurity")}</p>}
           {isError && (
             <p role="alert" className="text-sm text-destructive">
-              Could not load security options. {" "}
+              {t("securityLoadFailed")}{" "}
               <button type="button" className="underline" onClick={() => void refetch()}>
-                Retry
+                {t("retry")}
               </button>
             </p>
           )}
           {scriptError && (
             <p role="alert" className="text-sm text-destructive">
-              Could not load the captcha check. {" "}
+              {t("captchaLoadFailed")}{" "}
               <button
                 type="button"
                 className="underline"
@@ -176,7 +183,7 @@ export default function SignupPage() {
                   setResetKey((k) => k + 1);
                 }}
               >
-                Retry
+                {t("retry")}
               </button>
             </p>
           )}
@@ -198,16 +205,16 @@ export default function SignupPage() {
               (captchaRequired && !token)
             }
           >
-            Sign up
+            {t("signUp")}
           </Button>
           <p className="text-xs text-muted-foreground">
-            By creating an account you agree to the{" "}
+            {t("agreePrefix")}{" "}
             <Link to="/terms" className="underline underline-offset-2">
-              Terms of Service
+              {t("termsOfServiceLink")}
             </Link>{" "}
-            and{" "}
+            {t("and")}{" "}
             <Link to="/privacy" className="underline underline-offset-2">
-              Privacy Policy
+              {t("privacyPolicyLink")}
             </Link>
             .
           </p>

@@ -38,15 +38,48 @@ function escapeHtml(s: string): string {
 // or fragment — javascript:/data:/vbscript://host are rejected. img is
 // deliberately absent: images never fetch.
 const ALLOWED_TAGS = [
-  "p", "br", "ul", "ol", "li", "blockquote", "h1", "h2", "h3", "h4", "h5",
-  "h6", "em", "strong", "del", "code", "pre", "a", "hr", "span", "input",
-  "table", "thead", "tbody", "tr", "th", "td",
+  "p",
+  "br",
+  "ul",
+  "ol",
+  "li",
+  "blockquote",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "em",
+  "strong",
+  "del",
+  "code",
+  "pre",
+  "a",
+  "hr",
+  "span",
+  "input",
+  "table",
+  "thead",
+  "tbody",
+  "tr",
+  "th",
+  "td",
 ];
 const PURIFY_CONFIG = {
   ALLOWED_TAGS,
   ALLOWED_ATTR: [
-    "href", "title", "target", "rel", "type", "checked", "disabled",
-    "colspan", "rowspan", "align", "class",
+    "href",
+    "title",
+    "target",
+    "rel",
+    "type",
+    "checked",
+    "disabled",
+    "colspan",
+    "rowspan",
+    "align",
+    "class",
   ],
 };
 
@@ -86,7 +119,10 @@ function hardenLinks(node: Element) {
 // Everything else — javascript:, data:, vbscript:, //host — is stripped.
 // DOMPurify's default URI regexp stays in charge of other attributes (it
 // evaluates non-URI attribute values too, e.g. input type="checkbox").
-function hrefPolicy(_node: Element, data: { attrName: string; attrValue: unknown; keepAttr: boolean }) {
+function hrefPolicy(
+  _node: Element,
+  data: { attrName: string; attrValue: unknown; keepAttr: boolean },
+) {
   if (data.attrName !== "href") return;
   const value = String(data.attrValue ?? "");
   if (/[\u0000-\u0020\u007F]/.test(value) || value.includes("\\")) {
