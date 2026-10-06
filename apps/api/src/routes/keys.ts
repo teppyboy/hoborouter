@@ -1,13 +1,14 @@
 // Task 4 + key lifecycle: workspace-scoped sk-hbr- API key routes. Admin/owner
-// only; plaintext shown exactly once at creation; PATCH enable/disable (revoked
-// terminal → 409); DELETE revokes; model restrictions via
-// api_key_model_permissions (zero rows = unrestricted). POST/DELETE/PATCH/PUT
-// + audit atomic.
+// only; plaintext shown exactly once at creation; PATCH enable/disable + rename
+// (revoked terminal → 409); DELETE revokes; POST /remove soft-deletes (hidden
+// from lists, never authenticates, row kept for audit/usage joins); model
+// restrictions via api_key_model_permissions (zero rows = unrestricted).
+// POST/DELETE/PATCH/PUT + audit atomic.
 import { Elysia, t } from "elysia";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, writeAudit, jsonError } from "../authz";
 import { generateApiKey } from "@hoborouter/keys";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { type Db, workspaces, apiKeys, models, apiKeyModelPermissions } from "@hoborouter/db";
 
 // Shared display-name bound for create and rename; keeps the two paths consistent.
@@ -102,7 +103,8 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
             revoked_at: apiKeys.revoked_at,
           })
           .from(apiKeys)
-          .where(eq(apiKeys.workspace_id, params.id))
+          // removed keys are hidden from the management list
+          .where(and(eq(apiKeys.workspace_id, params.id), isNull(apiKeys.deleted_at)))
           .orderBy(asc(apiKeys.created_at));
         // legacy 'active' ≡ enabled — normalize for display
         for (const r of rows) if (r.status === "active") r.status = "enabled";
@@ -154,7 +156,13 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
           const key = await tx
             .select({ status: apiKeys.status, name: apiKeys.name })
             .from(apiKeys)
-            .where(and(eq(apiKeys.id, params.keyId), eq(apiKeys.workspace_id, params.id)))
+            .where(
+              and(
+                eq(apiKeys.id, params.keyId),
+                eq(apiKeys.workspace_id, params.id),
+                isNull(apiKeys.deleted_at),
+              ),
+            )
             .limit(1);
           if (!key[0]) return;
           // Revoked stays terminal for status changes; a name-only rename is
@@ -169,7 +177,13 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
               ...(hasStatus ? { status: requested as "enabled" | "disabled" } : {}),
               ...(hasName ? { name: name! } : {}),
             })
-            .where(and(eq(apiKeys.id, params.keyId), eq(apiKeys.workspace_id, params.id)))
+            .where(
+              and(
+                eq(apiKeys.id, params.keyId),
+                eq(apiKeys.workspace_id, params.id),
+                isNull(apiKeys.deleted_at),
+              ),
+            )
             .returning({ id: apiKeys.id, name: apiKeys.name, status: apiKeys.status });
           updated = changed.length;
           if (updated === 1) {
@@ -225,7 +239,13 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
         const key = await db
           .select({ id: apiKeys.id })
           .from(apiKeys)
-          .where(and(eq(apiKeys.id, params.keyId), eq(apiKeys.workspace_id, params.id)))
+          .where(
+            and(
+              eq(apiKeys.id, params.keyId),
+              eq(apiKeys.workspace_id, params.id),
+              isNull(apiKeys.deleted_at),
+            ),
+          )
           .limit(1);
         if (!key[0]) return jsonError(404, "NOT_FOUND", "Key not found");
         const rows = await db
@@ -256,7 +276,13 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
         const key = await db
           .select({ id: apiKeys.id })
           .from(apiKeys)
-          .where(and(eq(apiKeys.id, params.keyId), eq(apiKeys.workspace_id, params.id)))
+          .where(
+            and(
+              eq(apiKeys.id, params.keyId),
+              eq(apiKeys.workspace_id, params.id),
+              isNull(apiKeys.deleted_at),
+            ),
+          )
           .limit(1);
         if (!key[0]) return jsonError(404, "NOT_FOUND", "Key not found");
         const raw = (body as { modelIds?: unknown } | null)?.modelIds;
@@ -326,6 +352,7 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
               eq(apiKeys.id, params.keyId),
               eq(apiKeys.workspace_id, params.id),
               inArray(apiKeys.status, ["active", "enabled", "disabled"]),
+              isNull(apiKeys.deleted_at),
             ),
           )
           .returning({ id: apiKeys.id });
@@ -338,6 +365,47 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
           });
         }
         if (revoked.length === 0) return jsonError(404, "NOT_FOUND", "Key not found");
+        return new Response(null, { status: 200 });
+      },
+    )
+    .post(
+      "/api/v1/workspaces/:id/keys/:keyId/remove",
+      {
+        params: t.Object({ id: t.String(), keyId: t.String() }),
+        detail: {
+          tags: ["Keys"],
+          summary: "Remove API key (soft delete; hides it, keeps the row for audit)",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const userId = gate.session.user.id;
+        const denied = await requireWsRole(db, params.id, userId, "admin");
+        if (denied) return denied;
+        // Soft delete per repo convention: deleted_at/deleted_by, row retained
+        // so audit_log and usage joins still resolve the key's name/prefix.
+        // Any non-removed status (incl. revoked) can be removed; the key stops
+        // authenticating immediately via the verifyApiKey deleted_at filter.
+        const removed = await db
+          .update(apiKeys)
+          .set({ deleted_at: Date.now(), deleted_by: userId })
+          .where(
+            and(
+              eq(apiKeys.id, params.keyId),
+              eq(apiKeys.workspace_id, params.id),
+              isNull(apiKeys.deleted_at),
+            ),
+          )
+          .returning({ id: apiKeys.id });
+        if (removed.length === 0) return jsonError(404, "NOT_FOUND", "Key not found");
+        await writeAudit(db, {
+          actorUserId: userId,
+          workspaceId: params.id,
+          action: "key.remove",
+          target: params.keyId,
+        });
         return new Response(null, { status: 200 });
       },
     );

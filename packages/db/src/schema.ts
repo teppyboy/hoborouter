@@ -81,6 +81,10 @@ export const apiKeys = pgTable(
     created_at: big("created_at").notNull(),
     last_used_at: big("last_used_at"),
     revoked_at: big("revoked_at"),
+    // Soft delete (remove). Row is kept so audit_log/usage joins still resolve
+    // names; removed keys never authenticate and are hidden from key lists.
+    deleted_at: big("deleted_at"),
+    deleted_by: text("deleted_by"),
   },
   (t) => [
     uniqueIndex("api_keys_key_hash").on(t.key_hash),

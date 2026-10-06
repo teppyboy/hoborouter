@@ -66,6 +66,7 @@ export default function KeysPage() {
   const [restrictFor, setRestrictFor] = useState<ApiKey | null>(null);
   const [renameFor, setRenameFor] = useState<ApiKey | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ApiKey | null>(null);
   const [filter, setFilter] = useState("");
 
   const keysQuery = useQuery({
@@ -127,6 +128,17 @@ export default function KeysPage() {
       invalidate();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Revoke failed"),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (keyId: string) =>
+      api(`/api/v1/workspaces/${workspaceId}/keys/${keyId}/remove`, { method: "POST" }),
+    onSuccess: () => {
+      toast("Key removed");
+      setRemoveTarget(null);
+      invalidate();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Remove failed"),
   });
 
   const columns: ColumnDef<ApiKey, unknown>[] = [
@@ -192,6 +204,9 @@ export default function KeysPage() {
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-destructive" onClick={() => setRevokeTarget(key)}>
                 Revoke
+              </DropdownMenuItem>
+              <DropdownMenuItem className="text-destructive" onClick={() => setRemoveTarget(key)}>
+                Remove
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -332,6 +347,38 @@ export default function KeysPage() {
               onClick={() => revokeTarget && revokeMutation.mutate(revokeTarget.id)}
             >
               Revoke
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Remove = soft delete: hidden from the list, requests fail immediately.
+          Distinct from revoke, which keeps the key visible as a revoked row. */}
+      <Dialog
+        open={!!removeTarget}
+        onOpenChange={(open) => {
+          if (!open) setRemoveTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove key</DialogTitle>
+            <DialogDescription>
+              Remove “{removeTarget?.name}” from this workspace? Requests using this key will
+              immediately fail and it will disappear from the list. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRemoveTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={removeMutation.isPending}
+              onClick={() => removeTarget && removeMutation.mutate(removeTarget.id)}
+            >
+              Remove
             </Button>
           </DialogFooter>
         </DialogContent>

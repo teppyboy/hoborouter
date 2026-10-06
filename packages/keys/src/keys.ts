@@ -1,7 +1,7 @@
 // sk-hbr- API key generation/verification.
 // Plaintext format: `sk-hbr-` + 43 base64url chars (32 CSPRNG bytes, no padding).
 // Only SHA-256 hex is stored. Status: 'active' is legacy and treated as enabled.
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { apiKeys, apiKeyModelPermissions, type Db, type Tx } from "@hoborouter/db";
 
 const PREFIX = "sk-hbr-";
@@ -27,7 +27,7 @@ export interface ApiKeyRecord {
   status: string;
 }
 
-/** Hash + lookup. Returns null for unknown/disabled/revoked keys. Used by /v1 auth. */
+/** Hash + lookup. Returns null for unknown/disabled/revoked/removed keys. Used by /v1 auth. */
 export async function verifyApiKey(db: Db | Tx, plaintext: string): Promise<ApiKeyRecord | null> {
   if (typeof plaintext !== "string" || !plaintext.startsWith(PREFIX)) return null;
   const rows = await db
@@ -37,6 +37,9 @@ export async function verifyApiKey(db: Db | Tx, plaintext: string): Promise<ApiK
       and(
         eq(apiKeys.key_hash, hashApiKey(plaintext)),
         inArray(apiKeys.status, ["active", "enabled"]),
+        // soft-deleted (removed) keys must never authenticate even if their
+        // status column still reads 'enabled'
+        isNull(apiKeys.deleted_at),
       ),
     )
     .limit(1);
