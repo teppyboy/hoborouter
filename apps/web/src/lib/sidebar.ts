@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { safePersistStorage } from "./i18n/safe-storage";
 
 interface SidebarState {
   collapsed: boolean;
@@ -15,6 +16,6 @@ export const useSidebarStore = create<SidebarState>()(
       collapsed: false,
       toggleCollapsed: () => set((s) => ({ collapsed: !s.collapsed })),
     }),
-    { name: "hbr-sidebar" },
+    { name: "hbr-sidebar", storage: safePersistStorage<SidebarState>() },
   ),
 );

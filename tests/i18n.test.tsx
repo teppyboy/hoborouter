@@ -11,25 +11,6 @@ const GLOBAL_KEYS = ["window", "document", "localStorage", "location"] as const;
 const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
 let jsdomWindow: { close: () => void } | null = null;
 
-/** PersistStorage following the LIVE global localStorage at call time; no-ops
- *  when no test environment has installed one. Never undefined, so lazily
- *  binding stores (sidebar) cannot crash on persist writes. */
-function liveLocalStorageAdapter<S>() {
-  const ls = () => (globalThis as { localStorage?: Storage }).localStorage;
-  return {
-    getItem: (name: string): { state: S; version: number } | null => {
-      const raw = ls()?.getItem(name);
-      return raw ? (JSON.parse(raw) as { state: S; version: number }) : null;
-    },
-    setItem: (name: string, value: { state: S; version?: number }) => {
-      ls()?.setItem(name, JSON.stringify(value));
-    },
-    removeItem: (name: string) => {
-      ls()?.removeItem(name);
-    },
-  };
-}
-
 let translate: (typeof import("../apps/web/src/lib/i18n/t"))["translate"];
 let applyLocale: (typeof import("../apps/web/src/lib/i18n/locale"))["applyLocale"];
 let useLocaleStore: (typeof import("../apps/web/src/lib/i18n/locale"))["useLocaleStore"];
@@ -65,12 +46,11 @@ beforeAll(async () => {
   // touching store runtime code.
   ({ translate } = await import("../apps/web/src/lib/i18n/t"));
   ({ applyLocale, useLocaleStore } = await import("../apps/web/src/lib/i18n/locale"));
-  // Root-cause storage isolation: bind a never-undefined adapter that follows
-  // the LIVE global localStorage at call time and no-ops when no environment
-  // has installed one. Restoring `storage: undefined` in afterAll instead
-  // crashed sibling stores that lazily bind (sidebar persist at
-  // middleware.mjs setItem), so this adapter stays bound for the process.
-  useLocaleStore.persist.setOptions({ storage: liveLocalStorageAdapter() });
+  // No storage rebind needed: the runtime locale store binds
+  // safePersistStorage (apps/web/src/lib/i18n/safe-storage.ts) at creation,
+  // which follows the LIVE global localStorage at call time and no-ops when
+  // none is installed — so lazily-binding sibling stores never crash on
+  // persist writes after this file's jsdom teardown.
   ({ LanguageToggle } = await import("../apps/web/src/components/language-toggle"));
 });
 
@@ -172,7 +152,7 @@ test("applyLocale mirrors the locale onto <html lang>", () => {
 test("LanguageToggle renders an accessible VI/EN button", () => {
   const html = renderToStaticMarkup(<LanguageToggle />);
   expect(html).toContain('aria-label="Switch to Vietnamese"');
-  expect(html).toContain(">VI<"); // shows the locale you can switch TO
+  expect(html).toContain(">EN<"); // shows the CURRENT locale
 });
 
 // Client mount: zustand serves the initial state as the SSR snapshot, so a

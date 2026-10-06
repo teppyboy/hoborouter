@@ -18,26 +18,6 @@ import {
 // RouterProvider mount (which renders nothing under renderToStaticMarkup).
 import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js";
 import { JSDOM } from "jsdom";
-import type { LocaleState } from "../apps/web/src/lib/i18n/locale";
-
-/** PersistStorage following the LIVE global localStorage at call time; no-ops
- *  when no test environment has installed one. Never undefined, so lazily
- *  binding stores cannot crash on persist writes after sibling teardown. */
-function liveLocalStorageAdapter<S>() {
-  const ls = () => (globalThis as { localStorage?: Storage }).localStorage;
-  return {
-    getItem: (name: string): { state: S; version: number } | null => {
-      const raw = ls()?.getItem(name);
-      return raw ? (JSON.parse(raw) as { state: S; version: number }) : null;
-    },
-    setItem: (name: string, value: { state: S; version?: number }) => {
-      ls()?.setItem(name, JSON.stringify(value));
-    },
-    removeItem: (name: string) => {
-      ls()?.removeItem(name);
-    },
-  };
-}
 
 const GLOBAL_KEYS = ["window", "document", "localStorage", "location"] as const;
 const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
@@ -92,13 +72,11 @@ beforeAll(async () => {
   ({ default: LoginPage } = await import("../apps/web/src/pages/auth/login"));
   ({ LanguageToggle } = await import("../apps/web/src/components/language-toggle"));
   ({ useLocaleStore } = await import("../apps/web/src/lib/i18n/locale"));
-  // Sibling test files (e.g. shell-responsive) may have imported the store
-  // first in this process without a localStorage, leaving persist bound to a
-  // missing storage. Root-cause fix: bind a never-undefined adapter following
-  // the LIVE global localStorage at call time (no-ops when none installed);
-  // it stays bound for the process. Restoring `storage: undefined` in
-  // afterAll instead crashed lazily-binding sibling stores (sidebar persist).
-  useLocaleStore.persist.setOptions({ storage: liveLocalStorageAdapter<LocaleState>() });
+  // No storage rebind needed: the runtime locale store binds
+  // safePersistStorage (apps/web/src/lib/i18n/safe-storage.ts) at creation,
+  // which follows the LIVE global localStorage at call time and no-ops when
+  // none is installed — so lazily-loaded sibling stores never crash on
+  // persist writes after this file's jsdom teardown.
   ({ AppShell } = await import("../apps/web/src/components/app-shell"));
   ({ PublicLayout } = await import("../apps/web/src/components/public-layout"));
   ({ useSidebarStore } = await import("../apps/web/src/lib/sidebar"));
@@ -237,6 +215,29 @@ test("clicking the toggle again returns the page to English", async () => {
   } finally {
     unmount(mounted);
   }
+});
+
+test("the toggle label shows the CURRENT locale; aria-label names the target", () => {
+  useLocaleStore.getState().setLocale("en");
+  useLocaleStore.getState().setLocale("en");
+  // Static render proves the EN side (SSR serves the store's initial
+  // snapshot, which setLocale cannot change). The VI side needs a client
+  // mount — same reason tests/i18n.test.tsx mounts for locale flips.
+  const enHtml = renderStaticChrome(<LanguageToggle />);
+  expect(enHtml).toContain(">EN<");
+  expect(enHtml).toContain('aria-label="Switch to Vietnamese"');
+  const mounted = mountChrome(<LanguageToggle />);
+  try {
+    expect(mounted.text()).toContain("EN");
+    act(() => useLocaleStore.getState().setLocale("vi"));
+    expect(mounted.text()).toContain("VI");
+    expect(
+      mounted.container.querySelector('button[aria-label="Chuyển sang tiếng Anh"]'),
+    ).not.toBeNull();
+  } finally {
+    unmount(mounted);
+  }
+  useLocaleStore.getState().setLocale("en");
 });
 
 // --- Shell + public chrome (the labels a first-time visitor actually sees) --

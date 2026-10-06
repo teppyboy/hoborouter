@@ -219,7 +219,7 @@ test("public layout header mounts the language toggle beside the theme toggle", 
     </PublicLayout>,
   );
   expect(html).toContain('aria-label="Switch to Vietnamese"');
-  expect(html).toContain(">VI<");
+  expect(html).toContain(">EN<");
   expect(html.indexOf('aria-label="Switch to Vietnamese"')).toBeLessThan(
     html.indexOf('aria-label="Switch to dark mode"'),
   );
