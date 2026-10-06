@@ -2,6 +2,20 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { PageHeader } from "../../components/page";
+import { useLocaleEntry } from "../../lib/i18n/t";
+
+// Settings chrome copy: inline LocaleEntry set (see lib/i18n/common.ts).
+const settingsCopy = {
+  title: { en: "Settings", vi: "Cài đặt" },
+  description: { en: "Workspace, members and account.", vi: "Workspace, thành viên và tài khoản." },
+  unavailable: {
+    en: "Not available yet — no workspace selected.",
+    vi: "Chưa khả dụng — chưa chọn workspace.",
+  },
+  general: { en: "General", vi: "Chung" },
+  members: { en: "Members", vi: "Thành viên" },
+  account: { en: "Account", vi: "Tài khoản" },
+} as const;
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import GeneralTab from "./general";
 import MembersTab from "./members";
@@ -17,19 +31,23 @@ export default function SettingsPage() {
     enabled: !!workspaceId,
   });
 
+  const title = useLocaleEntry(settingsCopy.title);
+  const description = useLocaleEntry(settingsCopy.description);
+  const unavailable = useLocaleEntry(settingsCopy.unavailable);
+  const general = useLocaleEntry(settingsCopy.general);
+  const members = useLocaleEntry(settingsCopy.members);
+  const account = useLocaleEntry(settingsCopy.account);
   return (
     <div className="mx-auto w-full max-w-4xl p-6">
-      <PageHeader title="Settings" description="Workspace, members and account." />
+      <PageHeader title={title} description={description} />
       {!workspaceId ? (
-        <p className="mt-6 text-sm text-muted-foreground">
-          Not available yet — no workspace selected.
-        </p>
+        <p className="mt-6 text-sm text-muted-foreground">{unavailable}</p>
       ) : (
         <Tabs defaultValue="general" className="mt-6">
           <TabsList>
-            <TabsTrigger value="general">General</TabsTrigger>
-            <TabsTrigger value="members">Members</TabsTrigger>
-            <TabsTrigger value="account">Account</TabsTrigger>
+            <TabsTrigger value="general">{general}</TabsTrigger>
+            <TabsTrigger value="members">{members}</TabsTrigger>
+            <TabsTrigger value="account">{account}</TabsTrigger>
           </TabsList>
           <TabsContent value="general" className="mt-4">
             <GeneralTab workspaceId={workspaceId} />

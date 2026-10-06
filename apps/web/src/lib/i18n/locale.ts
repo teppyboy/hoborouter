@@ -1,3 +1,4 @@
+import { safePersistStorage } from "./safe-storage";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
@@ -21,7 +22,7 @@ export const useLocaleStore = create<LocaleState>()(
         set({ locale });
       },
     }),
-    { name: "hbr-locale" },
+    { name: "hbr-locale", storage: safePersistStorage<LocaleState>() },
   ),
 );
 

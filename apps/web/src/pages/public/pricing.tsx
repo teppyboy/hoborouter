@@ -9,6 +9,44 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Skeleton } from "../../components/ui/skeleton";
 import { formatVnd, formatTokens, formatUsdAmountText } from "../../lib/format";
 import { formatProviderLabel } from "../../lib/display";
+import { useLocaleEntry, type LocaleEntry } from "../../lib/i18n/t";
+
+// Chrome copy set for the pricing body; money VALUES stay server-formatted
+// (VND/USD invariants) — only the words around them are translated.
+const priceLabels = {
+  input: { en: "Input / 1M tokens", vi: "Input / 1M token" },
+  output: { en: "Output / 1M tokens", vi: "Output / 1M token" },
+  cached: { en: "Cached input / 1M tokens", vi: "Input cache / 1M token" },
+  reasoning: { en: "Reasoning / 1M tokens", vi: "Reasoning / 1M token" },
+} as const;
+const vndEstimate: LocaleEntry = { en: "(VND estimate)", vi: "(ước tính VND)" };
+const creditWord: LocaleEntry = { en: "credit", vi: "tín dụng" };
+const daysWord: LocaleEntry = { en: "days", vi: "ngày" };
+const vndGrant: LocaleEntry = { en: "fixed at creation", vi: "cố định khi tạo" };
+const requestsPerMinute: LocaleEntry = { en: "requests per minute", vi: "request mỗi phút" };
+const modelsHeading: LocaleEntry = { en: "Models", vi: "Mô hình" };
+const plansHeading: LocaleEntry = { en: "Subscription plans", vi: "Gói đăng ký" };
+const pricingTitle: LocaleEntry = { en: "Pricing", vi: "Bảng giá" };
+const pricingDescription: LocaleEntry = {
+  en: "Live per-model prices in VND per 1M tokens, converted at the current instance rate. Top up credits by QR (PayOS) or manual confirmation.",
+  vi: "Giá từng mô hình tính theo VND / 1M token, quy đổi theo tỷ giá hiện tại của instance. Nạp tín dụng bằng QR (PayOS) hoặc xác nhận thủ công.",
+};
+const catalogError: LocaleEntry = {
+  en: "Could not load the model catalog. Please try again later.",
+  vi: "Không tải được danh mục mô hình. Vui lòng thử lại sau.",
+};
+const plansError: LocaleEntry = {
+  en: "Could not load subscription plans. Please try again later.",
+  vi: "Không tải được các gói đăng ký. Vui lòng thử lại sau.",
+};
+const noModels: LocaleEntry = {
+  en: "No models published yet.",
+  vi: "Chưa có mô hình nào được xuất bản.",
+};
+const noPlans: LocaleEntry = {
+  en: "No subscription plans available right now.",
+  vi: "Hiện chưa có gói đăng ký nào.",
+};
 import {
   usePublicCatalog,
   usePublicInstance,
@@ -18,10 +56,10 @@ import {
   type PublicSubscriptionPlan,
 } from "../../lib/public-queries";
 
-function ModelPriceRow({ label, value }: { label: string; value: number }) {
+function ModelPriceRow({ label, value }: { label: LocaleEntry; value: number }) {
   return (
     <div className="flex items-baseline justify-between gap-2">
-      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-xs text-muted-foreground">{useLocaleEntry(label)}</span>
       <span className="font-mono text-sm">{formatVnd(value)}</span>
     </div>
   );
@@ -53,10 +91,10 @@ function ModelCard({ model }: { model: PublicCatalogModel }) {
           </div>
         )}
         <div className="space-y-1 border-t border-border pt-3">
-          <ModelPriceRow label="Input / 1M tokens" value={p.input} />
-          <ModelPriceRow label="Output / 1M tokens" value={p.output} />
-          <ModelPriceRow label="Cached input / 1M tokens" value={p.cached_input} />
-          <ModelPriceRow label="Reasoning / 1M tokens" value={p.reasoning} />
+          <ModelPriceRow label={priceLabels.input} value={p.input} />
+          <ModelPriceRow label={priceLabels.output} value={p.output} />
+          <ModelPriceRow label={priceLabels.cached} value={p.cached_input} />
+          <ModelPriceRow label={priceLabels.reasoning} value={p.reasoning} />
         </div>
       </CardContent>
     </Card>
@@ -68,6 +106,11 @@ const isUsdPriceText = (t: string | null | undefined): t is string =>
   typeof t === "string" && /^\d+(\.\d{1,2})?$/.test(t);
 
 function PlanCard({ plan }: { plan: PublicSubscriptionPlan }) {
+  const vndEstimateText = useLocaleEntry(vndEstimate);
+  const creditText = useLocaleEntry(creditWord);
+  const daysText = useLocaleEntry(daysWord);
+  const vndGrantText = useLocaleEntry(vndGrant);
+  const rateLimitText = useLocaleEntry(requestsPerMinute);
   // Each money field renders its OWN metadata: authored-USD price leads with
   // the exact text and keeps the VND quote as the server estimate; authored
   // per-period credit renders its exact USD text (never rate-recomputed)
@@ -88,28 +131,61 @@ function PlanCard({ plan }: { plan: PublicSubscriptionPlan }) {
         </div>
         {authored && (
           <div className="text-xs text-muted-foreground">
-            ≈ {formatVnd(plan.price_vnd)} (VND estimate)
+            ≈ {formatVnd(plan.price_vnd)} {vndEstimateText}
           </div>
         )}
         <div className="text-muted-foreground">
           {authoredCredit
-            ? `${formatUsdAmountText(plan.credit_per_period_usd!)} credit`
-            : `${formatVnd(plan.credit_per_period_vnd)} credit`}{" "}
-          / {plan.period_days} days
+            ? `${formatUsdAmountText(plan.credit_per_period_usd!)} ${creditText}`
+            : `${formatVnd(plan.credit_per_period_vnd)} ${creditText}`}{" "}
+          / {plan.period_days} {daysText}
           {authoredCredit && (
             <span className="block">
-              VND grant {formatVnd(plan.credit_per_period_vnd)} fixed at creation
+              VND grant {formatVnd(plan.credit_per_period_vnd)} {vndGrantText}
             </span>
           )}
         </div>
         {plan.rate_limit_per_minute != null && (
           <div className="text-muted-foreground">
-            {plan.rate_limit_per_minute} requests per minute
+            {plan.rate_limit_per_minute} {rateLimitText}
           </div>
         )}
       </CardContent>
     </Card>
   );
+}
+
+function PricingHeader() {
+  return (
+    <PageHeader
+      title={useLocaleEntry(pricingTitle)}
+      description={useLocaleEntry(pricingDescription)}
+    />
+  );
+}
+
+function ModelsHeading() {
+  return <h2 className="text-lg font-semibold">{useLocaleEntry(modelsHeading)}</h2>;
+}
+
+function PlansHeading() {
+  return <h2 className="text-lg font-semibold">{useLocaleEntry(plansHeading)}</h2>;
+}
+
+function CatalogErrorState() {
+  return <ErrorState message={useLocaleEntry(catalogError)} />;
+}
+
+function PlansErrorState() {
+  return <ErrorState message={useLocaleEntry(plansError)} />;
+}
+
+function NoModelsState() {
+  return <EmptyState title={useLocaleEntry(noModels)} />;
+}
+
+function NoPlansState() {
+  return <EmptyState title={useLocaleEntry(noPlans)} />;
 }
 
 export type FetchState = "loading" | "error" | "ready";
@@ -130,25 +206,18 @@ export function Pricing({
   return (
     <PublicLayout instance={instance}>
       <div className="space-y-8 py-6">
-        <PageHeader
-          title="Pricing"
-          description="Live per-model prices in VND per 1M tokens, converted at the current instance rate. Top up credits by QR (PayOS) or manual confirmation."
-        />
+        <PricingHeader />
 
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold">Models</h2>
+          <ModelsHeading />
           {modelsState === "loading" && (
             <div className="grid gap-4 sm:grid-cols-2" aria-busy="true">
               <Skeleton className="h-48" />
               <Skeleton className="h-48" />
             </div>
           )}
-          {modelsState === "error" && (
-            <ErrorState message="Could not load the model catalog. Please try again later." />
-          )}
-          {modelsState === "ready" && models && models.length === 0 && (
-            <EmptyState title="No models published yet." />
-          )}
+          {modelsState === "error" && <CatalogErrorState />}
+          {modelsState === "ready" && models && models.length === 0 && <NoModelsState />}
           {modelsState === "ready" && models && models.length > 0 && (
             <div className="grid gap-4 sm:grid-cols-2">
               {models.map((m) => (
@@ -159,19 +228,15 @@ export function Pricing({
         </section>
 
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold">Subscription plans</h2>
+          <PlansHeading />
           {plansState === "loading" && (
             <div className="grid gap-4 sm:grid-cols-2" aria-busy="true">
               <Skeleton className="h-32" />
               <Skeleton className="h-32" />
             </div>
           )}
-          {plansState === "error" && (
-            <ErrorState message="Could not load subscription plans. Please try again later." />
-          )}
-          {plansState === "ready" && plans && plans.length === 0 && (
-            <EmptyState title="No subscription plans available right now." />
-          )}
+          {plansState === "error" && <PlansErrorState />}
+          {plansState === "ready" && plans && plans.length === 0 && <NoPlansState />}
           {plansState === "ready" && plans && plans.length > 0 && (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {plans.map((p) => (

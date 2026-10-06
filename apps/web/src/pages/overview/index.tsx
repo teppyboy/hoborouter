@@ -5,6 +5,39 @@ import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatStatusLabel } from "../../lib/display";
 import { useUsageSummary } from "../logs/api";
+import { useLocaleEntry } from "../../lib/i18n/t";
+
+// Overview chrome copy: inline LocaleEntry set (see lib/i18n/common.ts).
+// Numbers, money formats and statuses stay server-formatted — words only.
+const overviewCopy = {
+  title: { en: "Overview", vi: "Tổng quan" },
+  description: {
+    en: "Last 30 days of activity for the selected workspace.",
+    vi: "Hoạt động 30 ngày gần nhất của workspace đang chọn.",
+  },
+  requests: { en: "Requests", vi: "Request" },
+  spend: { en: "Spend", vi: "Chi tiêu" },
+  tokens: { en: "Tokens", vi: "Token" },
+  successRate: { en: "Success rate", vi: "Tỷ lệ thành công" },
+  spendPerDay: { en: "Spend per day (USD)", vi: "Chi tiêu mỗi ngày (USD)" },
+  maxPerDay: { en: "max", vi: "tối đa" },
+  perDay: { en: "/day", vi: "/ngày" },
+  recentRequests: { en: "Recent requests", vi: "Request gần đây" },
+  time: { en: "Time", vi: "Thời gian" },
+  model: { en: "Model", vi: "Mô hình" },
+  status: { en: "Status", vi: "Trạng thái" },
+  cost: { en: "Cost", vi: "Chi phí" },
+  summaryUnavailable: {
+    en: "Usage summary endpoint not available yet",
+    vi: "Chưa có endpoint tổng hợp mức sử dụng",
+  },
+  noRequests: { en: "No requests yet", vi: "Chưa có request nào" },
+  logsUnavailable: {
+    en: "Usage logs endpoint not available yet",
+    vi: "Chưa có endpoint nhật ký mức sử dụng",
+  },
+  noUsage: { en: "No requests with usage", vi: "Không có request nào có mức sử dụng" },
+} as const;
 
 function StatTile({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
@@ -53,11 +86,30 @@ function BarChart({ data, rate }: { data: { label: string; value: number }[]; ra
           </div>
         ))}
       </div>
-      <div className="mt-2 flex justify-between text-xs text-muted-foreground">
-        <span>{data[0]?.label}</span>
-        <span>max {formatUsdFromVnd(maxValue, rate) ?? formatVnd(maxValue)}/day</span>
-        <span>{data.at(-1)?.label}</span>
-      </div>
+      <ChartFooter data={data} maxValue={maxValue} rate={rate} />
+    </div>
+  );
+}
+
+function ChartFooter({
+  data,
+  maxValue,
+  rate,
+}: {
+  data: { label: string; value: number }[];
+  maxValue: number;
+  rate?: number;
+}) {
+  const maxWord = useLocaleEntry(overviewCopy.maxPerDay);
+  const perDay = useLocaleEntry(overviewCopy.perDay);
+  return (
+    <div className="mt-2 flex justify-between text-xs text-muted-foreground">
+      <span>{data[0]?.label}</span>
+      <span>
+        {maxWord} {formatUsdFromVnd(maxValue, rate) ?? formatVnd(maxValue)}
+        {perDay}
+      </span>
+      <span>{data.at(-1)?.label}</span>
     </div>
   );
 }
@@ -70,7 +122,7 @@ export default function OverviewPage() {
   if (summary.isPending) {
     return (
       <div className="space-y-4">
-        <PageHeader title="Overview" />
+        <OverviewHeader />
         <Skeleton className="h-64 w-full" />
       </div>
     );
@@ -79,12 +131,8 @@ export default function OverviewPage() {
     const err = summary.error as ApiError;
     return (
       <div className="space-y-4">
-        <PageHeader title="Overview" />
-        {err.status === 404 ? (
-          <EmptyState title="Usage summary endpoint not available yet" />
-        ) : (
-          <ErrorState message={err.message} />
-        )}
+        <OverviewHeader />
+        {err.status === 404 ? <SummaryUnavailableState /> : <ErrorState message={err.message} />}
       </div>
     );
   }
@@ -103,27 +151,27 @@ export default function OverviewPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Overview"
-        description="Last 30 days of activity for the selected workspace."
-      />
+      <OverviewHeader />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile label="Requests" value={String(t.requests)} />
+        <StatTile label={useLocaleEntry(overviewCopy.requests)} value={String(t.requests)} />
         <StatTile
-          label="Spend"
+          label={useLocaleEntry(overviewCopy.spend)}
           value={formatUsdFromVnd(t.spend_vnd, rate) ?? formatVnd(t.spend_vnd)}
         />
-        <StatTile label="Tokens" value={formatTokens(t.input_tokens + t.output_tokens)} />
         <StatTile
-          label="Success rate"
+          label={useLocaleEntry(overviewCopy.tokens)}
+          value={formatTokens(t.input_tokens + t.output_tokens)}
+        />
+        <StatTile
+          label={useLocaleEntry(overviewCopy.successRate)}
           value={successRate}
           title="Share of successful requests among eligible requests (requests with a model and token usage) in the last 30 days — not limited to the 10 recent rows below."
         />
       </div>
       <div className="rounded-md border border-border p-4">
-        <p className="mb-3 text-xs text-muted-foreground">Spend per day (USD)</p>
+        <SpendPerDayLabel />
         {summary.data.daily.length === 0 ? (
-          <EmptyState title="No requests yet" />
+          <NoRequestsState />
         ) : (
           <BarChart data={fillDaily30(summary.data.daily)} rate={rate} />
         )}
@@ -145,32 +193,71 @@ import { useRequestLogs } from "../logs/api";
 import { visibleRows } from "../logs/filters";
 import { formatDate } from "../../lib/format";
 
+function OverviewHeader() {
+  return (
+    <PageHeader
+      title={useLocaleEntry(overviewCopy.title)}
+      description={useLocaleEntry(overviewCopy.description)}
+    />
+  );
+}
+
+function SummaryUnavailableState() {
+  return <EmptyState title={useLocaleEntry(overviewCopy.summaryUnavailable)} />;
+}
+
+function SpendPerDayLabel() {
+  return (
+    <p className="mb-3 text-xs text-muted-foreground">{useLocaleEntry(overviewCopy.spendPerDay)}</p>
+  );
+}
+
+function NoRequestsState() {
+  return <EmptyState title={useLocaleEntry(overviewCopy.noRequests)} />;
+}
+
+function RecentRequestsLabel() {
+  return (
+    <p className="mb-2 text-xs text-muted-foreground">
+      {useLocaleEntry(overviewCopy.recentRequests)}
+    </p>
+  );
+}
+
+function LogsUnavailableState() {
+  return <EmptyState title={useLocaleEntry(overviewCopy.logsUnavailable)} />;
+}
+
+function NoUsageState() {
+  return <EmptyState title={useLocaleEntry(overviewCopy.noUsage)} />;
+}
+
 function RecentRequests({ workspaceId }: { workspaceId: string | null }) {
   const logs = useRequestLogs(workspaceId, 10);
   const rate = useUsdVndRate(workspaceId).data;
   return (
     <div>
-      <p className="mb-2 text-xs text-muted-foreground">Recent requests</p>
+      <RecentRequestsLabel />
       {logs.isPending ? (
         <Skeleton className="h-40 w-full" />
       ) : logs.isError ? (
         (logs.error as ApiError).status === 404 ? (
-          <EmptyState title="Usage logs endpoint not available yet" />
+          <LogsUnavailableState />
         ) : (
           <ErrorState message={(logs.error as ApiError).message} />
         )
       ) : visibleRows(logs.data).length === 0 ? (
-        <EmptyState title="No requests with usage" />
+        <NoUsageState />
       ) : (
         <div className="rounded-lg border border-border">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Time</TableHead>
-                <TableHead>Model</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Tokens</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
+                <TableHead>{useLocaleEntry(overviewCopy.time)}</TableHead>
+                <TableHead>{useLocaleEntry(overviewCopy.model)}</TableHead>
+                <TableHead>{useLocaleEntry(overviewCopy.status)}</TableHead>
+                <TableHead className="text-right">{useLocaleEntry(overviewCopy.tokens)}</TableHead>
+                <TableHead className="text-right">{useLocaleEntry(overviewCopy.cost)}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
