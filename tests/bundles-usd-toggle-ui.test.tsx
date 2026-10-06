@@ -54,6 +54,18 @@ for (const [k, v] of Object.entries({
   (globalThis as Record<string, unknown>)[k] = v;
 }
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+// PublicLayout renders the sonner Toaster, which reads matchMedia at render
+// time; jsdom does not implement it.
+const matchMediaStub = () => ({
+  matches: false,
+  media: "",
+  addEventListener() {},
+  removeEventListener() {},
+  addListener() {},
+  removeListener() {},
+});
+(W as unknown as { matchMedia: unknown }).matchMedia = matchMediaStub;
+(globalThis as { matchMedia?: unknown }).matchMedia = matchMediaStub;
 jsdomWindow = W;
 
 afterAll(() => {
@@ -68,17 +80,40 @@ afterAll(() => {
 
 // @ts-expect-error relative specifier has no declaration file under tests tsconfig
 const { createRoot } = await import("../apps/web/node_modules/react-dom/client");
-const { BundleCards, PlanCards, SubscriptionStatusCard } = await import(
-  "../apps/web/src/pages/billing/bundles"
-);
+// @ts-expect-error relative specifier has no declaration file under tests tsconfig
+const { BundleCards, PlanCards, SubscriptionStatusCard } =
+  await import("../apps/web/src/pages/billing/bundles");
 import type { SubscriptionInfo } from "../apps/web/src/pages/billing/bundles";
 
+// Wider row shapes the components receive once USD-authored metadata lands;
+// assignable to the legacy component props in every phase of the change.
+interface TestBundle {
+  id: string;
+  name: string;
+  price_vnd: number;
+  credit_vnd: number;
+  bonus_vnd: number;
+  price_usd?: string;
+  credit_usd?: string;
+  bonus_usd?: string;
+}
+interface TestPlan {
+  id: string;
+  name: string;
+  price_vnd: number;
+  credit_per_period_vnd: number;
+  period_days: number;
+  rate_limit_per_minute?: number;
+  price_usd?: string;
+  credit_per_period_usd?: string;
+}
+
 const RATE = 26_000;
-const BUNDLES = [
+const BUNDLES: TestBundle[] = [
   { id: "b1", name: "Starter", price_vnd: 50_000, credit_vnd: 50_000, bonus_vnd: 0 },
   { id: "b2", name: "Value", price_vnd: 100_000, credit_vnd: 110_000, bonus_vnd: 10_000 },
 ];
-const PLANS = [
+const PLANS: TestPlan[] = [
   {
     id: "p1",
     name: "Pro",
@@ -88,6 +123,38 @@ const PLANS = [
     rate_limit_per_minute: 15,
   },
 ];
+
+function usdBundle(over: Partial<TestBundle>): TestBundle {
+  return {
+    id: "u1",
+    name: "Starter USD",
+    price_vnd: 259_750,
+    credit_vnd: 130_005,
+    bonus_vnd: 0,
+    price_usd: "9.99",
+    credit_usd: "5",
+    bonus_usd: "0",
+    ...over,
+  };
+}
+
+// USD-authored rows (creation FX 26001: 9.99 -> 259750 ceiling, 5 -> 130005,
+// 12 -> 312012). credit_vnd/bonus_vnd are the actual frozen VND grants.
+const USD_BUNDLES: TestBundle[] = [usdBundle({})];
+const USD_PLANS: TestPlan[] = [
+  {
+    id: "up1",
+    name: "Pro USD",
+    price_vnd: 259_750,
+    credit_per_period_vnd: 312_012,
+    period_days: 30,
+    price_usd: "9.99",
+    credit_per_period_usd: "12",
+  },
+];
+
+// A USD row whose server quote moved after an FX edit (quote 269740 at 27001).
+const USD_QUOTED_BUNDLES: TestBundle[] = [usdBundle({ price_vnd: 269_740 })];
 
 function jsonResponse(status: number, body: unknown): Response {
   return {
@@ -107,7 +174,12 @@ interface Mount {
 
 function mountCards(
   Component: typeof BundleCards | typeof PlanCards,
-  opts: { rate: number | undefined; subscribed?: boolean },
+  opts: {
+    rate: number | undefined;
+    subscribed?: boolean;
+    bundles?: TestBundle[];
+    plans?: TestPlan[];
+  },
 ): Mount {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -116,14 +188,14 @@ function mountCards(
   const props =
     Component === BundleCards
       ? {
-          bundles: BUNDLES,
+          bundles: opts.bundles ?? BUNDLES,
           workspaceId: "ws_1",
           payosAvailable: false,
           rate: opts.rate,
           onNavigate: () => {},
         }
       : {
-          plans: PLANS,
+          plans: opts.plans ?? PLANS,
           workspaceId: "ws_1",
           payosAvailable: false,
           subscribed: opts.subscribed ?? false,
@@ -259,10 +331,129 @@ test("active subscription card shows plan, credit and a cancel button", () => {
 test("cancel button DELETEs the workspace subscription", async () => {
   const m = mountSubCard(ACTIVE_SUB);
   await m.clickCancel();
-  expect(m.fetchCalls.some((c) => c.method === "DELETE" && c.url === "/api/v1/workspaces/ws_1/subscription")).toBe(true);
+  expect(
+    m.fetchCalls.some(
+      (c) => c.method === "DELETE" && c.url === "/api/v1/workspaces/ws_1/subscription",
+    ),
+  ).toBe(true);
 });
 
 test("expired subscription shows no cancel button", () => {
   const m = mountSubCard({ ...ACTIVE_SUB, expired: true });
   expect(m.container.textContent).not.toContain("Cancel subscription");
+});
+
+// --- USD-authored catalog rows (Task 3 member display) ---------------------
+
+test("authored USD price shows the exact price_usd text even without any FX rate", () => {
+  const m = mountCards(BundleCards, { rate: undefined, bundles: USD_BUNDLES });
+  expect(m.priceText("u1")).toBe("$9.99");
+  // VND secondary is the server quote, not a client conversion.
+  expect(m.container.textContent).toContain("259.750 ₫");
+  // USD rows still allow the toggle without a wallet rate.
+  expect(m.toggleButton()?.textContent).toBe("Show VND");
+  // Credit is the actual frozen VND grant (no rate: shown in VND).
+  expect(m.container.textContent).toContain("130.005 ₫ credit");
+  // Fixed-at-creation explanation for USD rows.
+  expect(m.container.textContent).toContain("fixed VND amount set at creation");
+});
+
+test("VND toggle on a USD row shows the server quote and labels it an estimate", () => {
+  const m = mountCards(BundleCards, { rate: undefined, bundles: USD_QUOTED_BUNDLES });
+  const btn = m.toggleButton();
+  if (!btn) throw new Error("toggle missing");
+  m.click(btn);
+  // Current server price_vnd quote (27001), never the creation fallback.
+  expect(m.priceText("u1")).toContain("269.740 ₫");
+  expect(m.priceText("u1")).not.toContain("259.750");
+  expect(m.container.textContent.toLowerCase()).toContain("estimate");
+  const back = m.toggleButton();
+  if (!back) throw new Error("toggle missing");
+  m.click(back);
+  expect(m.priceText("u1")).toBe("$9.99");
+});
+
+test("authored USD plan shows the exact price and keeps the VND grant credit", () => {
+  const m = mountCards(PlanCards, { rate: undefined, plans: USD_PLANS });
+  expect(m.priceText("up1")).toBe("$9.99");
+  expect(m.toggleButton()?.textContent).toBe("Show VND");
+  expect(m.container.textContent).toContain("312.012 ₫ credit / 30 days");
+});
+
+test("USD credit equivalent uses the actual frozen VND grant at the canonical rate", () => {
+  const m = mountCards(BundleCards, {
+    rate: RATE,
+    bundles: [usdBundle({ bonus_vnd: 10_000 })],
+  });
+  // 130005 / 26000 -> $5.00; actual grant, not credit_usd recomputed.
+  expect(m.container.textContent).toContain("$5.00 credit");
+  expect(m.container.textContent).toContain("+$0.38");
+});
+
+test("catalog envelope rate wins over the wallet rate", async () => {
+  const { catalogEnvelopeRate } = await import("../apps/web/src/pages/billing/bundles");
+  expect(catalogEnvelopeRate({ usd_vnd_rate: 27001 }, { usd_vnd_rate: 26900 }, 26000)).toBe(27001);
+  expect(catalogEnvelopeRate(undefined, { usd_vnd_rate: 26900 }, 26000)).toBe(26900);
+  expect(catalogEnvelopeRate(undefined, undefined, 26000)).toBe(26000);
+  expect(catalogEnvelopeRate(undefined, undefined, undefined)).toBeUndefined();
+});
+
+// --- purchase request shape ------------------------------------------------
+
+test("buy request carries the provider choice only, never amounts", async () => {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const root = createRoot(container);
+  const calls: { url: string; method: string; body: string }[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({
+      url: String(input),
+      method: init?.method ?? "GET",
+      body: typeof init?.body === "string" ? init.body : "",
+    });
+    if (String(input).includes("/purchase")) {
+      return jsonResponse(200, {
+        id: "pay_1",
+        status: "PENDING",
+        checkout_url: "/billing/payments",
+      });
+    }
+    return jsonResponse(200, {});
+  }) as typeof fetch;
+  try {
+    act(() => {
+      root.render(
+        <QueryClientProvider client={qc}>
+          <BundleCards
+            bundles={USD_BUNDLES}
+            workspaceId="ws_1"
+            payosAvailable={true}
+            rate={undefined}
+            onNavigate={() => {}}
+          />
+        </QueryClientProvider>,
+      );
+    });
+    const selectPayos = [...container.querySelectorAll("input[type=radio]")].find(
+      (r) => (r as HTMLInputElement).value === "payos",
+    );
+    if (!selectPayos) throw new Error("payos radio missing");
+    await act(async () => {
+      selectPayos.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    const buy = [...container.querySelectorAll("button")].find((b) => b.textContent === "Buy");
+    if (!buy) throw new Error("buy button missing");
+    await act(async () => {
+      buy.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const purchase = calls.find((c) => c.method === "POST" && c.url.includes("/purchase"));
+    if (!purchase) throw new Error("no purchase call");
+    expect(purchase.body).toBe('{"provider":"payos"}');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

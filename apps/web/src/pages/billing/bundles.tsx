@@ -5,7 +5,13 @@ import { Package as PackageIcon, RefreshCw as RefreshCwIcon } from "lucide-react
 import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
-import { formatVnd, formatUsdFromVnd, formatDate, useUsdVndRate } from "../../lib/format";
+import {
+  formatVnd,
+  formatUsdFromVnd,
+  formatUsdAmountText,
+  formatDate,
+  useUsdVndRate,
+} from "../../lib/format";
 import { PageHeader, EmptyState, ErrorState } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
@@ -17,6 +23,10 @@ interface Bundle {
   price_vnd: number;
   credit_vnd: number;
   bonus_vnd: number;
+  /** Authored exact USD price text; null on legacy VND rows. */
+  price_usd?: string | null;
+  credit_usd?: string | null;
+  bonus_usd?: string | null;
 }
 
 interface Plan {
@@ -26,6 +36,9 @@ interface Plan {
   credit_per_period_vnd: number;
   period_days: number;
   rate_limit_per_minute?: number;
+  /** Authored exact USD price text; null on legacy VND rows. */
+  price_usd?: string | null;
+  credit_per_period_usd?: string | null;
 }
 
 export interface SubscriptionInfo {
@@ -50,6 +63,25 @@ export type DisplayCurrency = "USD" | "VND";
 const hasRate = (rate: number | undefined): boolean =>
   typeof rate === "number" && Number.isFinite(rate) && rate > 0;
 
+const USD_TEXT = /^\d+(\.\d{1,2})?$/;
+const isUsdText = (t: string | null | undefined): t is string =>
+  typeof t === "string" && USD_TEXT.test(t);
+
+/**
+ * Canonical display FX for the billing pages: the catalog envelope rate
+ * (present on member catalog GETs without any wallet round-trip) wins; the
+ * wallet rate is only the fallback for older backends.
+ */
+export function catalogEnvelopeRate(
+  bundles?: { usd_vnd_rate?: number } | null,
+  plans?: { usd_vnd_rate?: number } | null,
+  walletRate?: number,
+): number | undefined {
+  const envelope = bundles?.usd_vnd_rate ?? plans?.usd_vnd_rate;
+  if (hasRate(envelope)) return envelope;
+  return hasRate(walletRate) ? walletRate : undefined;
+}
+
 /**
  * Seamless USD⇄VND toggle. Renders nothing without a backend rate: VND-only
  * display is the behavior-preserving fallback.
@@ -58,12 +90,15 @@ export function CurrencyToggle({
   currency,
   rate,
   onChange,
+  usdAvailable = false,
 }: {
   currency: DisplayCurrency;
   rate: number | undefined;
   onChange: (c: DisplayCurrency) => void;
+  /** Authored-USD rows show exact USD text without any FX rate. */
+  usdAvailable?: boolean;
 }) {
-  if (!hasRate(rate)) return null;
+  if (!hasRate(rate) && !usdAvailable) return null;
   return (
     <Button
       variant="outline"
@@ -102,10 +137,51 @@ export function Amount({
       <p data-testid={testId} className={className}>
         {primary}
       </p>
-      {secondary !== null && (
-        <p className="text-xs text-muted-foreground">= {secondary}</p>
-      )}
+      {secondary !== null && <p className="text-xs text-muted-foreground">= {secondary}</p>}
     </div>
+  );
+}
+
+/**
+ * One card price in the selected display currency. Authored-USD rows lead
+ * with the exact `price_usd` text (no FX needed) and pair it with the
+ * server's current `price_vnd` quote, labeled as an estimate because the
+ * checkout owns a transaction-time FX snapshot. Legacy VND rows keep the
+ * wallet-rate conversion display.
+ */
+export function CardPrice({
+  priceVnd,
+  priceUsd,
+  currency,
+  rate,
+  testId,
+  className = "",
+}: {
+  priceVnd: number;
+  priceUsd?: string | null;
+  currency: DisplayCurrency;
+  rate: number | undefined;
+  testId?: string;
+  className?: string;
+}) {
+  if (isUsdText(priceUsd)) {
+    const usd = formatUsdAmountText(priceUsd);
+    return (
+      <div className="min-w-0">
+        <p data-testid={testId} className={className}>
+          {currency === "USD" ? usd : formatVnd(priceVnd)}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          = {currency === "USD" ? formatVnd(priceVnd) : usd}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          VND estimate; the final amount is fixed when the payment is created.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <Amount vnd={priceVnd} currency={currency} rate={rate} testId={testId} className={className} />
   );
 }
 
@@ -115,12 +191,12 @@ export default function BillingBundlesPage() {
 
   const bundles = useQuery({
     queryKey: ["bundles"],
-    queryFn: () => api<{ data: Bundle[] }>("/api/v1/bundles"),
+    queryFn: () => api<{ data: Bundle[]; usd_vnd_rate?: number }>("/api/v1/bundles"),
   });
 
   const plans = useQuery({
     queryKey: ["subscription-plans"],
-    queryFn: () => api<{ data: Plan[] }>("/api/v1/subscription-plans"),
+    queryFn: () => api<{ data: Plan[]; usd_vnd_rate?: number }>("/api/v1/subscription-plans"),
   });
 
   // Renew vs Subscribe label: an active, unexpired subscription renews;
@@ -143,9 +219,11 @@ export default function BillingBundlesPage() {
   });
   const payosAvailable = methods.data?.payos === true;
 
-  // FX rate for the USD-canonical display; undefined (older backend) keeps
-  // the VND-only display.
-  const rate = useUsdVndRate(workspaceId).data;
+  // FX rate for the USD-canonical display: the catalog envelope rate wins
+  // (no wallet round-trip needed); the wallet rate is the older-backend
+  // fallback. USD-authored rows display exact USD text even without either.
+  const walletRate = useUsdVndRate(workspaceId).data;
+  const rate = catalogEnvelopeRate(bundles.data, plans.data, walletRate);
 
   return (
     <div className="space-y-6">
@@ -156,28 +234,28 @@ export default function BillingBundlesPage() {
         />
 
         {bundles.isPending ? (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          <Skeleton className="h-44 w-full" />
-          <Skeleton className="h-44 w-full" />
-          <Skeleton className="h-44 w-full" />
-        </div>
-      ) : bundles.isError ? (
-        <ErrorState message={bundles.error.message} />
-      ) : bundles.data.data.length === 0 ? (
-        <EmptyState
-          icon={PackageIcon}
-          title="No bundles available"
-          description="No credit bundles are on sale right now — check back later."
-        />
-      ) : (
-        <BundleCards
-          bundles={bundles.data.data}
-          workspaceId={workspaceId ?? undefined}
-          payosAvailable={payosAvailable}
-          rate={rate}
-          onNavigate={(href) => void navigate({ href })}
-        />
-      )}
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Skeleton className="h-44 w-full" />
+            <Skeleton className="h-44 w-full" />
+            <Skeleton className="h-44 w-full" />
+          </div>
+        ) : bundles.isError ? (
+          <ErrorState message={bundles.error.message} />
+        ) : bundles.data.data.length === 0 ? (
+          <EmptyState
+            icon={PackageIcon}
+            title="No bundles available"
+            description="No credit bundles are on sale right now — check back later."
+          />
+        ) : (
+          <BundleCards
+            bundles={bundles.data.data}
+            workspaceId={workspaceId ?? undefined}
+            payosAvailable={payosAvailable}
+            rate={rate}
+            onNavigate={(href) => void navigate({ href })}
+          />
+        )}
       </section>
 
       <section aria-label="Subscription plans" className="space-y-4">
@@ -193,28 +271,28 @@ export default function BillingBundlesPage() {
           />
         ) : null}
         {plans.isPending ? (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          <Skeleton className="h-44 w-full" />
-          <Skeleton className="h-44 w-full" />
-        </div>
-      ) : plans.isError ? (
-        <ErrorState message={plans.error.message} />
-      ) : plans.data.data.length === 0 ? (
-        <EmptyState
-          icon={RefreshCwIcon}
-          title="No plans available"
-          description="No subscription plans are on sale right now — check back later."
-        />
-      ) : (
-        <PlanCards
-          plans={plans.data.data}
-          workspaceId={workspaceId ?? undefined}
-          payosAvailable={payosAvailable}
-          subscribed={subscribed}
-          rate={rate}
-          onNavigate={(href) => void navigate({ href })}
-        />
-      )}
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Skeleton className="h-44 w-full" />
+            <Skeleton className="h-44 w-full" />
+          </div>
+        ) : plans.isError ? (
+          <ErrorState message={plans.error.message} />
+        ) : plans.data.data.length === 0 ? (
+          <EmptyState
+            icon={RefreshCwIcon}
+            title="No plans available"
+            description="No subscription plans are on sale right now — check back later."
+          />
+        ) : (
+          <PlanCards
+            plans={plans.data.data}
+            workspaceId={workspaceId ?? undefined}
+            payosAvailable={payosAvailable}
+            subscribed={subscribed}
+            rate={rate}
+            onNavigate={(href) => void navigate({ href })}
+          />
+        )}
       </section>
     </div>
   );
@@ -284,43 +362,48 @@ export function BundleCards({
       <div className="flex flex-wrap items-center justify-between gap-2">
         {payosAvailable && (
           <fieldset className="space-y-2">
-          <legend className="text-sm font-medium">Payment method</legend>
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="radio"
-              name="bundle-payment-provider"
-              value="manual"
-              checked={provider === "manual"}
-              onChange={() => setProviderChoice("manual")}
-              className="mt-1"
-            />
-            <span>
-              Manual transfer
-              <span className="block text-xs text-muted-foreground">
-                Create a pending payment; an admin confirms it out-of-band.
+            <legend className="text-sm font-medium">Payment method</legend>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="bundle-payment-provider"
+                value="manual"
+                checked={provider === "manual"}
+                onChange={() => setProviderChoice("manual")}
+                className="mt-1"
+              />
+              <span>
+                Manual transfer
+                <span className="block text-xs text-muted-foreground">
+                  Create a pending payment; an admin confirms it out-of-band.
+                </span>
               </span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="radio"
-              name="bundle-payment-provider"
-              value="payos"
-              checked={provider === "payos"}
-              onChange={() => setProviderChoice("payos")}
-              className="mt-1"
-            />
-            <span>
-              PayOS
-              <span className="block text-xs text-muted-foreground">
-                Pay by bank app or QR at PayOS; you will be redirected there and the payment status
-                here updates from the server.
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="bundle-payment-provider"
+                value="payos"
+                checked={provider === "payos"}
+                onChange={() => setProviderChoice("payos")}
+                className="mt-1"
+              />
+              <span>
+                PayOS
+                <span className="block text-xs text-muted-foreground">
+                  Pay by bank app or QR at PayOS; you will be redirected there and the payment
+                  status here updates from the server.
+                </span>
               </span>
-            </span>
-          </label>
-        </fieldset>
+            </label>
+          </fieldset>
         )}
-        <CurrencyToggle currency={currency} rate={rate} onChange={setCurrency} />
+        <CurrencyToggle
+          currency={currency}
+          rate={rate}
+          onChange={setCurrency}
+          usdAvailable={bundles.some((b) => isUsdText(b.price_usd))}
+        />
       </div>
 
       {/* min-w-0 on cards: nothing may force the page wider than 375px. */}
@@ -333,8 +416,9 @@ export function BundleCards({
             <CardContent className="flex min-w-0 flex-1 flex-col gap-3">
               <div>
                 <p className="text-xs text-muted-foreground">Price</p>
-                <Amount
-                  vnd={bundle.price_vnd}
+                <CardPrice
+                  priceVnd={bundle.price_vnd}
+                  priceUsd={bundle.price_usd}
                   currency={currency}
                   rate={rate}
                   testId={`price-${bundle.id}`}
@@ -352,6 +436,12 @@ export function BundleCards({
                     {currency === "USD" && hasRate(rate)
                       ? `+${formatUsdFromVnd(bundle.bonus_vnd, rate)} bonus`
                       : `+ ${formatVnd(bundle.bonus_vnd)} bonus`}
+                  </p>
+                )}
+                {isUsdText(bundle.price_usd) && (
+                  <p className="text-xs text-muted-foreground">
+                    Credit is a fixed VND amount set at creation; USD shows the current-rate
+                    equivalent.
                   </p>
                 )}
               </div>
@@ -436,43 +526,48 @@ export function PlanCards({
       <div className="flex flex-wrap items-center justify-between gap-2">
         {payosAvailable && (
           <fieldset className="space-y-2">
-          <legend className="text-sm font-medium">Payment method</legend>
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="radio"
-              name="plan-payment-provider"
-              value="manual"
-              checked={provider === "manual"}
-              onChange={() => setProviderChoice("manual")}
-              className="mt-1"
-            />
-            <span>
-              Manual transfer
-              <span className="block text-xs text-muted-foreground">
-                Create a pending payment; an admin confirms it out-of-band.
+            <legend className="text-sm font-medium">Payment method</legend>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="plan-payment-provider"
+                value="manual"
+                checked={provider === "manual"}
+                onChange={() => setProviderChoice("manual")}
+                className="mt-1"
+              />
+              <span>
+                Manual transfer
+                <span className="block text-xs text-muted-foreground">
+                  Create a pending payment; an admin confirms it out-of-band.
+                </span>
               </span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="radio"
-              name="plan-payment-provider"
-              value="payos"
-              checked={provider === "payos"}
-              onChange={() => setProviderChoice("payos")}
-              className="mt-1"
-            />
-            <span>
-              PayOS
-              <span className="block text-xs text-muted-foreground">
-                Pay by bank app or QR at PayOS; you will be redirected there and the payment status
-                here updates from the server.
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="plan-payment-provider"
+                value="payos"
+                checked={provider === "payos"}
+                onChange={() => setProviderChoice("payos")}
+                className="mt-1"
+              />
+              <span>
+                PayOS
+                <span className="block text-xs text-muted-foreground">
+                  Pay by bank app or QR at PayOS; you will be redirected there and the payment
+                  status here updates from the server.
+                </span>
               </span>
-            </span>
-          </label>
-        </fieldset>
+            </label>
+          </fieldset>
         )}
-        <CurrencyToggle currency={currency} rate={rate} onChange={setCurrency} />
+        <CurrencyToggle
+          currency={currency}
+          rate={rate}
+          onChange={setCurrency}
+          usdAvailable={plans.some((p) => isUsdText(p.price_usd))}
+        />
       </div>
 
       {/* min-w-0 on cards: nothing may force the page wider than 375px. */}
@@ -485,8 +580,9 @@ export function PlanCards({
             <CardContent className="flex min-w-0 flex-1 flex-col gap-3">
               <div>
                 <p className="text-xs text-muted-foreground">Price</p>
-                <Amount
-                  vnd={plan.price_vnd}
+                <CardPrice
+                  priceVnd={plan.price_vnd}
+                  priceUsd={plan.price_usd}
                   currency={currency}
                   rate={rate}
                   testId={`price-${plan.id}`}
@@ -502,6 +598,12 @@ export function PlanCards({
                 {!!plan.rate_limit_per_minute && (
                   <p className="text-xs text-muted-foreground">
                     Up to {plan.rate_limit_per_minute} requests per minute on subscription credit
+                  </p>
+                )}
+                {isUsdText(plan.price_usd) && (
+                  <p className="text-xs text-muted-foreground">
+                    Credit is a fixed VND amount set at creation; USD shows the current-rate
+                    equivalent.
                   </p>
                 )}
               </div>
@@ -543,10 +645,11 @@ export function SubscriptionStatusCard({
   const [currency, setCurrency] = useState<DisplayCurrency>("USD");
 
   const cancel = useMutation({
-    mutationFn: () => api<{ id: string; status: string; period_end: number }>(
-      `/api/v1/workspaces/${workspaceId}/subscription`,
-      { method: "DELETE" },
-    ),
+    mutationFn: () =>
+      api<{ id: string; status: string; period_end: number }>(
+        `/api/v1/workspaces/${workspaceId}/subscription`,
+        { method: "DELETE" },
+      ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["wallet", workspaceId] });
       toast("Subscription canceled — credit stays usable until the period ends");
