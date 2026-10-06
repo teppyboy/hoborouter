@@ -470,24 +470,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           onMouseEnter={() => collapsed && setHovered(true)}
           onMouseLeave={() => setHovered(false)}
           className={cn(
-            "hidden shrink-0 flex-col border-r border-border transition-[width] duration-200 md:flex",
+            "hidden shrink-0 flex-col border-r border-border transition-[width] duration-200 ease-in-out md:flex",
             displayCollapsed ? "w-14" : "w-52",
           )}
         >
           <div
             className={cn(
               "flex h-12 items-center gap-2 border-b border-border px-3",
-              collapsed && "justify-center px-0",
+              displayCollapsed && "justify-center px-0",
             )}
           >
             <Shuffle className="size-4 shrink-0" aria-hidden />
-            {!collapsed && <span className="text-sm font-semibold">Hoborouter</span>}
-            {!collapsed && (
+            {!displayCollapsed && <span className="text-sm font-semibold">Hoborouter</span>}
+            {!displayCollapsed && (
               <Button
                 variant="ghost"
                 size="icon"
                 className="ml-auto size-7"
-                aria-label="Collapse sidebar"
+                // Store state drives the label: while hover-expanded the rail
+                // looks open but the persisted store is still collapsed, so
+                // the visible control must offer the persistent expand.
+                aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                 onClick={toggleCollapsed}
               >
                 <ToggleIcon className="size-4" />

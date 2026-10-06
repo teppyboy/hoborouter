@@ -129,6 +129,22 @@ body {
   }
 }
 
+/* Default easing for interactive/common element transitions: standard
+   ease-in-out curve instead of the browser default. Scoped to elements, not
+   *, so keyframe animations (spinners, skeletons) are untouched — and
+   transition-timing-function never applies to @keyframes anyway. Component
+   utilities (ease-*) still win over this element-level default. */
+@media (prefers-reduced-motion: no-preference) {
+  a,
+  button,
+  [role="button"],
+  aside,
+  dialog,
+  [data-state] {
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
 /* Global reduced-motion guard: kill every animation/transition. */
 @media (prefers-reduced-motion: reduce) {
   *,
