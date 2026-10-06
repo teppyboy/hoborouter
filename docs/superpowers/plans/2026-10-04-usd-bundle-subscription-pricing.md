@@ -56,16 +56,16 @@ Use payment settings FX for catalog and wallet display. Do not change gateway us
 
 Worktree paths below are logical allocation labels, not paths to create blindly. Record the allocator's actual cwd, branch, base ref, run ID, and manifest before each writer starts. All workers use fresh contexts; native Pi only, no Claude Code/CLI fallback.
 
-| Lane | Exclusive write paths | Dependency | Focused gate | Durable handoff |
-| --- | --- | --- | --- | --- |
-| `schema` | `packages/db/src/schema.ts`, `packages/db/drizzle/0008_catalog_usd_pricing.sql`, `packages/db/drizzle/meta/_journal.json`, new `tests/catalog-usd-schema.test.ts` | Approved plan | Migrated legacy fixtures; valid/invalid USD groups; direct DB constraint rejection | `schema` report + patch + allocator manifest |
-| `usd-format` | `apps/web/src/lib/format.ts`, new `tests/usd-amount-format.test.ts` | Approved formatter contract | Exact string formatting: `5` = `$5.00`, `9.9` = `$9.90`, `0009.99` = `$9.99`; no floating-point rounding | `usd-format` report + patch + manifest |
-| `admin-api` | `apps/api/src/routes/admin-bundles.ts`, `apps/api/test/catalog-usd-pricing.test.ts` | Reviewed/committed foundation | Task 1 API red/green, authorization, legacy CRUD, immutable grants | `admin-api` report + patch + manifest |
-| `checkout-api` | `apps/api/src/routes/bundles.ts`, `apps/api/src/routes/payments.ts`, `apps/api/src/routes/dashboard.ts`, `apps/api/src/routes/public-catalog.ts`, `apps/api/test/catalog-usd-purchase.test.ts`, `apps/api/test/wallet-usd.test.ts`, `apps/api/test/public-catalog.test.ts` | Reviewed/committed foundation | Task 2 seeded products, both fake providers, canonical FX, cap, snapshots, concurrent replay | `checkout-api` report + patch + manifest |
-| `admin-ui` | `apps/web/src/pages/admin/bundles.tsx`, `tests/admin-bundles-usd-ui.test.tsx`, existing `tests/admin-bundles-ui.test.ts` only if behavior expectations require it | Reviewed/committed foundation; fixed admin API contract | USD/VND form controls, exact POST bodies, invalid input, accessible labels, legacy table | `admin-ui` report + patch + manifest |
-| `member-ui` | `apps/web/src/pages/billing/bundles.tsx`, `apps/web/src/lib/public-queries.ts`, `apps/web/src/pages/public/pricing.tsx`, `tests/bundles-usd-toggle-ui.test.tsx`, `tests/business-display.test.tsx` | Reviewed/committed foundation; fixed quote API contract | USD prices without wallet rate, current VND quotes, actual grants, toggles, sections, cancel behavior, public price | `member-ui` report + patch + manifest |
-| `integration` | new `apps/api/test/catalog-usd-flow.test.ts`, relevant billing area in `tests/e2e/ui.ts`; cross-lane corrections only after exclusive ownership transfer | All accepted component commits | Actual admin-create/purchase/settle flow; isolated fake-provider E2E | Integration report + small categorized patches |
-| Reviewers | No source writes | Frozen respective candidate | Cited spec/quality findings and test-evidence gaps | Separate lane-qualified review report |
+| Lane           | Exclusive write paths                                                                                                                                                                                                                                                      | Dependency                                              | Focused gate                                                                                                        | Durable handoff                                |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `schema`       | `packages/db/src/schema.ts`, `packages/db/drizzle/0008_catalog_usd_pricing.sql`, `packages/db/drizzle/meta/_journal.json`, new `tests/catalog-usd-schema.test.ts`                                                                                                          | Approved plan                                           | Migrated legacy fixtures; valid/invalid USD groups; direct DB constraint rejection                                  | `schema` report + patch + allocator manifest   |
+| `usd-format`   | `apps/web/src/lib/format.ts`, new `tests/usd-amount-format.test.ts`                                                                                                                                                                                                        | Approved formatter contract                             | Exact string formatting: `5` = `$5.00`, `9.9` = `$9.90`, `0009.99` = `$9.99`; no floating-point rounding            | `usd-format` report + patch + manifest         |
+| `admin-api`    | `apps/api/src/routes/admin-bundles.ts`, `apps/api/test/catalog-usd-pricing.test.ts`                                                                                                                                                                                        | Reviewed/committed foundation                           | Task 1 API red/green, authorization, legacy CRUD, immutable grants                                                  | `admin-api` report + patch + manifest          |
+| `checkout-api` | `apps/api/src/routes/bundles.ts`, `apps/api/src/routes/payments.ts`, `apps/api/src/routes/dashboard.ts`, `apps/api/src/routes/public-catalog.ts`, `apps/api/test/catalog-usd-purchase.test.ts`, `apps/api/test/wallet-usd.test.ts`, `apps/api/test/public-catalog.test.ts` | Reviewed/committed foundation                           | Task 2 seeded products, both fake providers, canonical FX, cap, snapshots, concurrent replay                        | `checkout-api` report + patch + manifest       |
+| `admin-ui`     | `apps/web/src/pages/admin/bundles.tsx`, `tests/admin-bundles-usd-ui.test.tsx`, existing `tests/admin-bundles-ui.test.ts` only if behavior expectations require it                                                                                                          | Reviewed/committed foundation; fixed admin API contract | USD/VND form controls, exact POST bodies, invalid input, accessible labels, legacy table                            | `admin-ui` report + patch + manifest           |
+| `member-ui`    | `apps/web/src/pages/billing/bundles.tsx`, `apps/web/src/lib/public-queries.ts`, `apps/web/src/pages/public/pricing.tsx`, `tests/bundles-usd-toggle-ui.test.tsx`, `tests/business-display.test.tsx`                                                                         | Reviewed/committed foundation; fixed quote API contract | USD prices without wallet rate, current VND quotes, actual grants, toggles, sections, cancel behavior, public price | `member-ui` report + patch + manifest          |
+| `integration`  | new `apps/api/test/catalog-usd-flow.test.ts`, relevant billing area in `tests/e2e/ui.ts`; cross-lane corrections only after exclusive ownership transfer                                                                                                                   | All accepted component commits                          | Actual admin-create/purchase/settle flow; isolated fake-provider E2E                                                | Integration report + small categorized patches |
+| Reviewers      | No source writes                                                                                                                                                                                                                                                           | Frozen respective candidate                             | Cited spec/quality findings and test-evidence gaps                                                                  | Separate lane-qualified review report          |
 
 **No overlapping writers:** Task text below defines requirements, while this board defines ownership. For example, the schema work is not also assigned to admin-api, and `format.ts` is not also assigned to either UI worker. When an interface must change, parent updates the written contract and transfers ownership before sending dependent fixes.
 
@@ -73,20 +73,20 @@ Worktree paths below are logical allocation labels, not paths to create blindly.
 
 Every small independently verifiable change is committed immediately after its tests/review pass; never wait for a whole wave to bulk-commit. Workers return uncommitted candidate patches; parent alone stages explicit paths and commits. A broken partial implementation is preserved as a handoff, not committed as finished product. Do not make artificial one-line commits that separate a migration from its schema/tests or implementation from its regression test.
 
-| Checkpoint | Commit subject | Atomic contents |
-| --- | --- | --- |
-| D1 | `docs: specify USD catalog pricing` | Approved spec only |
-| D2 | `docs: plan parallel USD pricing work` | This implementation/orchestration plan only |
-| F1 | `feat(db): add USD catalog metadata` | Forward migration, journal, schema, direct DB behavior tests; migration compatibility body |
-| F2 | `feat(web): format exact USD catalog amounts` | Formatter and focused tests |
-| A1 | `feat(api): author USD bundle and plan amounts` | Admin input validation, transaction snapshots/audit, API tests |
-| C1 | `feat(api): snapshot USD catalog checkout` | Manual/PayOS price resolution, payment snapshot/replay tests |
-| C2 | `fix(api): unify catalog payment FX quotes` | Member/public quoted catalog fields, wallet rate, corresponding tests |
-| U1 | `feat(web): author catalog amounts in USD` | Admin editor and interaction tests |
-| U2 | `feat(web): use USD bundle and plan prices` | Billing display/toggles/grants/cancellation regression tests |
-| U3 | `feat(web): show USD public plan prices` | Public type/query/display changes and tests |
-| I1 | `test: cover USD catalog purchase lifecycle` | Cross-component integration behavior |
-| I2 | `test(e2e): cover USD catalog checkout` | Relevant E2E flow, no unrelated reductions |
+| Checkpoint | Commit subject                                  | Atomic contents                                                                            |
+| ---------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| D1         | `docs: specify USD catalog pricing`             | Approved spec only                                                                         |
+| D2         | `docs: plan parallel USD pricing work`          | This implementation/orchestration plan only                                                |
+| F1         | `feat(db): add USD catalog metadata`            | Forward migration, journal, schema, direct DB behavior tests; migration compatibility body |
+| F2         | `feat(web): format exact USD catalog amounts`   | Formatter and focused tests                                                                |
+| A1         | `feat(api): author USD bundle and plan amounts` | Admin input validation, transaction snapshots/audit, API tests                             |
+| C1         | `feat(api): snapshot USD catalog checkout`      | Manual/PayOS price resolution, payment snapshot/replay tests                               |
+| C2         | `fix(api): unify catalog payment FX quotes`     | Member/public quoted catalog fields, wallet rate, corresponding tests                      |
+| U1         | `feat(web): author catalog amounts in USD`      | Admin editor and interaction tests                                                         |
+| U2         | `feat(web): use USD bundle and plan prices`     | Billing display/toggles/grants/cancellation regression tests                               |
+| U3         | `feat(web): show USD public plan prices`        | Public type/query/display changes and tests                                                |
+| I1         | `test: cover USD catalog purchase lifecycle`    | Cross-component integration behavior                                                       |
+| I2         | `test(e2e): cover USD catalog checkout`         | Relevant E2E flow, no unrelated reductions                                                 |
 
 Split C1/C2 only if each intermediate state passes its applicable checks: `bundles.ts` is shared within that single lane. Otherwise record why a single atomic commit is necessary instead of committing a broken state. Split U2/U3 because their implementation files are separate. Any later fix gets its own `fix:` commit plus regression test, not an amend/squash/history rewrite. No `git add -A`, push, tag, or image publication.
 
@@ -105,12 +105,14 @@ Split C1/C2 only if each intermediate state passes its applicable checks: `bundl
 ### Task 1: Add USD catalog authoring and immutable VND grants
 
 **Files:**
+
 - Modify: `packages/db/src/schema.ts`, `packages/db/drizzle/meta/_journal.json`
 - Create: `packages/db/drizzle/0008_catalog_usd_pricing.sql`
 - Modify: `apps/api/src/routes/admin-bundles.ts`
 - Create: `apps/api/test/catalog-usd-pricing.test.ts`
 
 **Interfaces:**
+
 - Existing VND POST bodies remain supported unchanged.
 - Bundle USD POST body: `{name: string, price_usd: string, credit_usd: string, bonus_usd?: string}`.
 - Plan USD POST body: `{name: string, price_usd: string, credit_per_period_usd: string, period_days?: number, rate_limit_per_minute?: number}`.
@@ -126,6 +128,7 @@ Split C1/C2 only if each intermediate state passes its applicable checks: `bundl
 ### Task 2: Resolve USD purchases and expose canonical quotes
 
 **Files:**
+
 - Modify: `apps/api/src/routes/bundles.ts`, `apps/api/src/routes/payments.ts`
 - Modify: `apps/api/src/routes/dashboard.ts`, `apps/api/src/routes/public-catalog.ts`
 - Create: `apps/api/test/catalog-usd-purchase.test.ts`
@@ -133,6 +136,7 @@ Split C1/C2 only if each intermediate state passes its applicable checks: `bundl
 - Existing regression gates: `tests/bundles-settlement.test.ts`, `tests/subscription-settlement.test.ts`, `tests/subscription-funding.test.ts`
 
 **Interfaces:**
+
 - Keep purchase POST bodies `{provider?: "manual" | "payos"}`; no USD input for members buying fixed products.
 - Extend internal `PayosPurchase` with optional `priceUsd?: string`, supplied only from the server catalog row.
 - `makePayosPaymentCreator(...)(workspaceId, userId, amount, purchase?, usdAmountText?)` keeps its existing signature. Resolve `purchase?.priceUsd` for USD catalog items, otherwise existing top-up/VND behavior.
@@ -148,12 +152,14 @@ Split C1/C2 only if each intermediate state passes its applicable checks: `bundl
 ### Task 3: Make admin and member USD controls real
 
 **Files:**
+
 - Modify: `apps/web/src/pages/admin/bundles.tsx`, `apps/web/src/pages/billing/bundles.tsx`
 - Modify: `apps/web/src/lib/format.ts`, `apps/web/src/lib/public-queries.ts`, `apps/web/src/pages/public/pricing.tsx`
 - Create: `tests/admin-bundles-usd-ui.test.tsx`
 - Modify: `tests/bundles-usd-toggle-ui.test.tsx`, `tests/business-display.test.tsx`
 
 **Interfaces:**
+
 - Add `formatUsdAmountText(text: string): string` in `lib/format.ts`: validated decimal text to `$` text with two decimal digits using string operations, no Number money conversion.
 - Add nullable USD metadata to UI catalog interfaces; GET response interfaces include optional `usd_vnd_rate` for older backend compatibility.
 - Member authored USD price uses exact `price_usd`; VND toggle uses server `price_vnd` quote. Legacy price conversion and all credits use canonical FX plus stored VND grants.

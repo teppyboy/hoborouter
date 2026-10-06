@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { Pricing } from "../apps/web/src/pages/public/pricing";
 import type { PublicSubscriptionPlan } from "../apps/web/src/lib/public-queries";
 
-
 const publicPlan = (over: Partial<PublicSubscriptionPlan>): PublicSubscriptionPlan => ({
   id: "pp1",
   name: "Pro",
@@ -16,7 +15,13 @@ const publicPlan = (over: Partial<PublicSubscriptionPlan>): PublicSubscriptionPl
 
 test("public pricing shows authored USD plan price and keeps the VND quote as an estimate", () => {
   const html = renderToStaticMarkup(
-    <Pricing instance={null} models={[]} modelsState="ready" plans={[publicPlan({})]} plansState="ready" />,
+    <Pricing
+      instance={null}
+      models={[]}
+      modelsState="ready"
+      plans={[publicPlan({})]}
+      plansState="ready"
+    />,
   );
   expect(html).toContain("$9.99");
   expect(html).toContain("≈ 259.750 ₫ (VND estimate)");

@@ -393,7 +393,13 @@ describe("GET /api/v1/public/subscription-plans", () => {
       const res = await req("/api/v1/public/subscription-plans");
       expect(res.status).toBe(200);
       const body = (await res.json()) as { data: { id: string; price_vnd: number }[] };
-      expect(body.data.map((p) => p.id)).toEqual(["plan-a", "plan-usd", "plan-b", "usd-a", "usd-b"]);
+      expect(body.data.map((p) => p.id)).toEqual([
+        "plan-a",
+        "plan-usd",
+        "plan-b",
+        "usd-a",
+        "usd-b",
+      ]);
       expect(body.data.map((p) => p.price_vnd)).toEqual([99000, 109450, 199000, 218900, 218900]);
     } finally {
       await db.execute(sql`DELETE FROM subscription_plans WHERE id IN ('usd-a', 'usd-b')`);

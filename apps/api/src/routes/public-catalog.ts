@@ -261,7 +261,7 @@ export const publicCatalogRoutes = (db: Db) =>
             priceVnd:
               r.price_usd !== null
                 ? (usdCentsToVndCeiling(parseUsdCents(r.price_usd)!, limits.usdVndRate) ??
-                   Number(r.price_vnd))
+                  Number(r.price_vnd))
                 : Number(r.price_vnd),
           }))
           .sort(

@@ -9,7 +9,15 @@ import { sql } from "drizzle-orm";
 import { createTestDb } from "@hoborouter/db";
 import { createAuth } from "../src/auth";
 import { buildApp } from "../src/app";
-import { q, trackDrop, signUp, req, createWorkspace, userIdByEmail, makeInstanceAdmin } from "./helpers";
+import {
+  q,
+  trackDrop,
+  signUp,
+  req,
+  createWorkspace,
+  userIdByEmail,
+  makeInstanceAdmin,
+} from "./helpers";
 import type { buildApp as BuildApp } from "../src/app";
 
 type App = Awaited<ReturnType<typeof BuildApp>>;
@@ -104,9 +112,8 @@ afterAll(() => {
 
 const balance = async () =>
   Number(
-    (
-      await q(db, "SELECT balance FROM wallets WHERE workspace_id = ? AND kind = 'topup'", WS)
-    )[0]!.balance,
+    (await q(db, "SELECT balance FROM wallets WHERE workspace_id = ? AND kind = 'topup'", WS))[0]!
+      .balance,
   );
 
 const audits = async (paymentId: string) =>
@@ -201,14 +208,22 @@ describe("cap enforcement before any write or provider call", () => {
     await setSetting("payment_max_amount_vnd", "200000");
     try {
       // Earlier tests left real USD purchases; assert no NEW over-cap row.
-      const before = await q(db, "SELECT id FROM payments WHERE bundle_id = ? AND provider = 'manual' AND amount > 200000", USD_BUNDLE);
+      const before = await q(
+        db,
+        "SELECT id FROM payments WHERE bundle_id = ? AND provider = 'manual' AND amount > 200000",
+        USD_BUNDLE,
+      );
       const res = await req(app, `/api/v1/workspaces/${WS}/bundles/${USD_BUNDLE}/purchase`, {
         method: "POST",
         cookie: memberCookie,
         body: { provider: "manual" },
       });
       expect(res.status).toBe(400);
-      const rows = await q(db, "SELECT id FROM payments WHERE bundle_id = ? AND provider = 'manual' AND amount > 200000", USD_BUNDLE);
+      const rows = await q(
+        db,
+        "SELECT id FROM payments WHERE bundle_id = ? AND provider = 'manual' AND amount > 200000",
+        USD_BUNDLE,
+      );
       expect(rows).toHaveLength(before.length);
       expect(await balance()).toBe(0);
     } finally {
@@ -220,7 +235,11 @@ describe("cap enforcement before any write or provider call", () => {
     await setSetting("payment_max_amount_vnd", "200000");
     try {
       const beforeCalls = calls.length;
-      const before = await q(db, "SELECT id FROM payments WHERE bundle_id = ? AND amount > 200000", USD_BUNDLE);
+      const before = await q(
+        db,
+        "SELECT id FROM payments WHERE bundle_id = ? AND amount > 200000",
+        USD_BUNDLE,
+      );
       const res = await req(payosApp, `/api/v1/workspaces/${WS}/bundles/${USD_BUNDLE}/purchase`, {
         method: "POST",
         cookie: memberCookie,
@@ -228,7 +247,11 @@ describe("cap enforcement before any write or provider call", () => {
       });
       expect(res.status).toBe(400);
       expect(calls.length).toBe(beforeCalls);
-      const rows = await q(db, "SELECT id FROM payments WHERE bundle_id = ? AND amount > 200000", USD_BUNDLE);
+      const rows = await q(
+        db,
+        "SELECT id FROM payments WHERE bundle_id = ? AND amount > 200000",
+        USD_BUNDLE,
+      );
       expect(rows).toHaveLength(before.length);
     } finally {
       await setSetting("payment_max_amount_vnd", "100000000");
@@ -250,8 +273,14 @@ describe("settlement replay and concurrency (frozen VND grants)", () => {
   test("concurrent admin completes of a USD bundle payment: one grant at creation FX", async () => {
     const paymentId = await createManual(`/api/v1/workspaces/${WS}/bundles/${USD_BUNDLE}/purchase`);
     const results = await Promise.allSettled([
-      req(app, `/api/v1/admin/payments/${paymentId}/complete`, { method: "POST", cookie: adminCookie }),
-      req(app, `/api/v1/admin/payments/${paymentId}/complete`, { method: "POST", cookie: adminCookie }),
+      req(app, `/api/v1/admin/payments/${paymentId}/complete`, {
+        method: "POST",
+        cookie: adminCookie,
+      }),
+      req(app, `/api/v1/admin/payments/${paymentId}/complete`, {
+        method: "POST",
+        cookie: adminCookie,
+      }),
     ]);
     const outcomes: string[] = [];
     for (const r of results) {
@@ -282,8 +311,14 @@ describe("settlement replay and concurrency (frozen VND grants)", () => {
       `/api/v1/workspaces/${WS}/subscription-plans/${USD_PLAN}/purchase`,
     );
     const results = await Promise.allSettled([
-      req(app, `/api/v1/admin/payments/${paymentId}/complete`, { method: "POST", cookie: adminCookie }),
-      req(app, `/api/v1/admin/payments/${paymentId}/complete`, { method: "POST", cookie: adminCookie }),
+      req(app, `/api/v1/admin/payments/${paymentId}/complete`, {
+        method: "POST",
+        cookie: adminCookie,
+      }),
+      req(app, `/api/v1/admin/payments/${paymentId}/complete`, {
+        method: "POST",
+        cookie: adminCookie,
+      }),
     ]);
     let credited = 0;
     for (const r of results) {

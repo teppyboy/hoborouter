@@ -95,7 +95,9 @@ export const bundlesRoutes = (
             ? { fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd }
             : {}),
           ...(purchase.bundleId ? { bundle_id: purchase.bundleId } : {}),
-          ...(purchase.subscriptionPlanId ? { subscription_plan_id: purchase.subscriptionPlanId } : {}),
+          ...(purchase.subscriptionPlanId
+            ? { subscription_plan_id: purchase.subscriptionPlanId }
+            : {}),
         },
       });
     });
@@ -149,7 +151,7 @@ export const bundlesRoutes = (
           price_vnd:
             row.price_usd !== null
               ? (usdCentsToVndCeiling(parseUsdCents(row.price_usd)!, limits.usdVndRate) ??
-                 Number(row.price_vnd))
+                Number(row.price_vnd))
               : Number(row.price_vnd),
         }));
         return new Response(JSON.stringify({ data, usd_vnd_rate: limits.usdVndRate }), {
@@ -190,7 +192,7 @@ export const bundlesRoutes = (
           price_vnd:
             row.price_usd !== null
               ? (usdCentsToVndCeiling(parseUsdCents(row.price_usd)!, limits.usdVndRate) ??
-                 Number(row.price_vnd))
+                Number(row.price_vnd))
               : Number(row.price_vnd),
         }));
         return new Response(JSON.stringify({ data, usd_vnd_rate: limits.usdVndRate }), {

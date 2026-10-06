@@ -59,14 +59,7 @@ async function insertBundle(b: InsertBundle): Promise<void> {
        (id, name, price_vnd, credit_vnd, bonus_vnd, active, created_at,
         price_usd, credit_usd, bonus_usd, creation_fx_rate_vnd_per_usd)
      VALUES ($1, $1, 259740, 130005, 0, true, $2, $3, $4, $5, $6)`,
-    [
-      b.id,
-      NOW,
-      b.priceUsd ?? null,
-      b.creditUsd ?? null,
-      b.bonusUsd ?? null,
-      b.fx ?? null,
-    ],
+    [b.id, NOW, b.priceUsd ?? null, b.creditUsd ?? null, b.bonusUsd ?? null, b.fx ?? null],
   );
 }
 
@@ -276,7 +269,9 @@ describe("USD catalog schema", () => {
 
   test("incomplete plan USD group (missing credit/FX) rejected", async () => {
     await expect(insertPlan({ id: "inc-p-1", priceUsd: "9.99" })).rejects.toThrow();
-    await expect(insertPlan({ id: "inc-p-2", priceUsd: "9.99", creditUsd: "12" })).rejects.toThrow();
+    await expect(
+      insertPlan({ id: "inc-p-2", priceUsd: "9.99", creditUsd: "12" }),
+    ).rejects.toThrow();
   });
 
   test("credit/bonus USD text without price (orphan non-null group member) rejected", async () => {
