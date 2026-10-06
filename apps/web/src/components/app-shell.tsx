@@ -443,13 +443,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setMobileNavOpen(false);
   }
 
+  // Hover-expand: a collapsed desktop rail temporarily opens under the pointer
+  // without touching the persisted store state (display-only). The aside is
+  // hidden below md, so these handlers never fire for the mobile sheet.
+  const [hovered, setHovered] = useState(false);
+  const displayCollapsed = collapsed && !hovered;
+
   return (
     <TooltipProvider>
       <div className="flex min-h-screen pb-safe">
         <aside
+          onMouseEnter={() => collapsed && setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
           className={cn(
             "hidden shrink-0 flex-col border-r border-border transition-[width] duration-200 md:flex",
-            collapsed ? "w-14" : "w-52",
+            displayCollapsed ? "w-14" : "w-52",
           )}
         >
           <div
@@ -473,9 +481,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <nav className="flex-1 overflow-y-auto p-2 text-sm">
-            <NavLinks pathname={pathname} collapsed={collapsed} isAdmin={isAdmin} />
+            <NavLinks pathname={pathname} collapsed={displayCollapsed} isAdmin={isAdmin} />
           </nav>
-          {collapsed && (
+          {displayCollapsed && (
             <div className="flex justify-center border-t border-border p-2">
               <Button
                 variant="ghost"
