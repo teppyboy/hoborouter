@@ -198,8 +198,8 @@ test("collapsed rail expands on hover without persisting, collapses on leave", a
 
 test("click toggle still persists through hover cycles", async () => {
   await renderShell();
-  // While hover-expanded, the expand button is hidden (rail already open);
-  // leave first, then click the rail's expand button.
+  // While hover-expanded the header already shows an "Expand sidebar" button
+  // (the control is always rendered); leave the rail anyway, then click it.
   hoverAside("enter");
   hoverAside("leave");
   const expand = document.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]');
@@ -252,6 +252,26 @@ test("hover-expanded rail exposes a persistent expand control", async () => {
   expect(useSidebarStore.getState().collapsed).toBe(false);
   hoverAside("leave");
   expect(aside().className).toContain("w-52");
+});
+
+test("collapsed rail keeps exactly one expand toggle, in the header (no bottom button)", async () => {
+  await renderShell();
+  const expands = document.querySelectorAll<HTMLButtonElement>('[aria-label="Expand sidebar"]');
+  // The bottom rail button was removed; the persistent header toggle is the
+  // only expand control, so keyboard users still have a reachable one.
+  expect(expands.length).toBe(1);
+  const toggle = expands[0]!;
+  expect(toggle.closest("aside")?.firstElementChild?.contains(toggle)).toBe(true);
+  act(() => {
+    toggle.click();
+  });
+  expect(useSidebarStore.getState().collapsed).toBe(false);
+  expect(aside().className).toContain("w-52");
+  // Persistent: hover cycles no longer collapse it.
+  hoverAside("enter");
+  hoverAside("leave");
+  expect(aside().className).toContain("w-52");
+  expect(useSidebarStore.getState().collapsed).toBe(false);
 });
 
 test("mobile nav trigger untouched: aside hidden below md, hamburger present", async () => {

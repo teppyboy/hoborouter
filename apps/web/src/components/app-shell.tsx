@@ -482,37 +482,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           >
             <Shuffle className="size-4 shrink-0" aria-hidden />
             {!displayCollapsed && <span className="text-sm font-semibold">Hoborouter</span>}
-            {!displayCollapsed && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="ml-auto size-7"
-                // Store state drives the label: while hover-expanded the rail
-                // looks open but the persisted store is still collapsed, so
-                // the visible control must offer the persistent expand.
-                aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-                onClick={toggleCollapsed}
-              >
-                <ToggleIcon className="size-4" />
-              </Button>
-            )}
+            {/* Store state drives the label: while hover-expanded the rail
+            looks open but the persisted store is still collapsed, so the
+            visible control must offer the persistent expand. Always rendered
+            (also on the narrow rail) so keyboard users keep a reachable
+            toggle; the bottom duplicate button was removed as useless. */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn("size-7", !displayCollapsed && "ml-auto")}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              onClick={toggleCollapsed}
+            >
+              <ToggleIcon className="size-4" />
+            </Button>
           </div>
           <nav className="flex-1 overflow-y-auto p-2 text-sm">
             <NavLinks pathname={pathname} collapsed={displayCollapsed} isAdmin={isAdmin} />
           </nav>
-          {displayCollapsed && (
-            <div className="flex justify-center border-t border-border p-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-7"
-                aria-label="Expand sidebar"
-                onClick={toggleCollapsed}
-              >
-                <ToggleIcon className="size-4" />
-              </Button>
-            </div>
-          )}
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-border bg-background/80 pr-4 pl-[max(1rem,env(safe-area-inset-left))] backdrop-blur">
