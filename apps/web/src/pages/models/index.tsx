@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { PageHeader, DataTable, EmptyState, ErrorState } from "../../components/page";
+import { PageHeader, DataTable, EmptyState, ErrorState, ScrollPanel } from "../../components/page";
 import { Boxes } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import {
@@ -15,7 +15,15 @@ import { useIsAdmin } from "../../components/app-shell";
 // Created by shell writer; route is splat "/models/$".
 import { modelHref } from "../../lib/models";
 import { formatProviderLabel } from "../../lib/display";
-import { allCapabilities, allProviders, useCatalogModels, type CatalogModel } from "./data";
+import {
+  allCapabilities,
+  allProviders,
+  MODEL_SORT_OPTIONS,
+  sortModels,
+  useCatalogModels,
+  type CatalogModel,
+  type ModelSortMode,
+} from "./data";
 
 export default function ModelsPage() {
   const { models, loading, error } = useCatalogModels();
@@ -30,6 +38,7 @@ export default function ModelsPage() {
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("all");
   const [cap, setCap] = useState("all");
+  const [sort, setSort] = useState<ModelSortMode>("recommended");
   const isAdmin = useIsAdmin();
 
   const providers = useMemo(() => allProviders(models), [models]);
@@ -37,14 +46,17 @@ export default function ModelsPage() {
 
   const filtered = useMemo(
     () =>
-      models.filter(
-        (m) =>
-          (provider === "all" || m.provider === provider) &&
-          (cap === "all" || m.capabilities.includes(cap)) &&
-          (search === "" ||
-            `${m.publicId} ${m.displayName ?? ""}`.toLowerCase().includes(search.toLowerCase())),
+      sortModels(
+        models.filter(
+          (m) =>
+            (provider === "all" || m.provider === provider) &&
+            (cap === "all" || m.capabilities.includes(cap)) &&
+            (search === "" ||
+              `${m.publicId} ${m.displayName ?? ""}`.toLowerCase().includes(search.toLowerCase())),
+        ),
+        sort,
       ),
-    [models, provider, cap, search],
+    [models, provider, cap, search, sort],
   );
 
   const columns = [
@@ -153,6 +165,18 @@ export default function ModelsPage() {
             </SelectContent>
           </Select>
         )}
+        <Select value={sort} onValueChange={(v) => setSort(v as ModelSortMode)}>
+          <SelectTrigger className="h-8 w-44" aria-label="Sort models">
+            <SelectValue placeholder="Sort" />
+          </SelectTrigger>
+          <SelectContent>
+            {MODEL_SORT_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       {loading ? (
         <div className="space-y-2">
@@ -173,9 +197,11 @@ export default function ModelsPage() {
           }
         />
       ) : (
-        <div className="rounded-lg border border-border">
-          <DataTable columns={columns} data={filtered} />
-        </div>
+        <ScrollPanel label="Model catalog" stickyHeader>
+          {/* key resets column-header sorting when the sort option changes,
+              so the chosen order (default Recommended) is always authoritative. */}
+          <DataTable key={sort} columns={columns} data={filtered} />
+        </ScrollPanel>
       )}
     </div>
   );

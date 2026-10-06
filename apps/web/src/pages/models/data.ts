@@ -76,3 +76,30 @@ export function allProviders(models: CatalogModel[]): string[] {
 export function allCapabilities(models: CatalogModel[]): string[] {
   return [...new Set(models.flatMap((m) => m.capabilities))].sort();
 }
+
+export type ModelSortMode = "recommended" | "name";
+
+export const MODEL_SORT_OPTIONS: { value: ModelSortMode; label: string }[] = [
+  { value: "recommended", label: "Recommended" },
+  { value: "name", label: "Name (A–Z)" },
+];
+
+/**
+ * Client-side ordering over public catalog fields only (price, public_id).
+ * "recommended" promotes cheaper models: ascending input+output per-1M price,
+ * public_id tie-break. No score fields are invented and no upstream ids are
+ * involved; the input array is not mutated.
+ */
+export function sortModels(models: CatalogModel[], mode: ModelSortMode): CatalogModel[] {
+  const sorted = [...models];
+  if (mode === "recommended") {
+    sorted.sort((a, b) => {
+      const pa = a.price.input_usd_micro_per_1m + a.price.output_usd_micro_per_1m;
+      const pb = b.price.input_usd_micro_per_1m + b.price.output_usd_micro_per_1m;
+      return pa !== pb ? pa - pb : a.publicId.localeCompare(b.publicId);
+    });
+  } else {
+    sorted.sort((a, b) => a.publicId.localeCompare(b.publicId));
+  }
+  return sorted;
+}
