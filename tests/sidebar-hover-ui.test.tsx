@@ -76,6 +76,28 @@ globalThis.fetch = (async () =>
 const { createRoot } = await import("../apps/web/node_modules/react-dom/client");
 const { AppShell } = await import("../apps/web/src/components/app-shell");
 const { useSidebarStore } = await import("../apps/web/src/lib/sidebar");
+import type { SidebarState } from "../apps/web/src/lib/sidebar";
+
+// Setup isolation (root cause): the sidebar store's persist storage binds at
+// first module load, which may happen while a sibling file's jsdom is torn
+// down or before any localStorage exists — leaving `storage` undefined and
+// crashing the first persist write (middleware setItem). Bind a never-
+// undefined adapter following the LIVE global localStorage at call time; it
+// no-ops when none is installed and stays bound for the process.
+useSidebarStore.persist.setOptions({
+  storage: {
+    getItem: (name: string): { state: SidebarState; version: number } | null => {
+      const raw = (globalThis as { localStorage?: Storage }).localStorage?.getItem(name);
+      return raw ? (JSON.parse(raw) as { state: SidebarState; version: number }) : null;
+    },
+    setItem: (name: string, value: { state: SidebarState; version?: number }) => {
+      (globalThis as { localStorage?: Storage }).localStorage?.setItem(name, JSON.stringify(value));
+    },
+    removeItem: (name: string) => {
+      (globalThis as { localStorage?: Storage }).localStorage?.removeItem(name);
+    },
+  },
+});
 
 afterAll(async () => {
   await flushReact();

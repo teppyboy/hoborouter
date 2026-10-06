@@ -44,3 +44,11 @@ export function useT<const D extends Record<string, LocaleEntry>>(
     [dictionary, locale],
   );
 }
+
+/** Reactive translate for a single inline `LocaleEntry` (nav items, chrome labels).
+ *  Avoids forcing short label sets into a named dictionary; typed entries always
+ *  carry both strings, so only a corrupted runtime locale can hit the `en` fallback. */
+export function useLocaleEntry(entry: LocaleEntry): string {
+  const locale = useLocaleStore((s) => s.locale);
+  return entry[locale] ?? entry.en;
+}

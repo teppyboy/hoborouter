@@ -6,10 +6,30 @@
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
+import type { LocaleState } from "../apps/web/src/lib/i18n/locale";
 
 const GLOBAL_KEYS = ["window", "document", "localStorage", "location"] as const;
 const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
 let jsdomWindow: { close: () => void } | null = null;
+
+/** PersistStorage following the LIVE global localStorage at call time; no-ops
+ *  when no test environment has installed one. Never undefined, so lazily
+ *  binding stores (sidebar) cannot crash on persist writes. */
+function liveLocalStorageAdapter<S>() {
+  const ls = () => (globalThis as { localStorage?: Storage }).localStorage;
+  return {
+    getItem: (name: string): { state: S; version: number } | null => {
+      const raw = ls()?.getItem(name);
+      return raw ? (JSON.parse(raw) as { state: S; version: number }) : null;
+    },
+    setItem: (name: string, value: { state: S; version?: number }) => {
+      ls()?.setItem(name, JSON.stringify(value));
+    },
+    removeItem: (name: string) => {
+      ls()?.removeItem(name);
+    },
+  };
+}
 
 let translate: (typeof import("../apps/web/src/lib/i18n/t"))["translate"];
 let applyLocale: (typeof import("../apps/web/src/lib/i18n/locale"))["applyLocale"];
@@ -38,13 +58,25 @@ beforeAll(async () => {
   }
   jsdomWindow = win;
   // Import AFTER the jsdom globals exist: zustand persist binds its storage
-  // (localStorage) when the store module first loads.
+  // (localStorage) when the store module first loads. Sibling files (e.g.
+  // sidebar-hover-ui) may have loaded the store first in this process without
+  // a localStorage, leaving persist bound to a missing storage — rebind to a
+  // storage that reads the CURRENT global localStorage at call time, so every
+  // file that installs its own jsdom gets correct persistence without
+  // touching store runtime code.
   ({ translate } = await import("../apps/web/src/lib/i18n/t"));
   ({ applyLocale, useLocaleStore } = await import("../apps/web/src/lib/i18n/locale"));
+  // Root-cause storage isolation: bind a never-undefined adapter that follows
+  // the LIVE global localStorage at call time and no-ops when no environment
+  // has installed one. Restoring `storage: undefined` in afterAll instead
+  // crashed sibling stores that lazily bind (sidebar persist at
+  // middleware.mjs setItem), so this adapter stays bound for the process.
+  useLocaleStore.persist.setOptions({ storage: liveLocalStorageAdapter() });
   ({ LanguageToggle } = await import("../apps/web/src/components/language-toggle"));
 });
 
 afterAll(() => {
+  useLocaleStore.getState().setLocale("en");
   for (const k of GLOBAL_KEYS) {
     const d = originals[k];
     if (d) Object.defineProperty(globalThis, k, d);

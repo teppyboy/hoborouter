@@ -38,6 +38,7 @@ import { gravatarUrl } from "../lib/avatar";
 import { resendVerification, type SessionUser } from "../lib/auth";
 import { LanguageToggle } from "./language-toggle";
 import { usePublicConfig } from "./turnstile";
+import { useLocaleEntry, type LocaleEntry } from "../lib/i18n/t";
 import { useCurrentWorkspaceId, useWorkspaces, type Workspace } from "../lib/workspace-queries";
 import { CreateWorkspace } from "./create-workspace";
 import { cn } from "../lib/utils";
@@ -57,45 +58,49 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/t
 import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from "./ui/sheet";
 
 interface NavItem {
-  label: string;
+  // Inline LocaleEntry: the sidebar is a small closed label set, so a named
+  // dictionary would only add key-collision churn (see lib/i18n/common.ts).
+  label: LocaleEntry;
   to: string;
   icon: LucideIcon;
 }
 
-const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
-  { label: "", items: [{ label: "Overview", to: "/", icon: LayoutDashboard }] },
+const NAV_GROUPS: { label: LocaleEntry | ""; items: NavItem[] }[] = [
+  { label: "", items: [{ label: { en: "Overview", vi: "Tổng quan" }, to: "/", icon: LayoutDashboard }] },
   {
-    label: "AI Gateway",
+    label: { en: "AI Gateway", vi: "AI Gateway" },
     items: [
-      { label: "Models", to: "/models", icon: Boxes },
-      { label: "API Keys", to: "/keys", icon: KeyRound },
-      { label: "Chat", to: "/chat", icon: MessageSquare },
-      { label: "Logs", to: "/logs", icon: ScrollText },
-      { label: "Usage", to: "/usage", icon: BarChart3 },
+      { label: { en: "Models", vi: "Mô hình" }, to: "/models", icon: Boxes },
+      { label: { en: "API Keys", vi: "Khoá API" }, to: "/keys", icon: KeyRound },
+      { label: { en: "Chat", vi: "Chat" }, to: "/chat", icon: MessageSquare },
+      { label: { en: "Logs", vi: "Nhật ký" }, to: "/logs", icon: ScrollText },
+      { label: { en: "Usage", vi: "Sử dụng" }, to: "/usage", icon: BarChart3 },
     ],
   },
   {
-    label: "Billing",
+    label: { en: "Billing", vi: "Thanh toán" },
     items: [
-      { label: "Credits", to: "/billing/credits", icon: Wallet },
-      { label: "Bundles", to: "/billing/bundles", icon: Package },
-      { label: "Payments", to: "/billing/payments", icon: CreditCard },
+      { label: { en: "Credits", vi: "Số dư" }, to: "/billing/credits", icon: Wallet },
+      { label: { en: "Bundles", vi: "Gói" }, to: "/billing/bundles", icon: Package },
+      { label: { en: "Payments", vi: "Giao dịch" }, to: "/billing/payments", icon: CreditCard },
     ],
   },
-  { label: "", items: [{ label: "Settings", to: "/settings", icon: Settings }] },
+  { label: "", items: [{ label: { en: "Settings", vi: "Cài đặt" }, to: "/settings", icon: Settings }] },
 ];
 
 const ADMIN_NAV: NavItem[] = [
-  { label: "Users", to: "/admin/users", icon: Users },
-  { label: "Models", to: "/admin/models", icon: Boxes },
-  { label: "Payments", to: "/admin/payments", icon: CreditCard },
-  { label: "Bundles & plans", to: "/admin/bundles", icon: Package },
-  { label: "Promotions", to: "/admin/promotions", icon: Gift },
-  { label: "Audit log", to: "/admin/audit", icon: ScrollText },
-  { label: "System", to: "/admin/system", icon: Cpu },
-  { label: "CPA", to: "/admin/cpa", icon: Server },
-  { label: "Settings", to: "/admin/settings", icon: Settings2 },
+  { label: { en: "Users", vi: "Người dùng" }, to: "/admin/users", icon: Users },
+  { label: { en: "Models", vi: "Mô hình" }, to: "/admin/models", icon: Boxes },
+  { label: { en: "Payments", vi: "Giao dịch" }, to: "/admin/payments", icon: CreditCard },
+  { label: { en: "Bundles & plans", vi: "Gói & kế hoạch" }, to: "/admin/bundles", icon: Package },
+  { label: { en: "Promotions", vi: "Khuyến mãi" }, to: "/admin/promotions", icon: Gift },
+  { label: { en: "Audit log", vi: "Nhật ký kiểm tra" }, to: "/admin/audit", icon: ScrollText },
+  { label: { en: "System", vi: "Hệ thống" }, to: "/admin/system", icon: Cpu },
+  { label: { en: "CPA", vi: "CPA" }, to: "/admin/cpa", icon: Server },
+  { label: { en: "Settings", vi: "Cài đặt" }, to: "/admin/settings", icon: Settings2 },
 ];
+
+const ADMIN_HEADING: LocaleEntry = { en: "Admin", vi: "Quản trị" };
 
 /** Detect instance-admin via GET /api/v1/me (200 = session, flag on the payload). */
 export function useIsAdmin() {
@@ -289,6 +294,7 @@ function NavLink({
   onNavigate?: () => void;
 }) {
   const Icon = item.icon;
+  const label = useLocaleEntry(item.label);
   const link = (
     <Link
       to={item.to}
@@ -297,7 +303,7 @@ function NavLink({
       onMouseEnter={() => preloadChunk(item.to)}
       onFocus={() => preloadChunk(item.to)}
       onClick={onNavigate}
-      aria-label={collapsed ? item.label : undefined}
+      aria-label={collapsed ? label : undefined}
       className={cn(
         "relative flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors duration-150",
         collapsed && "justify-center px-0",
@@ -307,14 +313,14 @@ function NavLink({
       )}
     >
       <Icon className="size-4 shrink-0" />
-      {!collapsed && <span className="truncate">{item.label}</span>}
+      {!collapsed && <span className="truncate">{label}</span>}
     </Link>
   );
   if (!collapsed) return link;
   return (
     <Tooltip>
       <TooltipTrigger asChild>{link}</TooltipTrigger>
-      <TooltipContent side="right">{item.label}</TooltipContent>
+      <TooltipContent side="right">{label}</TooltipContent>
     </Tooltip>
   );
 }
@@ -364,6 +370,13 @@ export function UnverifiedEmailBanner({ user }: { user: SessionUser | null }) {
   );
 }
 
+/** Sidebar section heading ("AI Gateway", "Billing", "Admin"), locale-aware. */
+function GroupHeading({ label }: { label: LocaleEntry }) {
+  return (
+    <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">{useLocaleEntry(label)}</p>
+  );
+}
+
 /** Shared nav body for the desktop aside and the mobile sheet. */
 function NavLinks({
   pathname,
@@ -381,7 +394,7 @@ function NavLinks({
       {NAV_GROUPS.map((group, gi) => (
         <div key={gi} className={cn(gi > 0 && "mt-4")}>
           {group.label && !collapsed && (
-            <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">{group.label}</p>
+            <GroupHeading label={group.label} />
           )}
           {group.items.map((item) => (
             <NavLink
@@ -396,9 +409,7 @@ function NavLinks({
       ))}
       {isAdmin === true && (
         <div className="mt-4">
-          {!collapsed && (
-            <p className="mb-1 px-2 text-xs font-medium text-muted-foreground">Admin</p>
-          )}
+          {!collapsed && <GroupHeading label={ADMIN_HEADING} />}
           {ADMIN_NAV.map((item) => (
             <NavLink
               key={item.to}
@@ -442,7 +453,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setLastPathname(pathname);
     setMobileNavOpen(false);
   }
-
   // Hover-expand: a collapsed desktop rail temporarily opens under the pointer
   // without touching the persisted store state (display-only). The aside is
   // hidden below md, so these handlers never fire for the mobile sheet.

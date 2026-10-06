@@ -5,6 +5,8 @@ interface SidebarState {
   collapsed: boolean;
   toggleCollapsed: () => void;
 }
+// Exported for tests that stub the persisted hbr-sidebar storage payload.
+export type { SidebarState };
 
 /** Sidebar collapsed state, persisted to localStorage (icon-only rail when collapsed). */
 export const useSidebarStore = create<SidebarState>()(

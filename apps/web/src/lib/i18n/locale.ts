@@ -7,6 +7,8 @@ interface LocaleState {
   locale: Locale;
   setLocale: (locale: Locale) => void;
 }
+// Exported for tests that stub the persisted hbr-locale storage payload.
+export type { LocaleState };
 
 export const useLocaleStore = create<LocaleState>()(
   persist(
