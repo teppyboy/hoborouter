@@ -85,8 +85,9 @@ Ports:
 ## Git / commits / PRs
 
 - Conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`.
-- Small, self-contained commits. Stage explicit paths; never `git add -A`.
-- No force push, history rewrites, or destructive commands. Push only when the owner asks.
+- Commit every small coherent change immediately; each commit stays focused and self-contained.
+- Run the narrow relevant tests before each commit; stage explicit paths only, never `git add -A`.
+- No squashing unrelated changes, force pushes, history rewrites, or destructive commands. Push only when the owner asks.
 - One PR = one thing. No unrelated churn, no mass renames, no AI slop.
 
 ## For AI agents reviewing PRs
