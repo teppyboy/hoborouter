@@ -80,6 +80,11 @@ async function seed() {
   await db.execute(plan("plan-a", "Starter", 99000, 100000, true, 15));
   await db.execute(plan("plan-b", "Group", 199000, 220000, true, 30));
   await db.execute(plan("plan-dead", "Old", 49000, 50000, false, 15));
+  // USD-authored plan frozen at creation FX 26000: price_vnd 143000,
+  // credit 260000. Member/public display quotes use the CURRENT rate.
+  await db.execute(
+    sql`INSERT INTO subscription_plans (id, name, price_vnd, credit_per_period_vnd, price_usd, credit_per_period_usd, creation_fx_rate_vnd_per_usd, period_days, rate_limit_per_minute, active, created_at) VALUES ('plan-usd', 'USD Plan', 143000, 260000, '5.50', '10', 26000, 30, 15, true, ${now})`,
+  );
 }
 
 beforeAll(async () => {
@@ -302,18 +307,29 @@ describe("GET /api/v1/public/instance", () => {
 });
 
 describe("GET /api/v1/public/subscription-plans", () => {
-  test("unauthenticated active plans only, exact shape, cheapest first", async () => {
+  test("unauthenticated active plans only, exact shape, cheapest first, canonical rate", async () => {
+    await q(
+      db,
+      sql`INSERT INTO instance_settings (key, value, updated_at) VALUES ('payment_usd_vnd_rate', '27000', ${now})
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    );
     const res = await req("/api/v1/public/subscription-plans");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { data: Record<string, unknown>[] };
-    expect(body.data.map((p) => p.id)).toEqual(["plan-a", "plan-b"]);
+    const body = (await res.json()) as { usd_vnd_rate: number; data: Record<string, unknown>[] };
+    expect(body.usd_vnd_rate).toBe(27000);
+    // plan-usd (quoted 148500 < 99000? no: 99000 < 148500) — order by quoted price_vnd:
+    // plan-a 99000, plan-usd 148500, plan-b 199000.
+    expect(body.data.map((p) => p.id)).toEqual(["plan-a", "plan-usd", "plan-b"]);
     for (const p of body.data) {
       expect(Object.keys(p).sort()).toEqual(
         [
+          "creation_fx_rate_vnd_per_usd",
+          "credit_per_period_usd",
           "credit_per_period_vnd",
           "id",
           "name",
           "period_days",
+          "price_usd",
           "price_vnd",
           "rate_limit_per_minute",
         ].sort(),
@@ -326,8 +342,63 @@ describe("GET /api/v1/public/subscription-plans", () => {
       credit_per_period_vnd: 100000,
       period_days: 30,
       rate_limit_per_minute: 15,
+      price_usd: null,
+      credit_per_period_usd: null,
+      creation_fx_rate_vnd_per_usd: null,
     });
     expect(JSON.stringify(body)).not.toContain("plan-dead");
+  });
+
+  test("USD plan quotes at the current payment-settings rate; frozen grant untouched", async () => {
+    const res = await req("/api/v1/public/subscription-plans");
+    const body = (await res.json()) as { usd_vnd_rate: number; data: Record<string, unknown>[] };
+    const usd = body.data.find((p) => p.id === "plan-usd")!;
+    // Quote: 550 cents * 27000 = 148,500 VND (current rate, not creation 26000).
+    expect(usd.price_vnd).toBe(148500);
+    expect(usd.price_usd).toBe("5.50");
+    expect(usd.credit_per_period_usd).toBe("10");
+    // Credit grant stays the frozen creation-time VND value.
+    expect(usd.credit_per_period_vnd).toBe(260000);
+    expect(usd.creation_fx_rate_vnd_per_usd).toBe(26000);
+    // Model catalog pricing still uses its own env FX; plans never follow it.
+    expect(body.usd_vnd_rate).toBe(27000);
+    await q(db, sql`DELETE FROM instance_settings WHERE key = 'payment_usd_vnd_rate'`);
+  });
+
+  test("unset setting falls back to the default rate 26000", async () => {
+    const res = await req("/api/v1/public/subscription-plans");
+    const body = (await res.json()) as { usd_vnd_rate: number; data: Record<string, unknown>[] };
+    expect(body.usd_vnd_rate).toBe(26000);
+    const usd = body.data.find((p) => p.id === "plan-usd")!;
+    // 550 cents * 26000 = 143000.
+    expect(usd.price_vnd).toBe(143000);
+  });
+
+  test("FX change reorders by the quoted price, not the stored fallback; created_at breaks ties", async () => {
+    // Two USD plans authored at creation FX 15000: stored fallback 165000 sits
+    // BELOW legacy plan-b (199000), so the old stored-price ordering put them
+    // before it. At rate 19900 their quotes rise to 1100 * 19900 = 218900 VND,
+    // above plan-b — cheapest-first must follow the returned quote. Equal
+    // quotes order by created_at (earlier first).
+    await db.execute(
+      sql`INSERT INTO subscription_plans (id, name, price_vnd, credit_per_period_vnd, price_usd, credit_per_period_usd, creation_fx_rate_vnd_per_usd, period_days, rate_limit_per_minute, active, created_at)
+          VALUES ('usd-a', 'Reversal A', 165000, 100000, '11.00', '10', 15000, 30, 15, true, ${now - 2000}),
+                 ('usd-b', 'Reversal B', 165000, 100000, '11.00', '10', 15000, 30, 15, true, ${now - 1000})`,
+    );
+    await db.execute(
+      sql`INSERT INTO instance_settings (key, value, updated_at) VALUES ('payment_usd_vnd_rate', '19900', ${now})
+          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    );
+    try {
+      const res = await req("/api/v1/public/subscription-plans");
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { data: { id: string; price_vnd: number }[] };
+      expect(body.data.map((p) => p.id)).toEqual(["plan-a", "plan-usd", "plan-b", "usd-a", "usd-b"]);
+      expect(body.data.map((p) => p.price_vnd)).toEqual([99000, 109450, 199000, 218900, 218900]);
+    } finally {
+      await db.execute(sql`DELETE FROM subscription_plans WHERE id IN ('usd-a', 'usd-b')`);
+      await db.execute(sql`DELETE FROM instance_settings WHERE key = 'payment_usd_vnd_rate'`);
+    }
   });
 });
 

@@ -19,12 +19,7 @@ import {
   subscriptions,
 } from "@hoborouter/db";
 import { applySubscriptionExpiry, runInImmediate } from "@hoborouter/wallet";
-
-// Same FX source billing uses: HBR_USD_VND_RATE, default 26000 (see v1-gateway/admin-extra).
-const usdVndRate = () => {
-  const n = Number(process.env.HBR_USD_VND_RATE);
-  return Number.isSafeInteger(n) && n > 0 ? n : 26000;
-};
+import { readPaymentLimits } from "../payment-creation";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -238,7 +233,8 @@ export const dashboardRoutes = (db: Db, auth: BetterAuthInstance) =>
           .from(wallets)
           .where(and(eq(wallets.workspace_id, params.id), eq(wallets.kind, "topup")))
           .limit(1);
-        const rate = usdVndRate();
+        const limits = await readPaymentLimits(db);
+        const rate = limits.usdVndRate;
         // O5: reading for display applies lazy expiry (idempotent forfeit of an
         // ended period's unused subscription credit) inside one transaction.
         const now = Date.now();

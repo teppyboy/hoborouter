@@ -19,6 +19,8 @@ import {
   type PriceRow,
 } from "@hoborouter/catalog";
 import { calculateCharge, type PriceSnapshot, type UsageTokens } from "@hoborouter/wallet";
+import { parseUsdCents, usdCentsToVndCeiling } from "@hoborouter/payments";
+import { readPaymentLimits } from "../payment-creation";
 
 // Public API shapes (consumed by the public web pages; mirrored in the web
 // client during integration — keep byte-compatible with the handlers below).
@@ -46,8 +48,13 @@ export type PublicInstanceInfo = {
 export type PublicSubscriptionPlan = {
   id: string;
   name: string;
+  /** USD rows: the current server quote at the canonical rate; legacy: stored VND. */
   price_vnd: number;
   credit_per_period_vnd: number;
+  /** USD authoring group; all null for legacy VND rows. */
+  price_usd: string | null;
+  credit_per_period_usd: string | null;
+  creation_fx_rate_vnd_per_usd: number | null;
   period_days: number;
   rate_limit_per_minute: number;
 };
@@ -225,26 +232,56 @@ export const publicCatalogRoutes = (db: Db) =>
         },
       },
       async () => {
+        // Canonical payment-settings rate: the same rate checkout resolves
+        // charges with, so listed quotes can never disagree with purchase.
+        const limits = await readPaymentLimits(db);
         const rows = await db
           .select({
             id: subscriptionPlans.id,
             name: subscriptionPlans.name,
             price_vnd: subscriptionPlans.price_vnd,
             credit_per_period_vnd: subscriptionPlans.credit_per_period_vnd,
+            price_usd: subscriptionPlans.price_usd,
+            credit_per_period_usd: subscriptionPlans.credit_per_period_usd,
+            creation_fx_rate_vnd_per_usd: subscriptionPlans.creation_fx_rate_vnd_per_usd,
             period_days: subscriptionPlans.period_days,
             rate_limit_per_minute: subscriptionPlans.rate_limit_per_minute,
+            created_at: subscriptionPlans.created_at,
           })
           .from(subscriptionPlans)
           .where(eq(subscriptionPlans.active, true))
-          .orderBy(subscriptionPlans.price_vnd, subscriptionPlans.created_at);
-        const data: PublicSubscriptionPlan[] = rows.map((r) => ({
+          .orderBy(subscriptionPlans.created_at);
+        // Cheapest first is defined on the RETURNED price: USD rows reprice at
+        // the current canonical rate, so ordering on the stored fallback VND
+        // can disagree with displayed prices after an FX change. Quote first,
+        // sort by quote, created_at breaks ties deterministically.
+        const quoted = rows
+          .map((r) => ({
+            row: r,
+            priceVnd:
+              r.price_usd !== null
+                ? (usdCentsToVndCeiling(parseUsdCents(r.price_usd)!, limits.usdVndRate) ??
+                   Number(r.price_vnd))
+                : Number(r.price_vnd),
+          }))
+          .sort(
+            (a, b) =>
+              a.priceVnd - b.priceVnd || Number(a.row.created_at) - Number(b.row.created_at),
+          );
+        const data: PublicSubscriptionPlan[] = quoted.map(({ row: r, priceVnd }) => ({
           id: r.id,
           name: r.name,
-          price_vnd: Number(r.price_vnd),
+          // USD rows quote at the CURRENT canonical rate (an estimate until
+          // payment creation snapshots it); legacy rows keep stored price_vnd.
+          price_vnd: priceVnd,
           credit_per_period_vnd: Number(r.credit_per_period_vnd),
+          price_usd: r.price_usd,
+          credit_per_period_usd: r.credit_per_period_usd,
+          creation_fx_rate_vnd_per_usd:
+            r.creation_fx_rate_vnd_per_usd === null ? null : Number(r.creation_fx_rate_vnd_per_usd),
           period_days: r.period_days,
           rate_limit_per_minute: r.rate_limit_per_minute,
         }));
-        return { data };
+        return { data, usd_vnd_rate: limits.usdVndRate };
       },
     );

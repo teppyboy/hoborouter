@@ -10,7 +10,7 @@ import { creditBundles, payments, subscriptionPlans } from "@hoborouter/db";
 import { asc, eq } from "drizzle-orm";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, wsRole, writeAudit, jsonError } from "../authz";
-import { payosConfigFromEnv, type PayosConfig } from "@hoborouter/payments";
+import { payosConfigFromEnv, type PayosConfig, parseUsdCents, usdCentsToVndCeiling } from "@hoborouter/payments";
 import { makePayosPaymentCreator } from "./payments";
 import {
   readPaymentLimits,
@@ -114,6 +114,7 @@ export const bundlesRoutes = (
       async ({ request }) => {
         const gate = await requireSession(auth, request);
         if (gate.error) return gate.error;
+        const limits = await readPaymentLimits(db);
         const rows = await db
           .select({
             id: creditBundles.id,
@@ -121,11 +122,26 @@ export const bundlesRoutes = (
             price_vnd: creditBundles.price_vnd,
             credit_vnd: creditBundles.credit_vnd,
             bonus_vnd: creditBundles.bonus_vnd,
+            price_usd: creditBundles.price_usd,
+            credit_usd: creditBundles.credit_usd,
+            bonus_usd: creditBundles.bonus_usd,
+            creation_fx_rate_vnd_per_usd: creditBundles.creation_fx_rate_vnd_per_usd,
           })
           .from(creditBundles)
           .where(eq(creditBundles.active, true))
           .orderBy(asc(creditBundles.created_at));
-        return new Response(JSON.stringify({ data: rows }), {
+        const data = rows.map((row) => ({
+          ...row,
+          // USD rows quote at the current payment FX (an estimate until
+          // payment creation snapshots it); legacy rows keep their stored
+          // price. Catalog rows are never updated for the quote.
+          price_vnd:
+            row.price_usd !== null
+              ? (usdCentsToVndCeiling(parseUsdCents(row.price_usd)!, limits.usdVndRate) ??
+                 Number(row.price_vnd))
+              : Number(row.price_vnd),
+        }));
+        return new Response(JSON.stringify({ data, usd_vnd_rate: limits.usdVndRate }), {
           headers: { "content-type": "application/json" },
         });
       },
@@ -142,6 +158,7 @@ export const bundlesRoutes = (
       async ({ request }) => {
         const gate = await requireSession(auth, request);
         if (gate.error) return gate.error;
+        const limits = await readPaymentLimits(db);
         const rows = await db
           .select({
             id: subscriptionPlans.id,
@@ -150,11 +167,22 @@ export const bundlesRoutes = (
             credit_per_period_vnd: subscriptionPlans.credit_per_period_vnd,
             period_days: subscriptionPlans.period_days,
             rate_limit_per_minute: subscriptionPlans.rate_limit_per_minute,
+            price_usd: subscriptionPlans.price_usd,
+            credit_per_period_usd: subscriptionPlans.credit_per_period_usd,
+            creation_fx_rate_vnd_per_usd: subscriptionPlans.creation_fx_rate_vnd_per_usd,
           })
           .from(subscriptionPlans)
           .where(eq(subscriptionPlans.active, true))
           .orderBy(asc(subscriptionPlans.created_at));
-        return new Response(JSON.stringify({ data: rows }), {
+        const data = rows.map((row) => ({
+          ...row,
+          price_vnd:
+            row.price_usd !== null
+              ? (usdCentsToVndCeiling(parseUsdCents(row.price_usd)!, limits.usdVndRate) ??
+                 Number(row.price_vnd))
+              : Number(row.price_vnd),
+        }));
+        return new Response(JSON.stringify({ data, usd_vnd_rate: limits.usdVndRate }), {
           headers: { "content-type": "application/json" },
         });
       },
