@@ -54,6 +54,11 @@ test("ChatPage SSR renders no manual key UI and no Connect button", () => {
   expect(html).not.toContain('aria-label="Connect chat key"');
 });
 
+test("ChatPage SSR exposes the file attachment control", () => {
+  const html = render();
+  expect(html).toContain('aria-label="Attach files"');
+});
+
 test("ChatPage SSR exposes the toolbar with accessible control labels", () => {
   const html = render();
   // Group semantics (no roving-tabindex toolbar contract) plus per-control

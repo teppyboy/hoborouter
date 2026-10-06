@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { History, Plus, Send, Square } from "lucide-react";
+import { History, Paperclip, Plus, Send, Square, X } from "lucide-react";
 import { createSseParser, type StreamDelta } from "./sse";
 import { ConversationList, conversationListKey } from "./conversation-list";
 import { buildPersistMessages, findRetryTurn, isEmptyAssistant, type TurnMessage } from "./turn";
@@ -26,6 +26,17 @@ import { useSession } from "../../lib/auth";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useCatalogModels } from "../models/data";
 import { ManagedKeyError, clearManagedChatKey, useManagedChatKey } from "./managed-key";
+import {
+  ATTACHMENT_HINT,
+  ATTACHMENT_RETENTION_NOTICE,
+  addAttachments,
+  buildUserContent,
+  removeAttachment,
+  utf8ByteLength,
+  withMultimodalContent,
+  type ChatAttachment,
+  type UserContent,
+} from "./attachments";
 
 // Turn message shape shared with the pure helpers in ./turn.
 type ChatMessage = TurnMessage;
@@ -36,6 +47,11 @@ const PROMPT_CHIPS = [
   "Explain how HTTP streaming works, end to end.",
   "Debug why my React component renders twice.",
 ];
+
+// Gateway caps the request body in UTF-8 BYTES (1 MiB); keep the client-side
+// pre-check well under that so attachment data URLs plus history never trip a
+// raw 413. Byte-accurate: measured with TextEncoder, not UTF-16 .length.
+const MAX_REQUEST_BODY_BYTES = 900_000;
 
 function readableError(status: number, body: { error?: { message?: string } } | null): string {
   const msg = body?.error?.message;
@@ -79,6 +95,30 @@ export function ChatPage() {
 
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [input, setInput] = React.useState("");
+  // Per-message attachments (images as multimodal parts, text/code inlined).
+  // Held in memory only; cleared when the message is sent or the view resets.
+  const [attachments, setAttachments] = React.useState<ChatAttachment[]>([]);
+  const attachmentsRef = React.useRef<ChatAttachment[]>([]);
+  const [attachError, setAttachError] = React.useState<string | null>(null);
+  // Session-only multimodal retention: conversation id -> user-turn index ->
+  // the full request content captured when that turn was sent. Lets follow-ups
+  // AND retries keep carrying this session's attachments (which persistence
+  // drops, history being string-only). Cleared on identity change; bounded by
+  // the session's own turn count.
+  const multimodalRef = React.useRef<Map<string, Map<number, UserContent>>>(new Map());
+  // Whether the most recently SENT turn carried attachments (drives the
+  // truthful retry disclosure).
+  const [lastTurnAttached, setLastTurnAttached] = React.useState(false);
+  // Serialized attachment reads: two overlapping file picks must both validate
+  // against the LIVE list, never a stale snapshot (count/total budget).
+  const attachQueueRef = React.useRef<Promise<void>>(Promise.resolve());
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  // State + ref move together: the async file-read handler and the send
+  // lifecycle must both see the live list without depending on render timing.
+  function applyAttachments(next: ChatAttachment[]) {
+    attachmentsRef.current = next;
+    setAttachments(next);
+  }
   const [streaming, setStreaming] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [keyError, setKeyError] = React.useState<ManagedKeyError | null>(null);
@@ -162,12 +202,44 @@ export function ChatPage() {
     setHistoryOpen(false);
     setError(null);
     setKeyError(null);
+    setAttachError(null);
+    setLastTurnAttached(false);
+    applyAttachments([]);
+    multimodalRef.current.clear();
     lastUserRef.current = null;
   }, [userId, workspaceId]);
 
   // Model changes are a per-message choice, not a conversation boundary:
   // switching models keeps the existing context (like ChatGPT). The model is
   // persisted with every save; an explicit "New chat" is how context resets.
+
+  /** Serialized, view-pinned attachment ingestion: overlapping picks queue
+   *  behind each other so every batch validates against the LIVE list (count
+   *  + total budget), and a read finishing after newChat/openChat/send (any
+   *  generation bump) or an identity switch is discarded — it can never
+   *  repopulate another conversation's or the sent composer's chip list. */
+  function handleFiles(fileList: FileList | null) {
+    const files = Array.from(fileList ?? []);
+    if (files.length === 0) return;
+    const run = attachQueueRef.current.then(
+      () => doAttachFiles(files),
+      () => doAttachFiles(files),
+    );
+    attachQueueRef.current = run;
+  }
+
+  async function doAttachFiles(files: File[]) {
+    const idAtPick = identityRef.current;
+    const genAtPick = seqRef.current;
+    const res = await addAttachments(attachmentsRef.current, files);
+    if (identityRef.current !== idAtPick || seqRef.current !== genAtPick) return;
+    if (res.error) {
+      setAttachError(res.error);
+      return;
+    }
+    setAttachError(null);
+    applyAttachments([...attachmentsRef.current, ...res.added]);
+  }
 
   function stop() {
     // Abort only — the in-flight send's own terminal path persists the partial
@@ -191,6 +263,9 @@ export function ChatPage() {
     setConflict(false);
     setSaveNotice(null);
     setLoadingChat(false);
+    setAttachError(null);
+    setLastTurnAttached(false);
+    applyAttachments([]);
     lastUserRef.current = null;
   }
 
@@ -227,6 +302,9 @@ export function ChatPage() {
     setError(null);
     setConflict(false);
     setSaveNotice(null);
+    setAttachError(null);
+    setLastTurnAttached(false);
+    applyAttachments([]);
     lastUserRef.current = null;
     if (!ws) return;
     setLoadingChat(true);
@@ -352,7 +430,19 @@ export function ChatPage() {
     const retryTurn = isRetry ? findRetryTurn(messages) : null;
     if (isRetry && (!retryTurn || lastUserRef.current === null)) return;
     const text = (isRetry ? retryTurn?.userText : (textOverride ?? input))?.trim() ?? "";
-    if (!text) return;
+    // Fresh sends carry the pending chips; a retry re-uses the RETAINED full
+    // content of the last user turn (below) so attachments survive a retry.
+    const turnAttachments = isRetry ? [] : attachmentsRef.current;
+    // Attachment-only retry: only meaningful while the retained multimodal
+    // content for that turn is still in this session's memory.
+    const retryTurnIndex = isRetry
+      ? retryTurn!.baseMessages.filter((m) => m.role === "user").length
+      : 0;
+    const retryRetained =
+      isRetry && activeChatIdRef.current
+        ? multimodalRef.current.get(activeChatIdRef.current)?.get(retryTurnIndex)
+        : undefined;
+    if (!text && turnAttachments.length === 0 && !retryRetained) return;
     // Busy + generation BEFORE the first await: a slow key creation can never
     // double-send, and a later stop/identity change owns the whole lifecycle.
     busyRef.current = true;
@@ -374,6 +464,38 @@ export function ChatPage() {
     abortRef.current = ac;
     assistantPartialRef.current = { content: "", reasoning: "" };
     let chatId = activeChatIdRef.current;
+    // Session-only multimodal retention: an attachment-bearing turn keeps its
+    // full request content in memory (conversation id + user-turn index) so
+    // follow-ups AND retries still carry the attachments until reload.
+    // Persistence stays string-only — no DB, no history schema change.
+    const storedTurns = chatId ? multimodalRef.current.get(chatId) : undefined;
+    const history: Array<{
+      role: "user" | "assistant";
+      content: string | UserContent;
+    }> = [
+      ...withMultimodalContent(
+        baseMessages.map(({ role, content }) => ({ role, content })),
+        storedTurns,
+      ),
+    ];
+    const turnIndex = baseMessages.filter((m) => m.role === "user").length;
+    const turnContent: UserContent = isRetry
+      ? (storedTurns?.get(turnIndex) ?? text)
+      : buildUserContent(text, turnAttachments);
+    history.push({ role: "user", content: turnContent });
+    // Gateway caps the body in UTF-8 BYTES (1 MiB), not UTF-16 chars: measure
+    // the exact payload BEFORE any side effect (conversation create, key
+    // mint, draft reset) so a rejection leaves the draft fully untouched.
+    const bodyJson = JSON.stringify({ model, messages: history, stream: true });
+    if (utf8ByteLength(bodyJson) > MAX_REQUEST_BODY_BYTES) {
+      setError(
+        "This message is too large to send — attachments plus history exceed the request limit. Remove some attachments and try again.",
+      );
+      busyRef.current = false;
+      setStreaming(false);
+      abortRef.current = null;
+      return;
+    }
     // Terminal save, AWAITED while busy: the next send cannot start until the
     // server version has been tracked, so a back-to-back send never saves on
     // a stale version and loses its turn to a 409.
@@ -405,13 +527,23 @@ export function ChatPage() {
       }
       const key = await resolveKey(seq, ac.signal);
       if (!key || !isCurrent()) return;
-      if (!isRetry && textOverride === undefined) setInput("");
       setError(null);
-      // Failed/empty assistant turns are excluded from follow-up context.
-      const history: Array<{ role: "user" | "assistant"; content: string }> = [
-        ...baseMessages.map(({ role, content }) => ({ role, content })),
-        { role: "user", content: text },
-      ];
+      // The request is now certain to go out: commit the draft reset, the
+      // retention entry and the retry disclosure together.
+      if (!isRetry && textOverride === undefined) {
+        setInput("");
+        applyAttachments([]);
+        setAttachError(null);
+        setLastTurnAttached(turnAttachments.length > 0);
+      }
+      if (chatId && !isRetry) {
+        let turns = multimodalRef.current.get(chatId);
+        if (!turns) {
+          turns = new Map();
+          multimodalRef.current.set(chatId, turns);
+        }
+        turns.set(turnIndex, turnContent);
+      }
       // A deliberate send (fresh or retry) always re-engages sticky-bottom
       // follow: the user must see their own message and the streaming reply,
       // even if they had scrolled up, and even if a late scroll event during
@@ -432,7 +564,7 @@ export function ChatPage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${key}`,
         },
-        body: JSON.stringify({ model, messages: history, stream: true }),
+        body: bodyJson,
         signal: ac.signal,
       });
       if (!res.ok) {
@@ -515,7 +647,9 @@ export function ChatPage() {
   }, [messages]);
 
   const autoEligible = Boolean(userId && workspaceId);
-  const canSend = Boolean(input.trim() && model && !streaming && !conflict && autoEligible);
+  const canSend = Boolean(
+    (input.trim() || attachments.length > 0) && model && !streaming && !conflict && autoEligible,
+  );
   const showRetry = !streaming && lastUserRef.current !== null;
 
   // Phone toolbar buttons must be 44px touch targets: the shared `size="sm"`
@@ -759,10 +893,47 @@ export function ChatPage() {
               </Button>
               <p className="min-w-0 text-xs text-muted-foreground">
                 Regenerates the last reply — usage will be charged again.
+                {lastTurnAttached &&
+                  " Retry re-sends this turn's attachments from this browser session; they are not saved to your history."}
               </p>
             </div>
           )}
           <div className="relative rounded-2xl border border-border bg-card p-2 shadow-sm">
+            {(attachments.length > 0 || attachError) && (
+              <div className="space-y-1 px-1 pb-1">
+                {attachments.length > 0 && (
+                  <ul className="flex flex-wrap gap-1.5">
+                    {attachments.map((a) => (
+                      <li
+                        key={a.id}
+                        className="flex max-w-full items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs"
+                      >
+                        <span className="min-w-0 truncate">{a.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            applyAttachments(removeAttachment(attachmentsRef.current, a.id));
+                            setAttachError(null);
+                          }}
+                          aria-label={`Remove attachment ${a.name}`}
+                          title={`Remove ${a.name}`}
+                          className="shrink-0 rounded-sm text-muted-foreground hover:text-foreground"
+                        >
+                          <X className="size-3.5" aria-hidden />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {attachError && (
+                  <p className="text-xs text-destructive" role="status">
+                    {attachError}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">{ATTACHMENT_HINT}</p>
+                <p className="text-xs text-muted-foreground">{ATTACHMENT_RETENTION_NOTICE}</p>
+              </div>
+            )}
             <Textarea
               aria-label="Message"
               rows={1}
@@ -783,7 +954,31 @@ export function ChatPage() {
               }}
               className="max-h-48 min-h-10 resize-none border-0 bg-transparent px-2 py-1 shadow-none field-sizing-content focus-visible:ring-0"
             />
-            <div className="flex justify-end pt-1">
+            <div className="flex items-center justify-end gap-1">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/png,image/jpeg,image/webp,image/gif,text/*,.md,.markdown,.csv,.json,.yaml,.yml,.toml,.log,.ts,.tsx,.js,.jsx,.mjs,.cjs,.css,.html,.py,.go,.rs,.java,.c,.h,.cpp,.sh,.sql"
+                className="hidden"
+                aria-hidden
+                tabIndex={-1}
+                onChange={(e) => {
+                  handleFiles(e.target.files);
+                  // Allow re-picking the same file after a removal.
+                  e.target.value = "";
+                }}
+              />
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={streaming}
+                aria-label="Attach files"
+                title={`Attach files. ${ATTACHMENT_HINT}`}
+              >
+                <Paperclip className="size-4" aria-hidden />
+              </Button>
               {streaming ? (
                 <Button size="icon" variant="outline" onClick={stop} aria-label="Stop generating">
                   <Square className="size-4" aria-hidden />
