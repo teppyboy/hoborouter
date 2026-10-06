@@ -118,6 +118,11 @@ export default function OverviewPage() {
   const workspaceId = useCurrentWorkspaceId();
   const summary = useUsageSummary(workspaceId);
   const rate = useUsdVndRate(workspaceId).data;
+  // Hooks must run on every render — before any early return below.
+  const requestsLabel = useLocaleEntry(overviewCopy.requests);
+  const spendLabel = useLocaleEntry(overviewCopy.spend);
+  const tokensLabel = useLocaleEntry(overviewCopy.tokens);
+  const successRateLabel = useLocaleEntry(overviewCopy.successRate);
 
   if (summary.isPending) {
     return (
@@ -153,17 +158,14 @@ export default function OverviewPage() {
     <div className="space-y-4">
       <OverviewHeader />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile label={useLocaleEntry(overviewCopy.requests)} value={String(t.requests)} />
+        <StatTile label={requestsLabel} value={String(t.requests)} />
         <StatTile
-          label={useLocaleEntry(overviewCopy.spend)}
+          label={spendLabel}
           value={formatUsdFromVnd(t.spend_vnd, rate) ?? formatVnd(t.spend_vnd)}
         />
+        <StatTile label={tokensLabel} value={formatTokens(t.input_tokens + t.output_tokens)} />
         <StatTile
-          label={useLocaleEntry(overviewCopy.tokens)}
-          value={formatTokens(t.input_tokens + t.output_tokens)}
-        />
-        <StatTile
-          label={useLocaleEntry(overviewCopy.successRate)}
+          label={successRateLabel}
           value={successRate}
           title="Share of successful requests among eligible requests (requests with a model and token usage) in the last 30 days — not limited to the 10 recent rows below."
         />
@@ -235,6 +237,12 @@ function NoUsageState() {
 function RecentRequests({ workspaceId }: { workspaceId: string | null }) {
   const logs = useRequestLogs(workspaceId, 10);
   const rate = useUsdVndRate(workspaceId).data;
+  // Hoisted: these JSX branches are conditional, so hooks can't live in JSX.
+  const timeLabel = useLocaleEntry(overviewCopy.time);
+  const modelLabel = useLocaleEntry(overviewCopy.model);
+  const statusLabel = useLocaleEntry(overviewCopy.status);
+  const tokensLabel = useLocaleEntry(overviewCopy.tokens);
+  const costLabel = useLocaleEntry(overviewCopy.cost);
   return (
     <div>
       <RecentRequestsLabel />
@@ -253,11 +261,11 @@ function RecentRequests({ workspaceId }: { workspaceId: string | null }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{useLocaleEntry(overviewCopy.time)}</TableHead>
-                <TableHead>{useLocaleEntry(overviewCopy.model)}</TableHead>
-                <TableHead>{useLocaleEntry(overviewCopy.status)}</TableHead>
-                <TableHead className="text-right">{useLocaleEntry(overviewCopy.tokens)}</TableHead>
-                <TableHead className="text-right">{useLocaleEntry(overviewCopy.cost)}</TableHead>
+                <TableHead>{timeLabel}</TableHead>
+                <TableHead>{modelLabel}</TableHead>
+                <TableHead>{statusLabel}</TableHead>
+                <TableHead className="text-right">{tokensLabel}</TableHead>
+                <TableHead className="text-right">{costLabel}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
