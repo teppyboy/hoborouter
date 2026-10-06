@@ -56,6 +56,13 @@ interface CatalogRow {
   created_at: number;
 }
 
+/** One authoring amount: its own currency choice plus both raw texts. */
+interface AmountInput {
+  currency: "USD" | "VND";
+  usd: string;
+  vnd: string;
+}
+
 /** Integer VND from a text field; null when not a safe integer. Sign is the caller's rule. */
 export function parseIntVnd(raw: string): number | null {
   const s = raw.trim();
@@ -106,26 +113,91 @@ function useCatalogMutation(path: string, key: readonly unknown[]) {
 function CurrencyToggle({
   value,
   onChange,
+  label,
 }: {
   value: "USD" | "VND";
   onChange: (c: "USD" | "VND") => void;
+  /** Unique accessible name; each amount field owns its own toggle. */
+  label: string;
 }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-muted-foreground">Currency</span>
-      <div className="flex gap-1" role="group" aria-label="Catalog currency">
-        {(["USD", "VND"] as const).map((c) => (
-          <Button
-            key={c}
-            type="button"
-            size="sm"
-            variant={value === c ? "default" : "outline"}
-            onClick={() => onChange(c)}
-          >
-            {c}
-          </Button>
-        ))}
+    <div className="flex gap-1" role="group" aria-label={label}>
+      {(["USD", "VND"] as const).map((c) => (
+        <Button
+          key={c}
+          type="button"
+          size="sm"
+          variant={value === c ? "default" : "outline"}
+          aria-pressed={value === c}
+          onClick={() => onChange(c)}
+        >
+          {c}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One authoring amount with an independent USD/VND selector. Exactly one raw
+ * text is submitted per field — the currency of its own toggle — so a bundle
+ * can mix, say, a USD price with a VND credit. Untoggled texts stay in state
+ * but never reach the request body.
+ */
+function AmountField({
+  idPrefix,
+  label,
+  groupLabel,
+  field,
+  onChange,
+  usdPlaceholder,
+  vndPlaceholder,
+  usdInvalid,
+  vndInvalid,
+}: {
+  idPrefix: string;
+  label: string;
+  groupLabel: string;
+  field: AmountInput;
+  onChange: (f: AmountInput) => void;
+  usdPlaceholder: string;
+  vndPlaceholder: string;
+  usdInvalid: boolean;
+  vndInvalid: boolean;
+}) {
+  return (
+    <div className="grid gap-1">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={`${idPrefix}-${field.currency.toLowerCase()}`}>
+          {label} ({field.currency})
+        </Label>
+        <CurrencyToggle
+          value={field.currency}
+          onChange={(c) => onChange({ ...field, currency: c })}
+          label={groupLabel}
+        />
       </div>
+      {field.currency === "USD" ? (
+        <Input
+          id={`${idPrefix}-usd`}
+          value={field.usd}
+          onChange={(e) => onChange({ ...field, usd: e.target.value })}
+          placeholder={usdPlaceholder}
+          inputMode="decimal"
+          aria-invalid={usdInvalid}
+          className={usdInvalid ? "border-destructive" : undefined}
+        />
+      ) : (
+        <Input
+          id={`${idPrefix}-vnd`}
+          value={field.vnd}
+          onChange={(e) => onChange({ ...field, vnd: e.target.value })}
+          placeholder={vndPlaceholder}
+          inputMode="numeric"
+          aria-invalid={vndInvalid}
+          className={vndInvalid ? "border-destructive" : undefined}
+        />
+      )}
     </div>
   );
 }
@@ -326,60 +398,50 @@ function CatalogTable<T extends CatalogRow>({
   );
 }
 
+const emptyAmount = (): AmountInput => ({ currency: "USD", usd: "", vnd: "" });
+const zeroAmount = (): AmountInput => ({ currency: "USD", usd: "0", vnd: "0" });
+
 function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
   const { create, update } = useCatalogMutation("/api/v1/admin/bundles", ["admin", "bundles"]);
-  const [currency, setCurrency] = useState<"USD" | "VND">("USD");
   const [name, setName] = useState("");
-  const [price, setPrice] = useState("");
-  const [credit, setCredit] = useState("");
-  const [bonus, setBonus] = useState("0");
-  const [priceUsd, setPriceUsd] = useState("");
-  const [creditUsd, setCreditUsd] = useState("");
-  const [bonusUsd, setBonusUsd] = useState("0");
+  const [price, setPrice] = useState<AmountInput>(emptyAmount);
+  const [credit, setCredit] = useState<AmountInput>(emptyAmount);
+  const [bonus, setBonus] = useState<AmountInput>(zeroAmount);
   const [renaming, setRenaming] = useState<CatalogRow | null>(null);
 
-  const priceN = parseIntVnd(price);
-  const creditN = parseIntVnd(credit);
-  const bonusN = parseIntVnd(bonus);
-  const priceUsdT = parseUsdAmount(priceUsd);
-  const creditUsdT = parseUsdAmount(creditUsd);
-  const bonusUsdT = parseUsdAmount(bonusUsd);
-  const usdValid =
+  const priceN = parseIntVnd(price.vnd);
+  const creditN = parseIntVnd(credit.vnd);
+  const bonusN = parseIntVnd(bonus.vnd);
+  const priceUsdT = parseUsdAmount(price.usd);
+  const creditUsdT = parseUsdAmount(credit.usd);
+  const bonusUsdT = parseUsdAmount(bonus.usd);
+  // Only the field's own active currency is validated; the hidden text of a
+  // toggled field is dormant state, never part of the request body.
+  const valid =
     name.trim().length > 0 &&
-    priceUsdT !== null &&
-    Number(priceUsdT) > 0 &&
-    creditUsdT !== null &&
-    bonusUsdT !== null;
-  const vndValid =
-    name.trim().length > 0 &&
-    priceN !== null &&
-    priceN > 0 &&
-    creditN !== null &&
-    creditN >= 0 &&
-    bonusN !== null &&
-    bonusN >= 0;
-  const valid = currency === "USD" ? usdValid : vndValid;
+    (price.currency === "USD"
+      ? priceUsdT !== null && Number(priceUsdT) > 0
+      : priceN !== null && priceN > 0) &&
+    (credit.currency === "USD" ? creditUsdT !== null : creditN !== null && creditN >= 0) &&
+    (bonus.currency === "USD" ? bonusUsdT !== null : bonusN !== null && bonusN >= 0);
 
   const reset = () => {
     setName("");
-    setPrice("");
-    setCredit("");
-    setBonus("0");
-    setPriceUsd("");
-    setCreditUsd("");
-    setBonusUsd("0");
+    setPrice(emptyAmount());
+    setCredit(emptyAmount());
+    setBonus(zeroAmount());
   };
   const submit = () => {
-    const body: Record<string, number | string> =
-      currency === "USD"
-        ? {
-            name: name.trim(),
-            price_usd: priceUsdT!,
-            credit_usd: creditUsdT!,
-            // Bonus defaults to "0" server-side; sent explicitly for clarity.
-            bonus_usd: bonusUsdT ?? "0",
-          }
-        : { name: name.trim(), price_vnd: priceN!, credit_vnd: creditN!, bonus_vnd: bonusN! };
+    // Exactly one amount key per field, keyed by that field's own currency.
+    // No fabricated USD metadata: a VND-authored field sends only its VND key.
+    const body: Record<string, number | string> = { name: name.trim() };
+    if (price.currency === "USD") body.price_usd = priceUsdT!;
+    else body.price_vnd = priceN!;
+    if (credit.currency === "USD") body.credit_usd = creditUsdT!;
+    else body.credit_vnd = creditN!;
+    // Bonus defaults to "0" server-side; sent explicitly for clarity.
+    if (bonus.currency === "USD") body.bonus_usd = bonusUsdT ?? "0";
+    else body.bonus_vnd = bonusN ?? 0;
     create.mutate(body, { onSuccess: reset });
   };
   return (
@@ -388,7 +450,6 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
         <CardTitle className="text-sm font-medium">Credit bundles</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <CurrencyToggle value={currency} onChange={setCurrency} />
         <form
           className="grid gap-3 sm:grid-cols-5 sm:items-end"
           onSubmit={(e) => {
@@ -403,64 +464,39 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
             onChange={setName}
             placeholder="500k pack"
           />
-          {currency === "USD" ? (
-            <>
-              <CreateField
-                id="bundle-price-usd"
-                label="Price (USD)"
-                value={priceUsd}
-                onChange={setPriceUsd}
-                placeholder="9.99"
-                decimal
-                invalid={priceUsd !== "" && priceUsdT === null}
-              />
-              <CreateField
-                id="bundle-credit-usd"
-                label="Credit (USD)"
-                value={creditUsd}
-                onChange={setCreditUsd}
-                placeholder="12"
-                decimal
-                invalid={creditUsd !== "" && creditUsdT === null}
-              />
-              <CreateField
-                id="bundle-bonus-usd"
-                label="Bonus (USD)"
-                value={bonusUsd}
-                onChange={setBonusUsd}
-                placeholder="0"
-                decimal
-                invalid={bonusUsd !== "" && bonusUsdT === null}
-              />
-            </>
-          ) : (
-            <>
-              <CreateField
-                id="bundle-price-vnd"
-                label="Price (VND)"
-                value={price}
-                onChange={setPrice}
-                placeholder="500000"
-                invalid={price !== "" && (priceN === null || priceN <= 0)}
-              />
-              <CreateField
-                id="bundle-credit-vnd"
-                label="Credit (VND)"
-                value={credit}
-                onChange={setCredit}
-                placeholder="500000"
-                invalid={credit !== "" && (creditN === null || creditN < 0)}
-              />
-              <CreateField
-                id="bundle-bonus-vnd"
-                label="Bonus (VND)"
-                value={bonus}
-                onChange={setBonus}
-                placeholder="0"
-                invalid={bonus !== "" && (bonusN === null || bonusN < 0)}
-              />
-            </>
-          )}
+          <AmountField
+            idPrefix="bundle-price"
+            label="Price"
+            groupLabel="Price currency"
+            field={price}
+            onChange={setPrice}
+            usdPlaceholder="9.99"
+            vndPlaceholder="500000"
+            usdInvalid={price.usd !== "" && priceUsdT === null}
+            vndInvalid={price.vnd !== "" && (priceN === null || priceN <= 0)}
+          />
+          <AmountField
+            idPrefix="bundle-credit"
+            label="Credit"
+            groupLabel="Credit currency"
+            field={credit}
+            onChange={setCredit}
+            usdPlaceholder="12"
+            vndPlaceholder="500000"
+            usdInvalid={credit.usd !== "" && creditUsdT === null}
+            vndInvalid={credit.vnd !== "" && (creditN === null || creditN < 0)}
+          />
+          <AmountField
+            idPrefix="bundle-bonus"
+            label="Bonus"
+            groupLabel="Bonus currency"
+            field={bonus}
+            onChange={setBonus}
+            usdPlaceholder="0"
+            vndPlaceholder="0"
+            usdInvalid={bonus.usd !== "" && bonusUsdT === null}
+            vndInvalid={bonus.vnd !== "" && (bonusN === null || bonusN < 0)}
+          />
           <Button type="submit" disabled={!valid || create.isPending}>
             {create.isPending ? "Creating…" : "Create bundle"}
           </Button>
@@ -473,20 +509,24 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
           data={query.data?.data ?? []}
           detailLabel="Credit"
           detail={(b) => {
+            // Each grant uses its OWN USD metadata, independent of the price
+            // currency: mixed rows may pair USD price with VND credit or
+            // vice versa, and legacy rows keep plain VND display.
+            const bonusPart = b.bonus_usd
+              ? Number(b.bonus_usd) > 0
+                ? ` + ${formatUsdAmountText(b.bonus_usd)} bonus`
+                : ""
+              : b.bonus_vnd > 0
+                ? ` + ${formatVnd(b.bonus_vnd)} bonus`
+                : "";
             if (b.credit_usd) {
-              const grant =
+              return (
                 `${formatUsdAmountText(b.credit_usd)} credit · ${formatVnd(b.credit_vnd)} grant` +
-                ` (fixed at creation)`;
-              const bonusPart =
-                b.bonus_usd && b.bonus_usd !== "0" && Number(b.bonus_usd) > 0
-                  ? ` + ${formatUsdAmountText(b.bonus_usd)} bonus`
-                  : "";
-              return grant + bonusPart;
+                ` (fixed at creation)` +
+                bonusPart
+              );
             }
-            return (
-              formatVnd(b.credit_vnd) +
-              (b.bonus_vnd > 0 ? ` + ${formatVnd(b.bonus_vnd)} bonus` : "")
-            );
+            return formatVnd(b.credit_vnd) + bonusPart;
           }}
           onRename={(id, n) => update.mutate({ id, body: { name: n } })}
           onSetActive={(row, active) => update.mutate({ id: row.id, body: { active } })}
@@ -503,63 +543,49 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
     "admin",
     "subscription-plans",
   ]);
-  const [currency, setCurrency] = useState<"USD" | "VND">("USD");
   const [name, setName] = useState("");
-  const [price, setPrice] = useState("");
-  const [credit, setCredit] = useState("");
-  const [priceUsd, setPriceUsd] = useState("");
-  const [creditUsd, setCreditUsd] = useState("");
+  const [price, setPrice] = useState<AmountInput>(emptyAmount);
+  const [credit, setCredit] = useState<AmountInput>(emptyAmount);
   const [period, setPeriod] = useState("30");
   const [rateLimit, setRateLimit] = useState("15");
   const [renameLimit, setRenameLimit] = useState("");
   const [renaming, setRenaming] = useState<CatalogRow | null>(null);
 
-  const priceN = parseIntVnd(price);
-  const creditN = parseIntVnd(credit);
+  const priceN = parseIntVnd(price.vnd);
+  const creditN = parseIntVnd(credit.vnd);
   const periodN = parseIntVnd(period);
   const rateN = parseIntVnd(rateLimit);
-  const priceUsdT = parseUsdAmount(priceUsd);
-  const creditUsdT = parseUsdAmount(creditUsd);
+  const priceUsdT = parseUsdAmount(price.usd);
+  const creditUsdT = parseUsdAmount(credit.usd);
   const rateInvalid = (v: number | null) => v === null || v < 1 || v > 600;
-  const usdValid =
+  const sharedValid =
     name.trim().length > 0 &&
-    priceUsdT !== null &&
-    Number(priceUsdT) > 0 &&
-    creditUsdT !== null &&
     (period === "" || (periodN !== null && periodN >= 1)) &&
     (rateLimit === "" || !rateInvalid(rateN));
-  const vndValid =
-    name.trim().length > 0 &&
-    priceN !== null &&
-    priceN > 0 &&
-    creditN !== null &&
-    creditN >= 0 &&
-    (period === "" || (periodN !== null && periodN >= 1)) &&
-    (rateLimit === "" || !rateInvalid(rateN));
-  const valid = currency === "USD" ? usdValid : vndValid;
+  // Only the field's own active currency is validated; the hidden text of a
+  // toggled field is dormant state, never part of the request body.
+  const valid =
+    sharedValid &&
+    (price.currency === "USD"
+      ? priceUsdT !== null && Number(priceUsdT) > 0
+      : priceN !== null && priceN > 0) &&
+    (credit.currency === "USD" ? creditUsdT !== null : creditN !== null && creditN >= 0);
 
   const reset = () => {
     setName("");
-    setPrice("");
-    setCredit("");
-    setPriceUsd("");
-    setCreditUsd("");
+    setPrice(emptyAmount());
+    setCredit(emptyAmount());
     setPeriod("30");
     setRateLimit("15");
   };
   const submit = () => {
-    const body: Record<string, number | string> =
-      currency === "USD"
-        ? {
-            name: name.trim(),
-            price_usd: priceUsdT!,
-            credit_per_period_usd: creditUsdT!,
-          }
-        : {
-            name: name.trim(),
-            price_vnd: priceN!,
-            credit_per_period_vnd: creditN!,
-          };
+    // Exactly one amount key per field, keyed by that field's own currency.
+    // No fabricated USD metadata: a VND-authored field sends only its VND key.
+    const body: Record<string, number | string> = { name: name.trim() };
+    if (price.currency === "USD") body.price_usd = priceUsdT!;
+    else body.price_vnd = priceN!;
+    if (credit.currency === "USD") body.credit_per_period_usd = creditUsdT!;
+    else body.credit_per_period_vnd = creditN!;
     if (period !== "") body.period_days = periodN!;
     if (rateLimit !== "") body.rate_limit_per_minute = rateN!;
     create.mutate(body, { onSuccess: reset });
@@ -570,7 +596,6 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
         <CardTitle className="text-sm font-medium">Subscription plans</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <CurrencyToggle value={currency} onChange={setCurrency} />
         <form
           className="grid gap-3 sm:grid-cols-5 sm:items-end"
           onSubmit={(e) => {
@@ -585,47 +610,28 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
             onChange={setName}
             placeholder="Monthly"
           />
-          {currency === "USD" ? (
-            <>
-              <CreateField
-                id="plan-price-usd"
-                label="Price (USD)"
-                value={priceUsd}
-                onChange={setPriceUsd}
-                placeholder="9.99"
-                decimal
-                invalid={priceUsd !== "" && priceUsdT === null}
-              />
-              <CreateField
-                id="plan-credit-usd"
-                label="Credit per period (USD)"
-                value={creditUsd}
-                onChange={setCreditUsd}
-                placeholder="12"
-                decimal
-                invalid={creditUsd !== "" && creditUsdT === null}
-              />
-            </>
-          ) : (
-            <>
-              <CreateField
-                id="plan-price-vnd"
-                label="Price (VND)"
-                value={price}
-                onChange={setPrice}
-                placeholder="200000"
-                invalid={price !== "" && (priceN === null || priceN <= 0)}
-              />
-              <CreateField
-                id="plan-credit-vnd"
-                label="Credit per period (VND)"
-                value={credit}
-                onChange={setCredit}
-                placeholder="200000"
-                invalid={credit !== "" && (creditN === null || creditN < 0)}
-              />
-            </>
-          )}
+          <AmountField
+            idPrefix="plan-price"
+            label="Price"
+            groupLabel="Plan price currency"
+            field={price}
+            onChange={setPrice}
+            usdPlaceholder="9.99"
+            vndPlaceholder="200000"
+            usdInvalid={price.usd !== "" && priceUsdT === null}
+            vndInvalid={price.vnd !== "" && (priceN === null || priceN <= 0)}
+          />
+          <AmountField
+            idPrefix="plan-credit"
+            label="Credit per period"
+            groupLabel="Credit per period currency"
+            field={credit}
+            onChange={setCredit}
+            usdPlaceholder="12"
+            vndPlaceholder="200000"
+            usdInvalid={credit.usd !== "" && creditUsdT === null}
+            vndInvalid={credit.vnd !== "" && (creditN === null || creditN < 0)}
+          />
           <CreateField
             id="plan-period"
             label="Period days"

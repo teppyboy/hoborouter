@@ -1,11 +1,14 @@
-// Admin catalog editor USD contract (jsdom, real React, mocked fetch only):
-// - Currency selection defaults to USD; VND is an explicit legacy choice;
-// - USD bundle POST body is exactly {name, price_usd, credit_usd, bonus_usd}
-//   and plan POST body exactly {name, price_usd, credit_per_period_usd,
-//   period_days?, rate_limit_per_minute?} (Task 1 contract, verbatim strings);
-// - invalid USD decimal text is blocked client-side before any POST;
-// - VND mode posts the unchanged legacy integer bodies;
-// - table shows authored USD prices and the creation-frozen VND grant;
+// Admin catalog editor per-field currency contract (jsdom, real React, mocked
+// fetch only):
+// - every amount field (bundle price/credit/bonus, plan price and per-period
+//   credit) owns an independent USD/VND selector; USD is the default;
+// - each field submits exactly one key: its USD decimal string verbatim or
+//   its VND safe integer — so mixed bodies (price_usd + credit_vnd) are
+//   legal and no fabricated USD metadata is ever sent;
+// - invalid amount text is blocked client-side before any POST;
+// - toggling one field's currency never changes another field's;
+// - table shows authored USD prices and each credit field using its OWN USD
+//   metadata (not the price currency); legacy rows keep plain VND display;
 // - rename / active / rate-limit behavior is unchanged.
 import { test, expect, afterAll } from "bun:test";
 import { JSDOM } from "jsdom";
@@ -97,6 +100,30 @@ const SEED_BUNDLES = {
       bonus_vnd: 0,
       active: true,
       created_at: 2,
+    },
+    {
+      id: "b_mixed",
+      name: "Mixed pack",
+      price_vnd: 300_000,
+      credit_vnd: 130_005,
+      bonus_vnd: 0,
+      price_usd: "12.5",
+      credit_usd: null,
+      bonus_usd: null,
+      active: true,
+      created_at: 4,
+    },
+    {
+      id: "b_mixed2",
+      name: "Mixed grant pack",
+      price_vnd: 259_750,
+      credit_vnd: 312_012,
+      bonus_vnd: 26_000,
+      price_usd: "9.99",
+      credit_usd: "12",
+      bonus_usd: null,
+      active: true,
+      created_at: 5,
     },
   ],
 };
@@ -198,6 +225,31 @@ function mount() {
         btn.dispatchEvent(new W.MouseEvent("click", { bubbles: true, cancelable: true }));
         await new Promise((r) => setTimeout(r, 0));
       });
+    },
+    /** Click USD/VND inside one field's own toggle group (unique aria-label). */
+    async clickCurrency(groupLabel: string, currency: "USD" | "VND") {
+      const group = h.container.querySelector(
+        `div[role="group"][aria-label="${groupLabel}"]`,
+      );
+      if (!group) throw new Error(`currency group not found: ${groupLabel}`);
+      const btn = [...group.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === currency,
+      );
+      if (!btn) throw new Error(`currency button not found: ${groupLabel}/${currency}`);
+      await act(async () => {
+        btn.dispatchEvent(new W.MouseEvent("click", { bubbles: true, cancelable: true }));
+        await new Promise((r) => setTimeout(r, 0));
+      });
+    },
+    /** aria-pressed state of one currency button inside a toggle group. */
+    currencyPressed(groupLabel: string, currency: "USD" | "VND"): boolean {
+      const group = h.container.querySelector(`div[role="group"][aria-label="${groupLabel}"]`);
+      if (!group) throw new Error(`currency group not found: ${groupLabel}`);
+      const btn = [...group.querySelectorAll("button")].find(
+        (b) => b.textContent?.trim() === currency,
+      );
+      if (!btn) throw new Error(`currency button not found: ${groupLabel}/${currency}`);
+      return btn.getAttribute("aria-pressed") === "true";
     },
     /** The form submit button whose text contains the given prefix (excludes toggles). */
     submitButton(submitText: string) {
@@ -307,32 +359,6 @@ test("invalid USD decimals blocked before any POST", async () => {
   }
 });
 
-test("explicit legacy VND mode posts the unchanged integer body", async () => {
-  const h = mount();
-  try {
-    await h.waitForData();
-    await h.clickButton("VND");
-    expect(h.container.textContent).toContain("Price (VND)");
-    expect(h.container.querySelector("#bundle-price-usd")).toBeNull();
-
-    await h.typeInto("bundle-name", "Legacy");
-    await h.typeInto("bundle-price-vnd", "500000");
-    await h.typeInto("bundle-credit-vnd", "500000");
-    await h.typeInto("bundle-bonus-vnd", "10000");
-    await h.submit("Create bundle");
-    const posts = h.postsTo("/api/v1/admin/bundles");
-    expect(posts.length).toBe(1);
-    expect(posts[0]!.body).toEqual({
-      name: "Legacy",
-      price_vnd: 500_000,
-      credit_vnd: 500_000,
-      bonus_vnd: 10_000,
-    });
-  } finally {
-    h.cleanup();
-  }
-});
-
 // --- plans -----------------------------------------------------------------
 
 test("USD plan POST body is exact and preserves period/rate controls", async () => {
@@ -364,7 +390,132 @@ test("USD plan POST body is exact and preserves period/rate controls", async () 
   }
 });
 
-// --- table display ---------------------------------------------------------
+test("explicit legacy VND mode posts the unchanged integer body", async () => {
+  const h = mount();
+  try {
+    await h.waitForData();
+    await h.clickCurrency("Price currency", "VND");
+    expect(h.container.textContent).toContain("Price (VND)");
+    expect(h.container.querySelector("#bundle-price-usd")).toBeNull();
+    await h.clickCurrency("Credit currency", "VND");
+    await h.clickCurrency("Bonus currency", "VND");
+
+    await h.typeInto("bundle-name", "Legacy");
+    await h.typeInto("bundle-price-vnd", "500000");
+    await h.typeInto("bundle-credit-vnd", "500000");
+    await h.typeInto("bundle-bonus-vnd", "10000");
+    await h.submit("Create bundle");
+    const posts = h.postsTo("/api/v1/admin/bundles");
+    expect(posts.length).toBe(1);
+    expect(posts[0]!.body).toEqual({
+      name: "Legacy",
+      price_vnd: 500_000,
+      credit_vnd: 500_000,
+      bonus_vnd: 10_000,
+    });
+  } finally {
+    h.cleanup();
+  }
+});
+
+// --- independent per-field selectors and mixed bodies -----------------------
+
+test("toggling one field's currency leaves the other fields in USD", async () => {
+  const h = mount();
+  try {
+    await h.waitForData();
+    expect(h.currencyPressed("Price currency", "USD")).toBe(true);
+    await h.clickCurrency("Price currency", "VND");
+    // Only the price field flipped; credit and bonus selectors untouched.
+    expect(h.currencyPressed("Price currency", "VND")).toBe(true);
+    expect(h.currencyPressed("Credit currency", "USD")).toBe(true);
+    expect(h.currencyPressed("Bonus currency", "USD")).toBe(true);
+    expect(h.container.querySelector("#bundle-price-usd")).toBeNull();
+    expect(h.container.querySelector("#bundle-credit-usd")).not.toBeNull();
+    expect(h.container.querySelector("#bundle-price-vnd")).not.toBeNull();
+
+    // Toggling back restores the retained USD text, not a blank field.
+    await h.typeInto("bundle-price-vnd", "500000");
+    await h.clickCurrency("Price currency", "USD");
+    await h.typeInto("bundle-price-usd", "9.99");
+    await h.clickCurrency("Price currency", "VND");
+    const el = h.container.querySelector<HTMLInputElement>("#bundle-price-vnd");
+    expect(el?.value).toBe("500000");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("mixed bundle body: USD price, VND credit, USD bonus, no fabricated USD metadata", async () => {
+  const h = mount();
+  try {
+    await h.waitForData();
+    await h.clickCurrency("Credit currency", "VND");
+    await h.typeInto("bundle-name", "Mixed");
+    await h.typeInto("bundle-price-usd", "9.99");
+    await h.typeInto("bundle-credit-vnd", "300000");
+    // bonus stays USD at its default "0"
+    await h.submit("Create bundle");
+    const posts = h.postsTo("/api/v1/admin/bundles");
+    expect(posts.length).toBe(1);
+    expect(posts[0]!.body).toEqual({
+      name: "Mixed",
+      price_usd: "9.99",
+      credit_vnd: 300_000,
+      bonus_usd: "0",
+    });
+    // The USD text is sent verbatim; no float-derived value anywhere.
+    expect(JSON.stringify(posts[0]!.body)).toContain('"price_usd":"9.99"');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("mixed plan body: VND price with USD per-period credit", async () => {
+  const h = mount();
+  try {
+    await h.waitForData();
+    await h.clickCurrency("Plan price currency", "VND");
+    await h.typeInto("plan-name", "Mixed plan");
+    await h.typeInto("plan-price-vnd", "200000");
+    await h.typeInto("plan-credit-usd", "12");
+    await h.typeInto("plan-period", "30");
+    await h.submit("Create plan");
+    const posts = h.postsTo("/api/v1/admin/subscription-plans");
+    expect(posts.length).toBe(1);
+    expect(posts[0]!.body).toEqual({
+      name: "Mixed plan",
+      price_vnd: 200_000,
+      credit_per_period_usd: "12",
+      period_days: 30,
+      rate_limit_per_minute: 15,
+    });
+  } finally {
+  }
+});
+
+test("invalid VND text is blocked before any POST, per field", async () => {
+  const h = mount();
+  try {
+    await h.waitForData();
+    await h.clickCurrency("Price currency", "VND");
+    await h.typeInto("bundle-name", "Starter");
+    await h.typeInto("bundle-price-vnd", "500.5");
+    await h.submit("Create bundle");
+    expect(h.postsTo("/api/v1/admin/bundles").length).toBe(0);
+    // Negative price violates the sign rule client-side too.
+    await h.typeInto("bundle-price-vnd", "-5");
+    await h.submit("Create bundle");
+    expect(h.postsTo("/api/v1/admin/bundles").length).toBe(0);
+    await h.typeInto("bundle-price-vnd", "500000");
+    await h.clickCurrency("Credit currency", "VND");
+    await h.typeInto("bundle-credit-vnd", "-1");
+    await h.submit("Create bundle");
+    expect(h.postsTo("/api/v1/admin/bundles").length).toBe(0);
+  } finally {
+    h.cleanup();
+  }
+});
 
 test("table shows authored USD price and creation-frozen VND grant", async () => {
   const h = mount();
@@ -379,6 +530,23 @@ test("table shows authored USD price and creation-frozen VND grant", async () =>
     expect(text).toContain("500.000 ₫");
     const legacyCell = h.container.querySelector('[data-testid="row-b_vnd-price"]');
     if (legacyCell) expect(legacyCell.textContent).not.toContain("$");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("mixed rows render each credit field with its own USD metadata", async () => {
+  const h = mount();
+  try {
+    await h.waitForData();
+    const text = h.container.textContent ?? "";
+    // VND-credit row with a USD price: credit shown in VND, no fabricated
+    // USD grant text, price still shows the exact authored USD text.
+    expect(text).toContain("$12.50");
+    expect(text).toContain("130.005 ₫");
+    // VND bonus under a USD-credit row: bonus follows its own metadata.
+    expect(text).toContain("+ 26.000 ₫ bonus");
+    expect(text).toContain("$9.99");
   } finally {
     h.cleanup();
   }
