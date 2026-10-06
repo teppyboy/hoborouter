@@ -72,7 +72,13 @@ export const REDACTED = "[REDACTED]";
 // harmless, false negatives are not).
 const SECRET_FIELD_RE = /secret|token|key|password|passwd|auth|credential/i;
 
-export type RedactedValue = null | boolean | number | string | RedactedValue[] | { [key: string]: RedactedValue };
+export type RedactedValue =
+  | null
+  | boolean
+  | number
+  | string
+  | RedactedValue[]
+  | { [key: string]: RedactedValue };
 
 /** Deep redaction by field name. Redacted fields keep their slot with REDACTED. */
 export function redactFields(value: unknown): RedactedValue {

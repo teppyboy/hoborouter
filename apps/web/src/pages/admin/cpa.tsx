@@ -43,7 +43,11 @@ export const CPA_BOOL_FLAGS = [
 ] as const;
 
 /** Routing strategies (ROUTING_STRATEGIES in the backend). */
-export const CPA_ROUTING_STRATEGIES = ["round-robin", "weighted-round-robin", "fill-first"] as const;
+export const CPA_ROUTING_STRATEGIES = [
+  "round-robin",
+  "weighted-round-robin",
+  "fill-first",
+] as const;
 
 const MAX_ALIASES = 200;
 const MAX_EXCLUDED_MODELS = 500;
@@ -104,7 +108,14 @@ export function parseAliasesJson(
 
 /** Newline-separated exclusion models: trimmed, deduped; null over the backend cap. */
 export function parseExclusionModels(text: string): string[] | null {
-  const models = [...new Set(text.split("\n").map((l) => l.trim()).filter(Boolean))];
+  const models = [
+    ...new Set(
+      text
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean),
+    ),
+  ];
   if (models.length > MAX_EXCLUDED_MODELS) return null;
   return models;
 }
@@ -113,9 +124,9 @@ const RETRY_FIELDS = ["request_retry", "max_retry_credentials", "max_retry_inter
 type RetryField = (typeof RETRY_FIELDS)[number];
 
 /** Build the retry-tuning body: only filled integer fields 0..1000; null on any invalid value. */
-export function retryBody(input: Partial<Record<RetryField, string>>):
-  | Partial<Record<RetryField, number>>
-  | null {
+export function retryBody(
+  input: Partial<Record<RetryField, string>>,
+): Partial<Record<RetryField, number>> | null {
   const out: Partial<Record<RetryField, number>> = {};
   for (const key of RETRY_FIELDS) {
     const raw = input[key];
@@ -164,7 +175,14 @@ function parseAuthFields(text: string): Record<string, unknown> | null {
 const AUTH_FILE_NAMES_MAX = 50;
 
 function parseAuthFileNames(text: string): string[] | null {
-  const names = [...new Set(text.split("\n").map((l) => l.trim()).filter(Boolean))];
+  const names = [
+    ...new Set(
+      text
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean),
+    ),
+  ];
   if (names.length < 1 || names.length > AUTH_FILE_NAMES_MAX) return null;
   return names;
 }
@@ -231,8 +249,7 @@ function useConfirm() {
   return { confirm, dialog };
 }
 
-const danger =
-  "This talks to the pinned CPA management API and cannot be undone on this page.";
+const danger = "This talks to the pinned CPA management API and cannot be undone on this page.";
 
 // ── Health ──────────────────────────────────────────────────────────────────
 
@@ -380,11 +397,7 @@ function RoutingCard() {
   );
   const flags = useCpaMutation("PATCH", "/api/v1/admin/cpa/config/flags", "Flag updated");
   const retry = useCpaMutation("PUT", "/api/v1/admin/cpa/config/retry", "Retry tuning updated");
-  const setProxy = useCpaMutation(
-    "PUT",
-    "/api/v1/admin/cpa/config/proxy-url",
-    "Proxy URL set",
-  );
+  const setProxy = useCpaMutation("PUT", "/api/v1/admin/cpa/config/proxy-url", "Proxy URL set");
   const clearProxy = useCpaMutation(
     "DELETE",
     "/api/v1/admin/cpa/config/proxy-url",
@@ -479,7 +492,9 @@ function RoutingCard() {
               inputMode="numeric"
               placeholder="max-retry-credentials"
               value={retryForm.max_retry_credentials}
-              onChange={(e) => setRetryForm({ ...retryForm, max_retry_credentials: e.target.value })}
+              onChange={(e) =>
+                setRetryForm({ ...retryForm, max_retry_credentials: e.target.value })
+              }
             />
             <Input
               id="cpa-retry-interval"
@@ -763,15 +778,27 @@ function AuthFilesCard() {
               onChange={(e) => setAuthIndex(e.target.value)}
             />
           </div>
-          <Button size="sm" variant="outline" disabled={status.isPending} onClick={() => setStatus(true)}>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={status.isPending}
+            onClick={() => setStatus(true)}
+          >
             Disable auth file
           </Button>
-          <Button size="sm" variant="outline" disabled={status.isPending} onClick={() => setStatus(false)}>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={status.isPending}
+            onClick={() => setStatus(false)}
+          >
             Enable auth file
           </Button>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="cpa-auth-fields">Metadata fields (JSON object, e.g. &#123;&quot;project_id&quot;: &quot;…&quot;&#125;)</Label>
+          <Label htmlFor="cpa-auth-fields">
+            Metadata fields (JSON object, e.g. &#123;&quot;project_id&quot;: &quot;…&quot;&#125;)
+          </Label>
           <Textarea
             id="cpa-auth-fields"
             rows={3}

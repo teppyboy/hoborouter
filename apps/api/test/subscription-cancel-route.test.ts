@@ -5,14 +5,7 @@
 // unknown workspaces both 404 (no workspace existence leak), 404 when there
 // is nothing to cancel, and repeats stay idempotent.
 import { describe, test, expect, beforeAll } from "bun:test";
-import {
-  q,
-  makeApp,
-  signUp,
-  req,
-  createWorkspace,
-  userIdByEmail,
-} from "./helpers";
+import { q, makeApp, signUp, req, createWorkspace, userIdByEmail } from "./helpers";
 import { createAuth } from "../src/auth";
 import { subscriptionCancelRoutes } from "../src/routes/subscription-cancel";
 import type { buildApp } from "../src/app";
@@ -70,7 +63,9 @@ beforeAll(async () => {
 
 describe("DELETE /api/v1/workspaces/:id/subscription", () => {
   test("unauthenticated 401; outsider and unknown workspace 404 (masked)", async () => {
-    const res = await req(cancelTarget, `/api/v1/workspaces/${ws}/subscription`, { method: "DELETE" });
+    const res = await req(cancelTarget, `/api/v1/workspaces/${ws}/subscription`, {
+      method: "DELETE",
+    });
     expect(res.status).toBe(401);
     const out = await req(cancelTarget, `/api/v1/workspaces/${ws}/subscription`, {
       method: "DELETE",

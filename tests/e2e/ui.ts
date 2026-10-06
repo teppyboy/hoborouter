@@ -1071,43 +1071,38 @@ async function main() {
     );
   const PLAINTEXT_KEY_RE = /sk-hbr-[A-Za-z0-9_-]{43}/; // full plaintext shape; key_prefix is far shorter
 
-  await step(
-    "chat: session catalog, model pick, managed browser key, streamed reply",
-    async () => {
-      await goto("/chat");
-      await page.waitForText("What would you like to build?");
-      assert(
-        await page.has('stored in this browser'),
-        "empty state discloses browser-key reuse",
-      );
-      const session = await browserFetchJson<{ user?: { id?: string } } | null>(
-        "/api/auth/get-session",
-      );
-      chatUserId = session?.user?.id ?? "";
-      chatWsId =
-        (await browserFetchJson<{ id: string; name: string }[]>("/api/v1/workspaces")).find(
-          (w) => w.name === wsName,
-        )?.id ?? "";
-      assert(!!chatUserId && !!chatWsId, "session user + main workspace id resolved");
-      // Catalog is session-scoped: the picker is usable before any key exists.
-      await waitForExpr(
-        `document.getElementById('chat-model')?.textContent === 'Choose a model'`,
-        "model catalog loaded without a key",
-      );
-      await selectOption("#chat-model", "Fake Test");
-      const keysBefore = await chatKeys();
-      await typeMessage("hi");
-      await page.clickAria('[aria-label="Send message"]');
-      // Streamed reply from the fake CPA (the gateway echoes the public model id).
-      await page.waitForText("Hello from fake/test-model: hi");
-      await replyDone();
-      // Viewport contract after a send: the page itself never scrolls (the log
-      // is the only scroller) and the composer stays visible at the bottom.
-      const chatLayout = await evaluate<{
-        composerBottom: number;
-        scrollHeight: number;
-        innerHeight: number;
-      }>(`(() => {
+  await step("chat: session catalog, model pick, managed browser key, streamed reply", async () => {
+    await goto("/chat");
+    await page.waitForText("What would you like to build?");
+    assert(await page.has("stored in this browser"), "empty state discloses browser-key reuse");
+    const session = await browserFetchJson<{ user?: { id?: string } } | null>(
+      "/api/auth/get-session",
+    );
+    chatUserId = session?.user?.id ?? "";
+    chatWsId =
+      (await browserFetchJson<{ id: string; name: string }[]>("/api/v1/workspaces")).find(
+        (w) => w.name === wsName,
+      )?.id ?? "";
+    assert(!!chatUserId && !!chatWsId, "session user + main workspace id resolved");
+    // Catalog is session-scoped: the picker is usable before any key exists.
+    await waitForExpr(
+      `document.getElementById('chat-model')?.textContent === 'Choose a model'`,
+      "model catalog loaded without a key",
+    );
+    await selectOption("#chat-model", "Fake Test");
+    const keysBefore = await chatKeys();
+    await typeMessage("hi");
+    await page.clickAria('[aria-label="Send message"]');
+    // Streamed reply from the fake CPA (the gateway echoes the public model id).
+    await page.waitForText("Hello from fake/test-model: hi");
+    await replyDone();
+    // Viewport contract after a send: the page itself never scrolls (the log
+    // is the only scroller) and the composer stays visible at the bottom.
+    const chatLayout = await evaluate<{
+      composerBottom: number;
+      scrollHeight: number;
+      innerHeight: number;
+    }>(`(() => {
       const ta = document.querySelector('textarea[aria-label="Message"]');
       return {
         composerBottom: ta ? ta.getBoundingClientRect().bottom : -1,
@@ -1115,59 +1110,58 @@ async function main() {
         innerHeight: window.innerHeight,
       };
     })()`);
-      assert(
-        chatLayout.composerBottom > 0 && chatLayout.composerBottom <= chatLayout.innerHeight,
-        `composer bottom within viewport, got ${chatLayout.composerBottom} vs ${chatLayout.innerHeight}`,
-      );
-      assert(
-        chatLayout.scrollHeight <= chatLayout.innerHeight + 1,
-        `page does not scroll: scrollHeight ${chatLayout.scrollHeight} vs innerHeight ${chatLayout.innerHeight}`,
-      );
-      const conv = await convLog();
-      assert(!!conv, "conversation log rendered");
-      assert(conv!.n === 2, `two bubbles (user + assistant), got ${conv!.n}`);
-      assert(conv!.first === "hi", "user bubble shows the sent message");
-      assert(
-        conv!.last!.includes("Hello from fake/test-model: hi"),
-        `assistant bubble has streamed reply, got "${conv!.last!.slice(0, 120)}"`,
-      );
-      // The send itself minted exactly one normal workspace API key.
-      const keysAfter = await chatKeys();
-      assert(
-        keysAfter.length === keysBefore.length + 1,
-        `exactly one key created by the chat flow (before ${keysBefore.length}, after ${keysAfter.length})`,
-      );
-      const created = keysAfter.filter((k) => !keysBefore.some((b) => b.id === k.id));
-      assert(
-        created.length === 1 &&
-          created[0]!.name.startsWith("Chat - ") &&
-          created[0]!.status === "enabled",
-        "the new key is the enabled device-named chat key",
-      );
-      assert(
-        !PLAINTEXT_KEY_RE.test(JSON.stringify(keysAfter)),
-        "keys list response never carries a plaintext secret",
-      );
-      // History list shows the literal first-turn title, and the snapshot matches.
-      await waitForExpr(
-        `!!document.querySelector('[aria-label="Rename conversation: hi"]')`,
-        "sidebar lists the conversation titled hi",
-      );
-      chatId =
-        (await browserFetchJson<{ data: { id: string }[] }>(`/api/v1/workspaces/${chatWsId}/chats`))
-          .data[0]?.id ?? "";
-      assert(!!chatId, "conversation persisted server-side");
-      const snap = await chatSnapshot();
-      assert(snap.title === "hi", `first-turn title is the literal prompt, got "${snap.title}"`);
-      assert(snap.model === MODEL_ID, "snapshot records the selected model");
-      assert(
-        snap.messages.length === 2 &&
-          snap.messages[0]?.role === "user" &&
-          snap.messages[1]?.role === "assistant",
-        "snapshot has the user + assistant turn",
-      );
-    },
-  );
+    assert(
+      chatLayout.composerBottom > 0 && chatLayout.composerBottom <= chatLayout.innerHeight,
+      `composer bottom within viewport, got ${chatLayout.composerBottom} vs ${chatLayout.innerHeight}`,
+    );
+    assert(
+      chatLayout.scrollHeight <= chatLayout.innerHeight + 1,
+      `page does not scroll: scrollHeight ${chatLayout.scrollHeight} vs innerHeight ${chatLayout.innerHeight}`,
+    );
+    const conv = await convLog();
+    assert(!!conv, "conversation log rendered");
+    assert(conv!.n === 2, `two bubbles (user + assistant), got ${conv!.n}`);
+    assert(conv!.first === "hi", "user bubble shows the sent message");
+    assert(
+      conv!.last!.includes("Hello from fake/test-model: hi"),
+      `assistant bubble has streamed reply, got "${conv!.last!.slice(0, 120)}"`,
+    );
+    // The send itself minted exactly one normal workspace API key.
+    const keysAfter = await chatKeys();
+    assert(
+      keysAfter.length === keysBefore.length + 1,
+      `exactly one key created by the chat flow (before ${keysBefore.length}, after ${keysAfter.length})`,
+    );
+    const created = keysAfter.filter((k) => !keysBefore.some((b) => b.id === k.id));
+    assert(
+      created.length === 1 &&
+        created[0]!.name.startsWith("Chat - ") &&
+        created[0]!.status === "enabled",
+      "the new key is the enabled device-named chat key",
+    );
+    assert(
+      !PLAINTEXT_KEY_RE.test(JSON.stringify(keysAfter)),
+      "keys list response never carries a plaintext secret",
+    );
+    // History list shows the literal first-turn title, and the snapshot matches.
+    await waitForExpr(
+      `!!document.querySelector('[aria-label="Rename conversation: hi"]')`,
+      "sidebar lists the conversation titled hi",
+    );
+    chatId =
+      (await browserFetchJson<{ data: { id: string }[] }>(`/api/v1/workspaces/${chatWsId}/chats`))
+        .data[0]?.id ?? "";
+    assert(!!chatId, "conversation persisted server-side");
+    const snap = await chatSnapshot();
+    assert(snap.title === "hi", `first-turn title is the literal prompt, got "${snap.title}"`);
+    assert(snap.model === MODEL_ID, "snapshot records the selected model");
+    assert(
+      snap.messages.length === 2 &&
+        snap.messages[0]?.role === "user" &&
+        snap.messages[1]?.role === "assistant",
+      "snapshot has the user + assistant turn",
+    );
+  });
 
   await step("chat: full reload reopens the saved conversation with messages + model", async () => {
     await goto("/chat");

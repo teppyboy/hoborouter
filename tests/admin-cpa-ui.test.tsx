@@ -207,7 +207,10 @@ async function mountPage() {
   responder = async (call) => {
     if (call.path === "/api/v1/admin/cpa/health" && (call.init?.method ?? "GET") === "GET")
       return jsonRes(200, healthPayload);
-    if (call.path === "/api/v1/admin/cpa/management/config" && (call.init?.method ?? "GET") === "GET")
+    if (
+      call.path === "/api/v1/admin/cpa/management/config" &&
+      (call.init?.method ?? "GET") === "GET"
+    )
       return jsonRes(200, { "request-retry": 3, "routing-strategy": "round-robin" });
     if (call.path === "/api/v1/admin/cpa/models") return jsonRes(200, { data: [] });
     return jsonRes(200, { ok: true });
@@ -313,8 +316,9 @@ test("parseAliasesJson validates the alias entry shape", () => {
 test("parseExclusionModels splits lines, trims, dedupes, caps at 500", () => {
   expect(parseExclusionModels("m1\n  m2 \n\nm1")).toEqual(["m1", "m2"]);
   expect(parseExclusionModels("   ")).toEqual([]);
-  expect(parseExclusionModels("m1\nm2\n" + Array.from({ length: 600 }, (_, i) => `x${i}`).join("\n")))
-    .toBeNull();
+  expect(
+    parseExclusionModels("m1\nm2\n" + Array.from({ length: 600 }, (_, i) => `x${i}`).join("\n")),
+  ).toBeNull();
 });
 
 // --- semantic SSR render ---------------------------------------------------
@@ -357,7 +361,10 @@ test("config save PUTs {config_yaml, confirm:true} after explicit confirm", asyn
   await confirmAction("Save config");
   const put = callsFor("PUT", "/api/v1/admin/cpa/config")[0]!;
   expect(put).toBeDefined();
-  expect(JSON.parse(String(put.init?.body))).toEqual({ config_yaml: "port: 8317\n", confirm: true });
+  expect(JSON.parse(String(put.init?.body))).toEqual({
+    config_yaml: "port: 8317\n",
+    confirm: true,
+  });
 });
 
 test("config save cancel sends nothing", async () => {
@@ -442,7 +449,10 @@ test("auth file disable PATCHes status; delete DELETEs {names, confirm:true}; re
   await confirmAction("Delete auth files");
   const del = callsFor("DELETE", "/api/v1/admin/cpa/auth-files")[0]!;
   expect(del).toBeDefined();
-  expect(JSON.parse(String(del.init?.body))).toEqual({ names: ["a.json", "b.json"], confirm: true });
+  expect(JSON.parse(String(del.init?.body))).toEqual({
+    names: ["a.json", "b.json"],
+    confirm: true,
+  });
 
   await confirmAction("Refresh auth files");
   expect(callsFor("POST", "/api/v1/admin/cpa/auth-files/refresh")).toHaveLength(1);
@@ -451,10 +461,7 @@ test("auth file disable PATCHes status; delete DELETEs {names, confirm:true}; re
 test("model alias PUT sends {channel, aliases}; exclusions PUT sends {channel, models}", async () => {
   await mountPage();
   setInput(document.getElementById("cpa-alias-channel")!, "gemini");
-  setInput(
-    document.getElementById("cpa-alias-json")!,
-    '[{"name":"gemini-2.5-pro","alias":"pro"}]',
-  );
+  setInput(document.getElementById("cpa-alias-json")!, '[{"name":"gemini-2.5-pro","alias":"pro"}]');
   await confirmAction("Save aliases");
   const put = callsFor("PUT", "/api/v1/admin/cpa/model-alias")[0]!;
   expect(put).toBeDefined();
@@ -485,7 +492,10 @@ test("mutation failure closes the confirm dialog and re-enables the trigger", as
   click(trigger);
   await waitFor(() => bodyText().includes("Confirm action"), "confirm dialog open");
   click(buttonByText("Confirm")!);
-  await waitFor(() => callsFor("PATCH", "/api/v1/admin/cpa/config/flags").length === 1, "patch sent");
+  await waitFor(
+    () => callsFor("PATCH", "/api/v1/admin/cpa/config/flags").length === 1,
+    "patch sent",
+  );
   // Server error surfaced (toast) — dialog must be closed and trigger usable again.
   await waitFor(() => !bodyText().includes("Confirm action"), "confirm dialog closed");
   click(trigger);
