@@ -5,7 +5,6 @@ import { test, expect, beforeEach } from "bun:test";
 import {
   startManagedChatKey,
   clearManagedChatKey,
-  chatKeyStorageKey,
   deviceChatName,
   deviceLabel,
   ManagedKeyError,
@@ -482,11 +481,4 @@ test("an aborted creation fails retryably and caches nothing", async () => {
   const retry = okFetch();
   await startManagedChatKey({ ...opts, fetch: retry.fetch });
   expect(retry.urls).toHaveLength(1);
-});
-
-test("manual remembered-key storage is namespaced per user+workspace", () => {
-  const own = chatKeyStorageKey(U1, W1);
-  expect(own).toBe("hbr-chat-key:user-1:ws-1");
-  expect(chatKeyStorageKey(U1, W2)).not.toBe(own);
-  expect(chatKeyStorageKey("user-2", W1)).not.toBe(own);
 });

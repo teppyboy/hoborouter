@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { History, KeyRound, Plus, Send, Square } from "lucide-react";
+import { History, Plus, Send, Square } from "lucide-react";
 import { createSseParser, type StreamDelta } from "./sse";
 import { ConversationList, conversationListKey } from "./conversation-list";
 import { buildPersistMessages, findRetryTurn, isEmptyAssistant, type TurnMessage } from "./turn";
@@ -13,9 +13,6 @@ import {
 import { ChatMarkdown } from "../../components/chat-markdown";
 import { ErrorState, CopyButton } from "../../components/page";
 import { Button } from "../../components/ui/button";
-import { Input } from "../../components/ui/input";
-import { Label } from "../../components/ui/label";
-import { Switch } from "../../components/ui/switch";
 import { Textarea } from "../../components/ui/textarea";
 import {
   Select,
@@ -28,19 +25,7 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../../components/
 import { useSession } from "../../lib/auth";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useCatalogModels } from "../models/data";
-import {
-  ManagedKeyError,
-  chatKeyStorageKey,
-  clearManagedChatKey,
-  useManagedChatKey,
-} from "./managed-key";
-
-// Manual pasted key (Advanced): memory by default; the remember switch opts
-// into sessionStorage under a per-user+workspace scoped key, so a remembered
-// key can only ever be restored by the identity that saved it. The legacy
-// unscoped "hbr-chat-key" is never read — it could hand one user's key to
-// the next person on the browser. Never localStorage, never logged, never
-// sent anywhere except the gateway Authorization header.
+import { ManagedKeyError, clearManagedChatKey, useManagedChatKey } from "./managed-key";
 
 // Turn message shape shared with the pure helpers in ./turn.
 type ChatMessage = TurnMessage;
@@ -54,8 +39,9 @@ const PROMPT_CHIPS = [
 
 function readableError(status: number, body: { error?: { message?: string } } | null): string {
   const msg = body?.error?.message;
-  if (status === 401)
-    return msg ?? "Invalid API key. Paste a valid sk-hbr- key from the API keys page.";
+  // 401 never reaches here (the managed-key reconnect path handles it); the
+  // generic fallback still names the likely cause.
+  if (status === 401) return msg ?? "Your chat key is no longer valid. Try reconnecting.";
   if (status === 402) return msg ?? "Insufficient wallet balance for this request.";
   if (status === 404) return msg ?? "Model not found. Pick another model.";
   return msg ?? `Request failed (${status}).`;
@@ -96,7 +82,6 @@ export function ChatPage() {
   const [streaming, setStreaming] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [keyError, setKeyError] = React.useState<ManagedKeyError | null>(null);
-  const [autoKeyReady, setAutoKeyReady] = React.useState(false);
   // Saved conversation identity. null = a new, unsaved chat: it is blank until
   // the first send, which creates the server conversation exactly once. The
   // ref mirrors the state so the send lifecycle can read the id after awaits.
@@ -117,12 +102,6 @@ export function ChatPage() {
   // Streaming assistant partial for the current send, mirrored to a ref so the
   // terminal save can build the full transcript without re-reading state.
   const assistantPartialRef = React.useRef({ content: "", reasoning: "" });
-  // Manual pasted key (Advanced). Memory only unless the remember switch opts
-  // into sessionStorage below; while set it takes precedence over the managed
-  // key and never auto-migrates anywhere else.
-  const [manualKey, setManualKey] = React.useState("");
-  const [remember, setRemember] = React.useState(false);
-
   const abortRef = React.useRef<AbortController | null>(null);
   // Sticky-bottom follow for the conversation log: ref to the scroll element
   // plus whether the user is near the bottom. While streaming, the log only
@@ -160,52 +139,6 @@ export function ChatPage() {
     [],
   );
 
-  // Manual remembered key lifecycle, scoped to the session identity. The
-  // legacy unscoped "hbr-chat-key" is never read (cross-user leak on shared
-  // browsers). On any real identity/workspace transition the previous
-  // identity's remembered key is dropped and the new identity's own scoped
-  // entry, if any, is restored. A pending session (null → known, first mount
-  // or re-login) wipes nothing: state survives until the identity is known.
-  // All storage access is best-effort — failures leave the in-memory key
-  // working for this tab.
-  const manualIdentityRef = React.useRef<string | null>(null);
-  React.useEffect(() => {
-    const id = userId && workspaceId ? chatKeyStorageKey(userId, workspaceId) : null;
-    const prevId = manualIdentityRef.current;
-    if (prevId === id) {
-      if (!id) return;
-      try {
-        if (remember && manualKey) sessionStorage.setItem(id, manualKey);
-        else sessionStorage.removeItem(id);
-      } catch {
-        // sessionStorage unavailable/full: memory still works this tab.
-      }
-      return;
-    }
-    manualIdentityRef.current = id;
-    if (prevId) {
-      // Identity/workspace switch or logout: never carry the previous
-      // identity's key over.
-      setManualKey("");
-      setRemember(false);
-      try {
-        sessionStorage.removeItem(prevId);
-      } catch {
-        // sessionStorage unavailable: the scoped key just stays unreferenced.
-      }
-    }
-    if (!id) return;
-    try {
-      const saved = sessionStorage.getItem(id);
-      if (saved) {
-        setManualKey(saved);
-        setRemember(true);
-      }
-    } catch {
-      // sessionStorage unavailable: start from the empty in-memory state.
-    }
-  }, [userId, workspaceId, remember, manualKey]);
-
   // Identity or workspace change: abort any in-flight stream and drop the
   // transcript AND the saved-conversation identity so one workspace's context
   // (or one user's private history) can never leak into another's view or
@@ -229,7 +162,6 @@ export function ChatPage() {
     setHistoryOpen(false);
     setError(null);
     setKeyError(null);
-    setAutoKeyReady(false);
     lastUserRef.current = null;
   }, [userId, workspaceId]);
 
@@ -277,7 +209,6 @@ export function ChatPage() {
   function reconnect() {
     if (userId && workspaceId) clearManagedChatKey({ userId, workspaceId });
     setKeyError(null);
-    setAutoKeyReady(false);
   }
 
   /** Open a saved conversation: abort any in-flight generation first, then
@@ -390,7 +321,6 @@ export function ChatPage() {
    *  and identity are re-checked: an identity switch or generation bump while
    *  a key is being created must never repopulate state. */
   async function resolveKey(gen?: number, signal?: AbortSignal): Promise<string | null> {
-    if (manualKey) return manualKey;
     if (!userId || !workspaceId) {
       setKeyError(
         new ManagedKeyError("unauthorized", "Sign in and choose a workspace to start chatting."),
@@ -403,7 +333,6 @@ export function ChatPage() {
     try {
       const key = await ensureKey(signal);
       if (!isCurrent()) return null;
-      setAutoKeyReady(true);
       return key.plaintext;
     } catch (e) {
       if (!isCurrent()) return null;
@@ -509,7 +438,7 @@ export function ChatPage() {
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         if (!isCurrent()) return;
-        if (!manualKey && res.status === 401) {
+        if (res.status === 401) {
           // Managed key revoked or session gone: offer explicit reconnect.
           setKeyError(
             new ManagedKeyError(
@@ -586,9 +515,7 @@ export function ChatPage() {
   }, [messages]);
 
   const autoEligible = Boolean(userId && workspaceId);
-  const canSend = Boolean(
-    input.trim() && model && !streaming && !conflict && (manualKey || autoEligible),
-  );
+  const canSend = Boolean(input.trim() && model && !streaming && !conflict && autoEligible);
   const showRetry = !streaming && lastUserRef.current !== null;
 
   // Phone toolbar buttons must be 44px touch targets: the shared `size="sm"`
@@ -623,11 +550,8 @@ export function ChatPage() {
       <ErrorState message={keyError.message} />
       {keyError.kind === "forbidden" ? (
         <p className="text-xs text-muted-foreground">
-          Members without owner/admin can still chat with a personal key:{" "}
-          <a href="/keys" className="underline underline-offset-2">
-            open API keys
-          </a>{" "}
-          and paste it under Advanced below.
+          Members without owner or admin role cannot create a chat key in this workspace. Ask a
+          workspace admin for help.
         </p>
       ) : keyError.kind === "unauthorized" ? (
         <div>
@@ -708,19 +632,6 @@ export function ChatPage() {
             </SelectContent>
           </Select>
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
-            {autoEligible && !autoKeyReady && !manualKey && !keyError && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className={toolbarTouch}
-                onClick={() => void resolveKey()}
-                aria-label="Connect chat key"
-                title="Reuse this browser's chat key — one is created only if none is stored yet"
-              >
-                <KeyRound className="size-4" aria-hidden />
-                <span className="hidden sm:inline">Connect</span>
-              </Button>
-            )}{" "}
             <Button
               variant="outline"
               size="sm"
@@ -781,11 +692,7 @@ export function ChatPage() {
               "Chat - iPhone"). A key is created only once, when you connect or send your first
               message. Usage is charged to your selected workspace.
             </p>
-            {!userId && (
-              <p className="text-sm text-muted-foreground">
-                Sign in to start chatting, or paste your own key under Advanced below.
-              </p>
-            )}
+            {!userId && <p className="text-sm text-muted-foreground">Sign in to start chatting.</p>}
           </div>
         ) : (
           <div
@@ -896,44 +803,6 @@ export function ChatPage() {
           <p className="py-2 text-center text-xs text-muted-foreground">
             Usage is charged to your selected workspace.
           </p>
-
-          {/* Advanced: manual pasted key, collapsed by default. Kept for members
-            who cannot (or prefer not to) use the managed workspace key. */}
-          <details className="pb-2">
-            <summary className="cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground">
-              Advanced: use your own API key
-            </summary>
-            <div className="mt-2 flex flex-wrap items-end gap-3 rounded-lg border border-border p-3">
-              <div className="min-w-56 flex-1 space-y-1.5">
-                <Label htmlFor="chat-api-key">API key</Label>
-                <Input
-                  id="chat-api-key"
-                  type="password"
-                  autoComplete="off"
-                  placeholder="sk-hbr-…"
-                  value={manualKey}
-                  onChange={(e) => setManualKey(e.target.value.trim())}
-                />
-              </div>
-              <div className="flex items-center gap-2 pb-1">
-                <Switch
-                  id="chat-remember"
-                  checked={remember}
-                  onCheckedChange={setRemember}
-                  aria-label="Remember key for this tab"
-                />
-                <Label
-                  htmlFor="chat-remember"
-                  className="text-sm font-normal text-muted-foreground"
-                >
-                  Remember for this tab
-                </Label>
-              </div>
-              <p className="w-full text-xs text-muted-foreground">
-                While set, your pasted key is used for this tab instead of the workspace chat key.
-              </p>
-            </div>
-          </details>
         </div>
       </div>
     </div>

@@ -45,12 +45,13 @@ test("ChatPage SSR carries the managed-key reuse notice", () => {
   expect(html).toContain("Usage is charged to your selected workspace.");
 });
 
-test("ChatPage SSR keeps manual key as a collapsed Advanced section", () => {
+test("ChatPage SSR renders no manual key UI and no Connect button", () => {
   const html = render();
-  // Native <details> renders its content in SSR markup even when collapsed;
-  // assert the summary exists rather than grepping for hidden-ness CSS.
-  expect(html).toContain("<details");
-  expect(html).toContain("Advanced: use your own API key");
+  // The manual pasted-key path was removed entirely (managed key only):
+  // neither the Advanced section nor any key input may exist in the markup.
+  expect(html).not.toContain("Advanced: use your own API key");
+  expect(html).not.toContain('id="chat-api-key"');
+  expect(html).not.toContain('aria-label="Connect chat key"');
 });
 
 test("ChatPage SSR exposes the toolbar with accessible control labels", () => {

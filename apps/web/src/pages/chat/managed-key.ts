@@ -1,7 +1,7 @@
 // Managed chat key: lazily mints exactly one device-named key ("Chat -
 // iPhone") per user + workspace via POST /api/v1/workspaces/:id/keys
-// (owner/admin only — members get 403 and fall back to the manual key UI,
-// never a weaker endpoint). Plaintext is cached in memory and persisted to
+// (owner/admin only — members get 403 and cannot chat from the UI, never a
+// weaker endpoint). Plaintext is cached in memory and persisted to
 // localStorage (sessionStorage fallback when localStorage is unavailable)
 // under a user+workspace-scoped key, so the SAME identity reuses its browser
 // chat key across sessions instead of minting a duplicate on every visit.
@@ -217,7 +217,7 @@ export async function startManagedChatKey(opts: StartManagedChatKeyOptions): Pro
       if (res.status === 403)
         throw new ManagedKeyError(
           "forbidden",
-          "You need owner or admin role in this workspace to create a chat key. Ask a workspace admin, or paste your own key from the API keys page.",
+          "You need owner or admin role in this workspace to create a chat key. Ask a workspace admin for help.",
           res.status,
         );
       if (res.status === 401)
@@ -300,16 +300,6 @@ export function clearManagedChatKey(
     for (const s of storages) clearPrefixedEntries(s);
   }
 }
-
-/**
- * Scoped sessionStorage key for the manual "remember for this tab" chat key
- * (Advanced option on the chat page). Namespacing by session user + workspace
- * means a remembered key can only ever be restored by the identity that saved
- * it — the legacy unscoped `hbr-chat-key` is never read on behalf of another
- * user.
- */
-export const chatKeyStorageKey = (userId: string, workspaceId: string): string =>
-  `hbr-chat-key:${userId}:${workspaceId}`;
 
 /**
  * UI seam for the chat page. Pass the session user id and the resolved
