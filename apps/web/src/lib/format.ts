@@ -18,6 +18,25 @@ export function useUsdVndRate(workspaceId: string | null | undefined) {
   });
 }
 
+/**
+ * Validated nonnegative USD decimal text -> display text with exactly two
+ * fraction digits. Pure string ops: catalog USD prices are exact decimal
+ * text, so Number conversion must never touch them (money invariant).
+ * Throws on text outside `/^\d+(\.\d{1,2})?$/` — validation belongs upstream.
+ */
+export function formatUsdAmountText(text: string): string {
+  if (!/^\d+(\.\d{1,2})?$/.test(text)) {
+    throw new Error(`invalid USD amount text: ${JSON.stringify(text)}`);
+  }
+  const dot = text.indexOf(".");
+  const intPart = dot === -1 ? text : text.slice(0, dot);
+  const frac = dot === -1 ? "" : text.slice(dot + 1);
+  // Canonical leading zeros: keep a lone "0", drop the rest.
+  const int = intPart.replace(/^0+(?=\d)/, "");
+  const cents = (frac + "00").slice(0, 2);
+  return `$${int}.${cents}`;
+}
+
 /** USD from VND using the backend-provided FX rate. Returns null when rate unavailable (fall back to VND). */
 export function formatUsdFromVnd(
   vnd: number | null | undefined,
