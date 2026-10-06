@@ -23,8 +23,37 @@ import {
   readPaymentLimits,
   paymentDeadlineMs,
   resolveTopupAmount,
+  applyPromoToTopup,
+  recordPercentRedemption,
   type PaymentSnapshot,
+  type PromoApplyResult,
 } from "../payment-creation";
+
+// Human-readable mapping of the promo-apply failure reasons; each maps to a
+// specific status so clients can distinguish fixable input (400) from state
+// conflicts (409) and authorization (403).
+const PROMO_APPLY_STATUS: Record<string, { status: number; code: string; message: string }> = {
+  invalid_code: { status: 400, code: "INVALID", message: "promo_code must be 32 hex characters" },
+  not_found: { status: 404, code: "NOT_FOUND", message: "Promo code not found" },
+  workspace_suspended: {
+    status: 403,
+    code: "WORKSPACE_SUSPENDED",
+    message: "Workspace is suspended",
+  },
+  promo_inactive: { status: 409, code: "PROMO_INACTIVE", message: "Promo code is inactive" },
+  promo_expired: { status: 409, code: "PROMO_EXPIRED", message: "Promo code is expired" },
+  promo_exhausted: { status: 409, code: "PROMO_EXHAUSTED", message: "Promo code has no uses left" },
+  already_redeemed: {
+    status: 409,
+    code: "ALREADY_REDEEMED",
+    message: "Promo code already used by this workspace",
+  },
+  not_percent: {
+    status: 409,
+    code: "PROMO_NOT_PERCENT",
+    message: "Fixed-credit promo codes are redeemed via the redeem endpoint, not checkout",
+  },
+};
 
 /** Purchase FK columns carried on a bundle/plan purchase; both absent = plain top-up. */
 export interface PayosPurchase {
@@ -53,6 +82,8 @@ export const makePayosPaymentCreator =
     purchase?: PayosPurchase,
     /** USD top-up input (plain top-ups only): the exact text typed by the payer. */
     usdAmountText?: string,
+    /** Optional percent-voucher code (plain top-ups only): consumed atomically with the insert. */
+    promoCodeText?: string,
   ) => {
     const id = crypto.randomUUID();
     const orderCode = payosNextOrderCode();
@@ -64,6 +95,13 @@ export const makePayosPaymentCreator =
     let deadlineMs = 0;
     let overCap = false;
     let invalidInput = false;
+    // Holder objects: TS narrows bare `let` flags assigned inside the
+    // transaction closure back to their initializer at post-transaction
+    // reads, so results are read through a stable property instead.
+    const promoResult: {
+      failure: Extract<PromoApplyResult, { ok: false }> | null;
+      voucher: Extract<PromoApplyResult, { ok: true }> | null;
+    } = { failure: null, voucher: null };
     let resolvedAmount = 0;
     await db.transaction(async (tx) => {
       const limits = await readPaymentLimits(tx);
@@ -79,7 +117,27 @@ export const makePayosPaymentCreator =
         return;
       }
       deadlineMs = paymentDeadlineMs(now, limits.timeoutMinutes);
-      resolvedAmount = resolved.amountVnd;
+      // Percent-voucher apply: explicit promo_code body field, authorized by
+      // the same session/workspace gates as the payment itself, checked and
+      // locked INSIDE this transaction (workspace → promo lock order). On any
+      // failure nothing is inserted — the payment and the redemption commit
+      // atomically or not at all.
+      if (promoCodeText !== undefined) {
+        const applied = await applyPromoToTopup(
+          tx,
+          workspaceId,
+          promoCodeText,
+          resolved.amountVnd,
+          now,
+        );
+        if (applied.ok) promoResult.voucher = applied;
+        else {
+          promoResult.failure = applied;
+          return;
+        }
+      }
+      const voucher = promoResult.voucher;
+      resolvedAmount = voucher ? voucher.finalDueVnd : resolved.amountVnd;
       snapshot = {
         input_currency: resolved.inputCurrency,
         input_amount_text: resolved.inputAmountText,
@@ -88,7 +146,9 @@ export const makePayosPaymentCreator =
       await tx.insert(payments).values({
         id,
         workspace_id: workspaceId,
-        amount: resolved.amountVnd,
+        // Final due for voucher payments — the payer/provider is charged the
+        // discounted amount; settlement credits original_amount_vnd instead.
+        amount: resolvedAmount,
         status: "pending",
         provider: "payos",
         provider_order_code: String(orderCode),
@@ -99,7 +159,20 @@ export const makePayosPaymentCreator =
         input_currency: resolved.inputCurrency,
         input_amount_text: resolved.inputAmountText,
         fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd,
+        promo_code_id: voucher ? voucher.promoId : null,
+        promo_kind: voucher ? "percent" : null,
+        original_amount_vnd: voucher ? resolved.amountVnd : null,
+        discount_vnd: voucher ? voucher.discountVnd : null,
       });
+      if (voucher) {
+        await recordPercentRedemption(tx, {
+          promoId: voucher.promoId,
+          workspaceId,
+          paymentId: id,
+          uses: 0,
+          now,
+        });
+      }
       await writeAudit(tx, {
         actorUserId: userId,
         workspaceId,
@@ -118,11 +191,25 @@ export const makePayosPaymentCreator =
           ...(purchase?.subscriptionPlanId
             ? { subscription_plan_id: purchase.subscriptionPlanId }
             : {}),
+          ...(voucher
+            ? {
+                promo_code_id: voucher.promoId,
+                promo_kind: "percent",
+                percent_bp: voucher.percentBp,
+                original_amount_vnd: resolved.amountVnd,
+                discount_vnd: voucher.discountVnd,
+                final_due_vnd: voucher.finalDueVnd,
+              }
+            : {}),
         },
       });
     });
     if (overCap) {
       return jsonError(400, "INVALID", "payment amount exceeds the configured maximum");
+    }
+    if (promoResult.failure) {
+      const m = PROMO_APPLY_STATUS[promoResult.failure.reason]!;
+      return jsonError(m.status, m.code, m.message);
     }
     if (invalidInput || !snapshot) {
       // Server-catalog USD text is DB-validated, so this only rejects an
@@ -152,6 +239,7 @@ export const makePayosPaymentCreator =
         // Provider-side expiry mirrors the local deadline snapshot.
         expiredAtSec: Math.ceil(deadlineMs / 1000),
       });
+      const pv = promoResult.voucher;
       return new Response(
         JSON.stringify({
           id,
@@ -160,6 +248,14 @@ export const makePayosPaymentCreator =
           provider: "payos",
           provider_order_code: String(orderCode),
           checkout_url: created.checkoutUrl,
+          // Voucher snapshot echo (absent when no promo was applied).
+          ...(pv
+            ? {
+                original_amount_vnd: pv.finalDueVnd + pv.discountVnd,
+                discount_vnd: pv.discountVnd,
+                promo_code_id: pv.promoId,
+              }
+            : {}),
         }),
         { status: 201, headers: { "content-type": "application/json" } },
       );
@@ -190,6 +286,10 @@ export const paymentsRoutes = (
               // decimals. Mutually exclusive with `amount`.
               usd_amount: t.Optional(t.String()),
               provider: t.Optional(t.Union([t.Literal("manual"), t.Literal("payos")])),
+              // Explicit percent-voucher apply (plain top-ups only). Applied
+              // and consumed inside the creation transaction; fixed-credit
+              // promo codes are redeem-only and rejected here.
+              promo_code: t.Optional(t.String()),
             }),
           ),
           response: t.Object({
@@ -199,6 +299,9 @@ export const paymentsRoutes = (
             provider: t.String(),
             provider_order_code: t.String(),
             checkout_url: t.String(),
+            original_amount_vnd: t.Optional(t.Number()),
+            discount_vnd: t.Optional(t.Number()),
+            promo_code_id: t.Optional(t.String()),
           }),
           detail: {
             tags: ["Payments"],
@@ -225,6 +328,11 @@ export const paymentsRoutes = (
           if (raw !== undefined && usdRaw !== undefined) {
             return jsonError(400, "INVALID", "amount and usd_amount are mutually exclusive");
           }
+          const promoRaw = (body as { promo_code?: unknown } | null)?.promo_code;
+          if (promoRaw !== undefined && typeof promoRaw !== "string") {
+            return jsonError(400, "INVALID", "promo_code must be a string");
+          }
+          const promoCodeText = promoRaw as string | undefined;
           const usdAmountText = typeof usdRaw === "string" ? usdRaw : null;
           let amount = 0;
           if (usdAmountText === null) {
@@ -245,6 +353,7 @@ export const paymentsRoutes = (
               amount,
               undefined,
               usdAmountText ?? undefined,
+              promoCodeText,
             );
           }
           const id = crypto.randomUUID();
@@ -252,6 +361,15 @@ export const paymentsRoutes = (
           const now = Date.now();
           // Settings (deadline/cap/FX) are read inside the insert transaction:
           // expires_at is a creation-time snapshot and the cap always binds.
+          // The percent-voucher (if any) is checked, the payment row and the
+          // redemption are written, and uses is incremented in ONE transaction:
+          // a lost race rolls back the payment too, so a voucher can never be
+          // double-spent and a payment can never exist without its redemption.
+          const promoResult: {
+            failure: Extract<PromoApplyResult, { ok: false }> | null;
+            voucher: Extract<PromoApplyResult, { ok: true }> | null;
+            originalAmount: number;
+          } = { failure: null, voucher: null, originalAmount: 0 };
           let resolvedAmount = 0;
           let checkoutPath = "";
           let createError: Response | null = null;
@@ -263,11 +381,30 @@ export const paymentsRoutes = (
               return;
             }
             const deadline = paymentDeadlineMs(now, limits.timeoutMinutes);
-            resolvedAmount = resolved.amountVnd;
+            if (promoCodeText !== undefined) {
+              const applied = await applyPromoToTopup(
+                tx,
+                params.id,
+                promoCodeText,
+                resolved.amountVnd,
+                now,
+              );
+              if (applied.ok) {
+                promoResult.voucher = applied;
+                promoResult.originalAmount = resolved.amountVnd;
+              } else {
+                promoResult.failure = applied;
+                return;
+              }
+            }
+            const voucher = promoResult.voucher;
+            resolvedAmount = voucher ? voucher.finalDueVnd : resolved.amountVnd;
             await tx.insert(payments).values({
               id,
               workspace_id: params.id,
-              amount: resolved.amountVnd,
+              // Final due for voucher payments: the payer is charged the
+              // discounted amount; settlement credits original_amount_vnd.
+              amount: resolvedAmount,
               status: "pending",
               provider: "manual",
               provider_order_code: orderCode,
@@ -276,14 +413,27 @@ export const paymentsRoutes = (
               input_currency: resolved.inputCurrency,
               input_amount_text: resolved.inputAmountText,
               fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd,
+              promo_code_id: voucher ? voucher.promoId : null,
+              promo_kind: voucher ? "percent" : null,
+              original_amount_vnd: voucher ? resolved.amountVnd : null,
+              discount_vnd: voucher ? voucher.discountVnd : null,
             });
+            if (voucher) {
+              await recordPercentRedemption(tx, {
+                promoId: voucher.promoId,
+                workspaceId: params.id,
+                paymentId: id,
+                uses: 0,
+                now,
+              });
+            }
             await writeAudit(tx, {
               actorUserId: userId,
               workspaceId: params.id,
               action: "payment.create",
               target: id,
               detail: {
-                amount: resolved.amountVnd,
+                amount: resolvedAmount,
                 provider: "manual",
                 expires_at: deadline,
                 input_currency: resolved.inputCurrency,
@@ -291,13 +441,28 @@ export const paymentsRoutes = (
                 ...(resolved.fxRateVndPerUsd !== null
                   ? { fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd }
                   : {}),
+                ...(voucher
+                  ? {
+                      promo_code_id: voucher.promoId,
+                      promo_kind: "percent",
+                      percent_bp: voucher.percentBp,
+                      original_amount_vnd: voucher.finalDueVnd + voucher.discountVnd,
+                      discount_vnd: voucher.discountVnd,
+                      final_due_vnd: voucher.finalDueVnd,
+                    }
+                  : {}),
               },
             });
             checkoutPath = `/billing/payments?payment=${id}`;
           });
           if (createError) return createError;
+          if (promoResult.failure) {
+            const m = PROMO_APPLY_STATUS[promoResult.failure.reason]!;
+            return jsonError(m.status, m.code, m.message);
+          }
           // No provider checkout: admin approval happens out-of-band; the
           // member tracks status in the billing UI.
+          const mv = promoResult.voucher;
           return new Response(
             JSON.stringify({
               id,
@@ -306,6 +471,14 @@ export const paymentsRoutes = (
               provider: "manual",
               provider_order_code: orderCode,
               checkout_url: checkoutPath,
+              // Voucher snapshot echo (absent when no promo was applied).
+              ...(mv
+                ? {
+                    original_amount_vnd: promoResult.originalAmount,
+                    discount_vnd: mv.discountVnd,
+                    promo_code_id: mv.promoId,
+                  }
+                : {}),
             }),
             { status: 201, headers: { "content-type": "application/json" } },
           );
@@ -349,6 +522,10 @@ export const paymentsRoutes = (
               input_currency: payments.input_currency,
               input_amount_text: payments.input_amount_text,
               fx_rate_vnd_per_usd: payments.fx_rate_vnd_per_usd,
+              promo_code_id: payments.promo_code_id,
+              promo_kind: payments.promo_kind,
+              original_amount_vnd: payments.original_amount_vnd,
+              discount_vnd: payments.discount_vnd,
             })
             .from(payments)
             .where(eq(payments.id, params.paymentId))

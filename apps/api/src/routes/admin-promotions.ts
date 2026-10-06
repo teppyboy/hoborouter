@@ -17,25 +17,39 @@ const json = (data: unknown, status = 200) =>
 
 const posInt = (v: number) => Number.isSafeInteger(v) && v > 0;
 
+// Percent-voucher bounds: bp in 1..9999 (never 10000 — a 100% discount would
+// drive the final due to zero, which the payments.amount > 0 CHECK forbids);
+// cap is a positive safe-integer VND amount.
+const percentBpValid = (v: number) => Number.isSafeInteger(v) && v >= 1 && v <= 9999;
+
 // Safe subset of a promo row: never code_hash. This shape is also the list
 // item shape, so a hash leak cannot happen by forgetting a select column.
 const safePromo = (r: {
   id: string;
   name: string;
-  amount_vnd: string | number;
+  kind?: "fixed" | "percent";
+  amount_vnd?: string | number | null;
+  percent_bp?: number | null;
+  max_discount_vnd?: string | number | null;
   max_uses: number;
-  uses: number;
-  expires_at: string | number | null;
-  active: boolean;
+  uses?: number;
+  expires_at?: string | number | null;
+  active?: boolean;
   created_at: string | number;
 }) => ({
   id: r.id,
   name: r.name,
-  amount_vnd: Number(r.amount_vnd),
+  kind: r.kind ?? "fixed",
+  amount_vnd: r.amount_vnd === null || r.amount_vnd === undefined ? null : Number(r.amount_vnd),
+  percent_bp: r.percent_bp ?? null,
+  max_discount_vnd:
+    r.max_discount_vnd === null || r.max_discount_vnd === undefined
+      ? null
+      : Number(r.max_discount_vnd),
   max_uses: r.max_uses,
-  uses: r.uses,
-  expires_at: r.expires_at === null ? null : Number(r.expires_at),
-  active: r.active,
+  uses: r.uses ?? 0,
+  expires_at: r.expires_at === null || r.expires_at === undefined ? null : Number(r.expires_at),
+  active: r.active ?? true,
   created_at: Number(r.created_at),
 });
 
@@ -73,7 +87,10 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
           .select({
             id: promoCodes.id,
             name: promoCodes.name,
+            kind: promoCodes.kind,
             amount_vnd: promoCodes.amount_vnd,
+            percent_bp: promoCodes.percent_bp,
+            max_discount_vnd: promoCodes.max_discount_vnd,
             max_uses: promoCodes.max_uses,
             uses: promoCodes.uses,
             expires_at: promoCodes.expires_at,
@@ -104,11 +121,45 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
         const b = (body ?? {}) as Record<string, unknown>;
         if (typeof b.name !== "string" || b.name.length === 0)
           return jsonError(400, "INVALID", "name must be a non-empty string");
+        // Explicit kind: 'fixed' (legacy default, amount_vnd credit) or
+        // 'percent' (basis points + VND cap off a top-up payment). The two
+        // shapes are mutually exclusive — no mixed or absent funding.
+        const kind = b.kind === undefined ? "fixed" : b.kind;
+        if (kind !== "fixed" && kind !== "percent")
+          return jsonError(400, "INVALID", "kind must be 'fixed' or 'percent'");
         const amountVnd = b.amount_vnd;
+        const percentBp = b.percent_bp;
+        const maxDiscountVnd = b.max_discount_vnd;
         const maxUses = b.max_uses;
         const expiresAt = b.expires_at;
-        if (!posInt(amountVnd as number) || (amountVnd as number) > MAX_SAFE_INTEGER_MONEY)
-          return jsonError(400, "INVALID", "amount_vnd must be a positive integer VND amount");
+        if (kind === "fixed") {
+          if (percentBp !== undefined || maxDiscountVnd !== undefined)
+            return jsonError(
+              400,
+              "INVALID",
+              "percent_bp/max_discount_vnd are only valid with kind='percent'",
+            );
+          if (!posInt(amountVnd as number) || (amountVnd as number) > MAX_SAFE_INTEGER_MONEY)
+            return jsonError(400, "INVALID", "amount_vnd must be a positive integer VND amount");
+        } else {
+          if (amountVnd !== undefined)
+            return jsonError(
+              400,
+              "INVALID",
+              "amount_vnd is only valid with kind='fixed'; percent promos use percent_bp + max_discount_vnd",
+            );
+          if (!percentBpValid(percentBp as number))
+            return jsonError(
+              400,
+              "INVALID",
+              "percent_bp must be an integer between 1 and 9999 basis points",
+            );
+          if (
+            !posInt(maxDiscountVnd as number) ||
+            (maxDiscountVnd as number) > MAX_SAFE_INTEGER_MONEY
+          )
+            return jsonError(400, "INVALID", "max_discount_vnd must be a positive integer VND cap");
+        }
         if (!posInt(maxUses as number))
           return jsonError(400, "INVALID", "max_uses must be a positive integer");
         const now = Date.now();
@@ -118,11 +169,14 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
         )
           return jsonError(400, "INVALID", "expires_at must be null or a future timestamp in ms");
         const code = generatePromoCode();
-        const row = {
+        const row: typeof promoCodes.$inferInsert = {
           id: crypto.randomUUID(),
           code_hash: hashPromoCode(code),
           name: b.name,
-          amount_vnd: amountVnd as number,
+          kind,
+          amount_vnd: kind === "fixed" ? (amountVnd as number) : null,
+          percent_bp: kind === "percent" ? (percentBp as number) : null,
+          max_discount_vnd: kind === "percent" ? (maxDiscountVnd as number) : null,
           max_uses: maxUses as number,
           uses: 0,
           expires_at: expiresAt as number | null,
@@ -139,7 +193,10 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
             target: row.id,
             detail: {
               name: row.name,
-              amount_vnd: row.amount_vnd,
+              kind: row.kind,
+              ...(row.kind === "fixed"
+                ? { amount_vnd: row.amount_vnd }
+                : { percent_bp: row.percent_bp, max_discount_vnd: row.max_discount_vnd }),
               max_uses: row.max_uses,
               expires_at: row.expires_at,
             },
@@ -196,7 +253,10 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
             .returning({
               id: promoCodes.id,
               name: promoCodes.name,
+              kind: promoCodes.kind,
               amount_vnd: promoCodes.amount_vnd,
+              percent_bp: promoCodes.percent_bp,
+              max_discount_vnd: promoCodes.max_discount_vnd,
               max_uses: promoCodes.max_uses,
               uses: promoCodes.uses,
               expires_at: promoCodes.expires_at,

@@ -203,6 +203,15 @@ export const payments = pgTable(
     input_currency: text("input_currency"),
     input_amount_text: text("input_amount_text"),
     fx_rate_vnd_per_usd: big("fx_rate_vnd_per_usd"),
+    // Percent-voucher snapshot (plain top-ups only; all four set or all NULL).
+    // `amount` holds the FINAL DUE (what the payer/provider is charged and
+    // what webhook amount checks bind to); original_amount_vnd is the undiscounted
+    // top-up credit granted at settlement, discount_vnd the voucher discount.
+    // Promo type is snapshotted (promo_kind) so settlement never needs a join.
+    promo_code_id: text("promo_code_id").references(() => promoCodes.id),
+    promo_kind: text("promo_kind", { enum: ["fixed", "percent"] }),
+    original_amount_vnd: big("original_amount_vnd"),
+    discount_vnd: big("discount_vnd"),
   },
   (t) => [
     uniqueIndex("payments_provider_order").on(t.provider, t.provider_order_code),
@@ -214,6 +223,12 @@ export const payments = pgTable(
     check(
       "payments_fx_rate_positive",
       sql`${t.fx_rate_vnd_per_usd} IS NULL OR ${t.fx_rate_vnd_per_usd} > 0`,
+    ),
+    check(
+      "payments_voucher_snapshot",
+      sql`(${t.promo_code_id} IS NULL AND ${t.promo_kind} IS NULL AND ${t.original_amount_vnd} IS NULL AND ${t.discount_vnd} IS NULL)
+          OR (${t.promo_code_id} IS NOT NULL AND ${t.promo_kind} IS NOT NULL AND ${t.original_amount_vnd} > 0
+              AND ${t.original_amount_vnd} <= ${MAX_BOUND} AND ${t.discount_vnd} >= 0 AND ${t.discount_vnd} <= ${MAX_BOUND})`,
     ),
   ],
 );
@@ -424,6 +439,12 @@ export const firstTopupBonuses = pgTable(
  * app-side hash is stored — the plaintext code never reaches the database.
  * `uses` is bounded by `max_uses` so exhausted codes cannot be redeemed even
  * if app-side checks race.
+ *
+ * Two kinds:
+ *  - fixed: amount_vnd credit granted by the /promotions/redeem endpoint.
+ *  - percent: percent_bp basis points off a TOP-UP payment at checkout (1..9999,
+ *    never 10000 — the final due must stay positive), with an optional-VND cap
+ *    max_discount_vnd. kind/amounts are immutable after creation.
  */
 export const promoCodes = pgTable(
   "promo_codes",
@@ -431,7 +452,12 @@ export const promoCodes = pgTable(
     id: text("id").primaryKey(),
     code_hash: text("code_hash").notNull(),
     name: text("name").notNull(),
-    amount_vnd: big("amount_vnd").notNull(),
+    kind: text("kind", { enum: ["fixed", "percent"] })
+      .notNull()
+      .default("fixed"),
+    amount_vnd: big("amount_vnd"),
+    percent_bp: integer("percent_bp"),
+    max_discount_vnd: big("max_discount_vnd"),
     max_uses: integer("max_uses").notNull(),
     uses: integer("uses").notNull().default(0),
     expires_at: big("expires_at"),
@@ -440,7 +466,16 @@ export const promoCodes = pgTable(
   },
   (t) => [
     uniqueIndex("promo_codes_code_hash").on(t.code_hash),
-    check("pc_amount_vnd", sql`${t.amount_vnd} > 0 AND ${t.amount_vnd} <= ${MAX_BOUND}`),
+    check(
+      "pc_amount_vnd",
+      sql`${t.amount_vnd} IS NULL OR (${t.amount_vnd} > 0 AND ${t.amount_vnd} <= ${MAX_BOUND})`,
+    ),
+    check(
+      "pc_kind",
+      sql`(${t.kind} = 'fixed' AND ${t.amount_vnd} IS NOT NULL AND ${t.percent_bp} IS NULL AND ${t.max_discount_vnd} IS NULL)
+          OR (${t.kind} = 'percent' AND ${t.amount_vnd} IS NULL AND ${t.percent_bp} > 0 AND ${t.percent_bp} <= 9999
+              AND ${t.max_discount_vnd} > 0 AND ${t.max_discount_vnd} <= ${MAX_BOUND})`,
+    ),
     check("pc_max_uses", sql`${t.max_uses} >= 1`),
     check("pc_uses", sql`${t.uses} >= 0 AND ${t.uses} <= ${t.max_uses}`),
     check("pc_expires_at", sql`${t.expires_at} IS NULL OR ${intBounded(t.expires_at)}`),
@@ -463,14 +498,16 @@ export const promoRedemptions = pgTable(
     workspace_id: text("workspace_id")
       .notNull()
       .references(() => workspaces.id),
-    ledger_entry_id: text("ledger_entry_id")
-      .notNull()
-      .references(() => ledgerEntries.id),
+    // Fixed redemptions link the granted credit; percent redemptions link the
+    // discounted payment instead. Exactly one of the two is always set.
+    ledger_entry_id: text("ledger_entry_id").references(() => ledgerEntries.id),
+    payment_id: text("payment_id").references(() => payments.id),
     created_at: big("created_at").notNull(),
   },
   (t) => [
     uniqueIndex("promo_redemptions_code_workspace").on(t.promo_code_id, t.workspace_id),
     check("pr_created_at", intBounded(t.created_at)),
+    check("pr_one_gate", sql`(${t.ledger_entry_id} IS NULL) <> (${t.payment_id} IS NULL)`),
   ],
 );
 

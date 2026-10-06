@@ -179,6 +179,9 @@ export async function processMockPaymentEvent(
       .select({
         id: payments.id,
         amount: payments.amount,
+        // For percent-voucher top-ups this is the FINAL DUE (what the payer
+        // was charged); original_amount_vnd is the top-up credit to grant.
+        original_amount_vnd: payments.original_amount_vnd,
         status: payments.status,
         workspace_id: payments.workspace_id,
         bundle_id: payments.bundle_id,
@@ -425,10 +428,15 @@ export async function processMockPaymentEvent(
       });
       balanceAfter = credit.balanceAfter;
     } else {
-      // Plain top-up: unchanged settlement path.
+      // Plain top-up. Voucher payments (promo_code_id set) credit the
+      // ORIGINAL top-up amount — the discount is the house's cost, not a
+      // reduction of the customer's credit — while the amount CHARGED is the
+      // final due (payment.amount, which the webhook amount check binds to).
+      // Non-voucher payments keep the unchanged settlement path.
+      const creditAmount = payment.original_amount_vnd ?? payment.amount;
       const credit = await creditWallet(tx, {
         walletId: wallet.id,
-        amount: payment.amount,
+        amount: creditAmount,
         kind: "topup",
         paymentId: payment.id,
         memo: plainMemo,

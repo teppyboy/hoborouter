@@ -161,7 +161,19 @@ describe("admin promotions create", () => {
     expect(JSON.stringify(body)).not.toContain("code_hash");
     // Safe promo shape exactly.
     expect(Object.keys(body.promo).sort()).toEqual(
-      ["active", "amount_vnd", "created_at", "expires_at", "id", "max_uses", "name", "uses"].sort(),
+      [
+        "active",
+        "amount_vnd",
+        "created_at",
+        "expires_at",
+        "id",
+        "kind",
+        "max_discount_vnd",
+        "max_uses",
+        "name",
+        "percent_bp",
+        "uses",
+      ].sort(),
     );
     expect(body.promo.uses).toBe(0);
     expect(body.promo.active).toBe(true);
@@ -219,7 +231,19 @@ describe("admin promotions list", () => {
     const body = JSON.parse(text) as { data: Array<Record<string, unknown>> };
     const row = body.data.find((r) => r.name === "secretfree")!;
     expect(Object.keys(row).sort()).toEqual(
-      ["active", "amount_vnd", "created_at", "expires_at", "id", "max_uses", "name", "uses"].sort(),
+      [
+        "active",
+        "amount_vnd",
+        "created_at",
+        "expires_at",
+        "id",
+        "kind",
+        "max_discount_vnd",
+        "max_uses",
+        "name",
+        "percent_bp",
+        "uses",
+      ].sort(),
     );
   });
 });
