@@ -35,6 +35,7 @@ beforeAll(async () => {
     localStorage: Storage;
     location: unknown;
     matchMedia: unknown;
+    getComputedStyle: (element: Element) => CSSStyleDeclaration;
     close: () => void;
   };
   win.matchMedia = () => ({
