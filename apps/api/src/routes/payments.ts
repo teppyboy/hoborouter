@@ -30,6 +30,8 @@ import {
 export interface PayosPurchase {
   bundleId?: string;
   subscriptionPlanId?: string;
+  /** Server-catalog USD price text; never client-supplied. Omitted = VND amount. */
+  priceUsd?: string;
 }
 
 // payOS branch of payment creation: persist pending + audit atomically, then
@@ -65,11 +67,12 @@ export const makePayosPaymentCreator =
     let resolvedAmount = 0;
     await db.transaction(async (tx) => {
       const limits = await readPaymentLimits(tx);
-      const resolved = resolveTopupAmount(
-        amount,
-        purchase ? null : (usdAmountText ?? null),
-        limits,
-      );
+      // USD input sources: a plain top-up's payer-typed text, or the server
+      // catalog row's price_usd for USD-priced purchases. Purchases without
+      // it keep their VND amount; the amount argument is ignored whenever a
+      // USD text resolves the charge.
+      const usdText = purchase?.priceUsd ?? (purchase ? null : (usdAmountText ?? null));
+      const resolved = resolveTopupAmount(usdText === null ? amount : null, usdText, limits);
       if (!resolved.ok) {
         if (resolved.reason === "over_cap") overCap = true;
         else invalidInput = true;
@@ -122,6 +125,8 @@ export const makePayosPaymentCreator =
       return jsonError(400, "INVALID", "payment amount exceeds the configured maximum");
     }
     if (invalidInput || !snapshot) {
+      // Server-catalog USD text is DB-validated, so this only rejects an
+      // invalid plain top-up usd_amount.
       return jsonError(
         400,
         "INVALID",

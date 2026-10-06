@@ -10,13 +10,14 @@ import { creditBundles, payments, subscriptionPlans } from "@hoborouter/db";
 import { asc, eq } from "drizzle-orm";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, wsRole, writeAudit, jsonError } from "../authz";
-import { payosConfigFromEnv, type PayosConfig, parseUsdCents, usdCentsToVndCeiling } from "@hoborouter/payments";
+import { payosConfigFromEnv, type PayosConfig } from "@hoborouter/payments";
+import { parseUsdCents, usdCentsToVndCeiling } from "@hoborouter/payments";
 import { makePayosPaymentCreator } from "./payments";
 import {
   readPaymentLimits,
   paymentDeadlineMs,
   withinPaymentCap,
-  snapshotForBundlePrice,
+  resolveTopupAmount,
 } from "../payment-creation";
 
 export const bundlesRoutes = (
@@ -37,29 +38,37 @@ export const bundlesRoutes = (
 
   // Manual (admin-approved) pending purchase; mirrors the top-up manual
   // branch in payments.ts but carries the bundle/plan FK on the payment row.
-  // Deadline snapshot + cap read inside the insert transaction; a price over
-  // the configured cap rejects the purchase before any row exists.
+  // Price resolution + deadline snapshot + cap read inside the insert
+  // transaction: USD-priced rows resolve their charge from the catalog row's
+  // price_usd at the transaction-time payment FX rate, so the cap always
+  // binds before any row exists and stale listed quotes never overrule it.
   const createManualPurchase = async (
     workspaceId: string,
     userId: string,
-    amount: number,
     purchase: { bundleId?: string; subscriptionPlanId?: string },
+    price: { amountVnd: number; usdText: string | null },
   ): Promise<Response> => {
     const id = crypto.randomUUID();
     const now = Date.now();
     let response: Response | null = null;
+    let resolvedAmount = 0;
     await db.transaction(async (tx) => {
       const limits = await readPaymentLimits(tx);
-      if (!withinPaymentCap(amount, limits.maxAmountVnd)) {
-        response = jsonError(400, "INVALID", "payment amount exceeds the configured maximum");
+      const resolved = resolveTopupAmount(
+        price.usdText === null ? price.amountVnd : null,
+        price.usdText,
+        limits,
+      );
+      if (!resolved.ok) {
+        response = jsonError(400, "INVALID", resolved.message);
         return;
       }
+      resolvedAmount = resolved.amountVnd;
       const deadline = paymentDeadlineMs(now, limits.timeoutMinutes);
-      const snapshot = snapshotForBundlePrice(amount);
       await tx.insert(payments).values({
         id,
         workspace_id: workspaceId,
-        amount,
+        amount: resolved.amountVnd,
         status: "pending",
         provider: "manual",
         provider_order_code: `MANUAL-${id}`,
@@ -67,7 +76,9 @@ export const bundlesRoutes = (
         expires_at: deadline,
         bundle_id: purchase.bundleId,
         subscription_plan_id: purchase.subscriptionPlanId,
-        ...snapshot,
+        input_currency: resolved.inputCurrency,
+        input_amount_text: resolved.inputAmountText,
+        fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd,
       });
       await writeAudit(tx, {
         actorUserId: userId,
@@ -75,15 +86,16 @@ export const bundlesRoutes = (
         action: "payment.create",
         target: id,
         detail: {
-          amount,
+          amount: resolved.amountVnd,
           provider: "manual",
           expires_at: deadline,
-          input_currency: snapshot.input_currency,
-          input_amount_text: snapshot.input_amount_text,
-          ...(purchase.bundleId ? { bundle_id: purchase.bundleId } : {}),
-          ...(purchase.subscriptionPlanId
-            ? { subscription_plan_id: purchase.subscriptionPlanId }
+          input_currency: resolved.inputCurrency,
+          input_amount_text: resolved.inputAmountText,
+          ...(resolved.fxRateVndPerUsd !== null
+            ? { fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd }
             : {}),
+          ...(purchase.bundleId ? { bundle_id: purchase.bundleId } : {}),
+          ...(purchase.subscriptionPlanId ? { subscription_plan_id: purchase.subscriptionPlanId } : {}),
         },
       });
     });
@@ -91,7 +103,7 @@ export const bundlesRoutes = (
     return new Response(
       JSON.stringify({
         id,
-        amount,
+        amount: resolvedAmount,
         status: "pending",
         provider: "manual",
         provider_order_code: `MANUAL-${id}`,
@@ -100,7 +112,6 @@ export const bundlesRoutes = (
       { status: 201, headers: { "content-type": "application/json" } },
     );
   };
-
   return new Elysia({ name: "bundles" })
     .get(
       "/api/v1/bundles",
@@ -220,18 +231,26 @@ export const bundlesRoutes = (
         if (provider === "payos") {
           if (!payos.available)
             return jsonError(503, "PROVIDER_UNAVAILABLE", "payOS is not configured");
-          // Cap binds before any provider call or row insert.
-          const limits = await readPaymentLimits(db);
-          if (!withinPaymentCap(bundle.price_vnd, limits.maxAmountVnd)) {
-            return jsonError(400, "INVALID", "payment amount exceeds the configured maximum");
+          // Legacy VND rows: cap binds before any provider call or row insert.
+          // USD rows resolve their charge inside the creation transaction, so
+          // the preflight must not reject on the stale fallback VND price.
+          if (bundle.price_usd === null) {
+            const limits = await readPaymentLimits(db);
+            if (!withinPaymentCap(bundle.price_vnd, limits.maxAmountVnd)) {
+              return jsonError(400, "INVALID", "payment amount exceeds the configured maximum");
+            }
           }
           return createPayosPayment(params.id, userId, bundle.price_vnd, {
             bundleId: bundle.id,
+            ...(bundle.price_usd !== null ? { priceUsd: bundle.price_usd } : {}),
           });
         }
-        return createManualPurchase(params.id, userId, bundle.price_vnd, {
-          bundleId: bundle.id,
-        });
+        return createManualPurchase(
+          params.id,
+          userId,
+          { bundleId: bundle.id },
+          { amountVnd: bundle.price_vnd, usdText: bundle.price_usd },
+        );
       },
     )
     .post(
@@ -267,18 +286,24 @@ export const bundlesRoutes = (
         if (provider === "payos") {
           if (!payos.available)
             return jsonError(503, "PROVIDER_UNAVAILABLE", "payOS is not configured");
-          // Cap binds before any provider call or row insert.
-          const limits = await readPaymentLimits(db);
-          if (!withinPaymentCap(plan.price_vnd, limits.maxAmountVnd)) {
-            return jsonError(400, "INVALID", "payment amount exceeds the configured maximum");
+          // See the bundle branch: only legacy VND rows preflight the cap.
+          if (plan.price_usd === null) {
+            const limits = await readPaymentLimits(db);
+            if (!withinPaymentCap(plan.price_vnd, limits.maxAmountVnd)) {
+              return jsonError(400, "INVALID", "payment amount exceeds the configured maximum");
+            }
           }
           return createPayosPayment(params.id, userId, plan.price_vnd, {
             subscriptionPlanId: plan.id,
+            ...(plan.price_usd !== null ? { priceUsd: plan.price_usd } : {}),
           });
         }
-        return createManualPurchase(params.id, userId, plan.price_vnd, {
-          subscriptionPlanId: plan.id,
-        });
+        return createManualPurchase(
+          params.id,
+          userId,
+          { subscriptionPlanId: plan.id },
+          { amountVnd: plan.price_vnd, usdText: plan.price_usd },
+        );
       },
     );
 };
