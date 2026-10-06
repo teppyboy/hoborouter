@@ -312,6 +312,192 @@ describe("legacy VND authoring unchanged", () => {
   });
 });
 
+// Per-field mixed currency authoring (supervisor-approved contract): each
+// money field independently USD text or VND integer; USD fields convert once
+// at the shared creation FX inside the insert transaction; stored *_usd records
+// only fields authored in USD (never fabricated for VND-authored fields);
+// FX stored iff any USD field is present; legacy all-VND stays all-NULL.
+describe("mixed per-field currency authoring", () => {
+  const mixedCases: [string, Record<string, unknown>, Record<string, unknown>][] = [
+    // [name, body, expected stored fields]
+    [
+      "USD price with VND grants",
+      { price_usd: "0.01", credit_vnd: 100000, bonus_vnd: 5000 },
+      {
+        price_vnd: 261,
+        credit_vnd: 100000,
+        bonus_vnd: 5000,
+        price_usd: "0.01",
+        credit_usd: null,
+        bonus_usd: null,
+      },
+    ],
+    [
+      "VND price with USD credit and USD bonus",
+      { price_vnd: 100000, credit_usd: "5", bonus_usd: "0.5" },
+      {
+        price_vnd: 100000,
+        credit_vnd: 130005,
+        bonus_vnd: 13001,
+        price_usd: null,
+        credit_usd: "5",
+        bonus_usd: "0.5",
+      },
+    ],
+    [
+      "VND price with USD credit and default VND bonus",
+      { price_vnd: 100000, credit_usd: "5" },
+      {
+        price_vnd: 100000,
+        credit_vnd: 130005,
+        bonus_vnd: 0,
+        price_usd: null,
+        credit_usd: "5",
+        bonus_usd: null,
+      },
+    ],
+    [
+      "USD price and credit with VND bonus",
+      { price_usd: "1", credit_usd: "0", bonus_vnd: 5000 },
+      {
+        price_vnd: 26001,
+        credit_vnd: 0,
+        bonus_vnd: 5000,
+        price_usd: "1",
+        credit_usd: "0",
+        bonus_usd: null,
+      },
+    ],
+  ];
+  for (const [label, body, expected] of mixedCases) {
+    test(`mixed bundle: ${label}`, async () => {
+      const res = await req(app, "/api/v1/admin/bundles", {
+        method: "POST",
+        cookie: adminCookie,
+        body: { name: label, ...body },
+      });
+      expect(res.status).toBe(201);
+      const row = (await res.json()) as Record<string, unknown>;
+      expect(row).toMatchObject({ ...expected, creation_fx_rate_vnd_per_usd: FX });
+    });
+  }
+
+  test("mixed bundle with zero-credit USD still stores FX and zero grant", async () => {
+    const res = await req(app, "/api/v1/admin/bundles", {
+      method: "POST",
+      cookie: adminCookie,
+      body: { name: "ZeroMix", price_vnd: 100000, credit_usd: "0", bonus_usd: "0" },
+    });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({
+      credit_vnd: 0,
+      bonus_vnd: 0,
+      credit_usd: "0",
+      bonus_usd: "0",
+      price_usd: null,
+      creation_fx_rate_vnd_per_usd: FX,
+    });
+  });
+
+  test("mixed bundles reject duplicated currencies, missing fields, and overflow", async () => {
+    const before = (await q<{ n: number }>(db, "SELECT count(*) AS n FROM credit_bundles"))[0]!.n;
+    for (const body of [
+      { price_usd: "1", price_vnd: 1, credit_usd: "1" },
+      { price_usd: "1", credit_usd: "1", credit_vnd: 1 },
+      { price_usd: "1", credit_usd: "1", bonus_usd: "1", bonus_vnd: 1 },
+      { price_usd: "1", credit_vnd: undefined, credit_usd: undefined }, // credit has neither variant
+      { credit_usd: "5" }, // no price at all
+      { price_vnd: 1, credit_usd: "1.001" }, // invalid mixed USD text
+      { price_usd: "1", credit_vnd: -5 }, // negative mixed VND grant
+      // USD credit "184000000000.00" at FX 25000 -> 4.6e15 VND + bonus 4.5e15 > MAX.
+      { price_vnd: 1, credit_usd: "184000000000.00", bonus_vnd: 4500000000000000 },
+    ]) {
+      const res = await req(app, "/api/v1/admin/bundles", {
+        method: "POST",
+        cookie: adminCookie,
+        body: { name: "BadMixed", ...body },
+      });
+      expect(res.status).toBe(400);
+    }
+    expect((await q<{ n: number }>(db, "SELECT count(*) AS n FROM credit_bundles"))[0]!.n).toBe(
+      before,
+    );
+  });
+
+  test("mixed bundles audit the FX snapshot and authored fields", async () => {
+    const res = await req(app, "/api/v1/admin/bundles", {
+      method: "POST",
+      cookie: adminCookie,
+      body: { name: "MixedAudit", price_vnd: 100000, credit_usd: "5" },
+    });
+    const row = (await res.json()) as { id: string };
+    const audits = await q<{ detail: unknown }>(
+      db,
+      "SELECT detail FROM audit_log WHERE action = 'bundle.create' AND target = ?",
+      row.id,
+    );
+    expect(audits.length).toBe(1);
+    const detail = audits[0]!.detail as Record<string, unknown> | string;
+    const parsed =
+      typeof detail === "string" ? (JSON.parse(detail) as Record<string, unknown>) : detail;
+    expect(parsed).toMatchObject({
+      price_vnd: 100000,
+      credit_vnd: 130005,
+      price_usd: null,
+      credit_usd: "5",
+      creation_fx_rate_vnd_per_usd: FX,
+    });
+  });
+
+  test("mixed plans: USD price with VND credit and VND price with USD credit", async () => {
+    const usdPrice = await req(app, "/api/v1/admin/subscription-plans", {
+      method: "POST",
+      cookie: adminCookie,
+      body: { name: "MixedPlanA", price_usd: "9.99", credit_per_period_vnd: 300000 },
+    });
+    expect(usdPrice.status).toBe(201);
+    expect(await usdPrice.json()).toMatchObject({
+      price_vnd: 259750,
+      credit_per_period_vnd: 300000,
+      price_usd: "9.99",
+      credit_per_period_usd: null,
+      creation_fx_rate_vnd_per_usd: FX,
+    });
+    const usdCredit = await req(app, "/api/v1/admin/subscription-plans", {
+      method: "POST",
+      cookie: adminCookie,
+      body: { name: "MixedPlanB", price_vnd: 200000, credit_per_period_usd: "12" },
+    });
+    expect(usdCredit.status).toBe(201);
+    expect(await usdCredit.json()).toMatchObject({
+      price_vnd: 200000,
+      credit_per_period_vnd: 312012,
+      price_usd: null,
+      credit_per_period_usd: "12",
+      creation_fx_rate_vnd_per_usd: FX,
+    });
+  });
+
+  test("mixed plans reject duplicated currencies, missing fields, and overflow", async () => {
+    for (const body of [
+      { price_usd: "1", price_vnd: 1, credit_per_period_usd: "1" },
+      { price_usd: "1", credit_per_period_usd: "1", credit_per_period_vnd: 1 },
+      { credit_per_period_usd: "5" }, // no price at all
+      { price_vnd: 1 }, // no credit at all
+      { price_vnd: 1, credit_per_period_usd: "1.001" },
+      // USD credit 4.6e15 + USD price ~26001 at FX 25000: individually valid, price is fine, so use credit+... only credit exists for plans; bound is per single grant here, so oversized conversion instead:
+      { price_vnd: 1, credit_per_period_usd: "999999999999.99" },
+    ]) {
+      const res = await req(app, "/api/v1/admin/subscription-plans", {
+        method: "POST",
+        cookie: adminCookie,
+        body: { name: "BadMixedPlan", ...body },
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+});
+
 // Fix-round-1 regressions (review P1s): aggregate grant-sum bound on both
 // USD and legacy VND authoring paths. Run last so the FX mutation here cannot
 // disturb earlier hand-derived fixtures. Transaction atomicity is enforced in

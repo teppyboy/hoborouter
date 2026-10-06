@@ -274,17 +274,55 @@ describe("USD catalog schema", () => {
     ).rejects.toThrow();
   });
 
-  test("credit/bonus USD text without price (orphan non-null group member) rejected", async () => {
-    // Group completeness is defined pairwise from the price column: a lone
-    // non-null member without price_usd is an ambiguous mixed-currency row.
-    await expect(
-      exec(
-        `INSERT INTO credit_bundles
-           (id, name, price_vnd, credit_vnd, bonus_vnd, active, created_at, price_usd, credit_usd, bonus_usd, creation_fx_rate_vnd_per_usd)
-         VALUES ('mixed-b', 'mixed-b', 100000, 100000, 0, true, $1, NULL, '5', '0', 26001)`,
-        [NOW],
-      ),
-    ).rejects.toThrow();
+  test("mixed bundle groups: USD credit/bonus with VND price insert at shared FX", async () => {
+    // Per-field mixed currency (migration 0009): each USD field is authored
+    // independently; FX is required whenever ANY USD field is set.
+    await insertBundle({
+      id: "mixed-b",
+      creditUsd: "5",
+      bonusUsd: "0",
+      fx: 26001,
+    });
+    const [b] = await rows<{
+      price_usd: string | null;
+      credit_usd: string;
+      bonus_usd: string;
+      creation_fx_rate_vnd_per_usd: string;
+    }>(
+      `SELECT price_usd, credit_usd, bonus_usd, creation_fx_rate_vnd_per_usd
+       FROM credit_bundles WHERE id = 'mixed-b'`,
+    );
+    expect(b).toEqual({
+      price_usd: null,
+      credit_usd: "5",
+      bonus_usd: "0",
+      creation_fx_rate_vnd_per_usd: "26001",
+    });
+    // USD price with VND grants is the mirror-image mixed group.
+    await insertBundle({ id: "mixed-b-price", priceUsd: "9.99", fx: 26001 });
+  });
+
+  test("mixed bundle group without FX rejected (FX required for any USD field)", async () => {
+    await expect(insertBundle({ id: "mixed-b-nofx", creditUsd: "5" })).rejects.toThrow();
+  });
+
+  test("mixed plan groups: USD credit with VND price inserts at shared FX", async () => {
+    await insertPlan({ id: "mixed-p", creditUsd: "12", fx: 26001 });
+    const [p] = await rows<{
+      price_usd: string | null;
+      credit_per_period_usd: string;
+      creation_fx_rate_vnd_per_usd: string;
+    }>(
+      `SELECT price_usd, credit_per_period_usd, creation_fx_rate_vnd_per_usd
+       FROM subscription_plans WHERE id = 'mixed-p'`,
+    );
+    expect(p).toEqual({
+      price_usd: null,
+      credit_per_period_usd: "12",
+      creation_fx_rate_vnd_per_usd: "26001",
+    });
+    await insertPlan({ id: "mixed-p-price", priceUsd: "9.99", fx: 26001 });
+    await expect(insertPlan({ id: "mixed-p-nofx", creditUsd: "12" })).rejects.toThrow();
   });
 
   test("non-positive FX rejected; FX bounded above by MAX_SAFE_INTEGER_MONEY", async () => {

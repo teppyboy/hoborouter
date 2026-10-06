@@ -23,13 +23,14 @@ const nonNegInt = (v: number | undefined): v is number =>
 // stays PATCH-editable on existing plans.
 const validRateLimit = (v: number) => Number.isSafeInteger(v) && v >= 1 && v <= 600;
 
-// USD authoring (Task 1): either a legacy all-VND body or an all-USD body —
-// never a mix, never an incomplete USD group. USD texts are exact decimal
-// strings parsed to BigInt cents; VND grants/price are derived ONCE at creation
-// from the canonical payment FX rate read inside the insert transaction and
-// frozen forever after (a later FX change only affects checkout price, never
-// already-promised grants). The payment cap is deliberately NOT applied here:
-// it bounds a single checkout, not catalog item size.
+// Per-field mixed currency authoring: each money field is independently USD
+// text or VND integer — never both variants of one field. USD texts convert
+// ONCE to integer VND at the shared creation FX read inside the insert
+// transaction and are frozen forever after (a later FX change only affects
+// checkout price, never already-promised grants). Stored *_usd records only
+// fields authored in USD — it is never fabricated for a VND-authored field.
+// The payment cap is deliberately NOT applied here: it bounds a single
+// checkout, not catalog item size.
 
 // Strip redundant integer-part leading zeros ("0009.99" -> "9.99") so stored
 // texts are canonical for display; the DB regex tolerates them, the API does
@@ -41,89 +42,149 @@ const canonicalUsd = (text: string): string => {
   return dot === -1 ? intPart : `${intPart}.${trimmed.slice(dot + 1)}`;
 };
 
-interface UsdAmounts {
-  priceVnd: number;
-  priceUsd: string;
-  creditVnd: number;
-  creditUsd: string;
-  bonusVnd: number;
-  bonusUsd: string;
-  fxRateVndPerUsd: number;
+type FieldParse = { ok: true; vnd: number; usd: string | null } | { ok: false; message: string };
+
+interface FieldAmount {
+  vnd: number;
+  // Exact authored USD text, or null when the field was authored in VND.
+  usd: string | null;
 }
 
-// Parse+validate one authored USD text. price must be positive; grants may be
-// zero (usdCentsToVndCeiling rejects non-positive cents, so zero grants are
-// short-circuited to 0 explicitly). Oversized text/conversion parse to null
-// and fail closed. Reads FX inside the caller's transaction; the caller must
-// also insert + audit inside that SAME transaction so the stored row and its
-// audit share one FX snapshot (never a second transaction).
-const resolveUsdAmounts = async (
-  tx: Tx,
-  priceUsdText: string,
-  creditUsdText: string,
-  bonusUsdText: string,
-): Promise<{ ok: true; amounts: UsdAmounts } | { ok: false; message: string }> => {
-  const priceCents = parseUsdCents(priceUsdText);
-  if (priceCents === null || priceCents <= 0n)
+// Parse+validate one authored USD text and convert it once at the shared
+// creation FX. price must be positive; grants may be zero (usdCentsToVndCeiling
+// rejects non-positive cents, so zero grants are short-circuited to 0
+// explicitly). Oversized text/conversion parse to null and fail closed. The
+// caller must convert, insert, and audit inside ONE transaction so the stored
+// row and its audit share one FX snapshot (never a second transaction).
+const convertUsdField = (
+  text: string,
+  label: string,
+  positive: boolean,
+  fxRateVndPerUsd: number,
+): FieldParse => {
+  const cents = parseUsdCents(text);
+  if (cents === null)
     return {
       ok: false,
-      message: "price_usd must be a positive decimal amount with at most 2 decimals",
+      message: `${label} must be a decimal amount with at most 2 decimals`,
     };
-  const creditCents = parseUsdCents(creditUsdText);
-  if (creditCents === null)
+  if (positive && cents <= 0n)
     return {
       ok: false,
-      message: "credit amounts must be decimal values with at most 2 decimals",
+      message: `${label} must be a positive decimal amount with at most 2 decimals`,
     };
-  const bonusCents = parseUsdCents(bonusUsdText);
-  if (bonusCents === null)
-    return {
-      ok: false,
-      message: "bonus_usd must be a decimal amount with at most 2 decimals",
-    };
-  const { usdVndRate } = await readPaymentLimits(tx);
-  const toVnd = (cents: bigint): number | null =>
-    cents === 0n ? 0 : usdCentsToVndCeiling(cents, usdVndRate);
-  const priceVnd = usdCentsToVndCeiling(priceCents, usdVndRate);
-  const creditVnd = toVnd(creditCents);
-  const bonusVnd = toVnd(bonusCents);
-  if (priceVnd === null || creditVnd === null || bonusVnd === null)
+  const vnd = cents === 0n ? 0 : usdCentsToVndCeiling(cents, fxRateVndPerUsd);
+  if (vnd === null)
     return {
       ok: false,
       message: "USD amounts exceed the maximum supported money value",
     };
+  return { ok: true, vnd, usd: canonicalUsd(text) };
+};
+
+const vndField = (vnd: number): FieldParse => ({ ok: true, vnd, usd: null });
+
+const resolveMixedBundleAmounts = async (
+  tx: Tx,
+  body: {
+    price_vnd?: number;
+    credit_vnd?: number;
+    bonus_vnd?: number;
+    price_usd?: string;
+    credit_usd?: string;
+    bonus_usd?: string;
+  },
+): Promise<
+  | {
+      ok: true;
+      price: FieldAmount;
+      credit: FieldAmount;
+      bonus: FieldAmount;
+      fxRateVndPerUsd: number;
+    }
+  | { ok: false; message: string }
+> => {
+  const { usdVndRate } = await readPaymentLimits(tx);
+  const conv = (text: string, label: string, positive: boolean): FieldParse =>
+    convertUsdField(text, label, positive, usdVndRate);
+  const price: FieldParse =
+    body.price_usd !== undefined
+      ? conv(body.price_usd, "price_usd", true)
+      : vndField(body.price_vnd!);
+  if (!price.ok) return price;
+  const credit: FieldParse =
+    body.credit_usd !== undefined
+      ? conv(body.credit_usd, "credit_usd", false)
+      : vndField(body.credit_vnd!);
+  if (!credit.ok) return credit;
+  const bonus: FieldParse =
+    body.bonus_usd !== undefined
+      ? conv(body.bonus_usd, "bonus_usd", false)
+      : vndField(body.bonus_vnd ?? 0);
+  if (!bonus.ok) return bonus;
   // Individually bounded grants can still overflow TOGETHER (settlement would
   // credit an impossible amount). BigInt sum, never Number addition.
-  if (BigInt(creditVnd) + BigInt(bonusVnd) > BigInt(MAX_SAFE_INTEGER_MONEY))
+  if (BigInt(credit.vnd) + BigInt(bonus.vnd) > BigInt(MAX_SAFE_INTEGER_MONEY))
     return {
       ok: false,
       message: "bundle credit and bonus grants together exceed the maximum supported money value",
     };
   return {
     ok: true,
-    amounts: {
-      priceVnd,
-      priceUsd: canonicalUsd(priceUsdText),
-      creditVnd,
-      creditUsd: canonicalUsd(creditUsdText),
-      bonusVnd,
-      bonusUsd: canonicalUsd(bonusUsdText),
-      fxRateVndPerUsd: usdVndRate,
-    },
+    price: { vnd: price.vnd, usd: price.usd },
+    credit: { vnd: credit.vnd, usd: credit.usd },
+    bonus: { vnd: bonus.vnd, usd: bonus.usd },
+    fxRateVndPerUsd: usdVndRate,
   };
 };
 
-const USD_MONEY_KEYS = ["price_usd", "credit_usd", "bonus_usd"] as const;
+const resolveMixedPlanAmounts = async (
+  tx: Tx,
+  body: {
+    price_vnd?: number;
+    credit_per_period_vnd?: number;
+    price_usd?: string;
+    credit_per_period_usd?: string;
+  },
+): Promise<
+  | { ok: true; price: FieldAmount; credit: FieldAmount; fxRateVndPerUsd: number }
+  | { ok: false; message: string }
+> => {
+  const { usdVndRate } = await readPaymentLimits(tx);
+  const conv = (text: string, label: string, positive: boolean): FieldParse =>
+    convertUsdField(text, label, positive, usdVndRate);
+  const price: FieldParse =
+    body.price_usd !== undefined
+      ? conv(body.price_usd, "price_usd", true)
+      : vndField(body.price_vnd!);
+  if (!price.ok) return price;
+  const credit: FieldParse =
+    body.credit_per_period_usd !== undefined
+      ? conv(body.credit_per_period_usd, "credit_per_period_usd", false)
+      : vndField(body.credit_per_period_vnd!);
+  if (!credit.ok) return credit;
+  return {
+    ok: true,
+    price: { vnd: price.vnd, usd: price.usd },
+    credit: { vnd: credit.vnd, usd: credit.usd },
+    fxRateVndPerUsd: usdVndRate,
+  };
+};
 
-// Reject a body that mixes USD and VND money fields, or that names any USD
-// field without the required complete bundle group (bonus_usd optional).
-const bundleUsdBodyError = (body: Record<string, unknown>): string | null => {
-  const usdKeys = USD_MONEY_KEYS.filter((k) => body[k] !== undefined);
-  const vndKeys = ["price_vnd", "credit_vnd", "bonus_vnd"].filter((k) => body[k] !== undefined);
-  if (usdKeys.length === 0) return null;
-  if (vndKeys.length > 0) return "cannot mix USD and VND money fields in one body";
-  if (body.price_usd === undefined || body.credit_usd === undefined)
-    return "USD bundles require price_usd and credit_usd together";
+// Per-field mixed currency: reject a field that names both currency variants,
+// and require price/credit in exactly one variant each (bundle bonus may be
+// omitted and defaults to zero).
+const bundleFieldError = (body: Record<string, unknown>): string | null => {
+  for (const field of ["price", "credit", "bonus"] as const) {
+    const vndKey = `${field}_vnd`;
+    const usdKey = `${field}_usd`;
+    if (body[vndKey] !== undefined && body[usdKey] !== undefined)
+      return `cannot set both ${vndKey} and ${usdKey} for one field`;
+  }
+  if (body.price_vnd === undefined && body.price_usd === undefined)
+    return "bundle requires price_vnd or price_usd";
+  if (body.credit_vnd === undefined && body.credit_usd === undefined)
+    return "bundle requires credit_vnd or credit_usd";
   return null;
 };
 
@@ -170,35 +231,51 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
       async ({ request, body }) => {
         const g = await guard(request);
         if ("error" in g) return g.error;
-        const usdError = bundleUsdBodyError(body);
+        const usdError = bundleFieldError(body);
         if (usdError) return jsonError(400, "INVALID", usdError);
+        const hasAnyUsd =
+          body.price_usd !== undefined ||
+          body.credit_usd !== undefined ||
+          body.bonus_usd !== undefined;
+        // A fully USD-authored body keeps the committed all-USD default
+        // (bonus_usd "0"); mixed bodies default the bonus to zero VND and
+        // leave bonus_usd NULL — never fabricate USD text for a VND grant.
+        const allUsd =
+          body.price_usd !== undefined &&
+          body.credit_usd !== undefined &&
+          body.price_vnd === undefined &&
+          body.credit_vnd === undefined &&
+          body.bonus_vnd === undefined;
+        const normalized = { ...body, bonus_usd: body.bonus_usd ?? (allUsd ? "0" : undefined) };
         const id = crypto.randomUUID();
-        if (body.price_usd !== undefined) {
-          // ONE transaction owns FX read, amount derivation, insert, and
-          // audit: the stored row and its audit always share one FX snapshot.
-          // Validation failures return before any write, so no rollback is
-          // needed and nothing (row/audit) is persisted on rejection.
+        if (hasAnyUsd) {
+          // VND-side values validate before the transaction so rejections
+          // never open one; USD-side values validate inside (they need the FX
+          // read). ONE transaction owns FX read, amount derivation, insert,
+          // and audit: the stored row and its audit always share one FX
+          // snapshot. Validation failures return before any write, so no
+          // rollback is needed and nothing (row/audit) is persisted.
+          if (body.price_vnd !== undefined && !posInt(body.price_vnd))
+            return jsonError(400, "INVALID", "price_vnd must be a positive integer VND amount");
+          if (body.credit_vnd !== undefined && !nonNegInt(body.credit_vnd))
+            return jsonError(400, "INVALID", "credit_vnd must be a non-negative integer");
+          if (body.bonus_vnd !== undefined && !nonNegInt(body.bonus_vnd))
+            return jsonError(400, "INVALID", "bonus_vnd must be a non-negative integer");
           const result = await db.transaction(async (tx) => {
-            const resolved = await resolveUsdAmounts(
-              tx,
-              body.price_usd!,
-              body.credit_usd!,
-              body.bonus_usd ?? "0",
-            );
+            const resolved = await resolveMixedBundleAmounts(tx, normalized);
             if (!resolved.ok) return { ok: false, message: resolved.message } as const;
-            const usd = resolved.amounts;
             const row: Record<string, unknown> = {
               id,
               name: body.name,
-              price_vnd: usd.priceVnd,
-              credit_vnd: usd.creditVnd,
-              bonus_vnd: usd.bonusVnd,
+              price_vnd: resolved.price.vnd,
+              credit_vnd: resolved.credit.vnd,
+              bonus_vnd: resolved.bonus.vnd,
               active: true,
               created_at: Date.now(),
-              price_usd: usd.priceUsd,
-              credit_usd: usd.creditUsd,
-              bonus_usd: usd.bonusUsd,
-              creation_fx_rate_vnd_per_usd: usd.fxRateVndPerUsd,
+              price_usd: resolved.price.usd,
+              credit_usd: resolved.credit.usd,
+              bonus_usd: resolved.bonus.usd,
+              creation_fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd,
             };
             await tx.insert(creditBundles).values(row as typeof creditBundles.$inferInsert);
             await writeAudit(tx, {
@@ -348,20 +425,25 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
       async ({ request, body }) => {
         const g = await guard(request);
         if ("error" in g) return g.error;
-        // Same all-USD or all-VND contract as bundles; both USD fields are
-        // required together (plans have no bonus field).
-        const hasPlanUsd = body.price_usd !== undefined || body.credit_per_period_usd !== undefined;
-        const hasPlanVnd = body.price_vnd !== undefined || body.credit_per_period_vnd !== undefined;
-        if (hasPlanUsd && hasPlanVnd)
-          return jsonError(400, "INVALID", "cannot mix USD and VND money fields in one body");
-        if (
-          hasPlanUsd &&
-          (body.price_usd === undefined || body.credit_per_period_usd === undefined)
-        )
+        // Per-field mixed currency (same contract as bundles): each of
+        // price and credit_per_period is independently USD text or VND
+        // integer, never both variants of one field.
+        if (body.price_vnd !== undefined && body.price_usd !== undefined)
+          return jsonError(400, "INVALID", "cannot set both price_vnd and price_usd for one field");
+        if (body.credit_per_period_vnd !== undefined && body.credit_per_period_usd !== undefined)
           return jsonError(
             400,
             "INVALID",
-            "USD plans require price_usd and credit_per_period_usd together",
+            "cannot set both credit_per_period_vnd and credit_per_period_usd for one field",
+          );
+        const hasPlanUsd = body.price_usd !== undefined || body.credit_per_period_usd !== undefined;
+        if (body.price_vnd === undefined && body.price_usd === undefined)
+          return jsonError(400, "INVALID", "plan requires price_vnd or price_usd");
+        if (body.credit_per_period_vnd === undefined && body.credit_per_period_usd === undefined)
+          return jsonError(
+            400,
+            "INVALID",
+            "plan requires credit_per_period_vnd or credit_per_period_usd",
           );
         if (body.period_days !== undefined && !(body.period_days >= 1))
           return jsonError(400, "INVALID", "period_days must be >= 1");
@@ -372,30 +454,33 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
             "rate_limit_per_minute must be an integer between 1 and 600",
           );
         const id = crypto.randomUUID();
-        if (body.price_usd !== undefined) {
-          // ONE transaction owns FX read, derivation, insert, and audit (same
-          // contract as bundles). Validation failures return before any write.
-          const result = await db.transaction(async (tx) => {
-            const resolved = await resolveUsdAmounts(
-              tx,
-              body.price_usd!,
-              body.credit_per_period_usd!,
-              "0",
+        if (hasPlanUsd) {
+          // VND-side values validate before the transaction (mirrors bundles);
+          // ONE transaction owns FX read, derivation, insert, and audit.
+          // Validation failures return before any write.
+          if (body.price_vnd !== undefined && !posInt(body.price_vnd))
+            return jsonError(400, "INVALID", "price_vnd must be a positive integer VND amount");
+          if (body.credit_per_period_vnd !== undefined && !nonNegInt(body.credit_per_period_vnd))
+            return jsonError(
+              400,
+              "INVALID",
+              "credit_per_period_vnd must be a non-negative integer",
             );
+          const result = await db.transaction(async (tx) => {
+            const resolved = await resolveMixedPlanAmounts(tx, body);
             if (!resolved.ok) return { ok: false, message: resolved.message } as const;
-            const usd = resolved.amounts;
             const row: Record<string, unknown> = {
               id,
               name: body.name,
-              price_vnd: usd.priceVnd,
-              credit_per_period_vnd: usd.creditVnd,
+              price_vnd: resolved.price.vnd,
+              credit_per_period_vnd: resolved.credit.vnd,
               period_days: body.period_days ?? 30,
               rate_limit_per_minute: body.rate_limit_per_minute ?? 15,
               active: true,
               created_at: Date.now(),
-              price_usd: usd.priceUsd,
-              credit_per_period_usd: usd.creditUsd,
-              creation_fx_rate_vnd_per_usd: usd.fxRateVndPerUsd,
+              price_usd: resolved.price.usd,
+              credit_per_period_usd: resolved.credit.usd,
+              creation_fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd,
             };
             await tx.insert(subscriptionPlans).values(row as typeof subscriptionPlans.$inferInsert);
             await writeAudit(tx, {

@@ -246,10 +246,12 @@ export const creditBundles = pgTable(
     // Deactivated, never deleted — past payments keep their FK.
     active: boolean("active").notNull().default(true),
     created_at: big("created_at").notNull(),
-    // Optional USD authoring group: either all four are NULL (legacy VND row,
-    // unchanged behavior) or all four are set together. USD values are exact
-    // decimal texts, never floats; VND grant columns above are frozen at
-    // creation from creation_fx_rate_vnd_per_usd and never recomputed.
+    // Per-field mixed currency (migration 0009): each USD column is authored
+    // independently; the shared creation FX snapshot is required whenever ANY
+    // USD column is set. Legacy all-VND rows and all-USD group rows both still
+    // satisfy this. USD values are exact decimal texts, never floats; VND
+    // grant columns above are frozen at creation from
+    // creation_fx_rate_vnd_per_usd and never recomputed.
     price_usd: text("price_usd"),
     credit_usd: text("credit_usd"),
     bonus_usd: text("bonus_usd"),
@@ -265,9 +267,7 @@ export const creditBundles = pgTable(
     // text; the DB layer tolerates leading zeros and the API normalizes them.
     check(
       "cb_usd_group_complete",
-      sql`(${t.price_usd} IS NULL) = (${t.credit_usd} IS NULL)
-        AND (${t.price_usd} IS NULL) = (${t.bonus_usd} IS NULL)
-        AND (${t.price_usd} IS NULL) = (${t.creation_fx_rate_vnd_per_usd} IS NULL)`,
+      sql`(${t.creation_fx_rate_vnd_per_usd} IS NOT NULL) = (${t.price_usd} IS NOT NULL OR ${t.credit_usd} IS NOT NULL OR ${t.bonus_usd} IS NOT NULL)`,
     ),
     check(
       "cb_price_usd_format",
@@ -303,8 +303,9 @@ export const subscriptionPlans = pgTable(
     // Deactivated, never deleted.
     active: boolean("active").notNull().default(true),
     created_at: big("created_at").notNull(),
-    // Optional USD authoring group (same all-or-nothing contract as bundles):
-    // NULL for legacy VND rows, or all three set together.
+    // Optional USD authoring group (per-field mixed contract, migration 0009):
+    // NULL for legacy VND rows; each USD column otherwise authored
+    // independently with a shared creation FX snapshot.
     price_usd: text("price_usd"),
     credit_per_period_usd: text("credit_per_period_usd"),
     creation_fx_rate_vnd_per_usd: big("creation_fx_rate_vnd_per_usd"),
@@ -320,8 +321,7 @@ export const subscriptionPlans = pgTable(
     check("sp_created_at", intBounded(t.created_at)),
     check(
       "sp_usd_group_complete",
-      sql`(${t.price_usd} IS NULL) = (${t.credit_per_period_usd} IS NULL)
-        AND (${t.price_usd} IS NULL) = (${t.creation_fx_rate_vnd_per_usd} IS NULL)`,
+      sql`(${t.creation_fx_rate_vnd_per_usd} IS NOT NULL) = (${t.price_usd} IS NOT NULL OR ${t.credit_per_period_usd} IS NOT NULL)`,
     ),
     check(
       "sp_price_usd_format",
