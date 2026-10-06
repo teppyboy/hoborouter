@@ -7,7 +7,7 @@ import { PublicLayout } from "../../components/public-layout";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Skeleton } from "../../components/ui/skeleton";
-import { formatVnd, formatTokens } from "../../lib/format";
+import { formatVnd, formatTokens, formatUsdAmountText } from "../../lib/format";
 import { formatProviderLabel } from "../../lib/display";
 import {
   usePublicCatalog,
@@ -63,14 +63,31 @@ function ModelCard({ model }: { model: PublicCatalogModel }) {
   );
 }
 
+// Authored USD catalog text; the same decimal syntax the formatter enforces.
+const isUsdPriceText = (t: string | null | undefined): t is string =>
+  typeof t === "string" && /^\d+(\.\d{1,2})?$/.test(t);
+
 function PlanCard({ plan }: { plan: PublicSubscriptionPlan }) {
+  // Authored-USD plans lead with the exact price text and keep the VND price
+  // as the server quote; legacy rows keep the pure-VND display. Model token
+  // prices are untouched (server-converted VND per 1M).
+  const authored = isUsdPriceText(plan.price_usd);
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">{plan.name}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-1 text-sm">
-        <div className="font-mono text-lg">{formatVnd(plan.price_vnd)}</div>
+        <div className="font-mono text-lg">
+          {isUsdPriceText(plan.price_usd)
+            ? formatUsdAmountText(plan.price_usd)
+            : formatVnd(plan.price_vnd)}
+        </div>
+        {authored && (
+          <div className="text-xs text-muted-foreground">
+            ≈ {formatVnd(plan.price_vnd)} (VND estimate)
+          </div>
+        )}
         <div className="text-muted-foreground">
           {formatVnd(plan.credit_per_period_vnd)} credit / {plan.period_days} days
         </div>

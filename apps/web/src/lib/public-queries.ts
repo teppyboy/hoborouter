@@ -49,6 +49,9 @@ export interface PublicSubscriptionPlan {
   credit_per_period_vnd: number;
   period_days: number;
   rate_limit_per_minute?: number;
+  /** Authored exact USD price text; null on legacy VND rows. */
+  price_usd?: string | null;
+  credit_per_period_usd?: string | null;
 }
 
 export function usePublicInstance() {
