@@ -49,15 +49,19 @@ const GLOBAL_KEYS = [
   "HTMLSelectElement",
   "DocumentFragment",
   "SVGElement",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
 ] as const;
 const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
 let jsdomWindow: { close: () => void } | null = null;
 
 beforeAll(async () => {
-  const win = new JSDOM("", { url: "http://localhost:5173" }).window as unknown as Record<
-    string,
-    unknown
-  >;
+  const win = new JSDOM("", {
+    url: "http://localhost:5173",
+    // Radix Tabs calls requestAnimationFrame in a mount effect; jsdom only
+    // provides it with pretendToBeVisual.
+    pretendToBeVisual: true,
+  }).window as unknown as Record<string, unknown>;
   for (const k of GLOBAL_KEYS) {
     originals[k] = Object.getOwnPropertyDescriptor(globalThis, k);
   }
@@ -88,6 +92,8 @@ beforeAll(async () => {
     HTMLSelectElement: win.HTMLSelectElement,
     DocumentFragment: win.DocumentFragment,
     SVGElement: win.SVGElement,
+    requestAnimationFrame: win.requestAnimationFrame,
+    cancelAnimationFrame: win.cancelAnimationFrame,
   };
   for (const [k, v] of Object.entries(values)) {
     (globalThis as Record<string, unknown>)[k] = v;
@@ -185,6 +191,18 @@ const setInput = (el: Element, value: string) => {
 const buttonByText = (text: string) =>
   Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === text);
 
+const cpaTabs = () => Array.from(document.querySelectorAll('[role="tab"]'));
+
+/** Radix Tabs activate on mousedown; click too so both activation paths fire. */
+const openTab = async (name: string) => {
+  const tab = cpaTabs().find((t) => t.textContent?.trim() === name);
+  if (!tab) throw new Error(`tab not found: ${name}`);
+  const MouseEvent = winEvents().MouseEvent;
+  tab.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  click(tab);
+  await flush();
+};
+
 const buttonByLabel = (label: string) =>
   document.querySelector<HTMLButtonElement>(`button[aria-label="${label.replace(/"/g, '\\"')}"]`);
 
@@ -226,7 +244,8 @@ async function mountPage() {
     </QueryClientProvider>,
   );
   await waitFor(
-    () => document.getElementById("cpa-key-new") !== null && bodyText().includes("round-robin"),
+    () =>
+      document.querySelector('[role="tablist"]') !== null && bodyText().includes("Healthy (200)"),
     "page rendered",
   );
   return qc;
@@ -244,6 +263,53 @@ async function confirmAction(label: string) {
   click(buttonByText("Confirm")!);
   await flush();
 }
+
+// --- tabbed page structure -------------------------------------------------
+
+test("cpa page renders a labelled tablist; only the active tab's content mounts", async () => {
+  await mountPage();
+  expect(document.querySelector('[role="tablist"]')).not.toBeNull();
+  expect(cpaTabs().map((t) => t.textContent?.trim())).toEqual([
+    "Health",
+    "Config",
+    "Routing",
+    "Access keys",
+    "Auth files",
+    "Models",
+  ]);
+  // Default tab: Health selected; other panels are unmounted by Radix.
+  expect(
+    cpaTabs()
+      .filter((t) => t.getAttribute("aria-selected") === "true")
+      .map((t) => t.textContent?.trim()),
+  ).toEqual(["Health"]);
+  expect(document.getElementById("cpa-key-new")).toBeNull();
+  expect(bodyText()).toContain("CPA health");
+});
+
+test("each tab panel is a bounded internal scroll container", async () => {
+  await mountPage();
+  const panels = document.querySelectorAll('[role="tabpanel"]');
+  expect(panels.length).toBeGreaterThan(0);
+  for (const panel of panels) {
+    expect(panel.className).toContain("overflow-y-auto");
+    expect(panel.className).toContain("max-h-");
+  }
+});
+
+test("tab switching shows the right section and unmounts the others", async () => {
+  await mountPage();
+  await openTab("Access keys");
+  expect(document.getElementById("cpa-key-new")).not.toBeNull();
+  expect(bodyText()).not.toContain("CPA health");
+  await openTab("Models");
+  expect(document.getElementById("cpa-alias-channel")).not.toBeNull();
+  expect(bodyText()).toContain("CPA models");
+  expect(bodyText()).toContain("CPA upstream models");
+  await openTab("Config");
+  expect(document.getElementById("cpa-config-yaml")).not.toBeNull();
+  expect(document.getElementById("cpa-key-new")).toBeNull();
+});
 
 // --- pure form state -------------------------------------------------------
 
@@ -356,6 +422,7 @@ test("secret inputs are password fields (write-only, never echoed)", () => {
 
 test("config save PUTs {config_yaml, confirm:true} after explicit confirm", async () => {
   await mountPage();
+  await openTab("Config");
   responder = async () => jsonRes(200, { ok: true });
   setInput(document.getElementById("cpa-config-yaml")!, "port: 8317\n");
   await confirmAction("Save config");
@@ -369,6 +436,7 @@ test("config save PUTs {config_yaml, confirm:true} after explicit confirm", asyn
 
 test("config save cancel sends nothing", async () => {
   await mountPage();
+  await openTab("Config");
   setInput(document.getElementById("cpa-config-yaml")!, "port: 8317\n");
   click(buttonByText("Save config")!);
   await waitFor(() => bodyText().includes("Confirm action"), "confirm dialog open");
@@ -379,6 +447,7 @@ test("config save cancel sends nothing", async () => {
 
 test("flag toggle PATCHes {flag, value}", async () => {
   await mountPage();
+  await openTab("Routing");
   await confirmAction("Set debug on");
   const patch = callsFor("PATCH", "/api/v1/admin/cpa/config/flags")[0]!;
   expect(patch).toBeDefined();
@@ -387,6 +456,7 @@ test("flag toggle PATCHes {flag, value}", async () => {
 
 test("routing strategy PUTs {strategy}", async () => {
   await mountPage();
+  await openTab("Routing");
   await confirmAction("Use fill-first");
   const put = callsFor("PUT", "/api/v1/admin/cpa/routing/strategy")[0]!;
   expect(put).toBeDefined();
@@ -395,6 +465,7 @@ test("routing strategy PUTs {strategy}", async () => {
 
 test("retry PUT sends only filled fields", async () => {
   await mountPage();
+  await openTab("Routing");
   setInput(document.getElementById("cpa-retry-request")!, "4");
   setInput(document.getElementById("cpa-retry-interval")!, "30");
   await confirmAction("Apply retry tuning");
@@ -405,6 +476,7 @@ test("retry PUT sends only filled fields", async () => {
 
 test("proxy URL set and clear hit the exact dangerous contracts", async () => {
   await mountPage();
+  await openTab("Routing");
   setInput(document.getElementById("cpa-proxy-url")!, "http://proxy.internal:8080");
   await confirmAction("Set proxy URL");
   const put = callsFor("PUT", "/api/v1/admin/cpa/config/proxy-url")[0]!;
@@ -421,6 +493,7 @@ test("proxy URL set and clear hit the exact dangerous contracts", async () => {
 
 test("api key add PATCHes {old,new} with the same secret value", async () => {
   await mountPage();
+  await openTab("Access keys");
   setInput(document.getElementById("cpa-key-new")!, "new-secret");
   await confirmAction("Add key");
   const patch = callsFor("PATCH", "/api/v1/admin/cpa/api-keys")[0]!;
@@ -430,6 +503,7 @@ test("api key add PATCHes {old,new} with the same secret value", async () => {
 
 test("api key delete DELETEs {key, confirm:true}", async () => {
   await mountPage();
+  await openTab("Access keys");
   setInput(document.getElementById("cpa-key-delete")!, "old-secret");
   await confirmAction("Delete key");
   const del = callsFor("DELETE", "/api/v1/admin/cpa/api-keys")[0]!;
@@ -439,6 +513,7 @@ test("api key delete DELETEs {key, confirm:true}", async () => {
 
 test("auth file disable PATCHes status; delete DELETEs {names, confirm:true}; refresh POSTs", async () => {
   await mountPage();
+  await openTab("Auth files");
   setInput(document.getElementById("cpa-auth-name")!, "cred.json");
   await confirmAction("Disable auth file");
   const patch = callsFor("PATCH", "/api/v1/admin/cpa/auth-files/status")[0]!;
@@ -460,6 +535,7 @@ test("auth file disable PATCHes status; delete DELETEs {names, confirm:true}; re
 
 test("model alias PUT sends {channel, aliases}; exclusions PUT sends {channel, models}", async () => {
   await mountPage();
+  await openTab("Models");
   setInput(document.getElementById("cpa-alias-channel")!, "gemini");
   setInput(document.getElementById("cpa-alias-json")!, '[{"name":"gemini-2.5-pro","alias":"pro"}]');
   await confirmAction("Save aliases");
@@ -480,6 +556,7 @@ test("model alias PUT sends {channel, aliases}; exclusions PUT sends {channel, m
 
 test("mutation failure closes the confirm dialog and re-enables the trigger", async () => {
   await mountPage();
+  await openTab("Routing");
   responder = async (call) => {
     if (call.init?.method === "PATCH")
       return jsonRes(502, {

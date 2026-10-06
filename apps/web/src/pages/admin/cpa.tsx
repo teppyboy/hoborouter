@@ -6,7 +6,7 @@
 // those sections are write-only forms against the mutation contracts.
 // Every mutation passes through an explicit confirm dialog; secret inputs are
 // write-only (type=password) and are never rendered back.
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CheckCircle2, XCircle } from "lucide-react";
@@ -16,6 +16,9 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import type { ColumnDef } from "@tanstack/react-table";
+import { DataTable, PageHeader } from "../../components/page";
 import {
   Dialog,
   DialogContent,
@@ -24,7 +27,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../components/ui/dialog";
-import { PageHeader } from "../../components/page";
 import { api } from "../../lib/api";
 import { AdminGate, useAdminQuery } from "./shared";
 
@@ -882,7 +884,57 @@ function AuthFilesCard() {
   );
 }
 
-// ── Model mappings (read: /cpa/models; writes: alias + exclusions) ─────────
+// ── CPA models table (read: /cpa/models; moved here from the System page) ──
+
+export function CpaModelsTable() {
+  const models = useAdminQuery<{ data: CpaModel[] }>(
+    ["admin", "cpa-models"],
+    "/api/v1/admin/cpa/models",
+  );
+  const columns: ColumnDef<CpaModel, unknown>[] = [
+    {
+      accessorKey: "id",
+      header: "Model",
+      cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
+    },
+    {
+      accessorKey: "owned_by",
+      header: "Owned by",
+      cell: (c) => (
+        <span className="font-mono text-xs">{(c.getValue() as string | null) ?? "—"}</span>
+      ),
+    },
+    {
+      accessorKey: "mapped",
+      header: "Mapped",
+      cell: ({ row }) => {
+        const ids = row.original.mapped_public_ids;
+        return ids && ids.length > 0 ? (
+          <span className="font-mono text-xs">{ids.join(", ")}</span>
+        ) : (
+          <Badge variant="outline">unmapped</Badge>
+        );
+      },
+    },
+  ];
+  return (
+    <div className="space-y-2">
+      <h2 className="text-sm font-medium">CPA models</h2>
+      {models.isPending ? (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : models.error ? (
+        <p className="flex items-center gap-2 text-sm text-destructive">
+          <XCircle className="size-4" />
+          {models.error instanceof Error ? models.error.message : "CPA unreachable"}
+        </p>
+      ) : (
+        <DataTable columns={columns} data={models.data.data} empty="No CPA models" />
+      )}
+    </div>
+  );
+}
+
+// ── Model mappings (writes: alias + exclusions) ───────────────────────────
 
 interface CpaModel {
   id: string;
@@ -891,12 +943,75 @@ interface CpaModel {
   mapped_public_ids?: string[];
 }
 
-function ModelMappingsCard() {
+/**
+ * Map client-visible alias/display-name IDs back to original upstream model
+ * IDs, from CPA's config as returned by the redacted management proxy
+ * (GET /api/v1/admin/cpa/management/config → /v0/management/config).
+ *
+ * Why: CPA's /v1/models list reports alias IDs once oauth model aliases are
+ * configured, so the admin page would otherwise show e.g. "MiMo v2.5" instead
+ * of the original "xiaomi/mimo-v2.5". Alias entries use CPA's yaml-style keys
+ * ("model-alias", "display-name") — the same shape admin-cpa-mutations.ts
+ * sends to PATCH /v0/management/oauth-model-alias. Secrets in the config are
+ * redacted server-side; alias entries carry no secret field names.
+ */
+export function aliasToOriginalMap(config: unknown): Map<string, string> {
+  const map = new Map<string, string>();
+  if (typeof config !== "object" || config === null) return map;
+  const oauth = (config as { oauth?: unknown }).oauth;
+  if (typeof oauth !== "object" || oauth === null) return map;
+  const raw = (oauth as Record<string, unknown>)["model-alias"];
+  if (typeof raw !== "object" || raw === null) return map;
+  for (const entries of Object.values(raw as Record<string, unknown>)) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const e = entry as Record<string, unknown>;
+      const name = e.name;
+      if (typeof name !== "string" || !name) continue;
+      if (typeof e.alias === "string" && e.alias && e.alias !== name) map.set(e.alias, name);
+      const display = e["display-name"];
+      if (typeof display === "string" && display && display !== name) map.set(display, name);
+    }
+  }
+  return map;
+}
+
+export function ModelMappingsCard() {
   const { confirm, dialog } = useConfirm();
   const models = useAdminQuery<{ data: CpaModel[] }>(
     ["admin", "cpa-models"],
     "/api/v1/admin/cpa/models",
   );
+  const config = useAdminQuery<unknown>(
+    ["admin", "cpa-config"],
+    "/api/v1/admin/cpa/management/config",
+  );
+  const aliasMap = useMemo(() => aliasToOriginalMap(config.data), [config.data]);
+  const resolved = useMemo(() => {
+    const merged = new Map<string, CpaModel>();
+    for (const model of models.data?.data ?? []) {
+      const id = aliasMap.get(model.id) ?? model.id;
+      const previous = merged.get(id);
+      merged.set(
+        id,
+        previous
+          ? {
+              id,
+              owned_by: previous.owned_by ?? model.owned_by,
+              mapped: previous.mapped || model.mapped,
+              mapped_public_ids: [
+                ...new Set([
+                  ...(previous.mapped_public_ids ?? []),
+                  ...(model.mapped_public_ids ?? []),
+                ]),
+              ],
+            }
+          : { ...model, id },
+      );
+    }
+    return [...merged.values()];
+  }, [models.data, aliasMap]);
   const alias = useCpaMutation("PUT", "/api/v1/admin/cpa/model-alias", "Model aliases saved");
   const exclusions = useCpaMutation(
     "PUT",
@@ -921,16 +1036,16 @@ function ModelMappingsCard() {
             <p className="text-sm text-destructive">
               {models.error instanceof Error ? models.error.message : "CPA unreachable"}
             </p>
-          ) : (models.data?.data ?? []).length === 0 ? (
+          ) : resolved.length === 0 ? (
             <p className="text-sm text-muted-foreground">No CPA models</p>
           ) : (
             <ul className="space-y-1">
-              {(models.data?.data ?? []).map((m) => (
-                <li key={m.id} className="flex items-center gap-2 text-sm">
-                  <span className="font-mono text-xs">{m.id}</span>
-                  {m.mapped_public_ids && m.mapped_public_ids.length > 0 ? (
+              {resolved.map((model) => (
+                <li key={model.id} className="flex items-center gap-2 text-sm">
+                  <span className="font-mono text-xs">{model.id}</span>
+                  {model.mapped_public_ids && model.mapped_public_ids.length > 0 ? (
                     <span className="font-mono text-xs text-muted-foreground">
-                      → {m.mapped_public_ids.join(", ")}
+                      → {model.mapped_public_ids.join(", ")}
                     </span>
                   ) : (
                     <Badge variant="outline">unmapped</Badge>
@@ -940,6 +1055,9 @@ function ModelMappingsCard() {
             </ul>
           )}
         </div>
+        <p className="text-xs text-muted-foreground">
+          IDs are original upstream model names; configured aliases are resolved for display.
+        </p>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="space-y-1">
             <Label htmlFor="cpa-alias-channel">Alias channel</Label>
@@ -1031,19 +1149,47 @@ function ModelMappingsCard() {
 
 export default function AdminCpaPage() {
   const health = useAdminQuery<unknown>(["admin", "cpa-health"], "/api/v1/admin/cpa/health");
+  // Tabs keep each section inside a bounded scroll container so the page
+  // itself never scrolls; every tab panel is keyboard-scrollable.
+  const panelClass = "max-h-[calc(100vh-12rem)] space-y-4 overflow-y-auto pr-1";
+  const tabs: { value: string; label: string; content: React.ReactNode }[] = [
+    { value: "health", label: "Health", content: <CpaHealthCard /> },
+    { value: "config", label: "Config", content: <ConfigCard /> },
+    { value: "routing", label: "Routing", content: <RoutingCard /> },
+    { value: "keys", label: "Access keys", content: <ApiKeysCard /> },
+    { value: "auth", label: "Auth files", content: <AuthFilesCard /> },
+    {
+      value: "models",
+      label: "Models",
+      content: (
+        <>
+          <CpaModelsTable />
+          <ModelMappingsCard />
+        </>
+      ),
+    },
+  ];
   return (
-    <div className="space-y-4">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <PageHeader
         title="CPA management"
         description="CLIProxyAPI health, config, routing, keys, credentials and model mappings."
       />
       <AdminGate query={health}>
-        <CpaHealthCard />
-        <ConfigCard />
-        <RoutingCard />
-        <ApiKeysCard />
-        <AuthFilesCard />
-        <ModelMappingsCard />
+        <Tabs defaultValue="health" className="flex min-h-0 flex-col">
+          <TabsList aria-label="CPA management sections">
+            {tabs.map((t) => (
+              <TabsTrigger key={t.value} value={t.value}>
+                {t.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {tabs.map((t) => (
+            <TabsContent key={t.value} value={t.value} className={panelClass}>
+              {t.content}
+            </TabsContent>
+          ))}
+        </Tabs>
       </AdminGate>
     </div>
   );
