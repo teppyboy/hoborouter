@@ -24,6 +24,7 @@ export type {
 export {
   applySubscriptionExpiry,
   cancelSubscription,
+  resumeSubscription,
   ensureSubscriptionWallet,
   extendOrCreateSubscription,
   getActiveUnexpiredSubscription,

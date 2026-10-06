@@ -203,6 +203,70 @@ export async function cancelSubscription(
 }
 
 /**
+ * Renew/resume (undoes the cancel marker): clears canceled_at on the active
+ * subscription so it re-enters the normal renewal path. Renewal itself is
+ * payment-driven (plan settlement), so this moves NO money — no credit, no
+ * refund, no new charge; the period end and expiry behavior are untouched.
+ * Idempotent: repeating on an already-renewed row returns it unchanged with
+ * no extra audit row. Null when the workspace has no active subscription.
+ */
+export async function resumeSubscription(
+  tx: Tx,
+  workspaceId: string,
+  now: number,
+): Promise<{ id: string; current_period_end: number } | null> {
+  const rows = await tx
+    .select({
+      id: subscriptions.id,
+      canceled_at: subscriptions.canceled_at,
+      current_period_end: subscriptions.current_period_end,
+    })
+    .from(subscriptions)
+    .where(and(eq(subscriptions.workspace_id, workspaceId), eq(subscriptions.status, "active")));
+  const existing = rows[0];
+  if (!existing) return null;
+  if (existing.canceled_at === null) {
+    return { id: existing.id, current_period_end: existing.current_period_end };
+  }
+  const cas = await tx
+    .update(subscriptions)
+    .set({ canceled_at: null })
+    .where(
+      and(eq(subscriptions.id, existing.id), eq(subscriptions.canceled_at, existing.canceled_at)),
+    )
+    .returning({ id: subscriptions.id });
+  if (cas.length !== 1) {
+    // A concurrent resume won the CAS; the marker is cleared either way, so
+    // re-read instead of failing the (idempotent) request.
+    const fresh = await tx
+      .select({
+        id: subscriptions.id,
+        canceled_at: subscriptions.canceled_at,
+        current_period_end: subscriptions.current_period_end,
+      })
+      .from(subscriptions)
+      .where(eq(subscriptions.id, existing.id));
+    const cur = fresh[0];
+    if (!cur || cur.canceled_at !== null) {
+      throw new WalletError(
+        "conflict",
+        `subscription ${existing.id} changed concurrently during resume`,
+      );
+    }
+    return { id: cur.id, current_period_end: cur.current_period_end };
+  }
+  await tx.insert(auditLog).values({
+    id: crypto.randomUUID(),
+    workspace_id: workspaceId,
+    action: "subscription.renew",
+    target: existing.id,
+    detail: { periodEnd: existing.current_period_end },
+    created_at: now,
+  });
+  return { id: existing.id, current_period_end: existing.current_period_end };
+}
+
+/**
  * O5 lazy expiry: while the active subscription's period has ended, forfeit
  * the currently available credit (balance - reserved) with an adjustment debit
  * memo 'subscription expired' on the subscription wallet.

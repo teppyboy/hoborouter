@@ -716,6 +716,24 @@ export function SubscriptionStatusCard({
     },
   });
 
+  // Renew (undo cancel): clears the cancel marker so the subscription
+  // re-enters the normal renewal path. No money moves here — no refund, no
+  // credit, no new charge; the current period is untouched.
+  const renew = useMutation({
+    mutationFn: () =>
+      api<{ id: string; status: string; period_end: number }>(
+        `/api/v1/workspaces/${workspaceId}/subscription`,
+        { method: "PUT" },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["wallet", workspaceId] });
+      toast("Subscription renewed — renewal re-enabled for the next period");
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof ApiError ? err.message : "Renew failed");
+    },
+  });
+
   const usd = formatUsdFromVnd(subscription.balance, rate);
   return (
     <div className="min-w-0 rounded-lg border border-border p-4">
@@ -740,20 +758,30 @@ export function SubscriptionStatusCard({
       </p>
       {!subscription.expired && (
         <div className="mt-2 flex flex-wrap items-center gap-3">
-          <Button
-            variant="destructive"
-            size="sm"
-            disabled={cancel.isPending}
-            onClick={() => cancel.mutate()}
-          >
-            {cancel.isPending ? "Canceling…" : "Cancel subscription"}
-          </Button>
+          {subscription.canceled ? (
+            <Button size="sm" disabled={renew.isPending} onClick={() => renew.mutate()}>
+              {renew.isPending ? "Renewing…" : "Renew"}
+            </Button>
+          ) : (
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={cancel.isPending}
+              onClick={() => cancel.mutate()}
+            >
+              {cancel.isPending ? "Canceling…" : "Cancel subscription"}
+            </Button>
+          )}
           <CurrencyToggle currency={currency} rate={rate} onChange={setCurrency} />
         </div>
       )}
       <p className="mt-2 text-xs text-muted-foreground">
-        Canceling stops renewal only (will not renew): credit stays usable until the period ends,
-        then unused credit is forfeited. {usd !== null ? "Shown in USD from the VND ledger." : ""}
+        {subscription.expired
+          ? "The period has ended; unused credit is forfeited. Paying for a plan again starts a new period."
+          : subscription.canceled
+            ? "Renew re-enables renewal (no charge now): the next plan payment renews the period. Credit stays usable until the period ends, then unused credit is forfeited."
+            : "Canceling stops renewal only (will not renew): credit stays usable until the period ends, then unused credit is forfeited."}{" "}
+        {usd !== null ? "Shown in USD from the VND ledger." : ""}
       </p>
     </div>
   );
