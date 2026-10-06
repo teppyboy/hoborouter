@@ -246,12 +246,45 @@ export const creditBundles = pgTable(
     // Deactivated, never deleted — past payments keep their FK.
     active: boolean("active").notNull().default(true),
     created_at: big("created_at").notNull(),
+    // Optional USD authoring group: either all four are NULL (legacy VND row,
+    // unchanged behavior) or all four are set together. USD values are exact
+    // decimal texts, never floats; VND grant columns above are frozen at
+    // creation from creation_fx_rate_vnd_per_usd and never recomputed.
+    price_usd: text("price_usd"),
+    credit_usd: text("credit_usd"),
+    bonus_usd: text("bonus_usd"),
+    creation_fx_rate_vnd_per_usd: big("creation_fx_rate_vnd_per_usd"),
   },
   (t) => [
     check("cb_price_vnd", sql`${t.price_vnd} > 0 AND ${t.price_vnd} <= ${MAX_BOUND}`),
     check("cb_credit_vnd", intBounded(t.credit_vnd)),
     check("cb_bonus_vnd", intBounded(t.bonus_vnd)),
     check("cb_created_at", intBounded(t.created_at)),
+    // Plain unsigned decimal text with at most two fractional digits. The
+    // format check precedes the numeric cast so the cast never sees invalid
+    // text; the DB layer tolerates leading zeros and the API normalizes them.
+    check(
+      "cb_usd_group_complete",
+      sql`(${t.price_usd} IS NULL) = (${t.credit_usd} IS NULL)
+        AND (${t.price_usd} IS NULL) = (${t.bonus_usd} IS NULL)
+        AND (${t.price_usd} IS NULL) = (${t.creation_fx_rate_vnd_per_usd} IS NULL)`,
+    ),
+    check(
+      "cb_price_usd_format",
+      sql`${t.price_usd} IS NULL OR (${t.price_usd} ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND ${t.price_usd}::numeric > 0 AND ${t.price_usd}::numeric <= ${MAX_BOUND})`,
+    ),
+    check(
+      "cb_credit_usd_format",
+      sql`${t.credit_usd} IS NULL OR (${t.credit_usd} ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND ${t.credit_usd}::numeric >= 0 AND ${t.credit_usd}::numeric <= ${MAX_BOUND})`,
+    ),
+    check(
+      "cb_bonus_usd_format",
+      sql`${t.bonus_usd} IS NULL OR (${t.bonus_usd} ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND ${t.bonus_usd}::numeric >= 0 AND ${t.bonus_usd}::numeric <= ${MAX_BOUND})`,
+    ),
+    check(
+      "cb_creation_fx_rate_vnd_per_usd",
+      sql`${t.creation_fx_rate_vnd_per_usd} IS NULL OR (${t.creation_fx_rate_vnd_per_usd} > 0 AND ${t.creation_fx_rate_vnd_per_usd} <= ${MAX_BOUND})`,
+    ),
   ],
 );
 
@@ -270,6 +303,11 @@ export const subscriptionPlans = pgTable(
     // Deactivated, never deleted.
     active: boolean("active").notNull().default(true),
     created_at: big("created_at").notNull(),
+    // Optional USD authoring group (same all-or-nothing contract as bundles):
+    // NULL for legacy VND rows, or all three set together.
+    price_usd: text("price_usd"),
+    credit_per_period_usd: text("credit_per_period_usd"),
+    creation_fx_rate_vnd_per_usd: big("creation_fx_rate_vnd_per_usd"),
   },
   (t) => [
     check("sp_price_vnd", sql`${t.price_vnd} > 0 AND ${t.price_vnd} <= ${MAX_BOUND}`),
@@ -280,6 +318,23 @@ export const subscriptionPlans = pgTable(
       sql`${t.rate_limit_per_minute} >= 1 AND ${t.rate_limit_per_minute} <= 600`,
     ),
     check("sp_created_at", intBounded(t.created_at)),
+    check(
+      "sp_usd_group_complete",
+      sql`(${t.price_usd} IS NULL) = (${t.credit_per_period_usd} IS NULL)
+        AND (${t.price_usd} IS NULL) = (${t.creation_fx_rate_vnd_per_usd} IS NULL)`,
+    ),
+    check(
+      "sp_price_usd_format",
+      sql`${t.price_usd} IS NULL OR (${t.price_usd} ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND ${t.price_usd}::numeric > 0 AND ${t.price_usd}::numeric <= ${MAX_BOUND})`,
+    ),
+    check(
+      "sp_credit_per_period_usd_format",
+      sql`${t.credit_per_period_usd} IS NULL OR (${t.credit_per_period_usd} ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND ${t.credit_per_period_usd}::numeric >= 0 AND ${t.credit_per_period_usd}::numeric <= ${MAX_BOUND})`,
+    ),
+    check(
+      "sp_creation_fx_rate_vnd_per_usd",
+      sql`${t.creation_fx_rate_vnd_per_usd} IS NULL OR (${t.creation_fx_rate_vnd_per_usd} > 0 AND ${t.creation_fx_rate_vnd_per_usd} <= ${MAX_BOUND})`,
+    ),
   ],
 );
 
