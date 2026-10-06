@@ -37,15 +37,31 @@ const overviewCopy = {
     vi: "Chưa có endpoint nhật ký mức sử dụng",
   },
   noUsage: { en: "No requests with usage", vi: "Không có request nào có mức sử dụng" },
+  retry: { en: "Retry", vi: "Thử lại" },
+  loading: { en: "Loading overview…", vi: "Đang tải tổng quan…" },
+  // Visible only to screen readers: the per-bar tooltip is hover-only, so the
+  // chart needs an accessible name that names its content.
+  chartAria: {
+    en: "Bar chart of daily spend over the last 30 days.",
+    vi: "Biểu đồ cột chi tiêu mỗi ngày trong 30 ngày gần đây.",
+  },
+  successRateHint: {
+    en: "Share of successful requests among eligible requests (requests with a model and token usage) in the last 30 days — not limited to the 10 recent rows below.",
+    vi: "Tỷ lệ request thành công trong số các request đủ điều kiện (có mô hình và mức sử dụng token) trong 30 ngày gần đây — không chỉ giới hạn ở 10 request gần đây bên dưới.",
+  },
 } as const;
 
 function StatTile({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="rounded-md border border-border px-4 py-3">
-      <p className="text-xs text-muted-foreground" title={title}>
+    // min-w-0 + truncate: long VND amounts must never blow out the 2-col
+    // mobile grid; the grid item clips instead of overflowing the viewport.
+    <div className="min-w-0 rounded-md border border-border px-4 py-3">
+      <p className="truncate text-xs text-muted-foreground" title={title}>
         {label}
       </p>
-      <p className="mt-1 font-mono text-xl tabular-nums">{value}</p>
+      <p className="mt-1 truncate font-mono text-lg tabular-nums sm:text-xl" title={value}>
+        {value}
+      </p>
     </div>
   );
 }
@@ -65,26 +81,31 @@ function fillDaily30(daily: { day: string; spend_vnd: number }[]) {
 
 /** Simple inline CSS bar chart: one bar per day, height scaled to max. */
 function BarChart({ data, rate }: { data: { label: string; value: number }[]; rate?: number }) {
+  const chartAria = useLocaleEntry(overviewCopy.chartAria);
   const max = Math.max(...data.map((d) => d.value), 1);
   const maxValue = Math.max(...data.map((d) => d.value));
   return (
     <div>
-      <div className="flex h-32 items-end gap-1">
-        {data.map((d) => (
-          <div key={d.label} className="group relative flex h-full min-w-0 flex-1 items-end">
-            <div
-              className={`mx-auto w-full max-w-3 rounded-sm ${
-                d.value > 0 ? "bg-foreground/70 group-hover:bg-foreground" : "bg-foreground/10"
-              }`}
-              style={{
-                height: d.value > 0 ? `${Math.max((d.value / max) * 100, 2)}%` : "2px",
-              }}
-            />
-            <span className="pointer-events-none absolute -top-6 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs group-hover:block">
-              {d.label}: {formatUsdFromVnd(d.value, rate) ?? formatVnd(d.value)}
-            </span>
-          </div>
-        ))}
+      {/* role=img + aria-label: the bars are decorative divs whose only data
+          surface (hover tooltip) is invisible to keyboards and touch. */}
+      <div role="img" aria-label={chartAria}>
+        <div className="flex h-32 items-end gap-1">
+          {data.map((d) => (
+            <div key={d.label} className="group relative flex h-full min-w-0 flex-1 items-end">
+              <div
+                className={`mx-auto w-full max-w-3 rounded-sm ${
+                  d.value > 0 ? "bg-foreground/70 group-hover:bg-foreground" : "bg-foreground/10"
+                }`}
+                style={{
+                  height: d.value > 0 ? `${Math.max((d.value / max) * 100, 2)}%` : "2px",
+                }}
+              />
+              <span className="pointer-events-none absolute -top-6 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs group-hover:block">
+                {d.label}: {formatUsdFromVnd(d.value, rate) ?? formatVnd(d.value)}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
       <ChartFooter data={data} maxValue={maxValue} rate={rate} />
     </div>
@@ -123,12 +144,19 @@ export default function OverviewPage() {
   const spendLabel = useLocaleEntry(overviewCopy.spend);
   const tokensLabel = useLocaleEntry(overviewCopy.tokens);
   const successRateLabel = useLocaleEntry(overviewCopy.successRate);
+  const successRateHint = useLocaleEntry(overviewCopy.successRateHint);
+  const loadingLabel = useLocaleEntry(overviewCopy.loading);
 
   if (summary.isPending) {
     return (
       <div className="space-y-4">
         <OverviewHeader />
-        <Skeleton className="h-64 w-full" />
+        {/* role=status announces the wait to screen readers even though the
+            skeleton itself is silent. */}
+        <div role="status">
+          <span className="sr-only">{loadingLabel}</span>
+          <Skeleton className="h-64 w-full" />
+        </div>
       </div>
     );
   }
@@ -137,7 +165,14 @@ export default function OverviewPage() {
     return (
       <div className="space-y-4">
         <OverviewHeader />
-        {err.status === 404 ? <SummaryUnavailableState /> : <ErrorState message={err.message} />}
+        {err.status === 404 ? (
+          <SummaryUnavailableState />
+        ) : (
+          <>
+            <ErrorState message={err.message} />
+            <RetryButton onClick={() => summary.refetch()} />
+          </>
+        )}
       </div>
     );
   }
@@ -164,11 +199,7 @@ export default function OverviewPage() {
           value={formatUsdFromVnd(t.spend_vnd, rate) ?? formatVnd(t.spend_vnd)}
         />
         <StatTile label={tokensLabel} value={formatTokens(t.input_tokens + t.output_tokens)} />
-        <StatTile
-          label={successRateLabel}
-          value={successRate}
-          title="Share of successful requests among eligible requests (requests with a model and token usage) in the last 30 days — not limited to the 10 recent rows below."
-        />
+        <StatTile label={successRateLabel} value={successRate} title={successRateHint} />
       </div>
       <div className="rounded-md border border-border p-4">
         <SpendPerDayLabel />
@@ -234,6 +265,20 @@ function NoUsageState() {
   return <EmptyState title={useLocaleEntry(overviewCopy.noUsage)} />;
 }
 
+/** Manual refetch for transient failures — the ErrorState alone is a dead end. */
+function RetryButton({ onClick }: { onClick: () => void }) {
+  const label = useLocaleEntry(overviewCopy.retry);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-md border border-border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+    >
+      {label}
+    </button>
+  );
+}
+
 function RecentRequests({ workspaceId }: { workspaceId: string | null }) {
   const logs = useRequestLogs(workspaceId, 10);
   const rate = useUsdVndRate(workspaceId).data;
@@ -243,16 +288,23 @@ function RecentRequests({ workspaceId }: { workspaceId: string | null }) {
   const statusLabel = useLocaleEntry(overviewCopy.status);
   const tokensLabel = useLocaleEntry(overviewCopy.tokens);
   const costLabel = useLocaleEntry(overviewCopy.cost);
+  const loadingLabel = useLocaleEntry(overviewCopy.loading);
   return (
     <div>
       <RecentRequestsLabel />
       {logs.isPending ? (
-        <Skeleton className="h-40 w-full" />
+        <div role="status">
+          <span className="sr-only">{loadingLabel}</span>
+          <Skeleton className="h-40 w-full" />
+        </div>
       ) : logs.isError ? (
         (logs.error as ApiError).status === 404 ? (
           <LogsUnavailableState />
         ) : (
-          <ErrorState message={(logs.error as ApiError).message} />
+          <>
+            <ErrorState message={(logs.error as ApiError).message} />
+            <RetryButton onClick={() => logs.refetch()} />
+          </>
         )
       ) : visibleRows(logs.data).length === 0 ? (
         <NoUsageState />
@@ -271,11 +323,17 @@ function RecentRequests({ workspaceId }: { workspaceId: string | null }) {
             <TableBody>
               {visibleRows(logs.data).map((r) => (
                 <TableRow key={r.id}>
-                  <TableCell className="font-mono text-xs">
+                  {/* whitespace-nowrap: a wrapped date reads as two rows on
+                      mobile; the table wrapper scrolls horizontally instead. */}
+                  <TableCell className="whitespace-nowrap font-mono text-xs">
                     {formatDate(new Date(r.created_at))}
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{r.public_model}</TableCell>
-                  <TableCell className="font-mono text-xs">{formatStatusLabel(r.status)}</TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-xs">
+                    {r.public_model}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-xs">
+                    {formatStatusLabel(r.status)}
+                  </TableCell>
                   <TableCell className="text-right font-mono text-xs">
                     {formatTokens(r.input_tokens + r.output_tokens)}
                   </TableCell>
