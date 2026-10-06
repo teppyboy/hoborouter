@@ -143,6 +143,48 @@ export function Amount({
 }
 
 /**
+ * One grant amount in the selected display currency. Own metadata wins: an
+ * authored `*_usd` text renders verbatim (never a rate-recomputed
+ * reinterpretation of it); only legacy VND-authored grants use the rate
+ * conversion, and the frozen integer VND grant is the fallback everywhere.
+ */
+function grantText(
+  usd: string | null | undefined,
+  vnd: number,
+  currency: DisplayCurrency,
+  rate: number | undefined,
+): string {
+  if (currency === "USD") {
+    if (isUsdText(usd)) return formatUsdAmountText(usd);
+    if (hasRate(rate)) {
+      const converted = formatUsdFromVnd(vnd, rate);
+      if (converted !== null) return converted;
+    }
+  }
+  return formatVnd(vnd);
+}
+
+/**
+ * Bonus line: shown for an authored positive USD bonus even when the frozen
+ * `bonus_vnd` is 0; a legacy VND bonus only exists when `bonus_vnd > 0`.
+ * Authored USD text wins over conversion in USD mode; VND mode keeps the
+ * integer VND grant, falling back to the authored USD text when no VND
+ * equivalent was ever derived.
+ */
+function bonusText(
+  usd: string | null | undefined,
+  vnd: number,
+  currency: DisplayCurrency,
+  rate: number | undefined,
+): string | null {
+  const authored = isUsdText(usd) && Number(usd) > 0;
+  if (!authored && vnd <= 0) return null;
+  if (authored && (currency === "USD" || vnd <= 0)) return `+${formatUsdAmountText(usd!)} bonus`;
+  if (currency === "USD" && hasRate(rate)) return `+${formatUsdFromVnd(vnd, rate)} bonus`;
+  return `+ ${formatVnd(vnd)} bonus`;
+}
+
+/**
  * One card price in the selected display currency. Authored-USD rows lead
  * with the exact `price_usd` text (no FX needed) and pair it with the
  * server's current `price_vnd` quote, labeled as an estimate because the
@@ -339,7 +381,7 @@ export function BundleCards({
           body: JSON.stringify(provider === "payos" ? { provider } : {}),
         },
       ),
-    onSuccess: async (payment) => {
+    onSuccess: async (payment: { id: string; status: string; checkout_url: string }) => {
       void queryClient.invalidateQueries({ queryKey: ["payments", workspaceId] });
       // Same redirect rule as the top-up: an absolute checkout URL must be a
       // full browser navigation; a relative path (manual) stays in-app.
@@ -352,7 +394,7 @@ export function BundleCards({
       toast("Payment created — waiting for admin confirmation");
       onNavigate(`/billing/payments?payment=${payment.id}`);
     },
-    onError: (err) => {
+    onError: (err: unknown) => {
       toast.error(err instanceof ApiError ? err.message : "Purchase failed");
     },
   });
@@ -402,7 +444,9 @@ export function BundleCards({
           currency={currency}
           rate={rate}
           onChange={setCurrency}
-          usdAvailable={bundles.some((b) => isUsdText(b.price_usd))}
+          usdAvailable={bundles.some(
+            (b) => isUsdText(b.price_usd) || isUsdText(b.credit_usd) || isUsdText(b.bonus_usd),
+          )}
         />
       </div>
 
@@ -427,23 +471,26 @@ export function BundleCards({
               </div>
               <div className="text-sm">
                 <p className="font-mono">
-                  {currency === "USD" && hasRate(rate)
-                    ? `${formatUsdFromVnd(bundle.credit_vnd, rate)} credit`
-                    : `${formatVnd(bundle.credit_vnd)} credit`}
+                  {grantText(bundle.credit_usd, bundle.credit_vnd, currency, rate)} credit
                 </p>
-                {bundle.bonus_vnd > 0 && (
-                  <p className="font-mono text-xs text-emerald-600 dark:text-emerald-400">
-                    {currency === "USD" && hasRate(rate)
-                      ? `+${formatUsdFromVnd(bundle.bonus_vnd, rate)} bonus`
-                      : `+ ${formatVnd(bundle.bonus_vnd)} bonus`}
+                {(() => {
+                  const bonus = bonusText(bundle.bonus_usd, bundle.bonus_vnd, currency, rate);
+                  return bonus ? (
+                    <p className="font-mono text-xs text-emerald-600 dark:text-emerald-400">
+                      {bonus}
+                    </p>
+                  ) : null;
+                })()}
+                {isUsdText(bundle.credit_usd) ? (
+                  <p className="text-xs text-muted-foreground">
+                    Credit is the exact authored USD amount; the VND grant is fixed at creation.
                   </p>
-                )}
-                {isUsdText(bundle.price_usd) && (
+                ) : isUsdText(bundle.price_usd) ? (
                   <p className="text-xs text-muted-foreground">
                     Credit is a fixed VND amount set at creation; USD shows the current-rate
                     equivalent.
                   </p>
-                )}
+                ) : null}
               </div>
               <Button
                 className="mt-auto w-full"
@@ -503,7 +550,7 @@ export function PlanCards({
           body: JSON.stringify(provider === "payos" ? { provider } : {}),
         },
       ),
-    onSuccess: async (payment) => {
+    onSuccess: async (payment: { id: string; status: string; checkout_url: string }) => {
       void queryClient.invalidateQueries({ queryKey: ["payments", workspaceId] });
       void queryClient.invalidateQueries({ queryKey: ["wallet", workspaceId] });
       // Same redirect rule as the bundle purchase: absolute URL = provider
@@ -516,7 +563,7 @@ export function PlanCards({
       toast("Payment created — waiting for admin confirmation");
       onNavigate(`/billing/payments?payment=${payment.id}`);
     },
-    onError: (err) => {
+    onError: (err: unknown) => {
       toast.error(err instanceof ApiError ? err.message : "Purchase failed");
     },
   });
@@ -566,7 +613,9 @@ export function PlanCards({
           currency={currency}
           rate={rate}
           onChange={setCurrency}
-          usdAvailable={plans.some((p) => isUsdText(p.price_usd))}
+          usdAvailable={plans.some(
+            (p) => isUsdText(p.price_usd) || isUsdText(p.credit_per_period_usd),
+          )}
         />
       </div>
 
@@ -591,21 +640,29 @@ export function PlanCards({
               </div>
               <div className="text-sm">
                 <p className="font-mono">
-                  {currency === "USD" && hasRate(rate)
-                    ? `${formatUsdFromVnd(plan.credit_per_period_vnd, rate)} credit / ${plan.period_days} days`
-                    : `${formatVnd(plan.credit_per_period_vnd)} credit / ${plan.period_days} days`}
+                  {grantText(
+                    plan.credit_per_period_usd,
+                    plan.credit_per_period_vnd,
+                    currency,
+                    rate,
+                  )}{" "}
+                  credit / {plan.period_days} days
                 </p>
                 {!!plan.rate_limit_per_minute && (
                   <p className="text-xs text-muted-foreground">
                     Up to {plan.rate_limit_per_minute} requests per minute on subscription credit
                   </p>
                 )}
-                {isUsdText(plan.price_usd) && (
+                {isUsdText(plan.credit_per_period_usd) ? (
+                  <p className="text-xs text-muted-foreground">
+                    Credit is the exact authored USD amount; the VND grant is fixed at creation.
+                  </p>
+                ) : isUsdText(plan.price_usd) ? (
                   <p className="text-xs text-muted-foreground">
                     Credit is a fixed VND amount set at creation; USD shows the current-rate
                     equivalent.
                   </p>
-                )}
+                ) : null}
               </div>
               <Button
                 className="mt-auto w-full"
@@ -654,7 +711,7 @@ export function SubscriptionStatusCard({
       void queryClient.invalidateQueries({ queryKey: ["wallet", workspaceId] });
       toast("Subscription canceled — credit stays usable until the period ends");
     },
-    onError: (err) => {
+    onError: (err: unknown) => {
       toast.error(err instanceof ApiError ? err.message : "Cancel failed");
     },
   });

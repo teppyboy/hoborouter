@@ -7,8 +7,26 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // lib/auth runs createAuthClient (window.location.origin) at module load;
-// stub a minimal window so the SSR render test can import the page.
-(globalThis as { window?: unknown }).window ??= { location: { origin: "http://localhost" } };
+// stub a minimal window so the SSR render test can import the page. The stub
+// includes matchMedia so a later test file in the same bun process (globalThis
+// leakage across files) that renders ThemeToggle under this window does not
+// crash; the previous value is restored after this file's tests.
+const REAL_WINDOW = (globalThis as { window?: unknown }).window;
+(globalThis as { window?: unknown }).window ??= {
+  location: { origin: "http://localhost" },
+  matchMedia: () => ({
+    matches: false,
+    media: "",
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+  }),
+};
+import { afterAll } from "bun:test";
+afterAll(() => {
+  (globalThis as { window?: unknown }).window = REAL_WINDOW;
+});
 const { BundleCards } = await import("../apps/web/src/pages/billing/bundles");
 const { formatLedgerMemoLabel } = await import("../apps/web/src/lib/display");
 

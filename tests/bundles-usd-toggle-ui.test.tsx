@@ -351,10 +351,40 @@ test("authored USD price shows the exact price_usd text even without any FX rate
   expect(m.container.textContent).toContain("259.750 ₫");
   // USD rows still allow the toggle without a wallet rate.
   expect(m.toggleButton()?.textContent).toBe("Show VND");
-  // Credit is the actual frozen VND grant (no rate: shown in VND).
+  // Credit renders its OWN authored USD metadata exactly, never a
+  // rate-recomputed equivalent.
+  expect(m.container.textContent).toContain("$5.00 credit");
+  expect(m.container.textContent).toContain("exact authored USD amount");
+});
+
+test("VND mode shows the frozen integer VND grant for USD-credit rows", () => {
+  const m = mountCards(BundleCards, { rate: undefined, bundles: USD_BUNDLES });
+  const btn = m.toggleButton();
+  if (!btn) throw new Error("toggle missing");
+  m.click(btn);
+  // Integer VND display/history preserved; no re-derived USD text.
   expect(m.container.textContent).toContain("130.005 ₫ credit");
-  // Fixed-at-creation explanation for USD rows.
-  expect(m.container.textContent).toContain("fixed VND amount set at creation");
+  expect(m.container.textContent).not.toContain("$5.00 credit");
+  const back = m.toggleButton();
+  if (!back) throw new Error("toggle missing");
+  m.click(back);
+  expect(m.container.textContent).toContain("$5.00 credit");
+});
+
+test("toggle is usable when only credit or bonus USD metadata exists", () => {
+  // No authored price, but an authored USD credit still enables exact USD display.
+  const m = mountCards(BundleCards, {
+    rate: undefined,
+    bundles: [usdBundle({ price_usd: undefined, credit_usd: "5" })],
+  });
+  expect(m.toggleButton()?.textContent).toBe("Show VND");
+  expect(m.container.textContent).toContain("$5.00 credit");
+  // Authored USD bonus alone enables the toggle too.
+  const m2 = mountCards(BundleCards, {
+    rate: undefined,
+    bundles: [usdBundle({ price_usd: undefined, credit_usd: undefined, bonus_usd: "1" })],
+  });
+  expect(m2.toggleButton()?.textContent).toBe("Show VND");
 });
 
 test("VND toggle on a USD row shows the server quote and labels it an estimate", () => {
@@ -372,21 +402,70 @@ test("VND toggle on a USD row shows the server quote and labels it an estimate",
   expect(m.priceText("u1")).toBe("$9.99");
 });
 
-test("authored USD plan shows the exact price and keeps the VND grant credit", () => {
+// --- authored USD plan display (own per-period metadata) -------------------
+
+test("authored USD bonus displays even when bonus_vnd is zero; legacy VND bonus still converts", () => {
+  // Authored bonus_usd exact text with zero frozen VND (no fabricated line,
+  // no rate-based reinterpretation).
+  const m = mountCards(BundleCards, {
+    rate: undefined,
+    bundles: [usdBundle({ bonus_usd: "2.5", bonus_vnd: 0 })],
+  });
+  expect(m.container.textContent).toContain("+$2.50 bonus");
+  // Zero-authored USD bonus stays hidden.
+  const m0 = mountCards(BundleCards, {
+    rate: undefined,
+    bundles: [usdBundle({ bonus_usd: "0", bonus_vnd: 0 })],
+  });
+  expect(m0.container.textContent).not.toContain("bonus");
+  // Legacy VND bonus on a USD-credit row keeps the rate-based conversion.
+  const mLegacy = mountCards(BundleCards, {
+    rate: RATE,
+    bundles: [usdBundle({ bonus_usd: undefined, bonus_vnd: 10_000 })],
+  });
+  expect(mLegacy.container.textContent).toContain("+$0.38"); // 10000 / 26000
+});
+
+test("authored USD credit is never reinterpreted through the rate", () => {
+  // credit_usd "5.10" with frozen grant 130005 at rate 26000 would convert
+  // to $5.00; the exact authored text must win.
+  const m = mountCards(BundleCards, {
+    rate: RATE,
+    bundles: [usdBundle({ credit_usd: "5.10", credit_vnd: 130_005 })],
+  });
+  expect(m.container.textContent).toContain("$5.10 credit");
+  expect(m.container.textContent).not.toContain("$5.00 credit");
+});
+
+test("authored USD plan shows the exact price and its own USD per-period credit", () => {
   const m = mountCards(PlanCards, { rate: undefined, plans: USD_PLANS });
   expect(m.priceText("up1")).toBe("$9.99");
   expect(m.toggleButton()?.textContent).toBe("Show VND");
+  // Exact authored per-period credit, no rate needed.
+  expect(m.container.textContent).toContain("$12.00 credit / 30 days");
+  expect(m.container.textContent).not.toContain("$11.99");
+  // VND mode keeps the frozen integer VND grant.
+  const btn = m.toggleButton();
+  if (!btn) throw new Error("toggle missing");
+  m.click(btn);
   expect(m.container.textContent).toContain("312.012 ₫ credit / 30 days");
-});
-
-test("USD credit equivalent uses the actual frozen VND grant at the canonical rate", () => {
-  const m = mountCards(BundleCards, {
-    rate: RATE,
-    bundles: [usdBundle({ bonus_vnd: 10_000 })],
+  // Authored per-period credit alone enables the toggle.
+  const m2 = mountCards(PlanCards, {
+    rate: undefined,
+    plans: [
+      {
+        id: "up2",
+        name: "Credit-only USD",
+        price_vnd: 259_750,
+        credit_per_period_vnd: 312_012,
+        period_days: 30,
+        price_usd: undefined,
+        credit_per_period_usd: "12",
+      },
+    ],
   });
-  // 130005 / 26000 -> $5.00; actual grant, not credit_usd recomputed.
-  expect(m.container.textContent).toContain("$5.00 credit");
-  expect(m.container.textContent).toContain("+$0.38");
+  expect(m2.toggleButton()?.textContent).toBe("Show VND");
+  expect(m2.container.textContent).toContain("$12.00 credit / 30 days");
 });
 
 test("catalog envelope rate wins over the wallet rate", async () => {
