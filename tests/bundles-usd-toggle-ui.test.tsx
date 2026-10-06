@@ -80,7 +80,6 @@ afterAll(() => {
 
 // @ts-expect-error relative specifier has no declaration file under tests tsconfig
 const { createRoot } = await import("../apps/web/node_modules/react-dom/client");
-// @ts-expect-error relative specifier has no declaration file under tests tsconfig
 const { BundleCards, PlanCards, SubscriptionStatusCard } =
   await import("../apps/web/src/pages/billing/bundles");
 import type { SubscriptionInfo } from "../apps/web/src/pages/billing/bundles";
