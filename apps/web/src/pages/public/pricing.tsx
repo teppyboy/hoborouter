@@ -68,10 +68,13 @@ const isUsdPriceText = (t: string | null | undefined): t is string =>
   typeof t === "string" && /^\d+(\.\d{1,2})?$/.test(t);
 
 function PlanCard({ plan }: { plan: PublicSubscriptionPlan }) {
-  // Authored-USD plans lead with the exact price text and keep the VND price
-  // as the server quote; legacy rows keep the pure-VND display. Model token
-  // prices are untouched (server-converted VND per 1M).
+  // Each money field renders its OWN metadata: authored-USD price leads with
+  // the exact text and keeps the VND quote as the server estimate; authored
+  // per-period credit renders its exact USD text (never rate-recomputed)
+  // with the frozen VND grant as secondary; legacy rows keep the pure-VND
+  // display. Model token prices are untouched (server-converted VND per 1M).
   const authored = isUsdPriceText(plan.price_usd);
+  const authoredCredit = isUsdPriceText(plan.credit_per_period_usd);
   return (
     <Card>
       <CardHeader>
@@ -89,7 +92,15 @@ function PlanCard({ plan }: { plan: PublicSubscriptionPlan }) {
           </div>
         )}
         <div className="text-muted-foreground">
-          {formatVnd(plan.credit_per_period_vnd)} credit / {plan.period_days} days
+          {authoredCredit
+            ? `${formatUsdAmountText(plan.credit_per_period_usd!)} credit`
+            : `${formatVnd(plan.credit_per_period_vnd)} credit`}{" "}
+          / {plan.period_days} days
+          {authoredCredit && (
+            <span className="block">
+              VND grant {formatVnd(plan.credit_per_period_vnd)} fixed at creation
+            </span>
+          )}
         </div>
         {plan.rate_limit_per_minute != null && (
           <div className="text-muted-foreground">

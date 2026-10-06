@@ -6,7 +6,6 @@
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
-import type { LocaleState } from "../apps/web/src/lib/i18n/locale";
 
 const GLOBAL_KEYS = ["window", "document", "localStorage", "location"] as const;
 const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
