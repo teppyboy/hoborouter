@@ -228,9 +228,7 @@ function mount() {
     },
     /** Click USD/VND inside one field's own toggle group (unique aria-label). */
     async clickCurrency(groupLabel: string, currency: "USD" | "VND") {
-      const group = h.container.querySelector(
-        `div[role="group"][aria-label="${groupLabel}"]`,
-      );
+      const group = h.container.querySelector(`div[role="group"][aria-label="${groupLabel}"]`);
       if (!group) throw new Error(`currency group not found: ${groupLabel}`);
       const btn = [...group.querySelectorAll("button")].find(
         (b) => b.textContent?.trim() === currency,

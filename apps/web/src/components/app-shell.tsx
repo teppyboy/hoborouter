@@ -66,7 +66,10 @@ interface NavItem {
 }
 
 const NAV_GROUPS: { label: LocaleEntry | ""; items: NavItem[] }[] = [
-  { label: "", items: [{ label: { en: "Overview", vi: "Tổng quan" }, to: "/", icon: LayoutDashboard }] },
+  {
+    label: "",
+    items: [{ label: { en: "Overview", vi: "Tổng quan" }, to: "/", icon: LayoutDashboard }],
+  },
   {
     label: { en: "AI Gateway", vi: "AI Gateway" },
     items: [
@@ -85,7 +88,10 @@ const NAV_GROUPS: { label: LocaleEntry | ""; items: NavItem[] }[] = [
       { label: { en: "Payments", vi: "Giao dịch" }, to: "/billing/payments", icon: CreditCard },
     ],
   },
-  { label: "", items: [{ label: { en: "Settings", vi: "Cài đặt" }, to: "/settings", icon: Settings }] },
+  {
+    label: "",
+    items: [{ label: { en: "Settings", vi: "Cài đặt" }, to: "/settings", icon: Settings }],
+  },
 ];
 
 const ADMIN_NAV: NavItem[] = [
@@ -393,9 +399,7 @@ function NavLinks({
     <>
       {NAV_GROUPS.map((group, gi) => (
         <div key={gi} className={cn(gi > 0 && "mt-4")}>
-          {group.label && !collapsed && (
-            <GroupHeading label={group.label} />
-          )}
+          {group.label && !collapsed && <GroupHeading label={group.label} />}
           {group.items.map((item) => (
             <NavLink
               key={item.to}

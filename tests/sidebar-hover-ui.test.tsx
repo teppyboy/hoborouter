@@ -176,7 +176,9 @@ function aside(): HTMLElement {
 
 function hoverAside(kind: "enter" | "leave") {
   act(() => {
-    aside().dispatchEvent(new MouseEvent(kind === "enter" ? "mouseover" : "mouseout", { bubbles: true }));
+    aside().dispatchEvent(
+      new MouseEvent(kind === "enter" ? "mouseover" : "mouseout", { bubbles: true }),
+    );
   });
 }
 

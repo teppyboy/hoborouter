@@ -144,7 +144,11 @@ function mountLogin(): {
   });
   const router = createRouter({
     routeTree: createRootRoute({ component: () => null }).addChildren([
-      createRoute({ getParentRoute: () => createRootRoute(), path: "/login", component: LoginPage }),
+      createRoute({
+        getParentRoute: () => createRootRoute(),
+        path: "/login",
+        component: LoginPage,
+      }),
     ]),
     history: createMemoryHistory({ initialEntries: ["/login"] }),
   });
@@ -205,7 +209,10 @@ test("the persisted locale survives a simulated reload (fresh store rehydrate)",
   useLocaleStore.setState({ locale: "en" }); // fresh-session default before rehydrate
   // Set the stored payload AFTER the setState above: persist writes back to
   // storage on every state change, so setting it first would be overwritten.
-  window.localStorage.setItem("hbr-locale", JSON.stringify({ state: { locale: "vi" }, version: 0 }));
+  window.localStorage.setItem(
+    "hbr-locale",
+    JSON.stringify({ state: { locale: "vi" }, version: 0 }),
+  );
   await useLocaleStore.persist.rehydrate();
   const mounted = mountLogin();
   try {
@@ -273,7 +280,11 @@ test("the app-shell sidebar is English at the default locale", () => {
   // collapsed; a collapsed rail renders no nav text, which would fail the
   // label assertions for isolation reasons rather than behavior.
   useSidebarStore.setState({ collapsed: false });
-  const html = renderStaticChrome(<AppShell><p>page body</p></AppShell>);
+  const html = renderStaticChrome(
+    <AppShell>
+      <p>page body</p>
+    </AppShell>,
+  );
   expect(html).toContain("Overview");
   expect(html).toContain("AI Gateway");
   expect(html).not.toContain("Tổng quan");
@@ -282,7 +293,11 @@ test("the app-shell sidebar is English at the default locale", () => {
 test("clicking the shell's own toggle translates the sidebar EN → VI", async () => {
   useLocaleStore.getState().setLocale("en");
   useSidebarStore.setState({ collapsed: false }); // see isolation note above
-  const mounted = mountChrome(<AppShell><p>page body</p></AppShell>);
+  const mounted = mountChrome(
+    <AppShell>
+      <p>page body</p>
+    </AppShell>,
+  );
   try {
     expect(mounted.text()).toContain("Overview");
     await clickToggle(mounted.container);
@@ -301,7 +316,11 @@ test("clicking the shell's own toggle translates the sidebar EN → VI", async (
 
 test("clicking the toggle translates the public header/footer chrome EN → VI", async () => {
   useLocaleStore.getState().setLocale("en");
-  const mounted = mountChrome(<PublicLayout instance={null}><p>landing body</p></PublicLayout>);
+  const mounted = mountChrome(
+    <PublicLayout instance={null}>
+      <p>landing body</p>
+    </PublicLayout>,
+  );
   try {
     expect(mounted.text()).toContain("Sign in");
     expect(mounted.text()).toContain("Sign up");
