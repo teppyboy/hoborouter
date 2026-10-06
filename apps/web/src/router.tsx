@@ -48,6 +48,7 @@ const Privacy = lazy(() => import("./pages/legal/privacy"));
 // Public marketing/support pages (each renders its own PublicLayout).
 const Pricing = lazy(() => import("./pages/public/pricing"));
 const Quickstart = lazy(() => import("./pages/public/quickstart"));
+const About = lazy(() => import("./pages/public/about"));
 
 function Page({ children }: { children: React.ReactNode }) {
   return <div className="p-4 sm:p-6">{children}</div>;
@@ -176,6 +177,11 @@ const publicRoutes = [
     getParentRoute: () => rootRoute,
     path: "/docs/quickstart",
     component: () => <Quickstart />,
+  }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/about",
+    component: () => <About />,
   }),
 ];
 

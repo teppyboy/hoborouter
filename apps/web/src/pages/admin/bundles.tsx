@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../components/ui/dialog";
-import { DataTable, PageHeader } from "../../components/page";
+import { DataTable, PageHeader, ScrollPanel } from "../../components/page";
 import { formatDate, formatUsdAmountText, formatVnd } from "../../lib/format";
 import { ApiError, api } from "../../lib/api";
 import { AdminGate, useAdminQuery } from "./shared";
@@ -152,8 +152,7 @@ function AmountField({
   onChange,
   usdPlaceholder,
   vndPlaceholder,
-  usdInvalid,
-  vndInvalid,
+  error,
 }: {
   idPrefix: string;
   label: string;
@@ -162,8 +161,8 @@ function AmountField({
   onChange: (f: AmountInput) => void;
   usdPlaceholder: string;
   vndPlaceholder: string;
-  usdInvalid: boolean;
-  vndInvalid: boolean;
+  /** Validation message for the ACTIVE currency's text; null = no error. */
+  error: string | null;
 }) {
   return (
     <div className="grid gap-1">
@@ -184,8 +183,9 @@ function AmountField({
           onChange={(e) => onChange({ ...field, usd: e.target.value })}
           placeholder={usdPlaceholder}
           inputMode="decimal"
-          aria-invalid={usdInvalid}
-          className={usdInvalid ? "border-destructive" : undefined}
+          aria-invalid={error !== null}
+          aria-describedby={error !== null ? `${idPrefix}-error` : undefined}
+          className={error !== null ? "border-destructive" : undefined}
         />
       ) : (
         <Input
@@ -194,9 +194,15 @@ function AmountField({
           onChange={(e) => onChange({ ...field, vnd: e.target.value })}
           placeholder={vndPlaceholder}
           inputMode="numeric"
-          aria-invalid={vndInvalid}
-          className={vndInvalid ? "border-destructive" : undefined}
+          aria-invalid={error !== null}
+          aria-describedby={error !== null ? `${idPrefix}-error` : undefined}
+          className={error !== null ? "border-destructive" : undefined}
         />
+      )}
+      {error !== null && (
+        <p id={`${idPrefix}-error`} className="text-xs text-destructive">
+          {error}
+        </p>
       )}
     </div>
   );
@@ -208,7 +214,7 @@ function CreateField({
   value,
   onChange,
   placeholder,
-  invalid,
+  error,
   decimal,
 }: {
   id: string;
@@ -216,9 +222,11 @@ function CreateField({
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
-  invalid?: boolean;
+  /** Validation message; null = no error. Empty text stays unflagged. */
+  error?: string | null;
   decimal?: boolean;
 }) {
+  const invalid = error != null && error !== "";
   return (
     <div className="grid gap-1">
       <Label htmlFor={id}>{label}</Label>
@@ -229,8 +237,14 @@ function CreateField({
         placeholder={placeholder}
         inputMode={decimal ? "decimal" : "numeric"}
         aria-invalid={invalid}
+        aria-describedby={invalid ? `${id}-error` : undefined}
         className={invalid ? "border-destructive" : undefined}
       />
+      {invalid && (
+        <p id={`${id}-error`} className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -312,8 +326,10 @@ function CatalogTable<T extends CatalogRow>({
   renaming,
   setRenaming,
   renameExtra,
+  tableLabel,
 }: {
   data: T[];
+  tableLabel: string;
   detailLabel: string;
   detail: (row: T) => string;
   onRename: (id: string, name: string) => void;
@@ -382,12 +398,15 @@ function CatalogTable<T extends CatalogRow>({
   ];
   return (
     <>
-      <DataTable
-        columns={columns}
-        data={data}
-        empty={`No ${detailLabel.toLowerCase()} yet`}
-        globalFilter=""
-      />
+      {/* Long catalogs scroll inside their own panel instead of growing the page. */}
+      <ScrollPanel label={tableLabel} stickyHeader>
+        <DataTable
+          columns={columns}
+          data={data}
+          empty={`No ${detailLabel.toLowerCase()} yet`}
+          globalFilter=""
+        />
+      </ScrollPanel>
       <RenameDialog
         row={renaming}
         onRename={onRename}
@@ -416,14 +435,42 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
   const creditUsdT = parseUsdAmount(credit.usd);
   const bonusUsdT = parseUsdAmount(bonus.usd);
   // Only the field's own active currency is validated; the hidden text of a
-  // toggled field is dormant state, never part of the request body.
+  // toggled field is dormant state, never part of the request body. A blank
+  // bonus is valid: it is submitted as 0, matching the server default.
   const valid =
     name.trim().length > 0 &&
     (price.currency === "USD"
       ? priceUsdT !== null && Number(priceUsdT) > 0
       : priceN !== null && priceN > 0) &&
     (credit.currency === "USD" ? creditUsdT !== null : creditN !== null && creditN >= 0) &&
-    (bonus.currency === "USD" ? bonusUsdT !== null : bonusN !== null && bonusN >= 0);
+    (bonus.currency === "USD"
+      ? bonusUsdT !== null || bonus.usd.trim() === ""
+      : (bonusN !== null && bonusN >= 0) || bonus.vnd.trim() === "");
+
+  const priceError =
+    price.currency === "USD"
+      ? price.usd !== "" && priceUsdT === null
+        ? "Enter a USD amount like 9.99 (up to two decimals, no sign)."
+        : null
+      : price.vnd !== "" && (priceN === null || priceN <= 0)
+        ? "Enter a whole VND amount greater than 0."
+        : null;
+  const creditError =
+    credit.currency === "USD"
+      ? credit.usd !== "" && creditUsdT === null
+        ? "Enter a USD amount like 12 (up to two decimals, no sign)."
+        : null
+      : credit.vnd !== "" && (creditN === null || creditN < 0)
+        ? "Enter a whole VND amount of 0 or more."
+        : null;
+  const bonusError =
+    bonus.currency === "USD"
+      ? bonus.usd !== "" && bonusUsdT === null
+        ? "Enter a USD amount like 2.50 (up to two decimals, no sign)."
+        : null
+      : bonus.vnd !== "" && (bonusN === null || bonusN < 0)
+        ? "Enter a whole VND amount of 0 or more."
+        : null;
 
   const reset = () => {
     setName("");
@@ -451,7 +498,7 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <form
-          className="grid gap-3 sm:grid-cols-5 sm:items-end"
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 sm:items-end"
           onSubmit={(e) => {
             e.preventDefault();
             if (valid) submit();
@@ -472,8 +519,7 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
             onChange={setPrice}
             usdPlaceholder="9.99"
             vndPlaceholder="500000"
-            usdInvalid={price.usd !== "" && priceUsdT === null}
-            vndInvalid={price.vnd !== "" && (priceN === null || priceN <= 0)}
+            error={priceError}
           />
           <AmountField
             idPrefix="bundle-credit"
@@ -483,8 +529,7 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
             onChange={setCredit}
             usdPlaceholder="12"
             vndPlaceholder="500000"
-            usdInvalid={credit.usd !== "" && creditUsdT === null}
-            vndInvalid={credit.vnd !== "" && (creditN === null || creditN < 0)}
+            error={creditError}
           />
           <AmountField
             idPrefix="bundle-bonus"
@@ -494,8 +539,7 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
             onChange={setBonus}
             usdPlaceholder="0"
             vndPlaceholder="0"
-            usdInvalid={bonus.usd !== "" && bonusUsdT === null}
-            vndInvalid={bonus.vnd !== "" && (bonusN === null || bonusN < 0)}
+            error={bonusError}
           />
           <Button type="submit" disabled={!valid || create.isPending}>
             {create.isPending ? "Creating…" : "Create bundle"}
@@ -507,6 +551,7 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
         </p>
         <CatalogTable
           data={query.data?.data ?? []}
+          tableLabel="Credit bundles"
           detailLabel="Credit"
           detail={(b) => {
             // Each grant uses its OWN USD metadata, independent of the price
@@ -562,6 +607,30 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
     name.trim().length > 0 &&
     (period === "" || (periodN !== null && periodN >= 1)) &&
     (rateLimit === "" || !rateInvalid(rateN));
+  const priceError =
+    price.currency === "USD"
+      ? price.usd !== "" && priceUsdT === null
+        ? "Enter a USD amount like 9.99 (up to two decimals, no sign)."
+        : null
+      : price.vnd !== "" && (priceN === null || priceN <= 0)
+        ? "Enter a whole VND amount greater than 0."
+        : null;
+  const creditError =
+    credit.currency === "USD"
+      ? credit.usd !== "" && creditUsdT === null
+        ? "Enter a USD amount like 12 (up to two decimals, no sign)."
+        : null
+      : credit.vnd !== "" && (creditN === null || creditN < 0)
+        ? "Enter a whole VND amount of 0 or more."
+        : null;
+  const periodError =
+    period !== "" && (periodN === null || periodN < 1)
+      ? "Enter a whole number of days, at least 1."
+      : null;
+  const rateError =
+    rateLimit !== "" && rateInvalid(rateN)
+      ? "Rate limit is between 1 and 600 requests per minute."
+      : null;
   // Only the field's own active currency is validated; the hidden text of a
   // toggled field is dormant state, never part of the request body.
   const valid =
@@ -597,7 +666,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <form
-          className="grid gap-3 sm:grid-cols-5 sm:items-end"
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 sm:items-end"
           onSubmit={(e) => {
             e.preventDefault();
             if (valid) submit();
@@ -618,8 +687,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
             onChange={setPrice}
             usdPlaceholder="9.99"
             vndPlaceholder="200000"
-            usdInvalid={price.usd !== "" && priceUsdT === null}
-            vndInvalid={price.vnd !== "" && (priceN === null || priceN <= 0)}
+            error={priceError}
           />
           <AmountField
             idPrefix="plan-credit"
@@ -629,8 +697,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
             onChange={setCredit}
             usdPlaceholder="12"
             vndPlaceholder="200000"
-            usdInvalid={credit.usd !== "" && creditUsdT === null}
-            vndInvalid={credit.vnd !== "" && (creditN === null || creditN < 0)}
+            error={creditError}
           />
           <CreateField
             id="plan-period"
@@ -638,7 +705,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
             value={period}
             onChange={setPeriod}
             placeholder="30"
-            invalid={period !== "" && (periodN === null || periodN < 1)}
+            error={periodError}
           />
           <CreateField
             id="plan-rate"
@@ -646,7 +713,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
             value={rateLimit}
             onChange={setRateLimit}
             placeholder="15"
-            invalid={rateLimit !== "" && rateInvalid(rateN)}
+            error={rateError}
           />
           <Button type="submit" disabled={!valid || create.isPending}>
             {create.isPending ? "Creating…" : "Create plan"}
@@ -658,6 +725,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
         </p>
         <CatalogTable
           data={query.data?.data ?? []}
+          tableLabel="Subscription plans"
           detailLabel="Credit/period"
           detail={(p) => {
             const credit = p.credit_per_period_usd

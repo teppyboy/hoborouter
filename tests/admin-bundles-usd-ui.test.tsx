@@ -216,6 +216,18 @@ function mount() {
         el.dispatchEvent(new W.Event("input", { bubbles: true }));
       });
     },
+    // Same as typeInto but scoped to this mount: prior dialog-heavy tests can
+    // leave a stale container attached to document.body, and a document-wide
+    // id lookup would then type into that dead input.
+    async typeIntoScope(inputId: string, value: string) {
+      const el = h.container.querySelector<HTMLInputElement>(`#${inputId}`);
+      if (!el) throw new Error(`input not found in container: #${inputId}`);
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(W.HTMLInputElement.prototype, "value")!.set!;
+        setter.call(el, value);
+        el.dispatchEvent(new W.Event("input", { bubbles: true }));
+      });
+    },
     async clickButton(label: string) {
       const btn = [...document.querySelectorAll("button")].find(
         (b) => b.textContent?.trim() === label,
@@ -567,6 +579,84 @@ test("rename and active toggles PATCH unchanged bodies", async () => {
     await h.waitForData();
     const patches2 = h.patchesTo("/api/v1/admin/bundles");
     expect(patches2.some((p) => p.body?.active === false)).toBe(true);
+  } finally {
+    h.cleanup();
+  }
+});
+
+// --- authoring UX: visible errors, blank bonus, scrollable tables ----------
+
+test("invalid amount text shows a visible, accessible error message", async () => {
+  const h = mount();
+  try {
+    await h.waitForData();
+    // Scoped typing: prior dialog-heavy tests can leave a stale container in
+    // document.body; a document-wide lookup could type into that dead input.
+    await h.typeIntoScope("bundle-price-usd", "1.001");
+    const input = h.container.querySelector<HTMLInputElement>("#bundle-price-usd");
+    expect(input?.getAttribute("aria-invalid")).toBe("true");
+    const describedBy = input?.getAttribute("aria-describedby") ?? "";
+    expect(describedBy).not.toBe("");
+    const message = h.container.querySelector(`#${describedBy}`);
+    expect(message?.textContent).toContain("USD");
+
+    // The same guarantee in VND mode with a sign-rule violation.
+    await h.clickCurrency("Price currency", "VND");
+    await h.typeIntoScope("bundle-price-vnd", "-5");
+    const vndInput = h.container.querySelector<HTMLInputElement>("#bundle-price-vnd");
+    expect(vndInput?.getAttribute("aria-invalid")).toBe("true");
+    const msg2 = h.container.querySelector(`#${vndInput?.getAttribute("aria-describedby")}`);
+    expect(msg2?.textContent?.toLowerCase()).toContain("vnd");
+
+    // Plan scalar fields surface their rule violations too.
+    await h.typeIntoScope("plan-period", "0");
+    await h.typeIntoScope("plan-rate", "900");
+    expect(h.container.textContent).toContain("at least 1");
+    expect(h.container.textContent).toContain("1 and 600");
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("a cleared bonus is treated as zero instead of silently disabling submit", async () => {
+  const h = mount();
+  try {
+    await h.waitForData();
+    await h.typeInto("bundle-name", "No bonus");
+    await h.typeInto("bundle-price-usd", "5");
+    await h.typeInto("bundle-credit-usd", "5");
+    await h.typeInto("bundle-bonus-usd", "");
+    await h.submit("Create bundle");
+    const posts = h.postsTo("/api/v1/admin/bundles");
+    expect(posts.length).toBe(1);
+    // Zero is explicit in the body, matching the server-side default.
+    expect(posts[0]!.body).toEqual({
+      name: "No bonus",
+      price_usd: "5",
+      credit_usd: "5",
+      bonus_usd: "0",
+    });
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("catalog tables scroll inside labelled regions", async () => {
+  const h = mount();
+  try {
+    await h.waitForData();
+    const bundlesRegion = h.container.querySelector(
+      'div[role="region"][aria-label="Credit bundles"]',
+    );
+    expect(bundlesRegion).not.toBeNull();
+    expect(bundlesRegion?.querySelector("table")).not.toBeNull();
+    expect(bundlesRegion?.textContent).toContain("Legacy pack");
+    const plansRegion = h.container.querySelector(
+      'div[role="region"][aria-label="Subscription plans"]',
+    );
+    expect(plansRegion).not.toBeNull();
+    expect(plansRegion?.querySelector("table")).not.toBeNull();
+    expect(plansRegion?.textContent).toContain("USD plan");
   } finally {
     h.cleanup();
   }

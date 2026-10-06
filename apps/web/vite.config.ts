@@ -1,10 +1,21 @@
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { defineConfig, lazyPlugins } from "vite-plus";
 
+// Single source of truth for the app version: this package's own package.json.
+// Injected as a build-time global (see src/lib/version.ts) so UI code never
+// hardcodes a version literal that could drift.
+const { version: appVersion } = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+) as { version: string };
+
 // https://vite.dev/config/
 export default defineConfig(() => ({
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   resolve: {
     alias: { "@": path.resolve(__dirname, "src") },
   },

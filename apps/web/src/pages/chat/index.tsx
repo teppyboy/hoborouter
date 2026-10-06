@@ -95,6 +95,7 @@ export function ChatPage() {
 
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [input, setInput] = React.useState("");
+  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   // Per-message attachments (images as multimodal parts, text/code inlined).
   // Held in memory only; cleared when the message is sent or the view resets.
   const [attachments, setAttachments] = React.useState<ChatAttachment[]>([]);
@@ -112,6 +113,9 @@ export function ChatPage() {
   // Serialized attachment reads: two overlapping file picks must both validate
   // against the LIVE list, never a stale snapshot (count/total budget).
   const attachQueueRef = React.useRef<Promise<void>>(Promise.resolve());
+  // Files queued for reading but not yet attached: a visible status so the
+  // paperclip button never feels dead while large reads are in flight.
+  const [readingFiles, setReadingFiles] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   // State + ref move together: the async file-read handler and the send
   // lifecycle must both see the live list without depending on render timing.
@@ -221,10 +225,16 @@ export function ChatPage() {
   function handleFiles(fileList: FileList | null) {
     const files = Array.from(fileList ?? []);
     if (files.length === 0) return;
-    const run = attachQueueRef.current.then(
-      () => doAttachFiles(files),
-      () => doAttachFiles(files),
-    );
+    setReadingFiles(true);
+    const run = attachQueueRef.current
+      .then(
+        () => doAttachFiles(files),
+        () => doAttachFiles(files),
+      )
+      .finally(() => {
+        // Clear the reading status only when no later pick is still queued.
+        if (attachQueueRef.current === run) setReadingFiles(false);
+      });
     attachQueueRef.current = run;
   }
 
@@ -814,7 +824,10 @@ export function ChatPage() {
                   key={chip}
                   variant="outline"
                   size="sm"
-                  onClick={() => setInput(chip)}
+                  onClick={() => {
+                    setInput(chip);
+                    textareaRef.current?.focus();
+                  }}
                   className="h-auto max-w-full min-h-9 py-2 text-left whitespace-normal"
                 >
                   {chip}
@@ -824,7 +837,8 @@ export function ChatPage() {
             <p className="max-w-md text-sm text-muted-foreground">
               Chat reuses a workspace key stored in this browser, named after this device (e.g.
               "Chat - iPhone"). A key is created only once, when you connect or send your first
-              message. Usage is charged to your selected workspace.
+              message. Use the paperclip to attach images or text files to a message. Usage is
+              charged to your selected workspace.
             </p>
             {!userId && <p className="text-sm text-muted-foreground">Sign in to start chatting.</p>}
           </div>
@@ -873,7 +887,9 @@ export function ChatPage() {
                       !m.reasoning &&
                       streaming &&
                       i === messages.length - 1 && (
-                        <div className="animate-pulse text-muted-foreground">Thinking…</div>
+                        <div className="animate-pulse motion-reduce:animate-none text-muted-foreground">
+                          Thinking…
+                        </div>
                       )
                     )}
                   </div>
@@ -899,8 +915,13 @@ export function ChatPage() {
             </div>
           )}
           <div className="relative rounded-2xl border border-border bg-card p-2 shadow-sm">
-            {(attachments.length > 0 || attachError) && (
+            {(attachments.length > 0 || attachError || readingFiles) && (
               <div className="space-y-1 px-1 pb-1">
+                {readingFiles && (
+                  <p className="text-xs text-muted-foreground" role="status">
+                    Reading file…
+                  </p>
+                )}
                 {attachments.length > 0 && (
                   <ul className="flex flex-wrap gap-1.5">
                     {attachments.map((a) => (
@@ -917,7 +938,7 @@ export function ChatPage() {
                           }}
                           aria-label={`Remove attachment ${a.name}`}
                           title={`Remove ${a.name}`}
-                          className="shrink-0 rounded-sm text-muted-foreground hover:text-foreground"
+                          className="shrink-0 rounded-sm text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           <X className="size-3.5" aria-hidden />
                         </button>
@@ -936,11 +957,14 @@ export function ChatPage() {
             )}
             <Textarea
               aria-label="Message"
+              ref={textareaRef}
               rows={1}
               placeholder={
                 model
                   ? "Send a message… (Enter to send, Shift+Enter for a new line)"
-                  : "Choose a model first"
+                  : modelsError
+                    ? "Model list unavailable — reload to pick a model"
+                    : "Choose a model first"
               }
               value={input}
               onChange={(e) => setInput(e.target.value)}

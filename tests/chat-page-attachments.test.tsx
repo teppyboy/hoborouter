@@ -360,3 +360,29 @@ test("attachments ride the request, persist in-session for follow-ups and retrie
   const retryLastUser = retry.messages.filter((m) => m.role === "user").at(-1);
   expect(JSON.stringify(retryLastUser?.content)).toContain("image_url");
 });
+
+test("a pick in flight shows a Reading status that clears when reads finish", async () => {
+  await mountPage();
+  const gate = gateFileReads();
+  try {
+    await pickFiles([pngFile(1024)]);
+    // While the file read is in flight the composer shows a live status and
+    // no chip yet: the paperclip button never looks dead on large files.
+    await waitFor(() => bodyText().includes("Reading file"), "reading status visible");
+    expect(chipCount()).toBe(0);
+    gate.releaseAll();
+    await waitFor(() => !bodyText().includes("Reading file"), "reading status cleared");
+    expect(chipCount()).toBe(1);
+  } finally {
+    gate.restore();
+  }
+});
+
+test("clicking a prompt chip focuses the composer", async () => {
+  await mountPage();
+  const chip = buttonByText("Help me write a debounce function in TypeScript.");
+  expect(chip).toBeDefined();
+  click(chip!);
+  await flush();
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Message");
+});

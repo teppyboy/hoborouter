@@ -1,5 +1,5 @@
 // Shared layout for the unauthenticated public pages: /, /pricing,
-// /docs/quickstart (routes are wired in router.tsx —
+// /docs/quickstart, /about (routes are wired in router.tsx —
 // this file owns no router imports so pages stay SSR/test friendly).
 // Plain <a> navigation: public pages are entry points, a full load is fine.
 // Responsive by flex-wrap (375px OK); flat theme tokens, no gradient hero.
@@ -17,6 +17,7 @@ const NAV: { label: LocaleEntry; href: string }[] = [
   { label: { en: "Welcome", vi: "Chào mừng" }, href: "/" },
   { label: { en: "Pricing", vi: "Bảng giá" }, href: "/pricing" },
   { label: { en: "Docs", vi: "Tài liệu" }, href: "/docs/quickstart" },
+  { label: { en: "About", vi: "Giới thiệu" }, href: "/about" },
 ];
 
 const signIn: LocaleEntry = { en: "Sign in", vi: "Đăng nhập" };

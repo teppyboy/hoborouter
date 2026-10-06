@@ -41,6 +41,8 @@ test("ChatPage SSR carries the managed-key reuse notice", () => {
   expect(html).toContain("stored in this browser");
   expect(html).toContain("Chat - iPhone");
   expect(html).toContain("created only once");
+  // First-use discoverability: the empty state names the attachment affordance.
+  expect(html).toContain("Use the paperclip to attach images or text files");
   // Charging is disclosed on the empty state, not just mid-conversation.
   expect(html).toContain("Usage is charged to your selected workspace.");
 });
