@@ -30,6 +30,9 @@ jobs:
           # pg_isready probes the unix socket and can succeed against the
           # init-phase temporary server (v0.4.0 CI failure); the script
           # probes TCP instead. See scripts/wait-postgres.sh.
+          # Consecutive successful probes guard against accept-then-close
+          # flapping right after init (run 37590822468 died on a mid-suite
+          # "Connection closed" ~38s in). See scripts/wait-postgres.sh.
           bash scripts/wait-postgres.sh hbr-ci-pg
       # v0.3.0 CI: 5 files died at exactly 5000ms (bun's default per-test
       # timeout) on their first test, which provisions a throwaway Postgres DB
@@ -37,9 +40,34 @@ jobs:
       # 4-way parallel workers and a Dockerized Postgres is ~8.5x slower than
       # local, so the 5s budget is too tight; 20s gives headroom without
       # masking real hangs (whole suite is ~110s here).
-      - run: PORT=3998 bun test --parallel=4 --timeout 20000
+      - name: Run tests
+        id: tests
+        run: |
+          set -o pipefail
+          PORT=3998 bun test --parallel=4 --timeout 20000 2>&1 | tee ci-test.log
         env:
-          HBR_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:55432/postgres
+          HBR_TEST_DATABASE_URL: >-
+            postgres://postgres:postgres@127.0.0.1:55432/postgres
+      # Run 37590822468: single transient "PostgresError: Connection closed"
+      # during a Better Auth session query, no assertion failures, suite passes
+      # locally with the exact command. Retry once, but only when the captured
+      # log shows that transient marker: any other failure (assertion, timeout,
+      # crash) exits here unchanged, and deterministic failures reproduce on
+      # the retry run anyway, so fail-fast for real regressions is preserved.
+      - name: Retry tests only on transient Postgres connection loss
+        if: failure() && steps.tests.outcome == 'failure'
+        run: |
+          if ! grep -q 'PostgresError: Connection closed' ci-test.log; then
+            echo "No transient 'Connection closed' error in log; failing as-is."
+            exit 1
+          fi
+          echo 'Transient PostgresError: Connection closed detected;'
+          echo 'retrying once.'
+          sleep 5
+          PORT=3998 bun test --parallel=4 --timeout 20000
+        env:
+          HBR_TEST_DATABASE_URL: >-
+            postgres://postgres:postgres@127.0.0.1:55432/postgres
 
   build:
     needs: test

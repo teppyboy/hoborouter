@@ -114,6 +114,9 @@ describe("scripts/wait-postgres.sh", () => {
     // exec into the requested container. The shim records the raw psql argv
     // (one invocation per line, tab-separated) so the assertions cover the
     // actual arguments, not just the command name.
+    //
+    // Since run 37590822468, readiness also requires 3 consecutive
+    // successful probes, so the first success does not exit yet.
     const shim = `
 if [ "$1" = "exec" ] && [ "$2" = "${CONTAINER}" ]; then
   bump "$S" target >/dev/null
@@ -134,8 +137,8 @@ exit 1
 `;
     const r = runWaitPostgres(shim);
     expect(r.code).toBe(0);
-    expect(r.state.psql).toBe(4); // 3 failures, then first TCP success
-    expect(r.psqlArgv.length).toBe(4);
+    expect(r.state.psql).toBe(6); // 3 init failures, then 3 stable successes
+    expect(r.psqlArgv.length).toBe(6);
     for (const argv of r.psqlArgv) {
       // Every invocation (success and failure) must probe over TCP with the
       // full argument set; a socket-based or query-less psql must fail here.
