@@ -21,7 +21,10 @@ import { useT } from "../../lib/i18n/t";
 // Money aggregates, dates and identifiers are never translated.
 const businessCopy = {
   requests: { en: "Requests", vi: "Requests" },
-  usageRevenue: { en: "Usage revenue (charged, stored)", vi: "Doanh thu sử dụng (đã tính, lưu trữ)" },
+  usageRevenue: {
+    en: "Usage revenue (charged, stored)",
+    vi: "Doanh thu sử dụng (đã tính, lưu trữ)",
+  },
   upstreamVnd: { en: "Upstream cost (VND)", vi: "Chi phí upstream (VND)" },
   upstreamVndHint: {
     en: "Each request converted with its own stored FX rate — never today's rate.",
@@ -221,11 +224,7 @@ function UsageTable({
                 <TableCell className="text-right">{money(r.upstream_cost_vnd)}</TableCell>
                 <TableCell className="text-right">
                   {money(r.realized_gross_margin_vnd)}
-                  {r.margin_provisional ? (
-                    <span title={tr("provisionalTitle")}>
-                      *
-                    </span>
-                  ) : null}
+                  {r.margin_provisional ? <span title={tr("provisionalTitle")}>*</span> : null}
                 </TableCell>
               </TableRow>
             ))
@@ -279,11 +278,7 @@ export function BusinessReportView({ data }: { data: BusinessReport }) {
             subs: money(t.subscription_sales_vnd),
           })}
         />
-        <StatTile
-          label={tr("refunds")}
-          value={money(t.refund_vnd)}
-          hint={tr("refundsHint")}
-        />
+        <StatTile label={tr("refunds")} value={money(t.refund_vnd)} hint={tr("refundsHint")} />
         <StatTile
           label={tr("prepaid")}
           value={money(t.prepaid_liability_vnd)}
@@ -310,9 +305,7 @@ export function BusinessReportView({ data }: { data: BusinessReport }) {
         </p>
       ) : null}
 
-      <p className="text-xs text-muted-foreground">
-        {tr("marginDefinition")}
-      </p>
+      <p className="text-xs text-muted-foreground">{tr("marginDefinition")}</p>
 
       {empty ? <EmptyState title={tr("noUsage")} /> : null}
 
@@ -352,10 +345,7 @@ export default function AdminBusinessPage() {
   );
   return (
     <div className="space-y-4">
-      <PageHeader
-        title={tr("title")}
-        description={tr("description")}
-      />
+      <PageHeader title={tr("title")} description={tr("description")} />
       <div className="flex flex-wrap items-end gap-3">
         <label className="text-xs text-muted-foreground">
           {tr("fromLabel")}

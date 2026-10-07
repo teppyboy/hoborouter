@@ -175,11 +175,7 @@ const useChatT = () => useT(chatCopy);
 type ChatMessage = TurnMessage;
 
 // Actionable starters: each is a real prompt a user can send or edit.
-const PROMPT_CHIPS: LocaleEntry[] = [
-  chatCopy.chip1,
-  chatCopy.chip2,
-  chatCopy.chip3,
-];
+const PROMPT_CHIPS: LocaleEntry[] = [chatCopy.chip1, chatCopy.chip2, chatCopy.chip3];
 
 // Gateway caps the request body in UTF-8 BYTES (1 MiB); keep the client-side
 // pre-check well under that so attachment data URLs plus history never trip a
@@ -206,13 +202,7 @@ function appendDelta(msg: ChatMessage, delta: StreamDelta): ChatMessage {
 }
 
 /** One suggestion chip; component boundary keeps useLocaleEntry per-element. */
-function PromptChip({
-  chip,
-  onPick,
-}: {
-  chip: LocaleEntry;
-  onPick: (text: string) => void;
-}) {
+function PromptChip({ chip, onPick }: { chip: LocaleEntry; onPick: (text: string) => void }) {
   const text = useLocaleEntry(chip);
   return (
     <Button
@@ -567,9 +557,7 @@ export function ChatPage() {
    *  a key is being created must never repopulate state. */
   async function resolveKey(gen?: number, signal?: AbortSignal): Promise<string | null> {
     if (!userId || !workspaceId) {
-      setKeyError(
-        new ManagedKeyError("unauthorized", t("signInToChat")),
-      );
+      setKeyError(new ManagedKeyError("unauthorized", t("signInToChat")));
       return null;
     }
     const id = identityRef.current;
@@ -582,9 +570,7 @@ export function ChatPage() {
     } catch (e) {
       if (!isCurrent()) return null;
       setKeyError(
-        e instanceof ManagedKeyError
-          ? e
-          : new ManagedKeyError("invalid", t("keyCreateFailed")),
+        e instanceof ManagedKeyError ? e : new ManagedKeyError("invalid", t("keyCreateFailed")),
       );
       return null;
     }
@@ -655,9 +641,7 @@ export function ChatPage() {
     // mint, draft reset) so a rejection leaves the draft fully untouched.
     const bodyJson = JSON.stringify({ model, messages: history, stream: true });
     if (utf8ByteLength(bodyJson) > MAX_REQUEST_BODY_BYTES) {
-      setError(
-        t("tooLarge"),
-      );
+      setError(t("tooLarge"));
       busyRef.current = false;
       setStreaming(false);
       abortRef.current = null;
@@ -688,8 +672,7 @@ export function ChatPage() {
           setActiveChatId(chatId);
           invalidateConversationList();
         } catch {
-          if (isCurrent())
-            setSaveNotice(t("saveFailedNoKeep"));
+          if (isCurrent()) setSaveNotice(t("saveFailedNoKeep"));
         }
       }
       const key = await resolveKey(seq, ac.signal);
@@ -739,12 +722,7 @@ export function ChatPage() {
         if (!isCurrent()) return;
         if (res.status === 401) {
           // Managed key revoked or session gone: offer explicit reconnect.
-          setKeyError(
-            new ManagedKeyError(
-              "unauthorized",
-              t("keyReconnectFresh"),
-            ),
-          );
+          setKeyError(new ManagedKeyError("unauthorized", t("keyReconnectFresh")));
         } else {
           setError(readableError(res.status, body));
         }
@@ -952,12 +930,8 @@ export function ChatPage() {
 
         {conflict && (
           <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2">
-            <p className="text-sm font-medium">
-              {t("conflictTitle")}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {t("conflictBody")}
-            </p>
+            <p className="text-sm font-medium">{t("conflictTitle")}</p>
+            <p className="text-xs text-muted-foreground">{t("conflictBody")}</p>
             <Button variant="outline" size="sm" className="mt-1" onClick={reloadActive}>
               {t("reloadSaved")}
             </Button>
@@ -1151,7 +1125,12 @@ export function ChatPage() {
                 <Paperclip className="size-4" aria-hidden />
               </Button>
               {streaming ? (
-                <Button size="icon" variant="outline" onClick={stop} aria-label={t("stopGenerating")}>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={stop}
+                  aria-label={t("stopGenerating")}
+                >
                   <Square className="size-4" aria-hidden />
                 </Button>
               ) : (

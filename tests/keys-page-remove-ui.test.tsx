@@ -127,7 +127,8 @@ beforeAll(async () => {
   win.Element.prototype.hasPointerCapture = () => false;
   win.Element.prototype.releasePointerCapture = () => {};
   win.HTMLElement.prototype.scrollIntoView = () => {};
-  const raf = (cb: (t: number) => void) => setTimeout(() => cb(Date.now()), 16) as unknown as number;
+  const raf = (cb: (t: number) => void) =>
+    setTimeout(() => cb(Date.now()), 16) as unknown as number;
   const values: Record<string, unknown> = {
     window: win,
     document: win.document,
@@ -135,7 +136,8 @@ beforeAll(async () => {
     location: win.location,
     getComputedStyle: win.getComputedStyle.bind(win),
     requestAnimationFrame: raf,
-    cancelAnimationFrame: (id: number) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
+    cancelAnimationFrame: (id: number) =>
+      clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
     MouseEvent: win.MouseEvent,
     MutationObserver: win.MutationObserver,
     Element: win.Element,
@@ -235,9 +237,14 @@ test("row menu offers Disable-or-Enable, Rename, Revoke and Remove", async () =>
   calls = [];
   const mounted = mount(<KeysPage />);
   try {
-    for (let i = 0; i < 10; i++) await act(async () => { await new Promise((r) => setTimeout(r, 25)); });
+    for (let i = 0; i < 10; i++)
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 25));
+      });
     expect(mounted.text()).toContain("Test key");
-    const trigger = mounted.container.querySelector<HTMLButtonElement>("[aria-label='Key actions']");
+    const trigger = mounted.container.querySelector<HTMLButtonElement>(
+      "[aria-label='Key actions']",
+    );
     expect(trigger).not.toBeNull();
     await click(trigger!);
     const items = menuItems();
@@ -253,8 +260,13 @@ test("Remove asks with soft-delete copy, then POSTs the key's /remove endpoint",
   calls = [];
   const mounted = mount(<KeysPage />);
   try {
-    for (let i = 0; i < 10; i++) await act(async () => { await new Promise((r) => setTimeout(r, 25)); });
-    const trigger = mounted.container.querySelector<HTMLButtonElement>("[aria-label='Key actions']");
+    for (let i = 0; i < 10; i++)
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 25));
+      });
+    const trigger = mounted.container.querySelector<HTMLButtonElement>(
+      "[aria-label='Key actions']",
+    );
     await click(trigger!);
     const remove = [...document.body.querySelectorAll("[role='menuitem']")].find(
       (el) => el.textContent === "Remove",
@@ -282,8 +294,13 @@ test("Revoke still targets DELETE (existing behavior unchanged)", async () => {
   calls = [];
   const mounted = mount(<KeysPage />);
   try {
-    for (let i = 0; i < 10; i++) await act(async () => { await new Promise((r) => setTimeout(r, 25)); });
-    const trigger = mounted.container.querySelector<HTMLButtonElement>("[aria-label='Key actions']");
+    for (let i = 0; i < 10; i++)
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 25));
+      });
+    const trigger = mounted.container.querySelector<HTMLButtonElement>(
+      "[aria-label='Key actions']",
+    );
     await click(trigger!);
     const revoke = [...document.body.querySelectorAll("[role='menuitem']")].find(
       (el) => el.textContent === "Revoke",

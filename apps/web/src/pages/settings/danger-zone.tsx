@@ -86,9 +86,7 @@ export default function DangerZone({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("deleteWorkspace")}</DialogTitle>
-            <DialogDescription>
-              {t("deleteConfirm", { name: workspaceName })}
-            </DialogDescription>
+            <DialogDescription>{t("deleteConfirm", { name: workspaceName })}</DialogDescription>
           </DialogHeader>
           <Input
             value={typed}

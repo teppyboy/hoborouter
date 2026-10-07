@@ -172,7 +172,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 const typeBadge = (t: string) => t.replace(" ", "-");
 
-const auditColumns = (t: (k: keyof typeof auditCopy) => string): ColumnDef<AuditEntry, unknown>[] => [
+const auditColumns = (
+  t: (k: keyof typeof auditCopy) => string,
+): ColumnDef<AuditEntry, unknown>[] => [
   {
     accessorKey: "created_at",
     header: t("time"),
@@ -266,7 +268,6 @@ const auditColumns = (t: (k: keyof typeof auditCopy) => string): ColumnDef<Audit
     ),
   },
 ];
-
 
 export default function AdminAuditPage() {
   const t = useT(auditCopy);

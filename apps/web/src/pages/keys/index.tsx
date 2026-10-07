@@ -304,19 +304,12 @@ export default function KeysPage() {
         </div>
       ) : keysQuery.isError ? (
         is403(keysQuery.error) ? (
-          <EmptyState
-            title={t("notAvailable")}
-            description={t("notAvailableDesc")}
-          />
+          <EmptyState title={t("notAvailable")} description={t("notAvailableDesc")} />
         ) : (
           <ErrorState message={(keysQuery.error as Error).message} />
         )
       ) : (keysQuery.data?.length ?? 0) === 0 ? (
-        <EmptyState
-          icon={KeyRound}
-          title={t("noKeys")}
-          description={t("noKeysDesc")}
-        />
+        <EmptyState icon={KeyRound} title={t("noKeys")} description={t("noKeysDesc")} />
       ) : (
         <DataTable
           columns={columns}
@@ -444,9 +437,7 @@ function RenameKeyDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("renameKey")}</DialogTitle>
-          <DialogDescription>
-            {t("renameCurrentName", { name: apiKey.name })}
-          </DialogDescription>
+          <DialogDescription>{t("renameCurrentName", { name: apiKey.name })}</DialogDescription>
         </DialogHeader>
         <form onSubmit={form.handleSubmit((v) => onSubmit(v.name))} className="grid gap-4">
           <div className="grid gap-2">
@@ -579,9 +570,7 @@ function ModelRestrictionsDialog({
       <DialogContent className="max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{t("restrictionsTitle", { name: apiKey.name })}</DialogTitle>
-          <DialogDescription>
-            {t("restrictionsDesc")}
-          </DialogDescription>
+          <DialogDescription>{t("restrictionsDesc")}</DialogDescription>
         </DialogHeader>
         {currentQuery.isPending || modelsQuery.isPending ? (
           <div className="grid gap-2">

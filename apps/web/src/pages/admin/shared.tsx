@@ -94,9 +94,7 @@ export function AdminGate({
     );
   if (query.error) {
     if (query.error instanceof ApiError && query.error.status === 403)
-      return (
-        <EmptyState title={t("title")} description={t("description")} />
-      );
+      return <EmptyState title={t("title")} description={t("description")} />;
     return <ErrorState message={query.error instanceof Error ? query.error.message : undefined} />;
   }
   return <>{children}</>;

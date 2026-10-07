@@ -14,7 +14,10 @@ import { useT } from "../lib/i18n/t";
 const resendCopy = {
   label: { en: "Resend verification email", vi: "Gửi lại email xác thực" },
   sending: { en: "Sending…", vi: "Đang gửi…" },
-  sent: { en: "Verification email sent — check your inbox", vi: "Đã gửi email xác thực — hãy kiểm tra hộp thư" },
+  sent: {
+    en: "Verification email sent — check your inbox",
+    vi: "Đã gửi email xác thực — hãy kiểm tra hộp thư",
+  },
   rateLimited: {
     en: "Too many emails requested; try again in a minute",
     vi: "Yêu cầu email quá nhiều; thử lại sau một phút",
@@ -25,13 +28,7 @@ const resendCopy = {
   },
 } as const;
 
-export function ResendVerificationButton({
-  email,
-  label,
-}: {
-  email: string;
-  label?: string;
-}) {
+export function ResendVerificationButton({ email, label }: { email: string; label?: string }) {
   const t = useT(resendCopy);
   const [sending, setSending] = useState(false);
   const send = async () => {

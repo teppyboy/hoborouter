@@ -149,10 +149,7 @@ export default function ModelsPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title={t("title")}
-        description={t("description")}
-      />
+      <PageHeader title={t("title")} description={t("description")} />
       <div className="flex flex-wrap items-center gap-2">
         <input
           value={search}
@@ -200,11 +197,7 @@ export default function ModelsPage() {
           icon={Boxes}
           title={t("noneAvailable")}
           description={
-            models.length === 0
-              ? isAdmin
-                ? t("noneAdmin")
-                : t("noneEmpty")
-              : t("noneFiltered")
+            models.length === 0 ? (isAdmin ? t("noneAdmin") : t("noneEmpty")) : t("noneFiltered")
           }
         />
       ) : (

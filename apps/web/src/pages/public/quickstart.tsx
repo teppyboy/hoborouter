@@ -44,7 +44,7 @@ const quickstartCopy = {
   copyExample: { en: "Copy {lang} example", vi: "Copy ví dụ {lang}" },
   exampleAria: { en: "{lang} example", vi: "ví dụ {lang}" },
   streamingLead: {
-    en: 'Responses follow the OpenAI chat-completions schema. Streaming is supported with',
+    en: "Responses follow the OpenAI chat-completions schema. Streaming is supported with",
     vi: "Phản hồi theo schema chat-completions của OpenAI. Hỗ trợ streaming với",
   },
   streamingTail: { en: ".", vi: "." },
@@ -129,7 +129,10 @@ function Snippet({ code, lang }: { code: string; lang: string }) {
       <div className="absolute right-2 top-2">
         <CopyButton value={code} label={t("copyExample", { lang })} />
       </div>
-      <pre className="overflow-x-auto p-4 text-xs leading-relaxed" aria-label={t("exampleAria", { lang })}>
+      <pre
+        className="overflow-x-auto p-4 text-xs leading-relaxed"
+        aria-label={t("exampleAria", { lang })}
+      >
         <code>{code}</code>
       </pre>
     </div>
@@ -162,10 +165,7 @@ export function Quickstart({
   return (
     <PublicLayout instance={instance}>
       <div className="space-y-6 py-6">
-        <PageHeader
-          title={t("title")}
-          description={t("description")}
-        />
+        <PageHeader title={t("title")} description={t("description")} />
 
         <section className="max-w-2xl">
           <h2 className="text-lg font-semibold">{t("step1Title")}</h2>
@@ -178,15 +178,16 @@ export function Quickstart({
             </li>
             <li>{t("step1TopUp")}</li>
             <li>{t("step1ApiKey")}</li>
-            <li>{t("step1Model")} {modelDisplay}.</li>
+            <li>
+              {t("step1Model")} {modelDisplay}.
+            </li>
           </ol>
         </section>
 
         <section className="max-w-3xl space-y-3">
           <h2 className="text-lg font-semibold">{t("step2Title")}</h2>
           <p className="text-sm text-muted-foreground">
-            {t("step2SdkLead")}{" "}
-            <code className="font-mono text-xs">{baseUrl}/v1</code>{" "}
+            {t("step2SdkLead")} <code className="font-mono text-xs">{baseUrl}/v1</code>{" "}
             {t("step2SdkTail")}
           </p>
           <Card>
@@ -210,8 +211,7 @@ export function Quickstart({
             </CardContent>
           </Card>
           <p className="text-sm text-muted-foreground">
-            {t("streamingLead")}{" "}
-            <code className="font-mono text-xs">"stream": true</code>
+            {t("streamingLead")} <code className="font-mono text-xs">"stream": true</code>
             {t("streamingTail")}
           </p>
         </section>

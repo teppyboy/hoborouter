@@ -142,7 +142,10 @@ export default function ModelDetailPage() {
           <dl className="divide-y divide-border text-sm">
             <PriceRow label={t("inputPrice")} value={model.price.input_usd_micro_per_1m} />
             <PriceRow label={t("outputPrice")} value={model.price.output_usd_micro_per_1m} />
-            <PriceRow label={t("cachedInputPrice")} value={model.price.cached_input_usd_micro_per_1m} />
+            <PriceRow
+              label={t("cachedInputPrice")}
+              value={model.price.cached_input_usd_micro_per_1m}
+            />
             <PriceRow label={t("reasoningPrice")} value={model.price.reasoning_usd_micro_per_1m} />
           </dl>
         </div>

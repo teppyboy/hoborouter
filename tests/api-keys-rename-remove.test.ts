@@ -34,8 +34,22 @@ beforeAll(async () => {
   drop = t.drop;
   const now = Date.now();
   await db.insert(users).values([
-    { id: USER_ID, name: "Owner", email: "owner@test", emailVerified: true, createdAt: new Date(now), updatedAt: new Date(now) },
-    { id: MEMBER_ID, name: "Member", email: "member@test", emailVerified: true, createdAt: new Date(now), updatedAt: new Date(now) },
+    {
+      id: USER_ID,
+      name: "Owner",
+      email: "owner@test",
+      emailVerified: true,
+      createdAt: new Date(now),
+      updatedAt: new Date(now),
+    },
+    {
+      id: MEMBER_ID,
+      name: "Member",
+      email: "member@test",
+      emailVerified: true,
+      createdAt: new Date(now),
+      updatedAt: new Date(now),
+    },
   ]);
   await db.insert(workspaces).values({ id: WS_ID, name: "WS", created_at: now });
   await db.insert(workspaceMembers).values([
@@ -86,7 +100,13 @@ async function keyRow(id: string) {
   const rows = (await db.$client.unsafe(
     `SELECT name, status, revoked_at, deleted_at, deleted_by FROM api_keys WHERE id = $1`,
     [id] as never[],
-  )) as { name: string; status: string; revoked_at: string | null; deleted_at: string | null; deleted_by: string | null }[];
+  )) as {
+    name: string;
+    status: string;
+    revoked_at: string | null;
+    deleted_at: string | null;
+    deleted_by: string | null;
+  }[];
   const r = rows[0];
   if (!r) return null;
   // bigint columns arrive as strings from the raw driver
@@ -106,7 +126,9 @@ async function listedIds(): Promise<string[]> {
 describe("rename (PATCH name)", () => {
   test("renames, keeps status, writes key.rename audit with previous name", async () => {
     const { id } = await seedKey();
-    const res = await call("PATCH", `/api/v1/workspaces/${WS_ID}/keys/${id}`, { name: " Renamed " });
+    const res = await call("PATCH", `/api/v1/workspaces/${WS_ID}/keys/${id}`, {
+      name: " Renamed ",
+    });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ id, name: "Renamed", status: "enabled" });
     const row = await keyRow(id);
@@ -120,9 +142,12 @@ describe("rename (PATCH name)", () => {
 
   test("rejects empty or oversized names", async () => {
     const { id } = await seedKey();
-    expect((await call("PATCH", `/api/v1/workspaces/${WS_ID}/keys/${id}`, { name: "   " })).status).toBe(400);
     expect(
-      (await call("PATCH", `/api/v1/workspaces/${WS_ID}/keys/${id}`, { name: "x".repeat(129) })).status,
+      (await call("PATCH", `/api/v1/workspaces/${WS_ID}/keys/${id}`, { name: "   " })).status,
+    ).toBe(400);
+    expect(
+      (await call("PATCH", `/api/v1/workspaces/${WS_ID}/keys/${id}`, { name: "x".repeat(129) }))
+        .status,
     ).toBe(400);
   });
 });
@@ -159,7 +184,8 @@ describe("remove (soft delete)", () => {
       (await call("PATCH", `/api/v1/workspaces/${WS_ID}/keys/${id}`, { name: "zombie" })).status,
     ).toBe(404);
     expect(
-      (await call("PATCH", `/api/v1/workspaces/${WS_ID}/keys/${id}`, { status: "disabled" })).status,
+      (await call("PATCH", `/api/v1/workspaces/${WS_ID}/keys/${id}`, { status: "disabled" }))
+        .status,
     ).toBe(404);
     expect((await call("DELETE", `/api/v1/workspaces/${WS_ID}/keys/${id}`)).status).toBe(404);
     expect((await call("GET", `/api/v1/workspaces/${WS_ID}/keys/${id}/models`)).status).toBe(404);
@@ -171,7 +197,9 @@ describe("remove (soft delete)", () => {
     const { id } = await seedKey();
     const memberApp = await buildApp({ db, auth: fakeAuth(MEMBER_ID) });
     const res = await memberApp.handle(
-      new Request(`http://localhost/api/v1/workspaces/${WS_ID}/keys/${id}/remove`, { method: "POST" }),
+      new Request(`http://localhost/api/v1/workspaces/${WS_ID}/keys/${id}/remove`, {
+        method: "POST",
+      }),
     );
     expect(res.status).toBe(403);
     expect(await keyRow(id)).not.toBeNull();

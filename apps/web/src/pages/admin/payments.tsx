@@ -244,7 +244,10 @@ export function PaymentsTable({
             <DialogDescription>
               {toComplete && (
                 <>
-                  {t("confirmPaidBody", { amount: formatVnd(toComplete.amount), ws: toComplete.workspace_name })}
+                  {t("confirmPaidBody", {
+                    amount: formatVnd(toComplete.amount),
+                    ws: toComplete.workspace_name,
+                  })}
                 </>
               )}
             </DialogDescription>
@@ -269,7 +272,10 @@ export function PaymentsTable({
             <DialogDescription>
               {toReject && (
                 <>
-                  {t("rejectBody", { amount: formatVnd(toReject.amount), ws: toReject.workspace_name })}
+                  {t("rejectBody", {
+                    amount: formatVnd(toReject.amount),
+                    ws: toReject.workspace_name,
+                  })}
                 </>
               )}
             </DialogDescription>

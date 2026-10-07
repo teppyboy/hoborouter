@@ -6,11 +6,7 @@
 // fetch) and auth-i18n.test.tsx (memory router for useNavigate).
 import { test, expect, beforeAll, afterAll, afterEach } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import {
-  createRouter,
-  createRootRoute,
-  createMemoryHistory,
-} from "@tanstack/react-router";
+import { createRouter, createRootRoute, createMemoryHistory } from "@tanstack/react-router";
 import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js";
 import { JSDOM } from "jsdom";
 
@@ -114,9 +110,7 @@ afterAll(() => {
 let sortModels: (typeof import("../apps/web/src/pages/models/data"))["sortModels"];
 let MODEL_SORT_OPTIONS: (typeof import("../apps/web/src/pages/models/data"))["MODEL_SORT_OPTIONS"];
 let ModelsPage: (typeof import("../apps/web/src/pages/models"))["default"];
-let mountRoot: (
-  container: HTMLElement,
-) => { render: (node: unknown) => void; unmount: () => void };
+let mountRoot: (container: HTMLElement) => { render: (node: unknown) => void; unmount: () => void };
 
 // --- harness ----------------------------------------------------------------
 

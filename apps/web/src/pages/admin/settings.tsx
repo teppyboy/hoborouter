@@ -24,7 +24,10 @@ const adminSettingsCopy = {
     vi: "Khi tắt, token cache được tính theo giá input đầy đủ. Request được gửi nguyên bản; nhà cung cấp vẫn có thể cache.",
   },
   bonus: { en: "First top-up bonus", vi: "Thưởng nạp lần đầu" },
-  bonusLabel: { en: "Bonus on a workspace's first paid top-up", vi: "Thưởng cho lần nạp trả phí đầu tiên của workspace" },
+  bonusLabel: {
+    en: "Bonus on a workspace's first paid top-up",
+    vi: "Thưởng cho lần nạp trả phí đầu tiên của workspace",
+  },
   bonusHint: {
     en: "One-time extra credit when a workspace's first top-up payment succeeds.",
     vi: "Tín dụng thêm một lần khi lần nạp đầu tiên của workspace thành công.",
@@ -115,9 +118,7 @@ function PromptCachingCard({
             {" "}
             <div className="grid gap-1">
               <Label htmlFor="prompt_caching">{t("promptCachingLabel")}</Label>
-              <p className="text-xs text-muted-foreground">
-                {t("promptCachingHint")}
-              </p>
+              <p className="text-xs text-muted-foreground">{t("promptCachingHint")}</p>
             </div>
             <Switch
               id="prompt_caching"
@@ -175,9 +176,7 @@ function FirstTopupBonusCard({
             <div className="flex items-center justify-between gap-4">
               <div className="grid gap-1">
                 <Label htmlFor="first_topup_bonus">{t("bonusLabel")}</Label>
-                <p className="text-xs text-muted-foreground">
-                  {t("bonusHint")}
-                </p>
+                <p className="text-xs text-muted-foreground">{t("bonusHint")}</p>
               </div>
               <Switch
                 id="first_topup_bonus"
@@ -211,11 +210,7 @@ function FirstTopupBonusCard({
                 {t("saveAmount")}
               </Button>
             </div>
-            {current === null && (
-              <p className="text-xs text-muted-foreground">
-                {t("noBonus")}
-              </p>
-            )}
+            {current === null && <p className="text-xs text-muted-foreground">{t("noBonus")}</p>}
           </div>
         ) : null}
       </CardContent>

@@ -86,7 +86,10 @@ const creditsCopy = {
   creating: { en: "Creating payment…", vi: "Đang tạo thanh toán…" },
   continuePayos: { en: "Continue to PayOS", vi: "Tiếp tục tới PayOS" },
   createPayment: { en: "Create payment", vi: "Tạo thanh toán" },
-  payosRedirect: { en: "Redirecting to PayOS checkout…", vi: "Đang chuyển tới trang thanh toán PayOS…" },
+  payosRedirect: {
+    en: "Redirecting to PayOS checkout…",
+    vi: "Đang chuyển tới trang thanh toán PayOS…",
+  },
   paymentCreated: {
     en: "Payment created — waiting for admin confirmation",
     vi: "Đã tạo thanh toán — đang chờ quản trị viên xác nhận",
@@ -121,10 +124,7 @@ const creditsCopy = {
 
 const makeSchema = (t: (k: keyof typeof creditsCopy) => string) =>
   z.object({
-    amount: z.coerce
-      .number()
-      .int(t("wholeVnd"))
-      .min(10_000, t("minTopUp")),
+    amount: z.coerce.number().int(t("wholeVnd")).min(10_000, t("minTopUp")),
   });
 type Values = z.infer<ReturnType<typeof makeSchema>>;
 
@@ -312,10 +312,7 @@ export default function BillingCreditsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={t("title")}
-        description={t("description")}
-      />
+      <PageHeader title={t("title")} description={t("description")} />
 
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-4">
@@ -340,11 +337,7 @@ export default function BillingCreditsPage() {
           ) : ledger.isError ? (
             <ErrorState message={ledger.error.message} />
           ) : ledger.data.data.length === 0 ? (
-            <EmptyState
-              icon={WalletIcon}
-              title={t("noLedger")}
-              description={t("noLedgerBody")}
-            />
+            <EmptyState icon={WalletIcon} title={t("noLedger")} description={t("noLedgerBody")} />
           ) : (
             <LedgerTabs columns={columns} sections={partitionLedger(ledger.data.data)} />
           )}
@@ -563,16 +556,17 @@ export function TopUpForm({
               </FormControl>
               <FormMessage>{usdError ?? undefined}</FormMessage>
               <p className="font-mono text-xs text-muted-foreground">
-                {usdApproxVnd !== null
-                  ? `≈ ${formatVnd(usdApproxVnd)} ${t("approxExact")}`
-                  : ""}
+                {usdApproxVnd !== null ? `≈ ${formatVnd(usdApproxVnd)} ${t("approxExact")}` : ""}
               </p>
             </FormItem>
           </>
         )}
         {paymentConfig && (
           <p className="text-xs text-muted-foreground">
-            {t("maxTopUp", { max: formatVnd(paymentConfig.max_amount_vnd), minutes: paymentConfig.timeout_minutes })}
+            {t("maxTopUp", {
+              max: formatVnd(paymentConfig.max_amount_vnd),
+              minutes: paymentConfig.timeout_minutes,
+            })}
           </p>
         )}
         {payosAvailable && (
@@ -605,9 +599,7 @@ export function TopUpForm({
               />
               <span>
                 PayOS
-                <span className="block text-xs text-muted-foreground">
-                  {t("payosBody")}
-                </span>
+                <span className="block text-xs text-muted-foreground">{t("payosBody")}</span>
               </span>
             </label>
           </fieldset>
@@ -619,9 +611,7 @@ export function TopUpForm({
               ? t("continuePayos")
               : t("createPayment")}
         </Button>
-        <p className="text-xs text-muted-foreground">
-          {t("completesWhen")}
-        </p>
+        <p className="text-xs text-muted-foreground">{t("completesWhen")}</p>
       </form>
     </Form>
   );
@@ -657,9 +647,7 @@ export function SubscriptionCard({
       <p className="text-sm text-muted-foreground">
         {t("reqPerMinute", { n: subscription.rate_limit_per_minute })}
       </p>
-      <p className="mt-2 text-xs text-muted-foreground">
-        {t("unusedLost")}
-      </p>
+      <p className="mt-2 text-xs text-muted-foreground">{t("unusedLost")}</p>
     </div>
   );
 }

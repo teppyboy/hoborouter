@@ -130,9 +130,7 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
   if (error) {
     return (
       <p className="text-sm text-muted-foreground">
-        {error instanceof ApiError
-          ? t("cannotView", { message: error.message })
-          : t("loadFailed")}
+        {error instanceof ApiError ? t("cannotView", { message: error.message }) : t("loadFailed")}
       </p>
     );
   }
@@ -205,7 +203,9 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t("removeMember")}</DialogTitle>
-            <DialogDescription>{t("removeConfirm", { email: removing?.email ?? "" })}</DialogDescription>
+            <DialogDescription>
+              {t("removeConfirm", { email: removing?.email ?? "" })}
+            </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setRemoving(null)}>
@@ -231,7 +231,10 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
 function InviteForm({ workspaceId, onInvited }: { workspaceId: string; onInvited: () => void }) {
   const t = useT(membersCopy);
   const makeInviteSchema = () =>
-    z.object({ email: z.string().email(t("emailInvalid")), role: z.enum(["owner", "admin", "member"]) });
+    z.object({
+      email: z.string().email(t("emailInvalid")),
+      role: z.enum(["owner", "admin", "member"]),
+    });
   const form = useForm<z.infer<ReturnType<typeof makeInviteSchema>>>({
     resolver: zodResolver(makeInviteSchema()),
     defaultValues: { email: "", role: "member" },

@@ -15,12 +15,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setWorkspaceId: (workspaceId) => set({ workspaceId }),
     }),
     {
-    name: "hbr-workspace",
-    // Live-lookup storage (see i18n/safe-storage.ts): the default
-    // createJSONStorage(() => localStorage) bakes in the storage object at
-    // module load and breaks when the module loads before jsdom/tests install
-    // one; in the browser behavior is identical.
-    storage: safePersistStorage<WorkspaceState>(),
-  },
+      name: "hbr-workspace",
+      // Live-lookup storage (see i18n/safe-storage.ts): the default
+      // createJSONStorage(() => localStorage) bakes in the storage object at
+      // module load and breaks when the module loads before jsdom/tests install
+      // one; in the browser behavior is identical.
+      storage: safePersistStorage<WorkspaceState>(),
+    },
   ),
 );

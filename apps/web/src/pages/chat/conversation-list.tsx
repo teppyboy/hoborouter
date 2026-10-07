@@ -48,8 +48,14 @@ const listCopy = {
     en: "This conversation changed elsewhere. Reload the list and try again.",
     vi: "Hội thoại này đã thay đổi ở nơi khác. Hãy tải lại danh sách và thử lại.",
   },
-  sessionExpired: { en: "Your session expired. Sign in again.", vi: "Phiên của bạn đã hết hạn. Đăng nhập lại." },
-  gone: { en: "This conversation no longer exists for you.", vi: "Hội thoại này không còn tồn tại với bạn." },
+  sessionExpired: {
+    en: "Your session expired. Sign in again.",
+    vi: "Phiên của bạn đã hết hạn. Đăng nhập lại.",
+  },
+  gone: {
+    en: "This conversation no longer exists for you.",
+    vi: "Hội thoại này không còn tồn tại với bạn.",
+  },
   actionFailed: { en: "The action failed. Try again.", vi: "Thao tác thất bại. Thử lại." },
   renameTitle: { en: "Rename conversation", vi: "Đổi tên hội thoại" },
   renameDesc: {
@@ -258,9 +264,7 @@ export function ConversationList({
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>{t("renameTitle")}</DialogTitle>
-            <DialogDescription>
-              {t("renameDesc")}
-            </DialogDescription>
+            <DialogDescription>{t("renameDesc")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
             <Label htmlFor="conversation-rename-title">{t("titleLabel")}</Label>

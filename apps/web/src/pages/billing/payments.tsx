@@ -26,7 +26,10 @@ import { useT } from "../../lib/i18n/t";
 // Money amounts, provider names and API status values are never translated.
 const paymentsCopy = {
   title: { en: "Payments", vi: "Thanh toán" },
-  description: { en: "Top-up payment history and status.", vi: "Lịch sử và trạng thái thanh toán nạp tín dụng." },
+  description: {
+    en: "Top-up payment history and status.",
+    vi: "Lịch sử và trạng thái thanh toán nạp tín dụng.",
+  },
   noPayments: { en: "No payments yet", vi: "Chưa có thanh toán nào" },
   noPaymentsBody: {
     en: "Create a top-up on the Credits page.",
@@ -89,11 +92,7 @@ export default function BillingPaymentsPage() {
   ) : payments.isError ? (
     <ErrorState message={payments.error.message} />
   ) : payments.data.data.length === 0 ? (
-    <EmptyState
-      icon={CreditCard}
-      title={t("noPayments")}
-      description={t("noPaymentsBody")}
-    >
+    <EmptyState icon={CreditCard} title={t("noPayments")} description={t("noPaymentsBody")}>
       <Button size="sm" onClick={() => void navigate({ href: "/billing/credits" })}>
         {t("goToCredits")}
       </Button>
@@ -107,9 +106,10 @@ export default function BillingPaymentsPage() {
       <PageHeader title={t("title")} description={t("description")} />
       {selectedId && workspaceId ? (
         <PaymentsTabs
-        status={<PaymentStatus workspaceId={workspaceId} paymentId={selectedId} />}
-        history={history}
-      />      ) : (
+          status={<PaymentStatus workspaceId={workspaceId} paymentId={selectedId} />}
+          history={history}
+        />
+      ) : (
         history
       )}
     </div>
@@ -233,14 +233,13 @@ function PaymentStatus({ workspaceId, paymentId }: { workspaceId: string; paymen
             <CopyButton value={p.id} label={t("copyPaymentId")} />
           </p>
           <p className="text-xs text-muted-foreground">
-            {t("providerPrefix")} <span className="font-mono">{formatProviderLabel(p.provider)}</span> · {t("order")}{" "}
+            {t("providerPrefix")}{" "}
+            <span className="font-mono">{formatProviderLabel(p.provider)}</span> · {t("order")}{" "}
             <span className="font-mono">{p.provider_order_code}</span> · {formatDate(p.created_at)}
           </p>
           {p.status === "pending" && (
             <p className="text-xs text-muted-foreground">
-              {p.provider === "payos"
-                ? t("waitingPayos")
-                : t("waitingAdmin")}
+              {p.provider === "payos" ? t("waitingPayos") : t("waitingAdmin")}
             </p>
           )}
         </div>

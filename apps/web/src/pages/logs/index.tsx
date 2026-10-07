@@ -94,7 +94,10 @@ const logsCopy = {
   tokens: { en: "Tokens", vi: "Token" },
   cost: { en: "Cost", vi: "Chi phí" },
   status: { en: "Status", vi: "Trạng thái" },
-  ttft: { en: "Time to first token (streaming requests only)", vi: "Thời gian tới token đầu (chỉ request streaming)" },
+  ttft: {
+    en: "Time to first token (streaming requests only)",
+    vi: "Thời gian tới token đầu (chỉ request streaming)",
+  },
   latency: { en: "Latency", vi: "Độ trễ" },
   noMatching: { en: "No matching requests", vi: "Không có request khớp" },
   openRequest: { en: "Open request {id}", vi: "Mở request {id}" },
@@ -221,7 +224,11 @@ function RemoveLogButton({ requestId, onRemoved }: { requestId: string; onRemove
 
 function AllOption({ label }: { label: string }) {
   const t = useT(logsCopy);
-  return <SelectItem value="all">{t("allFilterSuffix")} {label.toLowerCase()}</SelectItem>;
+  return (
+    <SelectItem value="all">
+      {t("allFilterSuffix")} {label.toLowerCase()}
+    </SelectItem>
+  );
 }
 
 function FilterSelect({
@@ -309,15 +316,9 @@ export default function LogsPage() {
     <div className="space-y-4">
       <PageHeader title={t("title")} description={t("description")} />
       {query.data.length === 0 ? (
-        <EmptyState
-          title={t("noRequests")}
-          description={t("noRequestsDesc")}
-        />
+        <EmptyState title={t("noRequests")} description={t("noRequestsDesc")} />
       ) : visible.length === 0 ? (
-        <EmptyState
-          title={t("noUsageRequests")}
-          description={t("noUsageDesc")}
-        />
+        <EmptyState title={t("noUsageRequests")} description={t("noUsageDesc")} />
       ) : (
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -375,10 +376,7 @@ export default function LogsPage() {
                   <TableHead className="text-right">{t("tokens")}</TableHead>
                   <TableHead className="text-right">{t("cost")}</TableHead>
                   <TableHead>{t("status")}</TableHead>
-                  <TableHead
-                    className="hidden text-right md:table-cell"
-                    title={t("ttft")}
-                  >
+                  <TableHead className="hidden text-right md:table-cell" title={t("ttft")}>
                     TTFT
                   </TableHead>
                   <TableHead className="hidden text-right md:table-cell">{t("latency")}</TableHead>
@@ -500,12 +498,18 @@ export default function LogsPage() {
               <DetailField label={t("status")}>
                 <StatusBadge status={selected.status} />
               </DetailField>
-              {selected.failure && <DetailField label={t("failure")}>{selected.failure}</DetailField>}
+              {selected.failure && (
+                <DetailField label={t("failure")}>{selected.failure}</DetailField>
+              )}
               <DetailField label={t("model")}>{selected.public_model}</DetailField>
-              <DetailField label={t("provider")}>{formatProviderLabel(selected.provider)}</DetailField>
+              <DetailField label={t("provider")}>
+                {formatProviderLabel(selected.provider)}
+              </DetailField>
               <DetailField label={t("keyPrefix")}>{selected.key_prefix ?? "—"}</DetailField>
               <DetailField label={t("inputTokens")}>{selected.input_tokens}</DetailField>
-              <DetailField label={t("cachedInputTokens")}>{selected.cached_input_tokens}</DetailField>
+              <DetailField label={t("cachedInputTokens")}>
+                {selected.cached_input_tokens}
+              </DetailField>
               <DetailField label={t("reasoningTokens")}>{selected.reasoning_tokens}</DetailField>
               <DetailField label={t("outputTokens")}>{selected.output_tokens}</DetailField>
               <DetailField label={t("cost")}>
@@ -515,7 +519,9 @@ export default function LogsPage() {
               <DetailField label={t("timeToFirstToken")}>
                 {formatDuration(selected.ttft_ms)}
               </DetailField>
-              <DetailField label={t("created")}>{formatDate(new Date(selected.created_at))}</DetailField>
+              <DetailField label={t("created")}>
+                {formatDate(new Date(selected.created_at))}
+              </DetailField>
             </div>
           )}
           {selected && isAdmin === true && (

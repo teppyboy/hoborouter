@@ -372,11 +372,7 @@ export default function UsagePage() {
           title={t("costUsd")}
           value={formatUsdFromVnd(totals.spend_vnd, rate) ?? formatVnd(totals.spend_vnd)}
         />
-        <KpiCard
-          title={t("successRate")}
-          value={successRate}
-          caption={t("successRateCaption")}
-        />
+        <KpiCard title={t("successRate")} value={successRate} caption={t("successRateCaption")} />
       </div>
 
       <UsageDataTabs
