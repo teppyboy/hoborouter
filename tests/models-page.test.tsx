@@ -4,7 +4,7 @@
 // pre-existing provider/capability filters plus column-header sorting remain
 // available. Harness mirrors admin-cpa-model-names.test.tsx (jsdom + mocked
 // fetch) and auth-i18n.test.tsx (memory router for useNavigate).
-import { test, expect, beforeAll, afterAll, afterEach } from "bun:test";
+import { test, expect, beforeAll, afterAll, afterEach, mock } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, createRootRoute, createMemoryHistory } from "@tanstack/react-router";
 import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js";
@@ -42,6 +42,37 @@ const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor
 let jsdomWindow: { close: () => void } | null = null;
 
 beforeAll(async () => {
+  // mock.module is process-global in Bun and outlives mock.restore(), so the
+  // mocked module must stay faithful to the real one: same ApiError shape and
+  // an api() that goes through globalThis.fetch. Otherwise test files sharing
+  // a worker process (e.g. admin-cpa-model-names) get a network layer that
+  // never touches their fetch mock and render empty lists.
+  mock.module("../apps/web/src/lib/api", () => {
+    class ApiError extends Error {
+      status: number;
+      code: string;
+      constructor(status: number, code: string, message: string) {
+        super(message);
+        this.name = "ApiError";
+        this.status = status;
+        this.code = code;
+      }
+    }
+    return {
+      ApiError,
+      api: async <T,>(path: string, init?: RequestInit): Promise<T> => {
+        const res = await fetch(path, init);
+        if (!res.ok) throw new ApiError(res.status, "unknown", `Request failed (${res.status})`);
+        const text = await res.text();
+        if (!text) return undefined as T;
+        return JSON.parse(text) as T;
+      },
+    };
+  });
+  mock.module("../apps/web/src/lib/workspace-queries", () => ({
+    useCurrentWorkspaceId: () => "ws-models",
+    useWorkspaces: () => ({ data: [], isSuccess: false }),
+  }));
   const win = new JSDOM("", { url: "http://localhost:5173" }).window as unknown as Record<
     string,
     unknown
@@ -81,6 +112,7 @@ beforeAll(async () => {
     (globalThis as Record<string, unknown>)[k] = v;
   }
   jsdomWindow = win as unknown as { close: () => void };
+  globalThis.fetch = mockFetch as typeof fetch;
   ({ sortModels, MODEL_SORT_OPTIONS } = await import("../apps/web/src/pages/models/data"));
   ({ default: ModelsPage } = await import("../apps/web/src/pages/models"));
   // react-dom/client is not linked from the tests workspace; resolve through
@@ -93,10 +125,10 @@ beforeAll(async () => {
     };
   };
   mountRoot = createRoot;
-  globalThis.fetch = mockFetch as typeof fetch;
 });
 
 afterAll(() => {
+  mock.restore();
   globalThis.fetch = realFetch;
   for (const k of GLOBAL_KEYS) {
     const d = originals[k];
@@ -114,13 +146,14 @@ let mountRoot: (container: HTMLElement) => { render: (node: unknown) => void; un
 
 // --- harness ----------------------------------------------------------------
 
-const realFetch = globalThis.fetch;
 const jsonRes = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 let responder: (path: string) => Promise<Response> = async () => jsonRes(500, {});
+
+const realFetch = globalThis.fetch;
 const mockFetch = (input: RequestInfo | URL): Promise<Response> =>
-  responder(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+  responder(typeof input === "string" ? input : input instanceof URL ? input.pathname : input.url);
 
 const roots: { unmount: () => void }[] = [];
 

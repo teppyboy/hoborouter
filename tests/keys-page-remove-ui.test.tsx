@@ -79,24 +79,44 @@ const keysFixture = [
 
 let calls: ApiCall[] = [];
 
+// mock.module is process-global in Bun and outlives mock.restore(), so the
+// mocked module must stay faithful to the real one: same ApiError shape and an
+// api() that goes through globalThis.fetch. Otherwise test files sharing a
+// worker process (e.g. admin-cpa-model-names, which mocks fetch itself) see a
+// network layer that never touches fetch and render empty lists.
 mock.module("../apps/web/src/lib/api", () => {
   class ApiError extends Error {
     status: number;
-    constructor(status: number, message: string) {
+    code: string;
+    constructor(status: number, code: string, message: string) {
       super(message);
+      this.name = "ApiError";
       this.status = status;
+      this.code = code;
     }
   }
   return {
     ApiError,
-    api: async (path: string, init?: RequestInit) => {
-      calls.push({ path, init });
-      const method = init?.method ?? "GET";
-      if (method === "GET" && path.endsWith("/keys")) return keysFixture;
-      return {};
+    api: async <T,>(path: string, init?: RequestInit): Promise<T> => {
+      const res = await fetch(path, init);
+      if (!res.ok) throw new ApiError(res.status, "unknown", `Request failed (${res.status})`);
+      const text = await res.text();
+      if (!text) return undefined as T;
+      return JSON.parse(text) as T;
     },
   };
 });
+
+const realFetch = globalThis.fetch;
+const jsonRes = (status: number, body: unknown) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const mockFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  calls.push({ path: String(input), init });
+  const method = init?.method ?? "GET";
+  if (method === "GET" && String(input).endsWith("/keys"))
+    return Promise.resolve(jsonRes(200, keysFixture));
+  return Promise.resolve(jsonRes(200, {}));
+};
 mock.module("../apps/web/src/lib/workspace-queries", () => ({
   useCurrentWorkspaceId: () => "ws-test",
   useWorkspaces: () => ({ data: [], isSuccess: false }),
@@ -105,16 +125,10 @@ mock.module("../apps/web/src/lib/workspace-queries", () => ({
 let KeysPage: (typeof import("../apps/web/src/pages/keys/index"))["default"];
 
 beforeAll(async () => {
-  const win = new JSDOM("", { url: "http://localhost:5173" }).window as unknown as {
-    document: object;
-    localStorage: Storage;
-    location: unknown;
-    matchMedia: unknown;
-    getComputedStyle: (element: Element) => CSSStyleDeclaration;
-    Element: typeof Element;
-    HTMLElement: typeof HTMLElement;
-    close: () => void;
-  };
+  const win = new JSDOM("", { url: "http://localhost:5173" }).window as unknown as Record<
+    string,
+    unknown
+  >;
   win.matchMedia = () => ({
     matches: false,
     media: "",
@@ -124,9 +138,9 @@ beforeAll(async () => {
     removeListener() {},
   });
   // Radix popover internals need these; jsdom has neither.
-  win.Element.prototype.hasPointerCapture = () => false;
-  win.Element.prototype.releasePointerCapture = () => {};
-  win.HTMLElement.prototype.scrollIntoView = () => {};
+  (win.Element as typeof Element).prototype.hasPointerCapture = () => false;
+  (win.Element as typeof Element).prototype.releasePointerCapture = () => {};
+  (win.HTMLElement as typeof HTMLElement).prototype.scrollIntoView = () => {};
   const raf = (cb: (t: number) => void) =>
     setTimeout(() => cb(Date.now()), 16) as unknown as number;
   const values: Record<string, unknown> = {
@@ -134,7 +148,7 @@ beforeAll(async () => {
     document: win.document,
     localStorage: win.localStorage,
     location: win.location,
-    getComputedStyle: win.getComputedStyle.bind(win),
+    getComputedStyle: (win.getComputedStyle as (element: Element) => CSSStyleDeclaration).bind(win),
     requestAnimationFrame: raf,
     cancelAnimationFrame: (id: number) =>
       clearTimeout(id as unknown as ReturnType<typeof setTimeout>),
@@ -185,15 +199,29 @@ beforeAll(async () => {
   for (const [k, v] of Object.entries(values)) {
     (globalThis as Record<string, unknown>)[k] = v;
   }
+  globalThis.fetch = mockFetch as typeof fetch;
   ({ default: KeysPage } = await import("../apps/web/src/pages/keys/index"));
 });
 
-// Globals are deliberately left in place (window/document/etc. stay jsdom's):
-// restoring them while radix's MutationObserver callbacks can still fire
-// produced cross-realm dispatchEvent errors that leaked into later test
-// files. The jsdom window stays alive for the remainder of the run.
-afterAll(() => {
+const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
+
+beforeAll(() => {
+  for (const key of GLOBAL_KEYS) {
+    originals[key] = Object.getOwnPropertyDescriptor(globalThis, key);
+  }
+});
+
+// Globals are restored after mock.restore(); radix's MutationObserver callbacks
+// can still fire briefly after unmount, so drain one macrotask first.
+afterAll(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 50));
   mock.restore();
+  for (const key of GLOBAL_KEYS) {
+    const descriptor = originals[key];
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+    else delete (globalThis as Record<string, unknown>)[key];
+  }
+  globalThis.fetch = realFetch;
 });
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
