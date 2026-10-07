@@ -557,7 +557,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <nav className="flex-1 overflow-y-auto p-2 text-sm">
             <NavLinks pathname={pathname} collapsed={displayCollapsed} isAdmin={isAdmin} />
           </nav>
-
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-border bg-background/80 pr-4 pl-[max(1rem,env(safe-area-inset-left))] backdrop-blur">
