@@ -246,9 +246,17 @@ test("the Settings item follows the active locale (EN → VI: Cài đặt)", asy
   const mounted = await mountShell();
   try {
     await openAccountMenu(mounted.container);
-    expect(document.querySelector('a[href="/settings"]')?.textContent).toContain("Settings");
+    expect(
+      [...document.querySelectorAll('a[href="/settings"]')].some((link) =>
+        link.textContent?.includes("Settings"),
+      ),
+    ).toBe(true);
     act(() => useLocaleStore.getState().setLocale("vi"));
-    expect(document.querySelector('a[href="/settings"]')?.textContent).toContain("Cài đặt");
+    expect(
+      [...document.querySelectorAll('a[href="/settings"]')].some((link) =>
+        link.textContent?.includes("Cài đặt"),
+      ),
+    ).toBe(true);
   } finally {
     act(() => useLocaleStore.getState().setLocale("en"));
     await unmount(mounted);

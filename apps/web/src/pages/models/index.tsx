@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { PageHeader, DataTable, EmptyState, ErrorState } from "../../components/page";
+import { PageHeader, DataTable, EmptyState, ErrorState, ScrollPanel } from "../../components/page";
 import { Boxes } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import {
@@ -15,7 +15,15 @@ import { useIsAdmin } from "../../components/app-shell";
 // Created by shell writer; route is splat "/models/$".
 import { modelHref } from "../../lib/models";
 import { formatProviderLabel } from "../../lib/display";
-import { allCapabilities, allProviders, useCatalogModels, type CatalogModel } from "./data";
+import {
+  allCapabilities,
+  allProviders,
+  sortModels,
+  MODEL_SORT_OPTIONS,
+  useCatalogModels,
+  type CatalogModel,
+  type ModelSortMode,
+} from "./data";
 import { useT } from "../../lib/i18n/t";
 
 // Models catalog copy: inline LocaleEntry set (see lib/i18n/common.ts).
@@ -65,6 +73,7 @@ export default function ModelsPage() {
   const [search, setSearch] = useState("");
   const [provider, setProvider] = useState("all");
   const [cap, setCap] = useState("all");
+  const [sort, setSort] = useState<ModelSortMode>("recommended");
   const isAdmin = useIsAdmin();
 
   const providers = useMemo(() => allProviders(models), [models]);
@@ -81,6 +90,7 @@ export default function ModelsPage() {
       ),
     [models, provider, cap, search],
   );
+  const ordered = useMemo(() => sortModels(filtered, sort), [filtered, sort]);
 
   const columns = [
     {
@@ -185,6 +195,18 @@ export default function ModelsPage() {
             </SelectContent>
           </Select>
         )}
+        <Select value={sort} onValueChange={(value) => setSort(value as ModelSortMode)}>
+          <SelectTrigger aria-label="Sort models" className="h-8 w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {MODEL_SORT_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       {loading ? (
         <div className="space-y-2">
@@ -192,7 +214,7 @@ export default function ModelsPage() {
             <div key={i} className="h-9 animate-pulse rounded bg-muted" />
           ))}
         </div>
-      ) : filtered.length === 0 ? (
+      ) : ordered.length === 0 ? (
         <EmptyState
           icon={Boxes}
           title={t("noneAvailable")}
@@ -202,7 +224,9 @@ export default function ModelsPage() {
         />
       ) : (
         <div className="rounded-lg border border-border">
-          <DataTable columns={columns} data={filtered} />
+          <ScrollPanel label="Model catalog" stickyHeader>
+            <DataTable key={sort} columns={columns} data={ordered} />
+          </ScrollPanel>
         </div>
       )}
     </div>

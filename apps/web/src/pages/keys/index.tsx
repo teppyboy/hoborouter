@@ -57,6 +57,14 @@ const keysCopy = {
   rename: { en: "Rename", vi: "Đổi tên" },
   modelRestrictions: { en: "Model restrictions", vi: "Giới hạn mô hình" },
   revoke: { en: "Revoke", vi: "Thu hồi" },
+  remove: { en: "Remove", vi: "Xoá" },
+  removeKey: { en: "Remove key", vi: "Xoá key" },
+  removeConfirm: {
+    en: "Remove “{name}” from this workspace? It will disappear from the list and stop authenticating requests.",
+    vi: "Xoá “{name}” khỏi workspace? Key sẽ biến mất khỏi danh sách và không còn xác thực request.",
+  },
+  keyRemoved: { en: "Key removed", vi: "Đã xoá key" },
+  removeFailed: { en: "Remove failed", vi: "Xoá thất bại" },
   title: { en: "API keys", vi: "API key" },
   description: {
     en: "Keys authenticate requests to the router. Admin/owner only.",
@@ -144,6 +152,7 @@ export default function KeysPage() {
   const [restrictFor, setRestrictFor] = useState<ApiKey | null>(null);
   const [renameFor, setRenameFor] = useState<ApiKey | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ApiKey | null>(null);
   const [filter, setFilter] = useState("");
 
   const keysQuery = useQuery({
@@ -205,6 +214,17 @@ export default function KeysPage() {
       invalidate();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : t("revokeFailed")),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (keyId: string) =>
+      api(`/api/v1/workspaces/${workspaceId}/keys/${keyId}/remove`, { method: "POST" }),
+    onSuccess: () => {
+      toast(t("keyRemoved"));
+      setRemoveTarget(null);
+      invalidate();
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : t("removeFailed")),
   });
 
   const columns: ColumnDef<ApiKey, unknown>[] = [
@@ -270,6 +290,9 @@ export default function KeysPage() {
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-destructive" onClick={() => setRevokeTarget(key)}>
                 {t("revoke")}
+              </DropdownMenuItem>
+              <DropdownMenuItem className="text-destructive" onClick={() => setRemoveTarget(key)}>
+                {t("remove")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -376,6 +399,35 @@ export default function KeysPage() {
           }}
         />
       )}
+
+      <Dialog
+        open={!!removeTarget}
+        onOpenChange={(open) => {
+          if (!open) setRemoveTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("removeKey")}</DialogTitle>
+            <DialogDescription>
+              {t("removeConfirm", { name: removeTarget?.name ?? "" })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRemoveTarget(null)}>
+              {t("cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={removeMutation.isPending}
+              onClick={() => removeTarget && removeMutation.mutate(removeTarget.id)}
+            >
+              {t("remove")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={!!revokeTarget}
