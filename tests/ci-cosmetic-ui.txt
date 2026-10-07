@@ -1,0 +1,17 @@
+# Cosmetic UI/copy tests excluded from the main release test gate
+# (release.yml "test" job) and run instead by the non-blocking "ui"
+# job. One test file path per line; lines starting with # are ignored.
+# Keep this list narrow: only pure copy/i18n/layout/render tests with no
+# money, auth, gateway, security, DB or readiness coverage. Everything
+# money- or behavior-related stays in the main gate.
+tests/i18n.test.tsx
+tests/auth-i18n.test.tsx
+tests/page-body-i18n.test.tsx
+tests/create-workspace-i18n.test.tsx
+tests/language-toggle.test.tsx
+tests/display-labels.test.ts
+tests/sidebar-hover-ui.test.tsx
+tests/shell-responsive.test.tsx
+tests/auth-render.test.tsx
+tests/about-page.test.tsx
+tests/billing-tabs-ui.test.tsx

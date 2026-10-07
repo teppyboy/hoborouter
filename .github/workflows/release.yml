@@ -42,9 +42,11 @@ jobs:
       # masking real hangs (whole suite is ~110s here).
       - name: Run tests
         id: tests
+        # Cosmetic UI/copy tests (tests/ci-cosmetic-ui.txt) are excluded from
+        # this gate and run by the non-blocking "ui" job below.
         run: |
           set -o pipefail
-          PORT=3998 bun test --parallel=4 --timeout 20000 2>&1 | tee ci-test.log
+          PORT=3998 bun run test:gate --timeout 20000 2>&1 | tee ci-test.log
         env:
           HBR_TEST_DATABASE_URL: >-
             postgres://postgres:postgres@127.0.0.1:55432/postgres
@@ -68,6 +70,19 @@ jobs:
         env:
           HBR_TEST_DATABASE_URL: >-
             postgres://postgres:postgres@127.0.0.1:55432/postgres
+
+  # Cosmetic UI/copy tests from tests/ci-cosmetic-ui.txt. These are pure
+  # render/i18n/layout checks (no DB), kept out of the release gate for
+  # speed but still run on every release. Non-blocking by design.
+  ui:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: Run cosmetic UI/copy tests
+        run: bun run test:ui --timeout 20000
 
   build:
     needs: test

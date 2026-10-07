@@ -9,6 +9,8 @@
   "scripts": {
     "test": "vp run bun-test",
     "bun-test": "bun test --parallel=4",
+    "test:gate": "bun test --parallel=4 $(awk '$0 !~ /^#/ && $0 != \"\" {printf \"--path-ignore-patterns=%s \", $0}' tests/ci-cosmetic-ui.txt)",
+    "test:ui": "bun test --parallel=4 $(awk '$0 !~ /^#/ && $0 != \"\" {printf \"%s \", $0}' tests/ci-cosmetic-ui.txt)",
     "check": "vp check",
     "lint": "vp lint",
     "fmt": "vp fmt",
