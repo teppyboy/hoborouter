@@ -14,6 +14,13 @@ const CPA_KEY = "test-cpa-secret";
 const CHAT_PATH = "/v1/chat/completions";
 const RATE_LIMIT = 2; // plan rate_limit_per_minute
 const DAY_MS = 86_400_000;
+// Pinned limiter clock: every same-window assertion in this suite (N+1 -> 429,
+// erode-count checks, streaming 429) must land inside one 60s window. The real
+// Date.now clock can cross a window boundary mid-test (streaming requests are
+// the slowest: SSE body + settlement), making the 429 flaky — a fresh window
+// legitimately allows the over-limit request. Subscription rows stay seeded on
+// the real clock because reserveRequest re-checks period_end with Date.now().
+const T0 = 1_700_000_000_000;
 
 const ENV_KEYS = ["HBR_GATEWAY_ENABLED", "CPA_BASE_URL", "CPA_ACCESS_KEY", "HBR_USD_VND_RATE"];
 let savedEnv: Record<string, string | undefined> = {};
@@ -97,6 +104,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  setRateLimitClock(Date.now);
   fakeServer?.stop(true);
 });
 
@@ -225,7 +233,7 @@ beforeEach(async () => {
   process.env.HBR_USD_VND_RATE = "26000";
   delete process.env.CPA_BASE_URL;
   resetSubscriptionRateLimits();
-  setRateLimitClock(Date.now);
+  setRateLimitClock(() => T0);
   // Fresh subscription row (the topup-only test removes it) + fresh baseline.
   await q(db, "DELETE FROM subscriptions");
   await seedSubscription(db);
@@ -351,7 +359,6 @@ describe("subscription gateway rate limit", () => {
   });
 
   test("rollover: topup fallback in the old window does not affect the fresh window", async () => {
-    const T0 = 1_700_000_000_000;
     setRateLimitClock(() => T0);
     startFakeCpa(() => chatJson());
     await setTopup(1000000);
@@ -368,7 +375,6 @@ describe("subscription gateway rate limit", () => {
   });
 
   test("window rollover resets the count (injected clock)", async () => {
-    const T0 = 1_700_000_000_000;
     setRateLimitClock(() => T0);
     startFakeCpa(() => chatJson());
     await setTopup(0);
@@ -395,6 +401,11 @@ describe("subscription gateway rate limit", () => {
   });
 
   test("streaming requests follow the same rules", async () => {
+    // Re-pin explicitly: streaming requests are the slowest in this suite (SSE
+    // body + settlement), so with the real Date.now clock a 60s window
+    // boundary can fall between the counted requests and the over-limit
+    // request, making the 429 flaky (fresh window legitimately allows it).
+    setRateLimitClock(() => T0);
     startFakeCpa(
       () => new Response(chatSse(), { headers: { "content-type": "text/event-stream" } }),
     );
@@ -411,5 +422,12 @@ describe("subscription gateway rate limit", () => {
       "subscription_rate_limited",
     );
     expect(over.headers.get("retry-after")).toBeTruthy();
+    // Window rollover resets the count for streaming too: the next window
+    // funds the subscription wallet again (same semantics as non-streaming).
+    setRateLimitClock(() => T0 + 61_000);
+    const fresh = await gwr(CHAT_PATH, chatBody({ stream: true }));
+    expect(fresh.status).toBe(200);
+    expect(await fresh.text()).toContain("data: [DONE]");
+    expect(await subFundedCount()).toBe(RATE_LIMIT + 1);
   });
 });
