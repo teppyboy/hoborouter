@@ -9,6 +9,9 @@ deploy/
 *.db-shm
 *.sqlite*
 .pi/
+.worktrees/
+.dev/
+.superpowers/
 **/.env
 **/.env.*
 docs
