@@ -120,6 +120,20 @@ export async function makeInstanceAdmin(db: Db, userId: string) {
   );
 }
 
+/**
+ * Poll a condition until it holds or the timeout elapses. Used to await
+ * asynchronous server-side paths (e.g. abort settlement) instead of fixed
+ * sleeps that are timing-dependent on slow CI.
+ */
+export async function waitFor(fn: () => Promise<boolean>, ms = 2000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (await fn()) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error("condition not met within timeout");
+}
+
 export async function userIdByEmail(db: Db, email: string): Promise<string> {
   const res = (await db.execute(
     sql`SELECT id FROM users WHERE email = ${email} LIMIT 1`,

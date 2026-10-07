@@ -5,7 +5,7 @@ import { describe, expect, test, beforeAll, afterAll, beforeEach, afterEach } fr
 import { Elysia } from "elysia";
 import { createTestDb } from "@hoborouter/db";
 import { hashApiKey } from "@hoborouter/keys";
-import { q, trackDrop, makeApp } from "./helpers";
+import { q, trackDrop, makeApp, waitFor } from "./helpers";
 import { gatewayRoutes } from "../src/routes/v1-gateway";
 
 const PLAINTEXT = "sk-hbr-gw-test-key";
@@ -303,11 +303,17 @@ describe("gateway core", () => {
     const reader = res.body!.getReader();
     await reader.read();
     await reader.cancel();
-    await new Promise((r) => setTimeout(r, 100));
-    expect(upstreamAborted).toBe(true);
-    const last = (
+    // Abort settlement is asynchronous; poll instead of a fixed sleep so the
+    // test is not timing-dependent on slow CI.
+    let last = (
       await q(db, "SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1")
     )[0] as { status: string };
+    await waitFor(async () => {
+      last = (
+        await q(db, "SELECT status FROM requests ORDER BY created_at DESC, id DESC LIMIT 1")
+      )[0] as { status: string };
+      return upstreamAborted && last.status === "client_abort";
+    });
     expect(last.status).toBe("client_abort");
     expect((await lastCharge()).status).toBe("settled_full_hold");
   });
