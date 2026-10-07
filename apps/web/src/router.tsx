@@ -103,7 +103,9 @@ const protectedLayout = createRoute({
 });
 
 /** Protected page route (chunk loaded from lib/prefetch). */
-function protectedRoute(path: string, PageComponent: React.ComponentType) {
+// `<const P>` keeps the call-site path literal so typed `Link to=` targets
+// (e.g. the account-menu Settings item) include protected routes.
+function protectedRoute<const P extends string>(path: P, PageComponent: React.ComponentType) {
   return createRoute({
     getParentRoute: () => protectedLayout,
     path,
