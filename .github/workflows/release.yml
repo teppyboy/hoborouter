@@ -42,6 +42,12 @@ jobs:
       # masking real hangs (whole suite is ~110s here).
       - name: Run tests
         id: tests
+        # continue-on-error keeps the job alive so the marker-gated retry step
+        # below can evaluate the failure; the job's final status is decided by
+        # the retry step (explicit fail when both attempts fail, success when
+        # the retry recovers). build needs this job, so a real failure still
+        # blocks the release.
+        continue-on-error: true
         # Cosmetic UI/copy tests (tests/ci-cosmetic-ui.txt) are excluded from
         # this gate and run by the non-blocking "ui" job below.
         run: |
@@ -56,8 +62,10 @@ jobs:
       # log shows that transient marker: any other failure (assertion, timeout,
       # crash) exits here unchanged, and deterministic failures reproduce on
       # the retry run anyway, so fail-fast for real regressions is preserved.
+      # continue-on-error above means failure() is false here; the outcome is
+      # still 'failure' on the initial attempt, so gate on that instead.
       - name: Retry tests only on transient Postgres connection loss
-        if: failure() && steps.tests.outcome == 'failure'
+        if: steps.tests.outcome == 'failure'
         run: |
           if ! grep -q 'PostgresError: Connection closed' ci-test.log; then
             echo "No transient 'Connection closed' error in log; failing as-is."
@@ -66,7 +74,12 @@ jobs:
           echo 'Transient PostgresError: Connection closed detected;'
           echo 'retrying once.'
           sleep 5
-          PORT=3998 bun test --parallel=4 --timeout 20000
+          set -o pipefail
+          if ! PORT=3998 bun test --parallel=4 \
+            --timeout 20000 2>&1 | tee ci-retry.log; then
+            echo 'Retry also failed; both attempts failed.'
+            exit 1
+          fi
         env:
           HBR_TEST_DATABASE_URL: >-
             postgres://postgres:postgres@127.0.0.1:55432/postgres
