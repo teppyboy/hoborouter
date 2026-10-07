@@ -9,6 +9,53 @@ import { Label } from "../../components/ui/label";
 import { PageHeader } from "../../components/page";
 import { api } from "../../lib/api";
 import { AdminGate, useAdminQuery } from "./shared";
+import { useT } from "../../lib/i18n/t";
+
+// Admin settings copy: inline LocaleEntry set (see lib/i18n/common.ts).
+// Money amounts and integer field values are never translated.
+const adminSettingsCopy = {
+  saved: { en: "Settings saved", vi: "Đã lưu cài đặt" },
+  loading: { en: "Loading…", vi: "Đang tải…" },
+  loadFailed: { en: "Failed to load settings", vi: "Không tải được cài đặt" },
+  promptCaching: { en: "Prompt caching", vi: "Prompt caching" },
+  promptCachingLabel: { en: "Prompt caching (all models)", vi: "Prompt caching (mọi mô hình)" },
+  promptCachingHint: {
+    en: "When off, cached tokens are billed at the full input price. Requests are sent unchanged; providers may still cache.",
+    vi: "Khi tắt, token cache được tính theo giá input đầy đủ. Request được gửi nguyên bản; nhà cung cấp vẫn có thể cache.",
+  },
+  bonus: { en: "First top-up bonus", vi: "Thưởng nạp lần đầu" },
+  bonusLabel: { en: "Bonus on a workspace's first paid top-up", vi: "Thưởng cho lần nạp trả phí đầu tiên của workspace" },
+  bonusHint: {
+    en: "One-time extra credit when a workspace's first top-up payment succeeds.",
+    vi: "Tín dụng thêm một lần khi lần nạp đầu tiên của workspace thành công.",
+  },
+  bonusAmount: { en: "Bonus amount (VND)", vi: "Số tiền thưởng (VND)" },
+  saveAmount: { en: "Save amount", vi: "Lưu số tiền" },
+  noBonus: {
+    en: "No valid bonus amount is configured — first top-ups get no bonus until one is set.",
+    vi: "Chưa cấu hình số tiền thưởng hợp lệ — lần nạp đầu sẽ không có thưởng cho đến khi đặt.",
+  },
+  paymentControls: { en: "Payment controls", vi: "Điều khiển thanh toán" },
+  timeoutLabel: { en: "Payment timeout (minutes)", vi: "Hạn thanh toán (phút)" },
+  timeoutHint: {
+    en: "Pending payments expire after this many minutes ({min}–{max}).",
+    vi: "Thanh toán chờ hết hạn sau số phút này ({min}–{max}).",
+  },
+  maxTopUpLabel: { en: "Max top-up amount (VND)", vi: "Số tiền nạp tối đa (VND)" },
+  maxTopUpHint: {
+    en: "Largest single top-up accepted; larger requests are rejected.",
+    vi: "Mức nạp đơn lẻ lớn nhất được chấp nhận; yêu cầu lớn hơn bị từ chối.",
+  },
+  rateLabel: { en: "USD → VND rate", vi: "Tỷ giá USD → VND" },
+  rateHint: {
+    en: "VND per 1 USD; converts USD top-up input into VND credit.",
+    vi: "VND trên 1 USD; quy đổi số tiền nạp USD thành tín dụng VND.",
+  },
+  saving: { en: "Saving…", vi: "Đang lưu…" },
+  save: { en: "Save", vi: "Lưu" },
+  title: { en: "Instance settings", vi: "Cài đặt instance" },
+  description: { en: "Global platform settings.", vi: "Cài đặt toàn hệ thống." },
+} as const;
 
 interface AdminSettings {
   prompt_caching_enabled: boolean;
@@ -36,6 +83,7 @@ function PromptCachingCard({
 }: {
   query: { data?: AdminSettings; isPending: boolean; error: unknown };
 }) {
+  const t = useT(adminSettingsCopy);
   const qc = useQueryClient();
   const mutation = useMutation({
     mutationFn: (enabled: boolean) =>
@@ -44,32 +92,31 @@ function PromptCachingCard({
         body: JSON.stringify({ prompt_caching_enabled: enabled }),
       }),
     onSuccess: () => {
-      toast("Settings saved");
+      toast(t("saved"));
       void qc.invalidateQueries({ queryKey: ["admin", "settings"] });
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Prompt caching</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("promptCaching")}</CardTitle>
       </CardHeader>
       <CardContent>
         {query.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">{t("loading")}</p>
         ) : query.error ? (
           <p className="text-sm text-destructive">
-            {query.error instanceof Error ? query.error.message : "Failed to load settings"}
+            {query.error instanceof Error ? query.error.message : t("loadFailed")}
           </p>
         ) : query.data ? (
           <div className="flex items-center justify-between gap-4">
             {" "}
             <div className="grid gap-1">
-              <Label htmlFor="prompt_caching">Prompt caching (all models)</Label>
+              <Label htmlFor="prompt_caching">{t("promptCachingLabel")}</Label>
               <p className="text-xs text-muted-foreground">
-                When off, cached tokens are billed at the full input price. Requests are sent
-                unchanged; providers may still cache.
+                {t("promptCachingHint")}
               </p>
             </div>
             <Switch
@@ -90,6 +137,7 @@ function FirstTopupBonusCard({
 }: {
   query: { data?: AdminSettings; isPending: boolean; error: unknown };
 }) {
+  const t = useT(adminSettingsCopy);
   const qc = useQueryClient();
   const [amount, setAmount] = useState<string | null>(null);
   const mutation = useMutation({
@@ -99,11 +147,11 @@ function FirstTopupBonusCard({
         body: JSON.stringify(body),
       }),
     onSuccess: () => {
-      toast("Settings saved");
+      toast(t("saved"));
       setAmount(null);
       void qc.invalidateQueries({ queryKey: ["admin", "settings"] });
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
   const current = query.data?.first_topup_bonus_amount_vnd ?? null;
   const parsed = amount === null ? null : Number(amount.trim());
@@ -113,22 +161,22 @@ function FirstTopupBonusCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">First top-up bonus</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("bonus")}</CardTitle>
       </CardHeader>
       <CardContent>
         {query.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">{t("loading")}</p>
         ) : query.error ? (
           <p className="text-sm text-destructive">
-            {query.error instanceof Error ? query.error.message : "Failed to load settings"}
+            {query.error instanceof Error ? query.error.message : t("loadFailed")}
           </p>
         ) : query.data ? (
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-4">
               <div className="grid gap-1">
-                <Label htmlFor="first_topup_bonus">Bonus on a workspace's first paid top-up</Label>
+                <Label htmlFor="first_topup_bonus">{t("bonusLabel")}</Label>
                 <p className="text-xs text-muted-foreground">
-                  One-time extra credit when a workspace's first top-up payment succeeds.
+                  {t("bonusHint")}
                 </p>
               </div>
               <Switch
@@ -140,7 +188,7 @@ function FirstTopupBonusCard({
             </div>
             <div className="flex items-end gap-2">
               <div className="grid gap-1">
-                <Label htmlFor="first_topup_bonus_amount">Bonus amount (VND)</Label>
+                <Label htmlFor="first_topup_bonus_amount">{t("bonusAmount")}</Label>
                 <Input
                   id="first_topup_bonus_amount"
                   value={amount ?? (current === null ? "" : String(current))}
@@ -160,12 +208,12 @@ function FirstTopupBonusCard({
                   })
                 }
               >
-                Save amount
+                {t("saveAmount")}
               </Button>
             </div>
             {current === null && (
               <p className="text-xs text-muted-foreground">
-                No valid bonus amount is configured — first top-ups get no bonus until one is set.
+                {t("noBonus")}
               </p>
             )}
           </div>
@@ -185,24 +233,25 @@ export function PaymentControlsCard({
 }: {
   query: { data?: AdminSettings; isPending: boolean; error: unknown };
 }) {
+  const t = useT(adminSettingsCopy);
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Payment controls</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("paymentControls")}</CardTitle>
       </CardHeader>
       <CardContent>
         {query.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">{t("loading")}</p>
         ) : query.error ? (
           <p className="text-sm text-destructive">
-            {query.error instanceof Error ? query.error.message : "Failed to load settings"}
+            {query.error instanceof Error ? query.error.message : t("loadFailed")}
           </p>
         ) : query.data ? (
           <div className="space-y-6">
             <PaymentIntegerField
               field="payment_timeout_minutes"
-              label="Payment timeout (minutes)"
-              hint={`Pending payments expire after this many minutes (${PAYMENT_TIMEOUT_MIN}–${PAYMENT_TIMEOUT_MAX}).`}
+              label={t("timeoutLabel")}
+              hint={t("timeoutHint", { min: PAYMENT_TIMEOUT_MIN, max: PAYMENT_TIMEOUT_MAX })}
               placeholder="30"
               current={query.data.payment_timeout_minutes}
               min={PAYMENT_TIMEOUT_MIN}
@@ -210,15 +259,15 @@ export function PaymentControlsCard({
             />
             <PaymentIntegerField
               field="payment_max_amount_vnd"
-              label="Max top-up amount (VND)"
-              hint="Largest single top-up accepted; larger requests are rejected."
+              label={t("maxTopUpLabel")}
+              hint={t("maxTopUpHint")}
               placeholder="100000000"
               current={query.data.payment_max_amount_vnd}
             />
             <PaymentIntegerField
               field="payment_usd_vnd_rate"
-              label="USD → VND rate"
-              hint="VND per 1 USD; converts USD top-up input into VND credit."
+              label={t("rateLabel")}
+              hint={t("rateHint")}
               placeholder="26000"
               current={query.data.payment_usd_vnd_rate}
             />
@@ -247,6 +296,7 @@ function PaymentIntegerField({
   min?: number;
   max?: number;
 }) {
+  const t = useT(adminSettingsCopy);
   const qc = useQueryClient();
   const [value, setValue] = useState<string | null>(null);
   const mutation = useMutation({
@@ -256,11 +306,11 @@ function PaymentIntegerField({
         body: JSON.stringify({ [field]: n }),
       }),
     onSuccess: () => {
-      toast("Settings saved");
+      toast(t("saved"));
       setValue(null);
       void qc.invalidateQueries({ queryKey: ["admin", "settings"] });
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e: Error) => toast.error(e.message),
   });
   const parsed = value === null ? null : parsePositiveIntegerField(value);
   const valid =
@@ -287,7 +337,7 @@ function PaymentIntegerField({
           disabled={value === null || !valid || mutation.isPending}
           onClick={() => parsed !== null && mutation.mutate(parsed)}
         >
-          {mutation.isPending ? "Saving…" : "Save"}
+          {mutation.isPending ? t("saving") : t("save")}
         </Button>
       </div>
     </div>
@@ -295,11 +345,12 @@ function PaymentIntegerField({
 }
 
 export default function AdminSettingsPage() {
+  const t = useT(adminSettingsCopy);
   const query = useAdminQuery<AdminSettings>(["admin", "settings"], "/api/v1/admin/settings");
   return (
     // No p-6: router wrapper already pads the page; double padding starves 375px phones.
     <div className="mx-auto w-full max-w-4xl">
-      <PageHeader title="Instance settings" description="Global platform settings." />
+      <PageHeader title={t("title")} description={t("description")} />
       <AdminGate query={query}>
         <div className="mt-6 space-y-4">
           <PromptCachingCard query={query} />

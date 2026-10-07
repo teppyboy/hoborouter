@@ -11,6 +11,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // lib/auth runs createAuthClient (window.location.origin) at module load;
 // stub a minimal window so the SSR render can import the page.
 (globalThis as { window?: unknown }).window ??= { location: { origin: "http://localhost" } };
+// The chat page imports the persisted hbr-locale store at module load; stub
+// localStorage so the persist middleware has storage in this SSR-only file.
+(globalThis as { localStorage?: unknown }).localStorage ??= {
+  getItem: () => null,
+  setItem: () => {},
+  removeItem: () => {},
+};
 const { ChatPage } = await import("../apps/web/src/pages/chat");
 
 function render(): string {

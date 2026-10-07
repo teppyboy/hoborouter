@@ -30,6 +30,29 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "../../compone
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 import { formatDate } from "../../lib/format";
 import { AdminGate, useAdminQuery } from "./shared";
+import { useT } from "../../lib/i18n/t";
+
+// Audit log copy: inline LocaleEntry set (see lib/i18n/common.ts). Action
+// names, actor/target identifiers and JSON details are never translated.
+const auditCopy = {
+  time: { en: "Time", vi: "Thời gian" },
+  action: { en: "Action", vi: "Hành động" },
+  actor: { en: "Actor", vi: "Người thực hiện" },
+  target: { en: "Target", vi: "Đối tượng" },
+  workspace: { en: "Workspace", vi: "Workspace" },
+  details: { en: "Details", vi: "Chi tiết" },
+  title: { en: "Audit log", vi: "Nhật ký kiểm toán" },
+  description: {
+    en: "Actions taken across the instance.",
+    vi: "Các hành động thực hiện trên toàn instance.",
+  },
+  search: { en: "Search…", vi: "Tìm…" },
+  allActions: { en: "All actions", vi: "Tất cả hành động" },
+  noEntries: { en: "No audit entries", vi: "Không có mục kiểm toán" },
+  eventAria: { en: "Audit event {action}", vi: "Sự kiện kiểm toán {action}" },
+  detailsTitle: { en: "Audit event details", vi: "Chi tiết sự kiện kiểm toán" },
+  eventId: { en: "Event ID", vi: "ID sự kiện" },
+} as const;
 
 /** Enriched audit row from GET /api/v1/audit (server resolves labels). */
 export interface AuditEntry {
@@ -149,10 +172,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 const typeBadge = (t: string) => t.replace(" ", "-");
 
-const columns: ColumnDef<AuditEntry, unknown>[] = [
+const auditColumns = (t: (k: keyof typeof auditCopy) => string): ColumnDef<AuditEntry, unknown>[] => [
   {
     accessorKey: "created_at",
-    header: "Time",
+    header: t("time"),
     cell: (c) => {
       const ms = c.getValue<number>();
       const iso = new Date(ms).toISOString();
@@ -171,7 +194,7 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
   },
   {
     accessorKey: "action",
-    header: "Action",
+    header: t("action"),
     cell: (c) => (
       <Hover tip={<span className="font-mono">{c.getValue<string>()}</span>}>
         <span className={truncate}>{humanizeAction(c.getValue<string>())}</span>
@@ -180,7 +203,7 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
   },
   {
     accessorKey: "actor",
-    header: "Actor",
+    header: t("actor"),
     cell: (c) => {
       const actor = c.getValue<AuditEntry["actor"]>();
       if (!actor?.email)
@@ -202,7 +225,7 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
   },
   {
     accessorKey: "target",
-    header: "Target",
+    header: t("target"),
     cell: ({ row }) => {
       const r = row.original;
       if (!r.target)
@@ -226,7 +249,7 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
   },
   {
     accessorKey: "workspace",
-    header: "Workspace",
+    header: t("workspace"),
     cell: (c) => {
       const ws = c.getValue<AuditEntry["workspace"]>();
       return <span className={truncate}>{ws?.name ?? "—"}</span>;
@@ -234,7 +257,7 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
   },
   {
     accessorKey: "detail",
-    header: "Details",
+    header: t("details"),
     enableSorting: false,
     cell: ({ row }) => (
       <span className={`${truncate} font-mono text-xs text-muted-foreground`}>
@@ -244,7 +267,10 @@ const columns: ColumnDef<AuditEntry, unknown>[] = [
   },
 ];
 
+
 export default function AdminAuditPage() {
+  const t = useT(auditCopy);
+  const cols = auditColumns(t);
   const query = useAdminQuery<AuditEntry[]>(["admin", "audit"], "/api/v1/audit?limit=200");
   const [search, setSearch] = useState("");
   const [actionFilter, setActionFilter] = useState("all");
@@ -274,7 +300,7 @@ export default function AdminAuditPage() {
 
   const table = useReactTable({
     data: filtered,
-    columns,
+    columns: cols,
     state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
@@ -288,24 +314,24 @@ export default function AdminAuditPage() {
     // would force the outer overflow-hidden to clip the card; the inner scroller
     // keeps the list usable at any height.
     <div className="flex h-[calc(100dvh-6rem)] min-h-0 flex-col gap-4 overflow-hidden">
-      <PageHeader title="Audit log" description="Actions taken across the instance." />
+      <PageHeader title={t("title")} description={t("description")} />
       <AdminGate query={query}>
         <Card className="flex min-h-0 flex-1 flex-col">
           <CardHeader className="flex shrink-0 flex-row flex-wrap items-center justify-between gap-2 space-y-0">
-            <CardTitle className="text-sm font-medium">Audit log</CardTitle>
+            <CardTitle className="text-sm font-medium">{t("title")}</CardTitle>
             <div className="flex w-full items-center gap-2 sm:w-auto">
               <Input
-                placeholder="Search…"
+                placeholder={t("search")}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="h-8 w-full text-xs sm:w-48"
               />
               <Select value={actionFilter} onValueChange={setActionFilter}>
                 <SelectTrigger className="h-8 w-40 flex-1 text-xs sm:w-40">
-                  <SelectValue placeholder="All actions" />
+                  <SelectValue placeholder={t("allActions")} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All actions</SelectItem>
+                  <SelectItem value="all">{t("allActions")}</SelectItem>
                   {actions.map((a) => (
                     <SelectItem key={a} value={a}>
                       {humanizeAction(a)}
@@ -342,10 +368,10 @@ export default function AdminAuditPage() {
                   {table.getRowModel().rows.length === 0 ? (
                     <TableRow>
                       <TableCell
-                        colSpan={columns.length}
+                        colSpan={cols.length}
                         className="text-center text-muted-foreground"
                       >
-                        No audit entries
+                        {t("noEntries")}
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -358,7 +384,7 @@ export default function AdminAuditPage() {
                           tabIndex={0}
                           role="button"
                           aria-haspopup="dialog"
-                          aria-label={`Audit event ${entry.action}`}
+                          aria-label={t("eventAria", { action: entry.action })}
                           onClick={open}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
@@ -390,15 +416,15 @@ export default function AdminAuditPage() {
             <div className="space-y-4">
               <div>
                 <SheetTitle>{humanizeAction(selected.action)}</SheetTitle>
-                <SheetDescription>Audit event details</SheetDescription>
+                <SheetDescription>{t("detailsTitle")}</SheetDescription>
               </div>
               <div className="space-y-3">
-                <Field label="Time">
+                <Field label={t("time")}>
                   {formatDate(selected.created_at)} ({new Date(selected.created_at).toISOString()})
                 </Field>
-                <Field label="Event ID">{selected.id}</Field>
-                <Field label="Action">{selected.action}</Field>
-                <Field label="Actor">
+                <Field label={t("eventId")}>{selected.id}</Field>
+                <Field label={t("action")}>{selected.action}</Field>
+                <Field label={t("actor")}>
                   {selected.actor ? (
                     <>
                       <div>{selected.actor.name ?? "—"}</div>
@@ -409,7 +435,7 @@ export default function AdminAuditPage() {
                     "—"
                   )}
                 </Field>
-                <Field label="Workspace">
+                <Field label={t("workspace")}>
                   {selected.workspace ? (
                     <>
                       {selected.workspace.name}
@@ -419,7 +445,7 @@ export default function AdminAuditPage() {
                     "—"
                   )}
                 </Field>
-                <Field label="Target">
+                <Field label={t("target")}>
                   {selected.target ? (
                     <>
                       {selected.target}
@@ -440,7 +466,7 @@ export default function AdminAuditPage() {
                     "—"
                   )}
                 </Field>
-                <Field label="Detail">
+                <Field label={t("details")}>
                   {isEmptyDetail(selected.detail)
                     ? "—"
                     : (() => {

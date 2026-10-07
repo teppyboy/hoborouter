@@ -37,15 +37,148 @@ import {
   type ChatAttachment,
   type UserContent,
 } from "./attachments";
+import { useT, useLocaleEntry, translate, type LocaleEntry } from "../../lib/i18n/t";
+import { useLocaleStore } from "../../lib/i18n/locale";
+
+// Chat page copy: inline LocaleEntry set (see lib/i18n/common.ts). Model
+// names, message content and API errors stay verbatim — only chrome, notices
+// and controls are translated. Module-level helpers read the live locale via
+// useLocaleStore.getState() (see translate() in lib/i18n/t.ts).
+const chatCopy = {
+  chip1: {
+    en: "Help me write a debounce function in TypeScript.",
+    vi: "Giúp tôi viết một hàm debounce bằng TypeScript.",
+  },
+  chip2: {
+    en: "Explain how HTTP streaming works, end to end.",
+    vi: "Giải thích cách HTTP streaming hoạt động từ đầu đến cuối.",
+  },
+  chip3: {
+    en: "Debug why my React component renders twice.",
+    vi: "Tìm lỗi vì sao component React của tôi render hai lần.",
+  },
+  errKeyReconnect: {
+    en: "Your chat key is no longer valid. Try reconnecting.",
+    vi: "Chat key của bạn không còn hợp lệ. Hãy kết nối lại.",
+  },
+  errWallet: {
+    en: "Insufficient wallet balance for this request.",
+    vi: "Số dư ví không đủ cho request này.",
+  },
+  errModelNotFound: {
+    en: "Model not found. Pick another model.",
+    vi: "Không tìm thấy mô hình. Hãy chọn mô hình khác.",
+  },
+  errRequestFailed: {
+    en: "Request failed ({status}).",
+    vi: "Request thất bại ({status}).",
+  },
+  convNotFound: {
+    en: "Conversation not found (it may belong to another account).",
+    vi: "Không tìm thấy hội thoại (có thể thuộc tài khoản khác).",
+  },
+  convLoadFailed: {
+    en: "Could not load this conversation. Try again.",
+    vi: "Không tải được hội thoại này. Thử lại.",
+  },
+  saveFailedNotice: {
+    en: "This conversation could not be saved to your history.",
+    vi: "Không lưu được hội thoại này vào lịch sử của bạn.",
+  },
+  saveFailedNoKeep: {
+    en: "This conversation could not be saved. Messages will not be kept.",
+    vi: "Không lưu được hội thoại này. Các tin nhắn sẽ không được giữ lại.",
+  },
+  signInToChat: {
+    en: "Sign in and choose a workspace to start chatting.",
+    vi: "Đăng nhập và chọn workspace để bắt đầu trò chuyện.",
+  },
+  keyCreateFailed: {
+    en: "Could not create a chat key. Try again.",
+    vi: "Không tạo được chat key. Thử lại.",
+  },
+  tooLarge: {
+    en: "This message is too large to send — attachments plus history exceed the request limit. Remove some attachments and try again.",
+    vi: "Tin nhắn quá lớn để gửi — tệp đính kèm cộng lịch sử vượt giới hạn request. Hãy bớt tệp đính kèm và thử lại.",
+  },
+  keyReconnectFresh: {
+    en: "Your chat key is no longer valid. Reconnect to create a fresh one.",
+    vi: "Chat key của bạn không còn hợp lệ. Kết nối lại để tạo key mới.",
+  },
+  noStreaming: {
+    en: "Streaming is not supported in this browser.",
+    vi: "Trình duyệt này không hỗ trợ streaming.",
+  },
+  requestFailed: { en: "Request failed.", vi: "Request thất bại." },
+  chat: { en: "Chat", vi: "Trò chuyện" },
+  chatControls: { en: "Chat controls", vi: "Điều khiển trò chuyện" },
+  convHistory: { en: "Conversation history", vi: "Lịch sử hội thoại" },
+  history: { en: "History", vi: "Lịch sử" },
+  model: { en: "Model", vi: "Mô hình" },
+  loadingModels: { en: "Loading models…", vi: "Đang tải mô hình…" },
+  modelsUnavailable: { en: "Model list unavailable", vi: "Không tải được danh sách mô hình" },
+  chooseModel: { en: "Choose a model", vi: "Chọn một mô hình" },
+  newChat: { en: "New chat", vi: "Trò chuyện mới" },
+  modelsPrefix: { en: "Models: {error}", vi: "Mô hình: {error}" },
+  conflictTitle: {
+    en: "This conversation changed on another device or tab.",
+    vi: "Hội thoại này đã thay đổi trên thiết bị hoặc tab khác.",
+  },
+  conflictBody: {
+    en: "Your newest messages below are still shown here but are NOT saved.",
+    vi: "Các tin nhắn mới nhất bên dưới vẫn hiển thị tại đây nhưng CHƯA được lưu.",
+  },
+  reloadSaved: { en: "Reload saved version", vi: "Tải lại bản đã lưu" },
+  loadingConversation: { en: "Loading conversation…", vi: "Đang tải hội thoại…" },
+  whatBuild: { en: "What would you like to build?", vi: "Bạn muốn xây dựng gì hôm nay?" },
+  reuseNotice: {
+    en: 'Chat reuses a workspace key stored in this browser, named after this device (e.g. "Chat - iPhone"). A key is created only once, when you connect or send your first message. Use the paperclip to attach images or text files to a message. Usage is charged to your selected workspace.',
+    vi: 'Chat dùng lại chat key của workspace được lưu trong trình duyệt này, đặt tên theo thiết bị (ví dụ "Chat - iPhone"). Key chỉ được tạo một lần, khi bạn kết nối hoặc gửi tin nhắn đầu tiên. Dùng chiếc kẹp giấy để đính kèm ảnh hoặc tệp văn bản vào tin nhắn. Mức sử dụng được tính vào workspace bạn đã chọn.',
+  },
+  signInStart: { en: "Sign in to start chatting.", vi: "Đăng nhập để bắt đầu trò chuyện." },
+  conversation: { en: "Conversation", vi: "Hội thoại" },
+  reasoning: { en: "Reasoning", vi: "Suy luận" },
+  copyReply: { en: "Copy reply", vi: "Copy câu trả lời" },
+  thinking: { en: "Thinking…", vi: "Đang suy nghĩ…" },
+  retryLastReply: { en: "Retry last reply", vi: "Thử lại câu trả lời cuối" },
+  retryRegenerates: {
+    en: "Regenerates the last reply — usage will be charged again.",
+    vi: "Tạo lại câu trả lời cuối — mức sử dụng sẽ được tính phí lại.",
+  },
+  retryAttachments: {
+    en: " Retry re-sends this turn's attachments from this browser session; they are not saved to your history.",
+    vi: " Thử lại sẽ gửi lại tệp đính kèm của lượt này từ phiên trình duyệt; chúng không được lưu vào lịch sử.",
+  },
+  readingFile: { en: "Reading file…", vi: "Đang đọc tệp…" },
+  removeAttachment: { en: "Remove attachment {name}", vi: "Xoá tệp đính kèm {name}" },
+  removeTitle: { en: "Remove {name}", vi: "Xoá {name}" },
+  message: { en: "Message", vi: "Tin nhắn" },
+  placeholderSend: {
+    en: "Send a message… (Enter to send, Shift+Enter for a new line)",
+    vi: "Nhập tin nhắn… (Enter để gửi, Shift+Enter để xuống dòng)",
+  },
+  placeholderModelsError: {
+    en: "Model list unavailable — reload to pick a model",
+    vi: "Không tải được danh sách mô hình — tải lại để chọn mô hình",
+  },
+  placeholderChooseModel: { en: "Choose a model first", vi: "Chọn mô hình trước" },
+  attachFiles: { en: "Attach files", vi: "Đính kèm tệp" },
+  attachFilesTitle: { en: "Attach files. {hint}", vi: "Đính kèm tệp. {hint}" },
+  stopGenerating: { en: "Stop generating", vi: "Dừng tạo" },
+  sendMessage: { en: "Send message", vi: "Gửi tin nhắn" },
+} as const;
+
+/** Reactive translator for the chat page; component-scope only. */
+const useChatT = () => useT(chatCopy);
 
 // Turn message shape shared with the pure helpers in ./turn.
 type ChatMessage = TurnMessage;
 
 // Actionable starters: each is a real prompt a user can send or edit.
-const PROMPT_CHIPS = [
-  "Help me write a debounce function in TypeScript.",
-  "Explain how HTTP streaming works, end to end.",
-  "Debug why my React component renders twice.",
+const PROMPT_CHIPS: LocaleEntry[] = [
+  chatCopy.chip1,
+  chatCopy.chip2,
+  chatCopy.chip3,
 ];
 
 // Gateway caps the request body in UTF-8 BYTES (1 MiB); keep the client-side
@@ -55,12 +188,13 @@ const MAX_REQUEST_BODY_BYTES = 900_000;
 
 function readableError(status: number, body: { error?: { message?: string } } | null): string {
   const msg = body?.error?.message;
+  const locale = useLocaleStore.getState().locale;
   // 401 never reaches here (the managed-key reconnect path handles it); the
   // generic fallback still names the likely cause.
-  if (status === 401) return msg ?? "Your chat key is no longer valid. Try reconnecting.";
-  if (status === 402) return msg ?? "Insufficient wallet balance for this request.";
-  if (status === 404) return msg ?? "Model not found. Pick another model.";
-  return msg ?? `Request failed (${status}).`;
+  if (status === 401) return msg ?? translate(chatCopy, "errKeyReconnect", locale);
+  if (status === 402) return msg ?? translate(chatCopy, "errWallet", locale);
+  if (status === 404) return msg ?? translate(chatCopy, "errModelNotFound", locale);
+  return msg ?? translate(chatCopy, "errRequestFailed", locale, { status });
 }
 
 function appendDelta(msg: ChatMessage, delta: StreamDelta): ChatMessage {
@@ -71,7 +205,30 @@ function appendDelta(msg: ChatMessage, delta: StreamDelta): ChatMessage {
   };
 }
 
+/** One suggestion chip; component boundary keeps useLocaleEntry per-element. */
+function PromptChip({
+  chip,
+  onPick,
+}: {
+  chip: LocaleEntry;
+  onPick: (text: string) => void;
+}) {
+  const text = useLocaleEntry(chip);
+  return (
+    <Button
+      key={chip.en}
+      variant="outline"
+      size="sm"
+      onClick={() => onPick(text)}
+      className="h-auto max-w-full min-h-9 py-2 text-left whitespace-normal"
+    >
+      {text}
+    </Button>
+  );
+}
+
 export function ChatPage() {
+  const t = useChatT();
   const { data: session } = useSession();
   const userId = session?.user?.id ?? null;
   const workspaceId = useCurrentWorkspaceId();
@@ -334,8 +491,8 @@ export function ChatPage() {
       if (!isLoadCurrent()) return;
       setError(
         e instanceof ConversationError && e.kind === "notFound"
-          ? "Conversation not found (it may belong to another account)."
-          : "Could not load this conversation. Try again.",
+          ? t("convNotFound")
+          : t("convLoadFailed"),
       );
     } finally {
       if (isLoadCurrent()) setLoadingChat(false);
@@ -378,29 +535,29 @@ export function ChatPage() {
    *  immutable assistant snapshot taken at the terminal point — never the
    *  live ref, which a newer send may already have reset. */
   async function persistTurn(
-    t: TurnSnapshot,
+    turn: TurnSnapshot,
     partial: { content: string; reasoning: string },
   ): Promise<void> {
     if (!userId || !workspaceId) return;
-    const msgs = buildPersistMessages(t.baseMessages, t.userText, partial);
-    const knownVersion = versionsRef.current.get(t.chatId);
+    const msgs = buildPersistMessages(turn.baseMessages, turn.userText, partial);
+    const knownVersion = versionsRef.current.get(turn.chatId);
     try {
-      const snap = await saveConversation(workspaceId, t.chatId, {
+      const snap = await saveConversation(workspaceId, turn.chatId, {
         version: knownVersion ?? 1,
-        title: t.isFirstTurn ? t.userText.slice(0, 120) : undefined,
-        model: t.model,
+        title: turn.isFirstTurn ? turn.userText.slice(0, 120) : undefined,
+        model: turn.model,
         messages: msgs,
       });
-      if (!viewCurrent(t)) return;
-      versionsRef.current.set(t.chatId, snap.version);
+      if (!viewCurrent(turn)) return;
+      versionsRef.current.set(turn.chatId, snap.version);
       setSaveNotice(null);
       invalidateConversationList();
     } catch (e) {
-      if (!viewCurrent(t)) return; // old turn, new view: never touch it
+      if (!viewCurrent(turn)) return; // old turn, new view: never touch it
       if (e instanceof ConversationError && e.kind === "conflict") {
         setConflict(true);
       } else {
-        setSaveNotice("This conversation could not be saved to your history.");
+        setSaveNotice(t("saveFailedNotice"));
       }
     }
   }
@@ -411,7 +568,7 @@ export function ChatPage() {
   async function resolveKey(gen?: number, signal?: AbortSignal): Promise<string | null> {
     if (!userId || !workspaceId) {
       setKeyError(
-        new ManagedKeyError("unauthorized", "Sign in and choose a workspace to start chatting."),
+        new ManagedKeyError("unauthorized", t("signInToChat")),
       );
       return null;
     }
@@ -427,7 +584,7 @@ export function ChatPage() {
       setKeyError(
         e instanceof ManagedKeyError
           ? e
-          : new ManagedKeyError("invalid", "Could not create a chat key. Try again."),
+          : new ManagedKeyError("invalid", t("keyCreateFailed")),
       );
       return null;
     }
@@ -499,7 +656,7 @@ export function ChatPage() {
     const bodyJson = JSON.stringify({ model, messages: history, stream: true });
     if (utf8ByteLength(bodyJson) > MAX_REQUEST_BODY_BYTES) {
       setError(
-        "This message is too large to send — attachments plus history exceed the request limit. Remove some attachments and try again.",
+        t("tooLarge"),
       );
       busyRef.current = false;
       setStreaming(false);
@@ -532,7 +689,7 @@ export function ChatPage() {
           invalidateConversationList();
         } catch {
           if (isCurrent())
-            setSaveNotice("This conversation could not be saved. Messages will not be kept.");
+            setSaveNotice(t("saveFailedNoKeep"));
         }
       }
       const key = await resolveKey(seq, ac.signal);
@@ -585,7 +742,7 @@ export function ChatPage() {
           setKeyError(
             new ManagedKeyError(
               "unauthorized",
-              "Your chat key is no longer valid. Reconnect to create a fresh one.",
+              t("keyReconnectFresh"),
             ),
           );
         } else {
@@ -599,7 +756,7 @@ export function ChatPage() {
         return;
       }
       const reader = res.body?.getReader();
-      if (!reader) throw new Error("Streaming is not supported in this browser.");
+      if (!reader) throw new Error(t("noStreaming"));
       const decoder = new TextDecoder();
       const parser = createSseParser();
       for (;;) {
@@ -618,7 +775,7 @@ export function ChatPage() {
       if (e instanceof DOMException && e.name === "AbortError") {
         // Explicit stop: keep whatever streamed so far and persist it.
       } else {
-        setError(e instanceof Error ? e.message : "Request failed.");
+        setError(e instanceof Error ? e.message : t("requestFailed"));
       }
       await saveTurn({ ...assistantPartialRef.current });
     } finally {
@@ -724,10 +881,10 @@ export function ChatPage() {
           labels come back at sm+. role=group exposes the controls for the E2E
           geometry probe without a roving-tabindex toolbar keyboard contract
           (native buttons are already tab-navigable). */}
-        <h1 className="sr-only">Chat</h1>
+        <h1 className="sr-only">{t("chat")}</h1>
         <div
           role="group"
-          aria-label="Chat controls"
+          aria-label={t("chatControls")}
           className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2"
         >
           {/* Phone: history opens in a sheet owned by this page, not the app
@@ -738,32 +895,32 @@ export function ChatPage() {
                 variant="outline"
                 size="sm"
                 className={`${toolbarTouch} lg:hidden`}
-                aria-label="Conversation history"
-                title="Conversation history"
+                aria-label={t("convHistory")}
+                title={t("convHistory")}
               >
                 <History className="size-4" aria-hidden />
-                <span className="hidden sm:inline">History</span>
+                <span className="hidden sm:inline">{t("history")}</span>
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="w-80">
-              <SheetTitle className="sr-only">Conversation history</SheetTitle>
+              <SheetTitle className="sr-only">{t("convHistory")}</SheetTitle>
               {historyList}
             </SheetContent>
           </Sheet>
           <Select value={model} onValueChange={setModel} disabled={models.length === 0}>
             <SelectTrigger
               id="chat-model"
-              aria-label="Model"
+              aria-label={t("model")}
               className="h-9 min-w-0 max-w-56 flex-1 gap-1 border-0 bg-muted/50 shadow-none"
             >
               <SelectValue
                 className="min-w-0 truncate"
                 placeholder={
                   modelsLoading
-                    ? "Loading models…"
+                    ? t("loadingModels")
                     : modelsError
-                      ? "Model list unavailable"
-                      : "Choose a model"
+                      ? t("modelsUnavailable")
+                      : t("chooseModel")
                 }
               />
             </SelectTrigger>
@@ -782,27 +939,27 @@ export function ChatPage() {
               className={toolbarTouch}
               onClick={newChat}
               disabled={messages.length === 0 && !streaming && activeChatId === null}
-              aria-label="New chat"
-              title="New chat"
+              aria-label={t("newChat")}
+              title={t("newChat")}
             >
               <Plus className="size-4" aria-hidden />
-              <span className="hidden sm:inline">New chat</span>
+              <span className="hidden sm:inline">{t("newChat")}</span>
             </Button>
           </div>
         </div>
 
-        {modelsError && <ErrorState message={`Models: ${modelsError}`} />}
+        {modelsError && <ErrorState message={t("modelsPrefix", { error: modelsError })} />}
 
         {conflict && (
           <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2">
             <p className="text-sm font-medium">
-              This conversation changed on another device or tab.
+              {t("conflictTitle")}
             </p>
             <p className="text-xs text-muted-foreground">
-              Your newest messages below are still shown here but are NOT saved.
+              {t("conflictBody")}
             </p>
             <Button variant="outline" size="sm" className="mt-1" onClick={reloadActive}>
-              Reload saved version
+              {t("reloadSaved")}
             </Button>
           </div>
         )}
@@ -812,42 +969,33 @@ export function ChatPage() {
           </p>
         )}
         {loadingChat && messages.length === 0 && (
-          <p className="px-4 py-2 text-sm text-muted-foreground">Loading conversation…</p>
+          <p className="px-4 py-2 text-sm text-muted-foreground">{t("loadingConversation")}</p>
         )}
 
         {messages.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 py-16 text-center">
-            <h2 className="text-2xl font-semibold tracking-tight">What would you like to build?</h2>
+            <h2 className="text-2xl font-semibold tracking-tight">{t("whatBuild")}</h2>
             <div className="flex flex-wrap justify-center gap-2">
               {PROMPT_CHIPS.map((chip) => (
-                <Button
-                  key={chip}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setInput(chip);
+                <PromptChip
+                  key={chip.en}
+                  chip={chip}
+                  onPick={(text) => {
+                    setInput(text);
                     textareaRef.current?.focus();
                   }}
-                  className="h-auto max-w-full min-h-9 py-2 text-left whitespace-normal"
-                >
-                  {chip}
-                </Button>
+                />
               ))}
             </div>
-            <p className="max-w-md text-sm text-muted-foreground">
-              Chat reuses a workspace key stored in this browser, named after this device (e.g.
-              "Chat - iPhone"). A key is created only once, when you connect or send your first
-              message. Use the paperclip to attach images or text files to a message. Usage is
-              charged to your selected workspace.
-            </p>
-            {!userId && <p className="text-sm text-muted-foreground">Sign in to start chatting.</p>}
+            <p className="max-w-md text-sm text-muted-foreground">{t("reuseNotice")}</p>
+            {!userId && <p className="text-sm text-muted-foreground">{t("signInStart")}</p>}
           </div>
         ) : (
           <div
             className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
             role="log"
             aria-live="polite"
-            aria-label="Conversation"
+            aria-label={t("conversation")}
             onScroll={() => {
               const el = logRef.current;
               if (!el) return;
@@ -868,7 +1016,7 @@ export function ChatPage() {
                     {m.reasoning && (
                       <details className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
                         <summary className="cursor-pointer select-none font-medium">
-                          Reasoning
+                          {t("reasoning")}
                         </summary>
                         <div className="mt-1 wrap-anywhere whitespace-pre-wrap">{m.reasoning}</div>
                       </details>
@@ -880,7 +1028,7 @@ export function ChatPage() {
                           streaming={streaming && i === messages.length - 1}
                         />
                         <div className="flex justify-end">
-                          <CopyButton value={m.content} label="Copy reply" />
+                          <CopyButton value={m.content} label={t("copyReply")} />
                         </div>
                       </>
                     ) : (
@@ -888,7 +1036,7 @@ export function ChatPage() {
                       streaming &&
                       i === messages.length - 1 && (
                         <div className="animate-pulse motion-reduce:animate-none text-muted-foreground">
-                          Thinking…
+                          {t("thinking")}
                         </div>
                       )
                     )}
@@ -905,12 +1053,11 @@ export function ChatPage() {
           {showRetry && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1">
               <Button variant="outline" size="sm" onClick={() => void send(undefined, true)}>
-                Retry last reply
+                {t("retryLastReply")}
               </Button>
               <p className="min-w-0 text-xs text-muted-foreground">
-                Regenerates the last reply — usage will be charged again.
-                {lastTurnAttached &&
-                  " Retry re-sends this turn's attachments from this browser session; they are not saved to your history."}
+                {t("retryRegenerates")}
+                {lastTurnAttached && t("retryAttachments")}
               </p>
             </div>
           )}
@@ -919,7 +1066,7 @@ export function ChatPage() {
               <div className="space-y-1 px-1 pb-1">
                 {readingFiles && (
                   <p className="text-xs text-muted-foreground" role="status">
-                    Reading file…
+                    {t("readingFile")}
                   </p>
                 )}
                 {attachments.length > 0 && (
@@ -936,8 +1083,8 @@ export function ChatPage() {
                             applyAttachments(removeAttachment(attachmentsRef.current, a.id));
                             setAttachError(null);
                           }}
-                          aria-label={`Remove attachment ${a.name}`}
-                          title={`Remove ${a.name}`}
+                          aria-label={t("removeAttachment", { name: a.name })}
+                          title={t("removeTitle", { name: a.name })}
                           className="shrink-0 rounded-sm text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           <X className="size-3.5" aria-hidden />
@@ -956,15 +1103,15 @@ export function ChatPage() {
               </div>
             )}
             <Textarea
-              aria-label="Message"
+              aria-label={t("message")}
               ref={textareaRef}
               rows={1}
               placeholder={
                 model
-                  ? "Send a message… (Enter to send, Shift+Enter for a new line)"
+                  ? t("placeholderSend")
                   : modelsError
-                    ? "Model list unavailable — reload to pick a model"
-                    : "Choose a model first"
+                    ? t("placeholderModelsError")
+                    : t("placeholderChooseModel")
               }
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -998,13 +1145,13 @@ export function ChatPage() {
                 variant="ghost"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={streaming}
-                aria-label="Attach files"
-                title={`Attach files. ${ATTACHMENT_HINT}`}
+                aria-label={t("attachFiles")}
+                title={t("attachFilesTitle", { hint: ATTACHMENT_HINT })}
               >
                 <Paperclip className="size-4" aria-hidden />
               </Button>
               {streaming ? (
-                <Button size="icon" variant="outline" onClick={stop} aria-label="Stop generating">
+                <Button size="icon" variant="outline" onClick={stop} aria-label={t("stopGenerating")}>
                   <Square className="size-4" aria-hidden />
                 </Button>
               ) : (
@@ -1012,7 +1159,7 @@ export function ChatPage() {
                   size="icon"
                   onClick={() => void send()}
                   disabled={!canSend}
-                  aria-label="Send message"
+                  aria-label={t("sendMessage")}
                 >
                   <Send className="size-4" aria-hidden />
                 </Button>

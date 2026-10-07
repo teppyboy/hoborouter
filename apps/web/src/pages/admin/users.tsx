@@ -31,6 +31,113 @@ import { useSession } from "../../lib/auth";
 import { ApiError, api } from "../../lib/api";
 import { formatDate } from "../../lib/format";
 import { AdminGate, useAdminQuery } from "./shared";
+import { useT } from "../../lib/i18n/t";
+
+// Admin users copy: inline LocaleEntry set (see lib/i18n/common.ts). Names,
+// emails, identifiers and role values (admin/user badges) are never translated.
+const usersCopy = {
+  title: { en: "Users", vi: "Người dùng" },
+  description: { en: "Instance users.", vi: "Người dùng trên instance." },
+  addUser: { en: "Add user", vi: "Thêm người dùng" },
+  email: { en: "Email", vi: "Email" },
+  name: { en: "Name", vi: "Tên" },
+  emailStatus: { en: "Email status", vi: "Trạng thái email" },
+  unavailable: { en: "Unavailable", vi: "Không xác định" },
+  verified: { en: "Verified", vi: "Đã xác minh" },
+  unverified: { en: "Unverified", vi: "Chưa xác minh" },
+  copyUserId: { en: "Copy user ID", vi: "Sao chép ID người dùng" },
+  joined: { en: "Joined", vi: "Ngày tham gia" },
+  role: { en: "Role", vi: "Vai trò" },
+  workspaces: { en: "Workspaces", vi: "Workspace" },
+  edit: { en: "Edit", vi: "Sửa" },
+  resetPassword: { en: "Reset password", vi: "Đặt lại mật khẩu" },
+  remove: { en: "Remove", vi: "Xóa" },
+  editAria: { en: "Edit {email}", vi: "Sửa {email}" },
+  resetAria: { en: "Reset password for {email}", vi: "Đặt lại mật khẩu cho {email}" },
+  removeAria: { en: "Remove {email}", vi: "Xóa {email}" },
+  noUsers: { en: "No users", vi: "Không có người dùng" },
+  removeTitle: { en: "Remove user?", vi: "Xóa người dùng?" },
+  removeDesc: {
+    en: "Remove {name} ({email})? Their sessions are revoked and they can no longer sign in. Billing history is kept.",
+    vi: "Xóa {name} ({email})? Các phiên của họ sẽ bị thu hồi và họ không thể đăng nhập nữa. Lịch sử thanh toán được giữ lại.",
+  },
+  cancel: { en: "Cancel", vi: "Hủy" },
+  editTitle: { en: "Edit user", vi: "Sửa người dùng" },
+  editDesc: {
+    en: "Change the name or email of {name} ({email}). Changing the email revokes all of their sessions and they must sign in again.",
+    vi: "Thay đổi tên hoặc email của {name} ({email}). Đổi email sẽ thu hồi tất cả phiên của họ và họ phải đăng nhập lại.",
+  },
+  saving: { en: "Saving…", vi: "Đang lưu…" },
+  save: { en: "Save", vi: "Lưu" },
+  resetTitle: { en: "Reset password", vi: "Đặt lại mật khẩu" },
+  resetDesc: {
+    en: "Set a new password for {name} ({email}). No old password is needed. This signs the user out of all their sessions and they must sign in again.",
+    vi: "Đặt mật khẩu mới cho {name} ({email}). Không cần mật khẩu cũ. Thao tác này đăng xuất người dùng khỏi mọi phiên và họ phải đăng nhập lại.",
+  },
+  newPassword: { en: "New password", vi: "Mật khẩu mới" },
+  confirmPassword: { en: "Confirm new password", vi: "Xác nhận mật khẩu mới" },
+  resetting: { en: "Resetting…", vi: "Đang đặt lại…" },
+  createTitle: { en: "Add user", vi: "Thêm người dùng" },
+  createDesc: {
+    en: "Create a user with an initial password.",
+    vi: "Tạo người dùng với mật khẩu ban đầu.",
+  },
+  password: { en: "Password", vi: "Mật khẩu" },
+  instanceAdmin: { en: "Instance admin", vi: "Quản trị instance" },
+  creating: { en: "Creating…", vi: "Đang tạo…" },
+  create: { en: "Create", vi: "Tạo" },
+  passwordRule: {
+    en: "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
+    vi: "Ít nhất 8 ký tự, gồm chữ hoa và chữ thường, một chữ số và một ký tự đặc biệt",
+  },
+  minChars: { en: "At least 8 characters", vi: "Ít nhất 8 ký tự" },
+  maxChars: { en: "At most 200 characters", vi: "Tối đa 200 ký tự" },
+  passwordsMismatch: { en: "Passwords do not match", vi: "Mật khẩu không khớp" },
+  removeSelf: {
+    en: "You cannot remove your own account. Ask another instance admin.",
+    vi: "Bạn không thể xóa tài khoản của chính mình. Hãy nhờ quản trị instance khác.",
+  },
+  lastAdmin: {
+    en: "This is the last instance admin. Promote another admin first.",
+    vi: "Đây là quản trị instance cuối cùng. Hãy nâng quyền một quản trị khác trước.",
+  },
+  soleOwnerNamed: {
+    en: "This user is the sole owner of: {names}. Transfer ownership first.",
+    vi: "Người dùng này là chủ sở hữu duy nhất của: {names}. Hãy chuyển quyền sở hữu trước.",
+  },
+  soleOwner: {
+    en: "This user is the sole owner of at least one workspace. Transfer ownership first.",
+    vi: "Người dùng này là chủ sở hữu duy nhất của ít nhất một workspace. Hãy chuyển quyền sở hữu trước.",
+  },
+  emailTaken: {
+    en: "A user with this email already exists.",
+    vi: "Đã tồn tại người dùng với email này.",
+  },
+  requestFailed: { en: "Request failed", vi: "Yêu cầu thất bại" },
+  updatedToast: { en: "Updated {name}", vi: "Đã cập nhật {name}" },
+  resetToast: {
+    en: "Password reset for {name}; all their sessions were signed out",
+    vi: "Đã đặt lại mật khẩu cho {name}; tất cả phiên của họ đã bị đăng xuất",
+  },
+  removedToast: { en: "Removed {name}", vi: "Đã xóa {name}" },
+  createdToast: { en: "User created", vi: "Đã tạo người dùng" },
+} as const;
+
+type UsersT = (key: keyof typeof usersCopy, vars?: Record<string, string | number>) => string;
+
+function removeErrorMessage(err: unknown, t: UsersT): string {
+  if (err instanceof ApiError) {
+    if (err.code === "CANNOT_REMOVE_SELF") return t("removeSelf");
+    if (err.code === "LAST_ADMIN") return t("lastAdmin");
+    if (err.code === "SOLE_OWNER") {
+      const sole = err as ApiError & SoleOwnerWorkspaces;
+      const names = sole.workspaces?.map((w) => w.name).join(", ");
+      return names ? t("soleOwnerNamed", { names }) : t("soleOwner");
+    }
+    if (err.code === "EMAIL_TAKEN") return t("emailTaken");
+  }
+  return err instanceof Error ? err.message : t("requestFailed");
+}
 
 export interface AdminUser {
   id: string;
@@ -48,16 +155,16 @@ interface SoleOwnerWorkspaces {
   workspaces?: { id: string; name: string }[];
 }
 
-const createSchema = z.object({
-  name: z.string().trim().min(1).max(80),
-  email: z.string().trim().toLowerCase().email(),
-  password: z.string().refine((v) => checkPassword(v).length === 0, {
-    message:
-      "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
-  }),
-  instance_admin: z.boolean(),
-});
-type CreateValues = z.infer<typeof createSchema>;
+const makeCreateSchema = (t: UsersT) =>
+  z.object({
+    name: z.string().trim().min(1).max(80),
+    email: z.string().trim().toLowerCase().email(),
+    password: z.string().refine((v) => checkPassword(v).length === 0, {
+      message: t("passwordRule"),
+    }),
+    instance_admin: z.boolean(),
+  });
+type CreateValues = z.infer<ReturnType<typeof makeCreateSchema>>;
 
 const editSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -65,19 +172,19 @@ const editSchema = z.object({
 });
 type EditValues = z.infer<typeof editSchema>;
 
-const resetSchema = z
-  .object({
-    newPassword: z.string().refine((v) => checkPassword(v).length === 0, {
-      message:
-        "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
-    }),
-    confirmPassword: z.string().min(8, "At least 8 characters").max(200, "At most 200 characters"),
-  })
-  .refine((v) => v.newPassword === v.confirmPassword, {
-    message: "Passwords do not match",
-    path: ["confirmPassword"],
-  });
-type ResetValues = z.infer<typeof resetSchema>;
+const makeResetSchema = (t: UsersT) =>
+  z
+    .object({
+      newPassword: z.string().refine((v) => checkPassword(v).length === 0, {
+        message: t("passwordRule"),
+      }),
+      confirmPassword: z.string().min(8, t("minChars")).max(200, t("maxChars")),
+    })
+    .refine((v) => v.newPassword === v.confirmPassword, {
+      message: t("passwordsMismatch"),
+      path: ["confirmPassword"],
+    });
+type ResetValues = z.infer<ReturnType<typeof makeResetSchema>>;
 
 /** Removes a user; returns workspaces list on 409 SOLE_OWNER so UI can name them. */
 async function removeUser(id: string): Promise<void> {
@@ -102,36 +209,19 @@ async function removeUser(id: string): Promise<void> {
   throw err;
 }
 
-function removeErrorMessage(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.code === "CANNOT_REMOVE_SELF")
-      return "You cannot remove your own account. Ask another instance admin.";
-    if (err.code === "LAST_ADMIN")
-      return "This is the last instance admin. Promote another admin first.";
-    if (err.code === "SOLE_OWNER") {
-      const sole = err as ApiError & SoleOwnerWorkspaces;
-      const names = sole.workspaces?.map((w) => w.name).join(", ");
-      return names
-        ? `This user is the sole owner of: ${names}. Transfer ownership first.`
-        : "This user is the sole owner of at least one workspace. Transfer ownership first.";
-    }
-    if (err.code === "EMAIL_TAKEN") return "A user with this email already exists.";
-  }
-  return err instanceof Error ? err.message : "Request failed";
-}
-
 export default function AdminUsersPage() {
+  const t = useT(usersCopy);
   const query = useAdminQuery<{ data: AdminUser[] }>(["admin", "users"], "/api/v1/admin/users");
   const { data: session } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Users"
-        description="Instance users."
+        title={t("title")}
+        description={t("description")}
         actions={
           <Button onClick={() => setCreateOpen(true)} size="sm">
-            Add user
+            {t("addUser")}
           </Button>
         }
       />
@@ -150,40 +240,41 @@ export function UsersTable({
   users: AdminUser[];
   currentUserId: string | null;
 }) {
+  const t = useT(usersCopy);
   const [toRemove, setToRemove] = useState<AdminUser | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [toEdit, setToEdit] = useState<AdminUser | null>(null);
   const [toReset, setToReset] = useState<AdminUser | null>(null);
 
   const columns: ColumnDef<AdminUser, unknown>[] = [
-    { accessorKey: "email", header: "Email" },
+    { accessorKey: "email", header: t("email") },
     {
       accessorKey: "email_verified",
-      header: "Email status",
+      header: t("emailStatus"),
       cell: (c) => {
         const verified = c.getValue() as boolean | undefined;
         // Undefined means the backend payload predates the flag: report
         // honestly instead of guessing.
         return verified === undefined ? (
-          <Badge variant="secondary">Unavailable</Badge>
+          <Badge variant="secondary">{t("unavailable")}</Badge>
         ) : verified ? (
-          <Badge variant="default">Verified</Badge>
+          <Badge variant="default">{t("verified")}</Badge>
         ) : (
-          <Badge variant="outline">Unverified</Badge>
+          <Badge variant="outline">{t("unverified")}</Badge>
         );
       },
     },
-    { accessorKey: "name", header: "Name" },
+    { accessorKey: "name", header: t("name") },
     {
       accessorKey: "created_at",
-      header: "Joined",
+      header: t("joined"),
       cell: (c) => (
         <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>
       ),
     },
     {
       accessorKey: "is_instance_admin",
-      header: "Role",
+      header: t("role"),
       cell: (c) =>
         c.getValue() ? (
           <Badge variant="default">admin</Badge>
@@ -191,14 +282,14 @@ export function UsersTable({
           <Badge variant="outline">user</Badge>
         ),
     },
-    { accessorKey: "workspace_count", header: "Workspaces" },
+    { accessorKey: "workspace_count", header: t("workspaces") },
     {
       accessorKey: "id",
       header: "ID",
       cell: (c) => (
         <span className="flex items-center gap-1">
           <span className="font-mono text-xs">{(c.getValue() as string).slice(0, 8)}…</span>
-          <CopyButton value={c.getValue() as string} label="Copy user ID" />
+          <CopyButton value={c.getValue() as string} label={t("copyUserId")} />
         </span>
       ),
     },
@@ -214,24 +305,24 @@ export function UsersTable({
             <Button
               variant="outline"
               size="sm"
-              aria-label={`Edit ${user.email}`}
+              aria-label={t("editAria", { email: user.email })}
               onClick={() => setToEdit(user)}
             >
-              Edit
+              {t("edit")}
             </Button>
             <Button
               variant="outline"
               size="sm"
-              aria-label={`Reset password for ${user.email}`}
+              aria-label={t("resetAria", { email: user.email })}
               onClick={() => setToReset(user)}
             >
-              Reset password
+              {t("resetPassword")}
             </Button>
             {user.id !== currentUserId && (
               <Button
                 variant="destructive"
                 size="sm"
-                aria-label={`Remove ${user.email}`}
+                aria-label={t("removeAria", { email: user.email })}
                 onClick={() => setToRemove(user)}
               >
                 Remove
@@ -245,7 +336,7 @@ export function UsersTable({
 
   return (
     <>
-      <DataTable columns={columns} data={users} empty="No users" />
+      <DataTable columns={columns} data={users} empty={t("noUsers")} />
       <Dialog
         open={toRemove !== null}
         onOpenChange={(open) => {
@@ -257,20 +348,23 @@ export function UsersTable({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Remove user?</DialogTitle>
+            <DialogTitle>{t("removeTitle")}</DialogTitle>
             <DialogDescription>
-              Remove {toRemove?.name} ({toRemove?.email})? Their sessions are revoked and they can
-              no longer sign in. Billing history is kept.
+              {t("removeDesc", {
+                name: toRemove?.name ?? "",
+                email: toRemove?.email ?? "",
+              })}
             </DialogDescription>
           </DialogHeader>
           {removeError && <p className="text-destructive text-sm">{removeError}</p>}
           <DialogFooter>
             <Button variant="outline" onClick={() => setToRemove(null)}>
-              Cancel
+              {t("cancel")}
             </Button>
             {toRemove && (
               <RemoveButton
                 user={toRemove}
+                t={t}
                 onError={setRemoveError}
                 onDone={() => setToRemove(null)}
               />
@@ -301,6 +395,7 @@ function EditUserDialog({
 }) {
   const queryClient = useQueryClient();
   const { refetch: refetchSession } = useSession();
+  const t = useT(usersCopy);
   const [formError, setFormError] = useState<string | null>(null);
   const form = useForm<EditValues>({
     resolver: zodResolver(editSchema),
@@ -317,7 +412,7 @@ function EditUserDialog({
         }),
       }),
     onSuccess: (data) => {
-      toast.success(`Updated ${data.user.name}`);
+      toast.success(t("updatedToast", { name: data.user.name }));
       void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       // An email change revokes the target's sessions server-side; if the
       // admin edited their own email, refresh the local session store.
@@ -327,9 +422,9 @@ function EditUserDialog({
     onError: (err) => {
       // Duplicate email maps onto the email field; everything else inline.
       if (err instanceof ApiError && err.code === "EMAIL_TAKEN") {
-        form.setError("email", { message: "A user with this email already exists." });
+        form.setError("email", { message: t("emailTaken") });
       } else {
-        setFormError(err instanceof Error ? err.message : "Request failed");
+        setFormError(err instanceof Error ? err.message : t("requestFailed"));
       }
     },
   });
@@ -346,10 +441,9 @@ function EditUserDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Edit user</DialogTitle>
+          <DialogTitle>{t("editTitle")}</DialogTitle>
           <DialogDescription>
-            Change the name or email of {user.name} ({user.email}). Changing the email revokes all
-            of their sessions and they must sign in again.
+            {t("editDesc", { name: user.name, email: user.email })}
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -359,7 +453,7 @@ function EditUserDialog({
               name="name"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Name</FormLabel>
+                  <FormLabel>{t("name")}</FormLabel>
                   <FormControl>
                     <Input {...field} placeholder="Ada Lovelace" />
                   </FormControl>
@@ -372,7 +466,7 @@ function EditUserDialog({
               name="email"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Email</FormLabel>
+                  <FormLabel>{t("email")}</FormLabel>
                   <FormControl>
                     <Input {...field} type="email" placeholder="ada@example.com" />
                   </FormControl>
@@ -390,10 +484,10 @@ function EditUserDialog({
                   onClose();
                 }}
               >
-                Cancel
+                {t("cancel")}
               </Button>
               <Button type="submit" disabled={save.isPending}>
-                {save.isPending ? "Saving…" : "Save"}
+                {save.isPending ? t("saving") : t("save")}
               </Button>
             </DialogFooter>
           </form>
@@ -406,9 +500,10 @@ function EditUserDialog({
 function ResetPasswordDialog({ user, onClose }: { user: AdminUser; onClose: () => void }) {
   const queryClient = useQueryClient();
   const { refetch: refetchSession } = useSession();
+  const t = useT(usersCopy);
   const [formError, setFormError] = useState<string | null>(null);
   const form = useForm<ResetValues>({
-    resolver: zodResolver(resetSchema),
+    resolver: zodResolver(makeResetSchema(t)),
     defaultValues: { newPassword: "", confirmPassword: "" },
   });
 
@@ -420,14 +515,14 @@ function ResetPasswordDialog({ user, onClose }: { user: AdminUser; onClose: () =
       }),
     onSuccess: () => {
       // The toast never contains the password.
-      toast.success(`Password reset for ${user.name}; all their sessions were signed out`);
+      toast.success(t("resetToast", { name: user.name }));
       void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       // The reset revokes sessions server-side; if the admin reset their own
       // password, refresh the local session store.
       void refetchSession();
       onClose();
     },
-    onError: (err) => setFormError(err instanceof Error ? err.message : "Request failed"),
+    onError: (err) => setFormError(err instanceof Error ? err.message : t("requestFailed")),
   });
 
   return (
@@ -442,10 +537,9 @@ function ResetPasswordDialog({ user, onClose }: { user: AdminUser; onClose: () =
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Reset password</DialogTitle>
+          <DialogTitle>{t("resetTitle")}</DialogTitle>
           <DialogDescription>
-            Set a new password for {user.name} ({user.email}). No old password is needed. This signs
-            the user out of all their sessions and they must sign in again.
+            {t("resetDesc", { name: user.name, email: user.email })}
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -458,7 +552,7 @@ function ResetPasswordDialog({ user, onClose }: { user: AdminUser; onClose: () =
               name="newPassword"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>New password</FormLabel>
+                  <FormLabel>{t("newPassword")}</FormLabel>
                   <FormControl>
                     <Input {...field} type="password" autoComplete="new-password" />
                   </FormControl>
@@ -471,7 +565,7 @@ function ResetPasswordDialog({ user, onClose }: { user: AdminUser; onClose: () =
               name="confirmPassword"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Confirm new password</FormLabel>
+                  <FormLabel>{t("confirmPassword")}</FormLabel>
                   <FormControl>
                     <Input {...field} type="password" autoComplete="new-password" />
                   </FormControl>
@@ -492,7 +586,7 @@ function ResetPasswordDialog({ user, onClose }: { user: AdminUser; onClose: () =
                 Cancel
               </Button>
               <Button type="submit" disabled={reset.isPending}>
-                {reset.isPending ? "Resetting…" : "Reset password"}
+                {reset.isPending ? t("resetting") : t("resetPassword")}
               </Button>
             </DialogFooter>
           </form>
@@ -504,10 +598,12 @@ function ResetPasswordDialog({ user, onClose }: { user: AdminUser; onClose: () =
 
 function RemoveButton({
   user,
+  t,
   onError,
   onDone,
 }: {
   user: AdminUser;
+  t: UsersT;
   onError: (message: string) => void;
   onDone: () => void;
 }) {
@@ -515,15 +611,15 @@ function RemoveButton({
   const remove = useMutation({
     mutationFn: () => removeUser(user.id),
     onSuccess: () => {
-      toast.success(`Removed ${user.name}`);
+      toast.success(t("removedToast", { name: user.name }));
       void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       onDone();
     },
-    onError: (err) => onError(removeErrorMessage(err)),
+    onError: (err) => onError(removeErrorMessage(err, t)),
   });
   return (
     <Button variant="destructive" disabled={remove.isPending} onClick={() => remove.mutate()}>
-      {remove.isPending ? "Removing…" : "Remove"}
+      {remove.isPending ? t("resetting") : t("remove")}
     </Button>
   );
 }
@@ -536,8 +632,9 @@ function CreateUserDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const queryClient = useQueryClient();
+  const t = useT(usersCopy);
   const form = useForm<CreateValues>({
-    resolver: zodResolver(createSchema),
+    resolver: zodResolver(makeCreateSchema(t)),
     defaultValues: { name: "", email: "", password: "", instance_admin: false },
   });
 
@@ -553,7 +650,7 @@ function CreateUserDialog({
         }),
       }),
     onSuccess: () => {
-      toast.success("User created");
+      toast.success(t("createdToast"));
       void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       onOpenChange(false);
       form.reset();
@@ -564,8 +661,8 @@ function CreateUserDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Add user</DialogTitle>
-          <DialogDescription>Create a user with an initial password.</DialogDescription>
+          <DialogTitle>{t("createTitle")}</DialogTitle>
+          <DialogDescription>{t("createDesc")}</DialogDescription>
         </DialogHeader>
         <Form {...form}>
           <form
@@ -577,7 +674,7 @@ function CreateUserDialog({
               name="name"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Name</FormLabel>
+                  <FormLabel>{t("name")}</FormLabel>
                   <FormControl>
                     <Input {...field} placeholder="Ada Lovelace" />
                   </FormControl>
@@ -590,7 +687,7 @@ function CreateUserDialog({
               name="email"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Email</FormLabel>
+                  <FormLabel>{t("email")}</FormLabel>
                   <FormControl>
                     <Input {...field} type="email" placeholder="ada@example.com" />
                   </FormControl>
@@ -603,7 +700,7 @@ function CreateUserDialog({
               name="password"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Password</FormLabel>
+                  <FormLabel>{t("password")}</FormLabel>
                   <FormControl>
                     <Input {...field} type="password" />
                   </FormControl>
@@ -617,19 +714,19 @@ function CreateUserDialog({
               render={({ field }) => (
                 <FormItem className="flex items-center gap-2">
                   <Switch checked={field.value} onCheckedChange={field.onChange} />
-                  <FormLabel className="font-normal">Instance admin</FormLabel>
+                  <FormLabel className="font-normal">{t("instanceAdmin")}</FormLabel>
                 </FormItem>
               )}
             />
             {create.error && (
-              <p className="text-destructive text-sm">{removeErrorMessage(create.error)}</p>
+              <p className="text-destructive text-sm">{removeErrorMessage(create.error, t)}</p>
             )}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
+                {t("cancel")}
               </Button>
               <Button type="submit" disabled={create.isPending}>
-                {create.isPending ? "Creating…" : "Create"}
+                {create.isPending ? t("creating") : t("create")}
               </Button>
             </DialogFooter>
           </form>

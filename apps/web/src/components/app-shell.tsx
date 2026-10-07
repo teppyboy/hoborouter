@@ -38,7 +38,7 @@ import { gravatarUrl } from "../lib/avatar";
 import { resendVerification, type SessionUser } from "../lib/auth";
 import { LanguageToggle } from "./language-toggle";
 import { usePublicConfig } from "./turnstile";
-import { useLocaleEntry, type LocaleEntry } from "../lib/i18n/t";
+import { useT, useLocaleEntry, type LocaleEntry } from "../lib/i18n/t";
 import { useCurrentWorkspaceId, useWorkspaces, type Workspace } from "../lib/workspace-queries";
 import { CreateWorkspace } from "./create-workspace";
 import { cn } from "../lib/utils";
@@ -107,6 +107,44 @@ const ADMIN_NAV: NavItem[] = [
 ];
 
 const ADMIN_HEADING: LocaleEntry = { en: "Admin", vi: "Quản trị" };
+
+// Shell chrome strings outside the nav dictionary: aria labels and the
+// unverified-email banner. Inline LocaleEntry set (see lib/i18n/common.ts).
+const SHELL = {
+  workspace: { en: "Workspace", vi: "Workspace" },
+  accountMenu: { en: "Account menu", vi: "Menu tài khoản" },
+  account: { en: "Account", vi: "Tài khoản" },
+  signOut: { en: "Sign out", vi: "Đăng xuất" },
+  expandSidebar: { en: "Expand sidebar", vi: "Mở rộng thanh bên" },
+  collapseSidebar: { en: "Collapse sidebar", vi: "Thu gọn thanh bên" },
+  openNavigation: { en: "Open navigation", vi: "Mở điều hướng" },
+  mainNavigation: { en: "Main navigation", vi: "Điều hướng chính" },
+  checkingAdmin: { en: "Checking admin…", vi: "Đang kiểm tra quyền quản trị…" },
+  verifyEmail: {
+    en: "Please verify your email address ({email}).",
+    vi: "Vui lòng xác thực địa chỉ email của bạn ({email}).",
+  },
+  sending: { en: "Sending…", vi: "Đang gửi…" },
+  resend: { en: "Resend", vi: "Gửi lại" },
+  dismiss: { en: "Dismiss", vi: "Bỏ qua" },
+  emailSent: {
+    en: "Verification email sent — check your inbox",
+    vi: "Đã gửi email xác thực — hãy kiểm tra hộp thư",
+  },
+  emailRateLimited: {
+    en: "Too many emails requested; try again in a minute",
+    vi: "Yêu cầu email quá nhiều; thử lại sau một phút",
+  },
+  emailFailed: {
+    en: "Could not send the verification email; try again later",
+    vi: "Không gửi được email xác thực; thử lại sau",
+  },
+} as const;
+
+/** Reactive translator over SHELL; use inside components only. */
+function useShellT() {
+  return useT(SHELL);
+}
 
 /** Detect instance-admin via GET /api/v1/me (200 = session, flag on the payload). */
 export function useIsAdmin() {
@@ -177,6 +215,7 @@ function ThemeToggle() {
 }
 
 function WorkspaceSwitcher() {
+  const st = useShellT();
   const { data: workspaces, isSuccess, refetch } = useWorkspaces();
   const workspaceId = useCurrentWorkspaceId();
   const setWorkspaceId = useWorkspaceStore((s) => s.setWorkspaceId);
@@ -190,7 +229,7 @@ function WorkspaceSwitcher() {
       // Fresh list on open: workspaces can be created outside this cache.
       onOpenChange={(open) => open && void refetch()}
     >
-      <SelectTrigger aria-label="Workspace" className="w-full gap-2">
+      <SelectTrigger aria-label={st("workspace")} className="w-full gap-2">
         <InitialAvatar label={initials(current)} />
         <span className="truncate">{current}</span>
       </SelectTrigger>
@@ -245,26 +284,39 @@ function UserAvatar({
 }
 
 function UserMenu() {
+  const st = useShellT();
+  const settingsLabel = useLocaleEntry({ en: "Settings", vi: "Cài đặt" });
   const { data: session } = useSession();
   const queryClient = useQueryClient();
+  const account = st("account");
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" aria-label="Account menu" className="max-w-48 gap-2">
+        <Button variant="ghost" size="sm" aria-label={st("accountMenu")} className="max-w-48 gap-2">
           <UserAvatar
             name={session?.user?.name}
             email={session?.user?.email}
             image={session?.user?.image}
           />
-          <span className="hidden truncate sm:inline">{session?.user?.name ?? "Account"}</span>
+          <span className="hidden truncate sm:inline">{session?.user?.name ?? account}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuLabel>
-          <p className="text-sm font-medium text-foreground">{session?.user?.name ?? "Account"}</p>
+          <p className="text-sm font-medium text-foreground">{session?.user?.name ?? account}</p>
           <p className="text-xs font-normal text-muted-foreground">{session?.user?.email}</p>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link
+            to="/settings"
+            preload="intent"
+            onMouseEnter={() => preloadChunk("/settings")}
+            onFocus={() => preloadChunk("/settings")}
+          >
+            <Settings className="size-4" /> {settingsLabel}
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem
           variant="destructive"
           onClick={() => {
@@ -280,7 +332,7 @@ function UserMenu() {
             });
           }}
         >
-          <LogOut className="size-4" /> Sign out
+          <LogOut className="size-4" /> {st("signOut")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -341,6 +393,14 @@ export function UnverifiedEmailBanner({ user }: { user: SessionUser | null }) {
   const [dismissed, setDismissed] = useState(false);
   const { data: config } = usePublicConfig();
   const [sending, setSending] = useState(false);
+  // Hooks must run before the early return below.
+  const verifyEmail = useLocaleEntry(SHELL.verifyEmail);
+  const sendingLabel = useLocaleEntry(SHELL.sending);
+  const resendLabel = useLocaleEntry(SHELL.resend);
+  const dismissLabel = useLocaleEntry(SHELL.dismiss);
+  const sentToast = useLocaleEntry(SHELL.emailSent);
+  const rateLimitedToast = useLocaleEntry(SHELL.emailRateLimited);
+  const failedToast = useLocaleEntry(SHELL.emailFailed);
   if (
     dismissed ||
     !config?.emailVerification.enabled ||
@@ -354,22 +414,22 @@ export function UnverifiedEmailBanner({ user }: { user: SessionUser | null }) {
     setSending(true);
     const { ok, rateLimited } = await resendVerification(user.email as string);
     setSending(false);
-    if (ok) toast.success("Verification email sent — check your inbox");
-    else if (rateLimited) toast.error("Too many emails requested; try again in a minute");
-    else toast.error("Could not send the verification email; try again later");
+    if (ok) toast.success(sentToast);
+    else if (rateLimited) toast.error(rateLimitedToast);
+    else toast.error(failedToast);
   };
   return (
     <div
       role="status"
       className="flex flex-wrap items-center gap-2 border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm"
     >
-      <span>Please verify your email address ({user.email}).</span>
+      <span>{verifyEmail.replace("{email}", user.email)}</span>
       <span className="ml-auto flex items-center gap-1">
         <Button variant="outline" size="sm" onClick={() => void resend()} disabled={sending}>
-          {sending ? "Sending…" : "Resend"}
+          {sending ? sendingLabel : resendLabel}
         </Button>
         <Button variant="ghost" size="sm" onClick={() => setDismissed(true)}>
-          Dismiss
+          {dismissLabel}
         </Button>
       </span>
     </div>
@@ -395,6 +455,7 @@ function NavLinks({
   isAdmin: boolean | null;
   onNavigate?: () => void;
 }) {
+  const st = useShellT();
   return (
     <>
       {NAV_GROUPS.map((group, gi) => (
@@ -427,7 +488,7 @@ function NavLinks({
       )}
       {isAdmin === null && !collapsed && (
         <div className="mt-4 px-2">
-          <Badge variant="secondary">Checking admin…</Badge>
+          <Badge variant="secondary">{st("checkingAdmin")}</Badge>
         </div>
       )}
     </>
@@ -435,6 +496,7 @@ function NavLinks({
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const st = useShellT();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   // Warm main nav route chunks once the app has painted.
   useEffect(() => {
@@ -482,24 +544,37 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           >
             <Shuffle className="size-4 shrink-0" aria-hidden />
             {!displayCollapsed && <span className="text-sm font-semibold">Hoborouter</span>}
-            {/* Store state drives the label: while hover-expanded the rail
-            looks open but the persisted store is still collapsed, so the
-            visible control must offer the persistent expand. Always rendered
-            (also on the narrow rail) so keyboard users keep a reachable
-            toggle; the bottom duplicate button was removed as useless. */}
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn("size-7", !displayCollapsed && "ml-auto")}
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              onClick={toggleCollapsed}
-            >
-              <ToggleIcon className="size-4" />
-            </Button>
+            {!displayCollapsed && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="ml-auto size-7"
+                // Store state drives the label: while hover-expanded the rail
+                // looks open but the persisted store is still collapsed, so
+                // the visible control must offer the persistent expand.
+                aria-label={collapsed ? st("expandSidebar") : st("collapseSidebar")}
+                onClick={toggleCollapsed}
+              >
+                <ToggleIcon className="size-4" />
+              </Button>
+            )}
           </div>
           <nav className="flex-1 overflow-y-auto p-2 text-sm">
             <NavLinks pathname={pathname} collapsed={displayCollapsed} isAdmin={isAdmin} />
           </nav>
+          {displayCollapsed && (
+            <div className="flex justify-center border-t border-border p-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label={st("expandSidebar")}
+                onClick={toggleCollapsed}
+              >
+                <ToggleIcon className="size-4" />
+              </Button>
+            </div>
+          )}
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-border bg-background/80 pr-4 pl-[max(1rem,env(safe-area-inset-left))] backdrop-blur">
@@ -508,7 +583,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  aria-label="Open navigation"
+                  aria-label={st("openNavigation")}
                   className="size-11 md:hidden"
                 >
                   <Menu className="size-5" />
@@ -520,7 +595,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <Shuffle className="size-4 shrink-0" aria-hidden />
                   Hoborouter
                 </SheetTitle>
-                <SheetDescription className="sr-only">Main navigation</SheetDescription>
+                <SheetDescription className="sr-only">{st("mainNavigation")}</SheetDescription>
                 <nav className="flex-1 overflow-y-auto p-2 text-sm">
                   <NavLinks
                     pathname={pathname}

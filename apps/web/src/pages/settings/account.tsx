@@ -21,40 +21,97 @@ import {
   FormLabel,
   FormMessage,
 } from "../../components/ui/form";
+import { useT } from "../../lib/i18n/t";
 
 /** Refetch the Better Auth session so the app-shell menu picks up name/image changes. */
 async function refreshSession() {
   await authClient.getSession();
 }
 
-const nameSchema = z.object({
-  name: z.string().trim().min(1, "Name is required").max(80, "At most 80 characters"),
-});
-const emailSchema = z.object({
-  email: z.string().trim().toLowerCase().email("Enter a valid email"),
-  currentPassword: z.string().min(1, "Current password is required"),
-});
-const passwordSchema = z
-  .object({
-    currentPassword: z.string().min(1, "Current password is required"),
-    newPassword: z.string().refine((v) => checkPassword(v).length === 0, {
-      message:
-        "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
-    }),
-    confirmPassword: z.string().min(1, "Confirm your new password"),
-  })
-  .refine((v) => v.newPassword === v.confirmPassword, {
-    message: "Passwords do not match",
-    path: ["confirmPassword"],
-  });
+// Account-tab copy: inline LocaleEntry set (see lib/i18n/common.ts). The zod
+// schemas become factories so validation messages follow the locale (same
+// pattern as the auth pages' makeLoginSchema).
+const accountCopy = {
+  nameRequired: { en: "Name is required", vi: "Vui lòng nhập tên" },
+  nameTooLong: { en: "At most 80 characters", vi: "Tối đa 80 ký tự" },
+  emailInvalid: { en: "Enter a valid email", vi: "Nhập email hợp lệ" },
+  currentPasswordRequired: {
+    en: "Current password is required",
+    vi: "Vui lòng nhập mật khẩu hiện tại",
+  },
+  passwordRuleFailed: {
+    en: "At least 8 characters, with upper- and lowercase letters, a digit, and a special character",
+    vi: "Ít nhất 8 ký tự, gồm chữ hoa, chữ thường, chữ số và ký tự đặc biệt",
+  },
+  confirmRequired: { en: "Confirm your new password", vi: "Vui lòng xác nhận mật khẩu mới" },
+  passwordMismatch: { en: "Passwords do not match", vi: "Mật khẩu không khớp" },
+  nameUpdateFailed: { en: "Failed to update name", vi: "Cập nhật tên thất bại" },
+  nameUpdated: { en: "Name updated", vi: "Đã cập nhật tên" },
+  name: { en: "Name", vi: "Tên" },
+  saveName: { en: "Save name", vi: "Lưu tên" },
+  wrongPassword: { en: "Wrong password", vi: "Sai mật khẩu" },
+  emailTaken: { en: "Email already in use", vi: "Email đã được sử dụng" },
+  emailChangeFailed: { en: "Failed to change email", vi: "Đổi email thất bại" },
+  emailUpdated: { en: "Email updated", vi: "Đã cập nhật email" },
+  email: { en: "Email", vi: "Email" },
+  currentPassword: { en: "Current password", vi: "Mật khẩu hiện tại" },
+  changeEmail: { en: "Change email", vi: "Đổi email" },
+  passwordUpdated: {
+    en: "Password updated; other sessions revoked",
+    vi: "Đã cập nhật mật khẩu; các phiên khác đã bị đăng xuất",
+  },
+  newPassword: { en: "New password", vi: "Mật khẩu mới" },
+  confirmNewPassword: { en: "Confirm new password", vi: "Xác nhận mật khẩu mới" },
+  changePassword: { en: "Change password", vi: "Đổi mật khẩu" },
+  avatarTooLarge: {
+    en: "Avatar too large (max {kb} KB)",
+    vi: "Ảnh đại diện quá lớn (tối đa {kb} KB)",
+  },
+  invalidImage: { en: "That file is not a valid image", vi: "Tệp này không phải ảnh hợp lệ" },
+  avatarUploadFailed: { en: "Failed to upload avatar", vi: "Tải ảnh đại diện lên thất bại" },
+  avatarUpdated: { en: "Avatar updated", vi: "Đã cập nhật ảnh đại diện" },
+  avatarRemoved: { en: "Avatar removed", vi: "Đã xoá ảnh đại diện" },
+  avatar: { en: "Avatar", vi: "Ảnh đại diện" },
+  upload: { en: "Upload", vi: "Tải lên" },
+  remove: { en: "Remove", vi: "Xoá" },
+  uploadAvatar: { en: "Upload avatar image", vi: "Tải ảnh đại diện lên" },
+  profile: { en: "Profile", vi: "Hồ sơ" },
+  password: { en: "Password", vi: "Mật khẩu" },
+} as const;
 
-type NameValues = z.infer<typeof nameSchema>;
-type EmailValues = z.infer<typeof emailSchema>;
-type PasswordValues = z.infer<typeof passwordSchema>;
+type AccountT = (key: keyof typeof accountCopy, vars?: Record<string, string | number>) => string;
+
+const makeNameSchema = (t: AccountT) =>
+  z.object({
+    name: z.string().trim().min(1, t("nameRequired")).max(80, t("nameTooLong")),
+  });
+const makeEmailSchema = (t: AccountT) =>
+  z.object({
+    email: z.string().trim().toLowerCase().email(t("emailInvalid")),
+    currentPassword: z.string().min(1, t("currentPasswordRequired")),
+  });
+const makePasswordSchema = (t: AccountT) =>
+  z
+    .object({
+      currentPassword: z.string().min(1, t("currentPasswordRequired")),
+      newPassword: z.string().refine((v) => checkPassword(v).length === 0, {
+        message: t("passwordRuleFailed"),
+      }),
+      confirmPassword: z.string().min(1, t("confirmRequired")),
+    })
+    .refine((v) => v.newPassword === v.confirmPassword, {
+      message: t("passwordMismatch"),
+      path: ["confirmPassword"],
+    });
+
+type NameValues = z.infer<ReturnType<typeof makeNameSchema>>;
+type EmailValues = z.infer<ReturnType<typeof makeEmailSchema>>;
+type PasswordValues = z.infer<ReturnType<typeof makePasswordSchema>>;
 
 function NameSection({ name }: { name: string }) {
+  const t = useT(accountCopy);
   const form = useForm<NameValues>({
-    resolver: zodResolver(nameSchema),
+    resolver: zodResolver(makeNameSchema(t)),
     defaultValues: { name },
   });
   return (
@@ -63,11 +120,11 @@ function NameSection({ name }: { name: string }) {
         onSubmit={form.handleSubmit(async (values) => {
           const { error } = await authClient.updateUser({ name: values.name });
           if (error) {
-            toast.error(error.message ?? "Failed to update name");
+            toast.error(error.message ?? t("nameUpdateFailed"));
             return;
           }
           await refreshSession();
-          toast.success("Name updated");
+          toast.success(t("nameUpdated"));
           form.reset({ name: values.name });
         })}
         className="grid gap-4"
@@ -77,7 +134,7 @@ function NameSection({ name }: { name: string }) {
           name="name"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Name</FormLabel>
+              <FormLabel>{t("name")}</FormLabel>
               <FormControl>
                 <Input autoComplete="name" {...field} />
               </FormControl>
@@ -91,7 +148,7 @@ function NameSection({ name }: { name: string }) {
           className="w-fit"
           disabled={form.formState.isSubmitting || !form.formState.isDirty}
         >
-          Save name
+          {t("saveName")}
         </Button>
       </form>
     </Form>
@@ -99,8 +156,9 @@ function NameSection({ name }: { name: string }) {
 }
 
 function EmailSection({ email }: { email: string }) {
+  const t = useT(accountCopy);
   const form = useForm<EmailValues>({
-    resolver: zodResolver(emailSchema),
+    resolver: zodResolver(makeEmailSchema(t)),
     defaultValues: { email, currentPassword: "" },
   });
   return (
@@ -117,16 +175,16 @@ function EmailSection({ email }: { email: string }) {
             });
           } catch (err) {
             if (err instanceof ApiError && err.code === "WRONG_PASSWORD") {
-              form.setError("currentPassword", { message: "Wrong password" });
+              form.setError("currentPassword", { message: t("wrongPassword") });
             } else if (err instanceof ApiError && err.code === "EMAIL_TAKEN") {
-              form.setError("email", { message: "Email already in use" });
+              form.setError("email", { message: t("emailTaken") });
             } else {
-              toast.error(err instanceof Error ? err.message : "Failed to change email");
+              toast.error(err instanceof Error ? err.message : t("emailChangeFailed"));
             }
             return;
           }
           await refreshSession();
-          toast.success("Email updated");
+          toast.success(t("emailUpdated"));
           form.reset({ email: values.email.trim().toLowerCase(), currentPassword: "" });
         })}
         className="grid gap-4"
@@ -136,7 +194,7 @@ function EmailSection({ email }: { email: string }) {
           name="email"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Email</FormLabel>
+              <FormLabel>{t("email")}</FormLabel>
               <FormControl>
                 <Input type="email" autoComplete="email" {...field} />
               </FormControl>
@@ -149,7 +207,7 @@ function EmailSection({ email }: { email: string }) {
           name="currentPassword"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Current password</FormLabel>
+              <FormLabel>{t("currentPassword")}</FormLabel>
               <FormControl>
                 <Input type="password" autoComplete="current-password" {...field} />
               </FormControl>
@@ -163,7 +221,7 @@ function EmailSection({ email }: { email: string }) {
           className="w-fit"
           disabled={form.formState.isSubmitting || !form.formState.isDirty}
         >
-          Change email
+          {t("changeEmail")}
         </Button>
       </form>
     </Form>
@@ -171,8 +229,9 @@ function EmailSection({ email }: { email: string }) {
 }
 
 function PasswordSection() {
+  const t = useT(accountCopy);
   const form = useForm<PasswordValues>({
-    resolver: zodResolver(passwordSchema),
+    resolver: zodResolver(makePasswordSchema(t)),
     defaultValues: { currentPassword: "", newPassword: "", confirmPassword: "" },
   });
   return (
@@ -185,11 +244,11 @@ function PasswordSection() {
             revokeOtherSessions: true,
           });
           if (error) {
-            form.setError("currentPassword", { message: error.message ?? "Wrong password" });
+            form.setError("currentPassword", { message: error.message ?? t("wrongPassword") });
             return;
           }
           form.reset();
-          toast.success("Password updated; other sessions revoked");
+          toast.success(t("passwordUpdated"));
         })}
         className="grid gap-4"
       >
@@ -198,7 +257,7 @@ function PasswordSection() {
           name="currentPassword"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Current password</FormLabel>
+              <FormLabel>{t("currentPassword")}</FormLabel>
               <FormControl>
                 <Input type="password" autoComplete="current-password" {...field} />
               </FormControl>
@@ -211,7 +270,7 @@ function PasswordSection() {
           name="newPassword"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>New password</FormLabel>
+              <FormLabel>{t("newPassword")}</FormLabel>
               <FormControl>
                 <Input type="password" autoComplete="new-password" {...field} />
               </FormControl>
@@ -224,7 +283,7 @@ function PasswordSection() {
           name="confirmPassword"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Confirm new password</FormLabel>
+              <FormLabel>{t("confirmNewPassword")}</FormLabel>
               <FormControl>
                 <Input type="password" autoComplete="new-password" {...field} />
               </FormControl>
@@ -233,7 +292,7 @@ function PasswordSection() {
           )}
         />
         <Button type="submit" size="sm" className="w-fit" disabled={form.formState.isSubmitting}>
-          Change password
+          {t("changePassword")}
         </Button>
       </form>
     </Form>
@@ -247,6 +306,7 @@ interface SessionUser {
 }
 
 function AvatarSection({ user }: { user: SessionUser }) {
+  const t = useT(accountCopy);
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -273,20 +333,21 @@ function AvatarSection({ user }: { user: SessionUser }) {
         } catch {
           // non-JSON error body
         }
+        const maxKb = Math.floor(MAX_AVATAR_BYTES / 1024);
         toast.error(
           res.status === 413 || code === "TOO_LARGE"
-            ? `Avatar too large (max ${Math.floor(MAX_AVATAR_BYTES / 1024)} KB)`
+            ? t("avatarTooLarge", { kb: maxKb })
             : code === "INVALID_IMAGE"
-              ? "That file is not a valid image"
-              : "Failed to upload avatar",
+              ? t("invalidImage")
+              : t("avatarUploadFailed"),
         );
         return;
       }
       await refreshSession();
       await queryClient.invalidateQueries({ queryKey: ["session"] });
-      toast.success("Avatar updated");
+      toast.success(t("avatarUpdated"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to upload avatar");
+      toast.error(err instanceof Error ? err.message : t("avatarUploadFailed"));
     } finally {
       setBusy(false);
     }
@@ -294,7 +355,7 @@ function AvatarSection({ user }: { user: SessionUser }) {
 
   return (
     <section className="grid gap-3">
-      <h3 className="text-sm font-medium">Avatar</h3>
+      <h3 className="text-sm font-medium">{t("avatar")}</h3>
       <div className="flex items-center gap-4">
         {user.image ? (
           <img src={user.image} alt="" className="size-16 rounded-full object-cover" />
@@ -319,7 +380,7 @@ function AvatarSection({ user }: { user: SessionUser }) {
             disabled={busy}
             onClick={() => fileRef.current?.click()}
           >
-            Upload
+            {t("upload")}
           </Button>
           {user.image && (
             <Button
@@ -335,13 +396,13 @@ function AvatarSection({ user }: { user: SessionUser }) {
                     credentials: "include",
                   });
                   await refreshSession();
-                  toast.success("Avatar removed");
+                  toast.success(t("avatarRemoved"));
                 } finally {
                   setBusy(false);
                 }
               }}
             >
-              Remove
+              {t("remove")}
             </Button>
           )}
         </div>
@@ -350,7 +411,7 @@ function AvatarSection({ user }: { user: SessionUser }) {
           type="file"
           accept="image/*"
           className="sr-only"
-          aria-label="Upload avatar image"
+          aria-label={t("uploadAvatar")}
           onChange={(e) => {
             const file = e.target.files?.[0];
             e.target.value = "";
@@ -363,6 +424,7 @@ function AvatarSection({ user }: { user: SessionUser }) {
 }
 
 export default function AccountTab() {
+  const t = useT(accountCopy);
   const { data: session, isPending } = useSession();
 
   if (isPending) return <Skeleton className="h-24 w-full max-w-md" />;
@@ -372,21 +434,21 @@ export default function AccountTab() {
     <div className="max-w-md space-y-10">
       {user && <AvatarSection user={user} />}
       <section className="grid gap-3">
-        <h3 className="text-sm font-medium">Profile</h3>
+        <h3 className="text-sm font-medium">{t("profile")}</h3>
         <NameSection name={user?.name ?? ""} />
       </section>
       <section className="grid gap-3">
-        <h3 className="text-sm font-medium">Email</h3>
+        <h3 className="text-sm font-medium">{t("email")}</h3>
         <EmailSection email={user?.email ?? ""} />
       </section>
       <section className="grid gap-3">
-        <h3 className="text-sm font-medium">Password</h3>
+        <h3 className="text-sm font-medium">{t("password")}</h3>
         <PasswordSection />
       </section>
       <div>
         <dl className="grid gap-3 text-sm">
           <div className="flex items-center justify-between border-b border-border pb-2">
-            <dt className="text-muted-foreground">Email</dt>
+            <dt className="text-muted-foreground">{t("email")}</dt>
             <dd className="font-mono">{user?.email ?? "—"}</dd>
           </div>
         </dl>

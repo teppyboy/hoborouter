@@ -8,6 +8,34 @@ import { Separator } from "../../components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { formatUsdMicroPer1m } from "../../lib/format";
 import { useCatalogModel } from "./data";
+import { useT } from "../../lib/i18n/t";
+
+// Model detail copy: inline LocaleEntry set (see lib/i18n/common.ts). The
+// public model id, capability values and code samples stay verbatim.
+const detailCopy = {
+  back: { en: "Back", vi: "Quay lại" },
+  description: {
+    en: "Published model pricing. Prices are per 1M tokens, in USD.",
+    vi: "Giá mô hình đã xuất bản. Giá trên 1M token, tính bằng USD.",
+  },
+  copyModelId: { en: "Copy model ID", vi: "Copy model ID" },
+  notFound: { en: "Model not found", vi: "Không tìm thấy mô hình" },
+  notFoundDesc: { en: 'No published model "{id}".', vi: 'Không có mô hình đã xuất bản "{id}".' },
+  pricing: { en: "Pricing", vi: "Giá" },
+  inputPrice: { en: "Input / 1M", vi: "Input / 1M" },
+  outputPrice: { en: "Output / 1M", vi: "Output / 1M" },
+  cachedInputPrice: { en: "Cached input / 1M", vi: "Input cache / 1M" },
+  reasoningPrice: { en: "Reasoning / 1M", vi: "Suy luận / 1M" },
+  details: { en: "Details", vi: "Chi tiết" },
+  provider: { en: "Provider", vi: "Nhà cung cấp" },
+  contextWindow: { en: "Context window", vi: "Cửa sổ ngữ cảnh" },
+  displayName: { en: "Display name", vi: "Tên hiển thị" },
+  descriptionLabel: { en: "Description", vi: "Mô tả" },
+  capabilities: { en: "Capabilities", vi: "Năng lực" },
+  quickstart: { en: "Quickstart", vi: "Hướng dẫn nhanh" },
+  sdkJs: { en: "OpenAI SDK (JS)", vi: "OpenAI SDK (JS)" },
+  sdkPy: { en: "OpenAI SDK (Python)", vi: "OpenAI SDK (Python)" },
+} as const;
 
 const PLACEHOLDER_KEY = "sk-hbr-YOUR_KEY";
 
@@ -65,6 +93,7 @@ function PriceRow({ label, value }: { label: string; value: number }) {
 }
 
 export default function ModelDetailPage() {
+  const t = useT(detailCopy);
   // Route is splat "/models/$"; public id may contain '/', read the splat param.
   const params = useParams({ strict: false }) as { _splat?: string; modelId?: string };
   const rawId = params._splat ?? params.modelId ?? "";
@@ -85,8 +114,8 @@ export default function ModelDetailPage() {
     return modelQ.error instanceof Error && "status" in modelQ.error ? (
       ((
         <div className="space-y-4">
-          <PageHeader title="Model" />
-          <EmptyState title="Model not found" description={`No published model "${publicId}".`} />
+          <PageHeader title={t("notFound")} />
+          <EmptyState title={t("notFound")} description={t("notFoundDesc", { id: publicId })} />
         </div>
       ) as React.ReactNode)
     ) : (
@@ -99,52 +128,52 @@ export default function ModelDetailPage() {
   return (
     <div className="space-y-4">
       <Button variant="ghost" size="sm" className="-ml-2" onClick={() => history.back()}>
-        <ChevronLeft className="size-4" /> Back
+        <ChevronLeft className="size-4" /> {t("back")}
       </Button>
       <PageHeader
         title={publicId}
-        description="Published model pricing. Prices are per 1M tokens, in USD."
-        actions={<CopyButton value={publicId} label="Copy model ID" />}
+        description={t("description")}
+        actions={<CopyButton value={publicId} label={t("copyModelId")} />}
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-border">
-          <div className="border-b border-border px-4 py-2 text-sm font-medium">Pricing</div>
+          <div className="border-b border-border px-4 py-2 text-sm font-medium">{t("pricing")}</div>
           <dl className="divide-y divide-border text-sm">
-            <PriceRow label="Input / 1M" value={model.price.input_usd_micro_per_1m} />
-            <PriceRow label="Output / 1M" value={model.price.output_usd_micro_per_1m} />
-            <PriceRow label="Cached input / 1M" value={model.price.cached_input_usd_micro_per_1m} />
-            <PriceRow label="Reasoning / 1M" value={model.price.reasoning_usd_micro_per_1m} />
+            <PriceRow label={t("inputPrice")} value={model.price.input_usd_micro_per_1m} />
+            <PriceRow label={t("outputPrice")} value={model.price.output_usd_micro_per_1m} />
+            <PriceRow label={t("cachedInputPrice")} value={model.price.cached_input_usd_micro_per_1m} />
+            <PriceRow label={t("reasoningPrice")} value={model.price.reasoning_usd_micro_per_1m} />
           </dl>
         </div>
 
         <div className="rounded-lg border border-border">
-          <div className="border-b border-border px-4 py-2 text-sm font-medium">Details</div>
+          <div className="border-b border-border px-4 py-2 text-sm font-medium">{t("details")}</div>
           <dl className="divide-y divide-border text-sm">
             <div className="flex items-center justify-between px-4 py-2">
-              <dt className="text-muted-foreground">Provider</dt>
+              <dt className="text-muted-foreground">{t("provider")}</dt>
               <dd className="font-mono">{model.provider}</dd>
             </div>
             <div className="flex items-center justify-between px-4 py-2">
-              <dt className="text-muted-foreground">Context window</dt>
+              <dt className="text-muted-foreground">{t("contextWindow")}</dt>
               <dd className="font-mono">
                 {model.context_window != null ? model.context_window.toLocaleString() : "—"}
               </dd>
             </div>
             {model.display_name && (
               <div className="flex items-center justify-between px-4 py-2">
-                <dt className="text-muted-foreground">Display name</dt>
+                <dt className="text-muted-foreground">{t("displayName")}</dt>
                 <dd>{model.display_name}</dd>
               </div>
             )}
             {model.description && (
               <div className="px-4 py-2">
-                <dt className="text-muted-foreground">Description</dt>
+                <dt className="text-muted-foreground">{t("descriptionLabel")}</dt>
                 <dd className="mt-1 text-sm">{model.description}</dd>
               </div>
             )}
             <div className="px-4 py-2">
-              <dt className="text-muted-foreground">Capabilities</dt>
+              <dt className="text-muted-foreground">{t("capabilities")}</dt>
               <dd className="mt-1">
                 {model.capabilities.length === 0 ? (
                   <span className="text-muted-foreground text-sm">—</span>
@@ -165,15 +194,15 @@ export default function ModelDetailPage() {
 
       <div className="rounded-lg border border-border">
         <div className="flex flex-wrap items-center justify-between gap-1 border-b border-border px-4 py-2">
-          <span className="text-sm font-medium">Quickstart</span>
+          <span className="text-sm font-medium">{t("quickstart")}</span>
           <span className="font-mono text-xs text-muted-foreground">base URL: {origin}/v1</span>
         </div>
         <div className="p-4">
           <Tabs defaultValue="curl">
             <TabsList>
               <TabsTrigger value="curl">cURL</TabsTrigger>
-              <TabsTrigger value="js">OpenAI SDK (JS)</TabsTrigger>
-              <TabsTrigger value="py">OpenAI SDK (Python)</TabsTrigger>
+              <TabsTrigger value="js">{t("sdkJs")}</TabsTrigger>
+              <TabsTrigger value="py">{t("sdkPy")}</TabsTrigger>
             </TabsList>
             <Separator className="my-3" />
             <TabsContent value="curl">

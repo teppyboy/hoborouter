@@ -51,10 +51,10 @@ const fields = [
 ] as const;
 
 /** Live rule checklist under the password field; ticks as rules are satisfied. */
-function PasswordChecklist({ value }: { value: string }) {
+function PasswordChecklist({ value, t }: { value: string; t: AuthT }) {
   return (
     <ul
-      aria-label="Password requirements"
+      aria-label={t("passwordRequirements")}
       aria-live="polite"
       className="grid gap-1 text-xs text-muted-foreground"
     >
@@ -63,7 +63,7 @@ function PasswordChecklist({ value }: { value: string }) {
         return (
           <li key={rule.key} className={ok ? "text-emerald-600" : undefined}>
             <span aria-hidden="true">{ok ? "\u2713" : "\u25CB"}</span> {rule.label}
-            <span className="sr-only">{ok ? " (met)" : " (not yet met)"}</span>
+            <span className="sr-only">{ok ? t("ruleMet") : t("ruleNotMet")}</span>
           </li>
         );
       })}
@@ -141,7 +141,9 @@ export default function SignupPage() {
                   <FormControl>
                     <Input type={f.type} autoComplete={f.autoComplete} {...field} />
                   </FormControl>
-                  {f.name === "password" && <PasswordChecklist value={watchedPassword ?? ""} />}
+                  {f.name === "password" && (
+                    <PasswordChecklist value={watchedPassword ?? ""} t={t} />
+                  )}
                   <FormMessage className="animate-in fade-in slide-in-from-top-1" />
                 </FormItem>
               )}

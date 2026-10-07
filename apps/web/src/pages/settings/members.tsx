@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from "../../components/ui/select";
 import type { ColumnDef } from "@tanstack/react-table";
+import { useT } from "../../lib/i18n/t";
 
 type Role = "owner" | "admin" | "member";
 
@@ -43,13 +44,47 @@ interface Member {
   name: string | null;
 }
 
-const inviteSchema = z.object({
-  email: z.string().email("Enter a valid email"),
-  role: z.enum(["owner", "admin", "member"]),
-});
-type InviteValues = z.infer<typeof inviteSchema>;
+// Members-tab copy: inline LocaleEntry set (see lib/i18n/common.ts). Role
+// *values* stay raw API enums ("owner"|"admin"|"member"); only the words
+// around them are translated.
+const membersCopy = {
+  emailInvalid: { en: "Enter a valid email", vi: "Nhập email hợp lệ" },
+  roleUpdated: { en: "Role updated", vi: "Đã cập nhật vai trò" },
+  updateFailed: { en: "Update failed", vi: "Cập nhật thất bại" },
+  memberRemoved: { en: "Member removed", vi: "Đã xoá thành viên" },
+  removeFailed: { en: "Remove failed", vi: "Xoá thất bại" },
+  loadFailed: { en: "Failed to load members.", vi: "Không tải được danh sách thành viên." },
+  cannotView: { en: "Cannot view members: {message}", vi: "Không xem được thành viên: {message}" },
+  emailHeader: { en: "Email", vi: "Email" },
+  nameHeader: { en: "Name", vi: "Tên" },
+  roleHeader: { en: "Role", vi: "Vai trò" },
+  roleOwner: { en: "owner", vi: "chủ sở hữu" },
+  roleAdmin: { en: "admin", vi: "quản trị" },
+  roleMember: { en: "member", vi: "thành viên" },
+  roleFor: { en: "Role for {email}", vi: "Vai trò của {email}" },
+  remove: { en: "Remove", vi: "Xoá" },
+  noMembers: {
+    en: "No members. Invited users must already have an account.",
+    vi: "Chưa có thành viên. Người được mời phải đã có tài khoản.",
+  },
+  removeMember: { en: "Remove member", vi: "Xoá thành viên" },
+  removeConfirm: {
+    en: "Remove {email} from this workspace?",
+    vi: "Xoá {email} khỏi workspace này?",
+  },
+  cancel: { en: "Cancel", vi: "Huỷ" },
+  memberAdded: { en: "Member added", vi: "Đã thêm thành viên" },
+  inviteFailed: { en: "Invite failed", vi: "Mời thất bại" },
+  inviteByEmail: { en: "Invite by email", vi: "Mời qua email" },
+  add: { en: "Add", vi: "Thêm" },
+} as const;
+
+function roleLabelKey(role: Role): "roleOwner" | "roleAdmin" | "roleMember" {
+  return role === "owner" ? "roleOwner" : role === "admin" ? "roleAdmin" : "roleMember";
+}
 
 export default function MembersTab({ workspaceId }: { workspaceId: string }) {
+  const t = useT(membersCopy);
   const qc = useQueryClient();
   const [removing, setRemoving] = React.useState<Member | null>(null);
 
@@ -74,21 +109,21 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
         body: JSON.stringify({ role }),
       }),
     onSuccess: () => {
-      toast("Role updated");
+      toast(t("roleUpdated"));
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Update failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : t("updateFailed")),
   });
 
   const removeMember = useMutation({
     mutationFn: (userId: string) =>
       api(`/api/v1/workspaces/${workspaceId}/members/${userId}`, { method: "DELETE" }),
     onSuccess: () => {
-      toast("Member removed");
+      toast(t("memberRemoved"));
       setRemoving(null);
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Remove failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : t("removeFailed")),
   });
 
   if (isLoading) return <Skeleton className="h-64 w-full" />;
@@ -96,8 +131,8 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
     return (
       <p className="text-sm text-muted-foreground">
         {error instanceof ApiError
-          ? `Cannot view members: ${error.message}`
-          : "Failed to load members."}
+          ? t("cannotView", { message: error.message })
+          : t("loadFailed")}
       </p>
     );
   }
@@ -105,16 +140,16 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
   const columns: ColumnDef<Member, unknown>[] = [
     {
       accessorKey: "email",
-      header: "Email",
+      header: t("emailHeader"),
       meta: "font-mono",
     },
-    { accessorKey: "name", header: "Name" },
+    { accessorKey: "name", header: t("nameHeader") },
     {
       accessorKey: "role",
-      header: "Role",
+      header: t("roleHeader"),
       cell: ({ row }) =>
         row.original.role === "owner" ? (
-          row.original.role
+          t(roleLabelKey(row.original.role))
         ) : (
           <Select
             value={row.original.role}
@@ -124,13 +159,16 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
                 .catch(() => undefined)
             }
           >
-            <SelectTrigger className="h-8 w-28" aria-label={`Role for ${row.original.email}`}>
+            <SelectTrigger
+              className="h-8 w-28"
+              aria-label={t("roleFor", { email: row.original.email })}
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="owner">owner</SelectItem>
-              <SelectItem value="admin">admin</SelectItem>
-              <SelectItem value="member">member</SelectItem>
+              <SelectItem value="owner">{t("roleOwner")}</SelectItem>
+              <SelectItem value="admin">{t("roleAdmin")}</SelectItem>
+              <SelectItem value="member">{t("roleMember")}</SelectItem>
             </SelectContent>
           </Select>
         ),
@@ -146,7 +184,7 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
           className="text-destructive"
           onClick={() => setRemoving(row.original)}
         >
-          Remove
+          {t("remove")}
         </Button>
       ),
     },
@@ -159,21 +197,19 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
         <DataTable
           columns={columns}
           data={members ?? []}
-          empty={
-            members?.length ? undefined : "No members. Invited users must already have an account."
-          }
+          empty={members?.length ? undefined : t("noMembers")}
         />
       </div>
 
       <Dialog open={!!removing} onOpenChange={(open) => !open && setRemoving(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Remove member</DialogTitle>
-            <DialogDescription>Remove {removing?.email} from this workspace?</DialogDescription>
+            <DialogTitle>{t("removeMember")}</DialogTitle>
+            <DialogDescription>{t("removeConfirm", { email: removing?.email ?? "" })}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setRemoving(null)}>
-              Cancel
+              {t("cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -183,7 +219,7 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
                 removing && removeMember.mutateAsync(removing.user_id).catch(() => undefined)
               }
             >
-              Remove
+              {t("remove")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -193,23 +229,26 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
 }
 
 function InviteForm({ workspaceId, onInvited }: { workspaceId: string; onInvited: () => void }) {
-  const form = useForm<InviteValues>({
-    resolver: zodResolver(inviteSchema),
+  const t = useT(membersCopy);
+  const makeInviteSchema = () =>
+    z.object({ email: z.string().email(t("emailInvalid")), role: z.enum(["owner", "admin", "member"]) });
+  const form = useForm<z.infer<ReturnType<typeof makeInviteSchema>>>({
+    resolver: zodResolver(makeInviteSchema()),
     defaultValues: { email: "", role: "member" },
   });
 
   const invite = useMutation({
-    mutationFn: (values: InviteValues) =>
+    mutationFn: (values: z.infer<ReturnType<typeof makeInviteSchema>>) =>
       api(`/api/v1/workspaces/${workspaceId}/members`, {
         method: "POST",
         body: JSON.stringify(values),
       }),
     onSuccess: () => {
-      toast("Member added");
+      toast(t("memberAdded"));
       form.reset({ email: "", role: "member" });
       onInvited();
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Invite failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : t("inviteFailed")),
   });
 
   return (
@@ -223,7 +262,7 @@ function InviteForm({ workspaceId, onInvited }: { workspaceId: string; onInvited
           name="email"
           render={({ field }) => (
             <FormItem className="flex-1">
-              <FormLabel>Invite by email</FormLabel>
+              <FormLabel>{t("inviteByEmail")}</FormLabel>
               <FormControl>
                 <Input type="email" placeholder="user@example.com" {...field} />
               </FormControl>
@@ -236,7 +275,7 @@ function InviteForm({ workspaceId, onInvited }: { workspaceId: string; onInvited
           name="role"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Role</FormLabel>
+              <FormLabel>{t("roleHeader")}</FormLabel>
               <Select value={field.value} onValueChange={field.onChange}>
                 <FormControl>
                   <SelectTrigger className="w-full sm:w-28">
@@ -244,9 +283,9 @@ function InviteForm({ workspaceId, onInvited }: { workspaceId: string; onInvited
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
-                  <SelectItem value="owner">owner</SelectItem>
-                  <SelectItem value="admin">admin</SelectItem>
-                  <SelectItem value="member">member</SelectItem>
+                  <SelectItem value="owner">{t("roleOwner")}</SelectItem>
+                  <SelectItem value="admin">{t("roleAdmin")}</SelectItem>
+                  <SelectItem value="member">{t("roleMember")}</SelectItem>
                 </SelectContent>
               </Select>
               <FormMessage />
@@ -254,7 +293,7 @@ function InviteForm({ workspaceId, onInvited }: { workspaceId: string; onInvited
           )}
         />
         <Button type="submit" size="sm" disabled={invite.isPending} className="sm:mt-8">
-          Add
+          {t("add")}
         </Button>
       </form>
     </Form>

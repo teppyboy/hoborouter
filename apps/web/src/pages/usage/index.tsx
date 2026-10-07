@@ -23,6 +23,52 @@ import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useUsageSummary, successRateLabel } from "../logs/api";
 import { metricSeries, type Metric } from "./charthelper";
+import { useT, useLocaleEntry, type LocaleEntry } from "../../lib/i18n/t";
+
+// Usage page copy: inline LocaleEntry set (see lib/i18n/common.ts). Money,
+// tokens and model ids are never translated.
+const usageCopy = {
+  requests: { en: "Requests", vi: "Requests" },
+  tokens: { en: "Tokens", vi: "Token" },
+  cost: { en: "Cost", vi: "Chi phí" },
+  errors: { en: "Errors", vi: "Lỗi" },
+  dataViews: { en: "Usage data views", vi: "Chế độ xem dữ liệu sử dụng" },
+  chart: { en: "Chart", vi: "Biểu đồ" },
+  perModel: { en: "Per model", vi: "Theo mô hình" },
+  noRequests: { en: "No requests yet", vi: "Chưa có request nào" },
+  perModelUsage: { en: "Per model usage", vi: "Sử dụng theo mô hình" },
+  modelCol: { en: "Model", vi: "Mô hình" },
+  requestsCol: { en: "Requests", vi: "Requests" },
+  tokensCol: { en: "Tokens", vi: "Token" },
+  tokenShare: { en: "Token share", vi: "Tỷ lệ token" },
+  spend: { en: "Spend", vi: "Chi tiêu" },
+  title: { en: "Usage", vi: "Mức sử dụng" },
+  description: {
+    en: "Requests, tokens and cost over the last {days} days.",
+    vi: "Requests, token và chi phí trong {days} ngày qua.",
+  },
+  filterByModel: { en: "Filter by model", vi: "Lọc theo mô hình" },
+  allModels: { en: "All models", vi: "Tất cả mô hình" },
+  timePeriod: { en: "Time period", vi: "Khoảng thời gian" },
+  endpointUnavailable: {
+    en: "Usage summary endpoint not available yet",
+    vi: "Chưa có endpoint tổng hợp mức sử dụng",
+  },
+  costUsd: { en: "Cost (USD)", vi: "Chi phí (USD)" },
+  successRate: { en: "Success rate", vi: "Tỷ lệ thành công" },
+  successRateCaption: {
+    en: "Share of successful requests among eligible requests (requests with a model and token usage) in the selected period.",
+    vi: "Tỷ lệ request thành công trong số các request đủ điều kiện (có mô hình và mức sử dụng token) trong kỳ đã chọn.",
+  },
+  chartMetric: { en: "Chart metric", vi: "Chỉ số biểu đồ" },
+} as const;
+
+const METRICS: { id: Metric; label: LocaleEntry }[] = [
+  { id: "requests", label: usageCopy.requests },
+  { id: "tokens", label: usageCopy.tokens },
+  { id: "cost", label: usageCopy.cost },
+  { id: "errors", label: usageCopy.errors },
+];
 
 /** Row shape from GET /usage-summary `by_model` (public IDs only). */
 export interface PerModelRow {
@@ -34,13 +80,6 @@ export interface PerModelRow {
 }
 
 const PERIODS = [7, 30, 90] as const;
-
-const METRICS: { id: Metric; label: string }[] = [
-  { id: "requests", label: "Requests" },
-  { id: "tokens", label: "Tokens" },
-  { id: "cost", label: "Cost" },
-  { id: "errors", label: "Errors" },
-];
 
 function formatMetric(vnd: number, metric: Metric, rate?: number): string {
   if (metric === "cost") return formatUsdFromVnd(vnd, rate) ?? formatVnd(vnd);
@@ -130,6 +169,11 @@ function KpiCard({ title, value, caption }: { title: string; value: string; capt
   );
 }
 
+/** Locale-aware label for a chart metric tab. */
+function MetricLabel({ label }: { label: LocaleEntry }) {
+  return <>{useLocaleEntry(label)}</>;
+}
+
 /**
  * Chart and Per-model views live in separate tabs so the per-model table can
  * grow without pushing the chart (or the page) down; only the active tab's
@@ -142,11 +186,12 @@ export function UsageDataTabs({
   chart: React.ReactNode;
   perModel: React.ReactNode;
 }) {
+  const t = useT(usageCopy);
   return (
     <Tabs defaultValue="chart" className="min-w-0">
-      <TabsList aria-label="Usage data views">
-        <TabsTrigger value="chart">Chart</TabsTrigger>
-        <TabsTrigger value="per-model">Per model</TabsTrigger>
+      <TabsList aria-label={t("dataViews")}>
+        <TabsTrigger value="chart">{t("chart")}</TabsTrigger>
+        <TabsTrigger value="per-model">{t("perModel")}</TabsTrigger>
       </TabsList>
       <TabsContent value="chart">{chart}</TabsContent>
       <TabsContent value="per-model">{perModel}</TabsContent>
@@ -167,17 +212,18 @@ export function PerModelTable({
   totalTokens: number;
   rate?: number;
 }) {
-  if (byModel.length === 0) return <EmptyState title="No requests yet" />;
+  const t = useT(usageCopy);
+  if (byModel.length === 0) return <EmptyState title={t("noRequests")} />;
   return (
-    <ScrollPanel label="Per model usage" stickyHeader>
+    <ScrollPanel label={t("perModelUsage")} stickyHeader>
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Model</TableHead>
-            <TableHead className="text-right">Requests</TableHead>
-            <TableHead className="text-right">Tokens</TableHead>
-            <TableHead className="text-right">Token share</TableHead>
-            <TableHead className="text-right">Spend</TableHead>
+            <TableHead>{t("modelCol")}</TableHead>
+            <TableHead className="text-right">{t("requestsCol")}</TableHead>
+            <TableHead className="text-right">{t("tokensCol")}</TableHead>
+            <TableHead className="text-right">{t("tokenShare")}</TableHead>
+            <TableHead className="text-right">{t("spend")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -222,6 +268,7 @@ export function PerModelTable({
 }
 
 export default function UsagePage() {
+  const t = useT(usageCopy);
   const workspaceId = useCurrentWorkspaceId();
   const [days, setDays] = useState(30);
   const [model, setModel] = useState("all");
@@ -240,16 +287,16 @@ export default function UsagePage() {
 
   const header = (
     <PageHeader
-      title="Usage"
-      description={`Requests, tokens and cost over the last ${days} days.`}
+      title={t("title")}
+      description={t("description", { days })}
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <Select value={model} onValueChange={setModel}>
-            <SelectTrigger className="h-8 w-44" aria-label="Filter by model">
-              <SelectValue placeholder="All models" />
+            <SelectTrigger className="h-8 w-44" aria-label={t("filterByModel")}>
+              <SelectValue placeholder={t("allModels")} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All models</SelectItem>
+              <SelectItem value="all">{t("allModels")}</SelectItem>
               {(optionsQuery.data?.by_model ?? [])
                 .map((m) => String(m.public_model))
                 .filter((m) => m.length > 0)
@@ -262,7 +309,7 @@ export default function UsagePage() {
           </Select>
           <div
             role="group"
-            aria-label="Time period"
+            aria-label={t("timePeriod")}
             className="flex items-center gap-1 rounded-md border border-border p-0.5"
           >
             {PERIODS.map((d) => (
@@ -300,7 +347,7 @@ export default function UsagePage() {
       <div className="space-y-4">
         {header}
         {err.status === 404 ? (
-          <EmptyState title="Usage summary endpoint not available yet" />
+          <EmptyState title={t("endpointUnavailable")} />
         ) : (
           <ErrorState message={err.message} />
         )}
@@ -319,16 +366,16 @@ export default function UsagePage() {
       {header}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard title="Requests" value={totals.requests.toLocaleString("en-US")} />
-        <KpiCard title="Tokens" value={formatTokens(totalTokens)} />
+        <KpiCard title={t("requests")} value={totals.requests.toLocaleString("en-US")} />
+        <KpiCard title={t("tokens")} value={formatTokens(totalTokens)} />
         <KpiCard
-          title="Cost (USD)"
+          title={t("costUsd")}
           value={formatUsdFromVnd(totals.spend_vnd, rate) ?? formatVnd(totals.spend_vnd)}
         />
         <KpiCard
-          title="Success rate"
+          title={t("successRate")}
           value={successRate}
-          caption="Share of successful requests among eligible requests (requests with a model and token usage) in the selected period."
+          caption={t("successRateCaption")}
         />
       </div>
 
@@ -337,10 +384,10 @@ export default function UsagePage() {
           <Card>
             <CardHeader className="pb-0">
               <Tabs value={metric} onValueChange={(v) => setMetric(v as Metric)}>
-                <TabsList aria-label="Chart metric">
+                <TabsList aria-label={t("chartMetric")}>
                   {METRICS.map((m) => (
                     <TabsTrigger key={m.id} value={m.id} className="text-xs">
-                      {m.label}
+                      <MetricLabel label={m.label} />
                     </TabsTrigger>
                   ))}
                 </TabsList>
@@ -348,7 +395,7 @@ export default function UsagePage() {
             </CardHeader>
             <CardContent>
               {daily.length === 0 ? (
-                <EmptyState title="No requests yet" />
+                <EmptyState title={t("noRequests")} />
               ) : (
                 <>
                   <DailyChart daily={daily} days={days} metric={metric} rate={rate} />

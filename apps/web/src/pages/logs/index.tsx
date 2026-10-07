@@ -43,6 +43,7 @@ import { formatStatusLabel, formatProviderLabel } from "../../lib/display";
 import { ApiError, api } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useRequestLogs, type UsageLogRow } from "./api";
+import { useT } from "../../lib/i18n/t";
 import {
   applyLogFilters,
   paginateLogs,
@@ -50,6 +51,88 @@ import {
   LOG_PAGE_SIZE,
   type LogFilters,
 } from "./filters";
+
+// Logs page copy: inline LocaleEntry set (see lib/i18n/common.ts). Request
+// IDs, model ids, token counts and money values are never translated.
+const logsCopy = {
+  title: { en: "Logs", vi: "Nhật ký" },
+  description: {
+    en: "Request logs for the selected workspace.",
+    vi: "Nhật ký request của workspace đã chọn.",
+  },
+  endpointUnavailable: {
+    en: "Usage logs endpoint not available yet",
+    vi: "Chưa có endpoint nhật ký mức sử dụng",
+  },
+  noRequests: { en: "No requests yet", vi: "Chưa có request nào" },
+  noRequestsDesc: {
+    en: "Usage logs will appear here once requests are made.",
+    vi: "Nhật ký sử dụng sẽ xuất hiện khi có request.",
+  },
+  noUsageRequests: { en: "No requests with usage", vi: "Không có request nào có mức sử dụng" },
+  noUsageDesc: {
+    en: "All loaded requests were hidden because they have no model or no token usage.",
+    vi: "Mọi request đã tải bị ẩn vì không có mô hình hoặc không dùng token.",
+  },
+  searchPlaceholder: { en: "Search request, model, key…", vi: "Tìm request, mô hình, key…" },
+  searchLogs: { en: "Search logs", vi: "Tìm nhật ký" },
+  modelsLabel: { en: "Models", vi: "Mô hình" },
+  allModels: { en: "All models", vi: "Tất cả mô hình" },
+  statuses: { en: "Statuses", vi: "Trạng thái" },
+  allStatuses: { en: "All statuses", vi: "Tất cả trạng thái" },
+  succeeded: { en: "Succeeded", vi: "Thành công" },
+  error: { en: "Error", vi: "Lỗi" },
+  keysLabel: { en: "Keys", vi: "Key" },
+  allKeys: { en: "All keys", vi: "Tất cả key" },
+  allFilterSuffix: { en: "All", vi: "Tất cả" },
+  refreshLogs: { en: "Refresh logs", vi: "Làm mới nhật ký" },
+  refresh: { en: "Refresh", vi: "Làm mới" },
+  time: { en: "Time", vi: "Thời gian" },
+  request: { en: "Request", vi: "Request" },
+  model: { en: "Model", vi: "Mô hình" },
+  key: { en: "Key", vi: "Key" },
+  tokens: { en: "Tokens", vi: "Token" },
+  cost: { en: "Cost", vi: "Chi phí" },
+  status: { en: "Status", vi: "Trạng thái" },
+  ttft: { en: "Time to first token (streaming requests only)", vi: "Thời gian tới token đầu (chỉ request streaming)" },
+  latency: { en: "Latency", vi: "Độ trễ" },
+  noMatching: { en: "No matching requests", vi: "Không có request khớp" },
+  openRequest: { en: "Open request {id}", vi: "Mở request {id}" },
+  copyRequestId: { en: "Copy request ID", vi: "Copy request ID" },
+  showing: {
+    en: "Showing {start}–{end} of {total} loaded requests",
+    vi: "Hiển thị {start}–{end} trong {total} request đã tải",
+  },
+  hidden: {
+    en: " — {n} hidden (no model or no token usage)",
+    vi: " — {n} bị ẩn (không có mô hình hoặc không dùng token)",
+  },
+  prev: { en: "Prev", vi: "Trước" },
+  next: { en: "Next", vi: "Sau" },
+  previousPage: { en: "Previous page", vi: "Trang trước" },
+  nextPage: { en: "Next page", vi: "Trang sau" },
+  detailsTitle: { en: "Request usage details", vi: "Chi tiết sử dụng của request" },
+  failure: { en: "Failure", vi: "Lỗi" },
+  provider: { en: "Provider", vi: "Nhà cung cấp" },
+  keyPrefix: { en: "Key prefix", vi: "Tiền tố key" },
+  inputTokens: { en: "Input tokens", vi: "Token đầu vào" },
+  cachedInputTokens: { en: "Cached input tokens", vi: "Token đầu vào cache" },
+  reasoningTokens: { en: "Reasoning tokens", vi: "Token suy luận" },
+  outputTokens: { en: "Output tokens", vi: "Token đầu ra" },
+  duration: { en: "Duration", vi: "Thời lượng" },
+  timeToFirstToken: { en: "Time to first token", vi: "Thời gian tới token đầu" },
+  created: { en: "Created", vi: "Thời gian tạo" },
+  removeLog: { en: "Remove log", vi: "Xoá nhật ký" },
+  removeLogDesc: {
+    en: "Hides this log from users. Billing records are kept.",
+    vi: "Ẩn nhật ký này khỏi người dùng. Bản ghi thanh toán được giữ lại.",
+  },
+  removing: { en: "Removing…", vi: "Đang xoá…" },
+  remove: { en: "Remove", vi: "Xoá" },
+  logRemoved: { en: "Log removed", vi: "Đã xoá nhật ký" },
+  removeFailed: { en: "Remove failed", vi: "Xoá thất bại" },
+  cancel: { en: "Cancel", vi: "Huỷ" },
+} as const;
 
 function formatDuration(ms: number | null | undefined): string {
   return typeof ms === "number" && Number.isFinite(ms) && ms >= 0 ? `${ms} ms` : "—";
@@ -83,20 +166,21 @@ function DetailField({ label, children }: { label: string; children: React.React
  * underlying request (hides it from customer views, keeps billing records).
  */
 function RemoveLogButton({ requestId, onRemoved }: { requestId: string; onRemoved: () => void }) {
+  const t = useT(logsCopy);
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const remove = useMutation({
     mutationFn: () => api(`/api/v1/admin/requests/${requestId}`, { method: "DELETE" }),
     onSuccess: () => {
-      toast("Log removed", {
-        description: "Hides this log from users. Billing records are kept.",
+      toast(t("logRemoved"), {
+        description: t("removeLogDesc"),
       });
       void qc.invalidateQueries({ queryKey: ["usage-logs"] });
       void qc.invalidateQueries({ queryKey: ["usage-summary"] });
       setOpen(false);
       onRemoved();
     },
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Remove failed"),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : t("removeFailed")),
   });
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -106,22 +190,20 @@ function RemoveLogButton({ requestId, onRemoved }: { requestId: string; onRemove
           size="sm"
           className="gap-1.5"
           onClick={() => setOpen(true)}
-          aria-label="Remove log"
+          aria-label={t("removeLog")}
         >
           <Trash2 className="h-3.5 w-3.5" />
-          Remove log
+          {t("removeLog")}
         </Button>
       </div>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Remove log</DialogTitle>
-          <DialogDescription>
-            Hides this log from users. Billing records are kept.
-          </DialogDescription>
+          <DialogTitle>{t("removeLog")}</DialogTitle>
+          <DialogDescription>{t("removeLogDesc")}</DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
-            Cancel
+            {t("cancel")}
           </Button>
           <Button
             variant="destructive"
@@ -129,12 +211,17 @@ function RemoveLogButton({ requestId, onRemoved }: { requestId: string; onRemove
             disabled={remove.isPending}
             onClick={() => void remove.mutateAsync().catch(() => undefined)}
           >
-            {remove.isPending ? "Removing…" : "Remove"}
+            {remove.isPending ? t("removing") : t("remove")}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+function AllOption({ label }: { label: string }) {
+  const t = useT(logsCopy);
+  return <SelectItem value="all">{t("allFilterSuffix")} {label.toLowerCase()}</SelectItem>;
 }
 
 function FilterSelect({
@@ -156,7 +243,7 @@ function FilterSelect({
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="all">All {label.toLowerCase()}</SelectItem>
+        <AllOption label={label} />
         {options.map((o) => (
           <SelectItem key={o} value={o}>
             {o}
@@ -168,6 +255,7 @@ function FilterSelect({
 }
 
 export default function LogsPage() {
+  const t = useT(logsCopy);
   const workspaceId = useCurrentWorkspaceId();
   const query = useRequestLogs(workspaceId);
   const rate = useUsdVndRate(workspaceId).data;
@@ -184,7 +272,7 @@ export default function LogsPage() {
   if (query.isPending) {
     return (
       <div className="space-y-4">
-        <PageHeader title="Logs" description="Request logs for the selected workspace." />
+        <PageHeader title={t("title")} description={t("description")} />
         <Skeleton className="h-64 w-full" />
       </div>
     );
@@ -193,9 +281,9 @@ export default function LogsPage() {
     const err = query.error as ApiError;
     return (
       <div className="space-y-4">
-        <PageHeader title="Logs" description="Request logs for the selected workspace." />
+        <PageHeader title={t("title")} description={t("description")} />
         {err.status === 404 ? (
-          <EmptyState title="Usage logs endpoint not available yet" />
+          <EmptyState title={t("endpointUnavailable")} />
         ) : (
           <ErrorState message={err.message} />
         )}
@@ -219,47 +307,47 @@ export default function LogsPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Logs" description="Request logs for the selected workspace." />
+      <PageHeader title={t("title")} description={t("description")} />
       {query.data.length === 0 ? (
         <EmptyState
-          title="No requests yet"
-          description="Usage logs will appear here once requests are made."
+          title={t("noRequests")}
+          description={t("noRequestsDesc")}
         />
       ) : visible.length === 0 ? (
         <EmptyState
-          title="No requests with usage"
-          description="All loaded requests were hidden because they have no model or no token usage."
+          title={t("noUsageRequests")}
+          description={t("noUsageDesc")}
         />
       ) : (
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <Input
               className="h-8 w-56 text-sm"
-              placeholder="Search request, model, key…"
-              aria-label="Search logs"
+              placeholder={t("searchPlaceholder")}
+              aria-label={t("searchLogs")}
               value={filters.search}
               onChange={(e) => setFilter({ search: e.target.value })}
             />
             <FilterSelect
-              label="Models"
-              placeholder="All models"
+              label={t("modelsLabel")}
+              placeholder={t("allModels")}
               value={filters.model}
               onChange={(v) => setFilter({ model: v })}
               options={models}
             />
             <Select value={filters.status} onValueChange={(v) => setFilter({ status: v })}>
-              <SelectTrigger aria-label="Statuses" className="h-8 w-[120px] text-xs">
+              <SelectTrigger aria-label={t("statuses")} className="h-8 w-[120px] text-xs">
                 <SelectValue placeholder="All statuses" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="ok">Succeeded</SelectItem>
-                <SelectItem value="error">Error</SelectItem>
+                <SelectItem value="all">{t("allStatuses")}</SelectItem>
+                <SelectItem value="ok">{t("succeeded")}</SelectItem>
+                <SelectItem value="error">{t("error")}</SelectItem>
               </SelectContent>
             </Select>
             <FilterSelect
-              label="Keys"
-              placeholder="All keys"
+              label={t("keysLabel")}
+              placeholder={t("allKeys")}
               value={filters.key}
               onChange={(v) => setFilter({ key: v })}
               options={keys}
@@ -270,37 +358,37 @@ export default function LogsPage() {
               className="h-8 gap-1.5 text-xs"
               onClick={() => query.refetch()}
               disabled={query.isFetching}
-              aria-label="Refresh logs"
+              aria-label={t("refreshLogs")}
             >
               <RefreshCw className={"h-3.5 w-3.5" + (query.isFetching ? " animate-spin" : "")} />
-              Refresh
+              {t("refresh")}
             </Button>
           </div>
           <div className="rounded-lg border border-border">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Time</TableHead>
-                  <TableHead>Request</TableHead>
-                  <TableHead>Model</TableHead>
-                  <TableHead className="hidden md:table-cell">Key</TableHead>
-                  <TableHead className="text-right">Tokens</TableHead>
-                  <TableHead className="text-right">Cost</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>{t("time")}</TableHead>
+                  <TableHead>{t("request")}</TableHead>
+                  <TableHead>{t("model")}</TableHead>
+                  <TableHead className="hidden md:table-cell">{t("key")}</TableHead>
+                  <TableHead className="text-right">{t("tokens")}</TableHead>
+                  <TableHead className="text-right">{t("cost")}</TableHead>
+                  <TableHead>{t("status")}</TableHead>
                   <TableHead
                     className="hidden text-right md:table-cell"
-                    title="Time to first token (streaming requests only)"
+                    title={t("ttft")}
                   >
                     TTFT
                   </TableHead>
-                  <TableHead className="hidden text-right md:table-cell">Latency</TableHead>
+                  <TableHead className="hidden text-right md:table-cell">{t("latency")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {slice.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={9}>
-                      <EmptyState title="No matching requests" />
+                      <EmptyState title={t("noMatching")} />
                     </TableCell>
                   </TableRow>
                 )}
@@ -311,7 +399,7 @@ export default function LogsPage() {
                       key={r.id}
                       tabIndex={0}
                       role="button"
-                      aria-label={`Open request ${r.request_id}`}
+                      aria-label={t("openRequest", { id: r.request_id })}
                       className="cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
                       onClick={(e) => {
                         // Only open the drawer for the row itself, not for
@@ -338,7 +426,7 @@ export default function LogsPage() {
                             onClick={(e) => e.stopPropagation()}
                             onKeyDown={(e) => e.stopPropagation()}
                           >
-                            <CopyButton value={r.request_id} label="Copy request ID" />
+                            <CopyButton value={r.request_id} label={t("copyRequestId")} />
                           </span>
                         </span>
                       </TableCell>
@@ -355,7 +443,7 @@ export default function LogsPage() {
                       </TableCell>
                       <TableCell
                         className="hidden whitespace-nowrap text-right font-mono text-xs md:table-cell"
-                        title="Time to first token (streaming requests only)"
+                        title={t("ttft")}
                       >
                         {formatDuration(r.ttft_ms)}
                       </TableCell>
@@ -370,8 +458,8 @@ export default function LogsPage() {
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>
-              Showing {rangeStart}–{rangeEnd} of {filtered.length} loaded requests
-              {hiddenCount > 0 && ` — ${hiddenCount} hidden (no model or no token usage)`}
+              {t("showing", { start: rangeStart, end: rangeEnd, total: filtered.length })}
+              {hiddenCount > 0 && t("hidden", { n: hiddenCount })}
             </span>
             <span className="flex flex-wrap gap-1">
               <Button
@@ -380,9 +468,9 @@ export default function LogsPage() {
                 className="h-7 text-xs"
                 disabled={safePage === 0}
                 onClick={() => setPage(safePage - 1)}
-                aria-label="Previous page"
+                aria-label={t("previousPage")}
               >
-                Prev
+                {t("prev")}
               </Button>
               <Button
                 variant="outline"
@@ -390,9 +478,9 @@ export default function LogsPage() {
                 className="h-7 text-xs"
                 disabled={safePage >= pageCount - 1}
                 onClick={() => setPage(safePage + 1)}
-                aria-label="Next page"
+                aria-label={t("nextPage")}
               >
-                Next
+                {t("next")}
               </Button>
             </span>
           </div>
@@ -401,33 +489,33 @@ export default function LogsPage() {
       <Sheet open={selected != null} onOpenChange={(open) => !open && setSelected(null)}>
         <SheetContent>
           <SheetTitle className="font-mono text-sm break-all">{selected?.request_id}</SheetTitle>
-          <SheetDescription className="sr-only">Request usage details</SheetDescription>
+          <SheetDescription className="sr-only">{t("detailsTitle")}</SheetDescription>
           {selected && (
             <div className="pb-3 border-b border-border">
-              <CopyButton value={selected.request_id} label="Copy request ID" />
+              <CopyButton value={selected.request_id} label={t("copyRequestId")} />
             </div>
           )}
           {selected && (
             <div className="pt-2">
-              <DetailField label="Status">
+              <DetailField label={t("status")}>
                 <StatusBadge status={selected.status} />
               </DetailField>
-              {selected.failure && <DetailField label="Failure">{selected.failure}</DetailField>}
-              <DetailField label="Model">{selected.public_model}</DetailField>
-              <DetailField label="Provider">{formatProviderLabel(selected.provider)}</DetailField>
-              <DetailField label="Key prefix">{selected.key_prefix ?? "—"}</DetailField>
-              <DetailField label="Input tokens">{selected.input_tokens}</DetailField>
-              <DetailField label="Cached input tokens">{selected.cached_input_tokens}</DetailField>
-              <DetailField label="Reasoning tokens">{selected.reasoning_tokens}</DetailField>
-              <DetailField label="Output tokens">{selected.output_tokens}</DetailField>
-              <DetailField label="Cost">
+              {selected.failure && <DetailField label={t("failure")}>{selected.failure}</DetailField>}
+              <DetailField label={t("model")}>{selected.public_model}</DetailField>
+              <DetailField label={t("provider")}>{formatProviderLabel(selected.provider)}</DetailField>
+              <DetailField label={t("keyPrefix")}>{selected.key_prefix ?? "—"}</DetailField>
+              <DetailField label={t("inputTokens")}>{selected.input_tokens}</DetailField>
+              <DetailField label={t("cachedInputTokens")}>{selected.cached_input_tokens}</DetailField>
+              <DetailField label={t("reasoningTokens")}>{selected.reasoning_tokens}</DetailField>
+              <DetailField label={t("outputTokens")}>{selected.output_tokens}</DetailField>
+              <DetailField label={t("cost")}>
                 {formatUsdFromVnd(selected.charged_vnd, rate) ?? formatVnd(selected.charged_vnd)}
               </DetailField>
-              <DetailField label="Duration">{formatDuration(selected.latency_ms)}</DetailField>
-              <DetailField label="Time to first token">
+              <DetailField label={t("duration")}>{formatDuration(selected.latency_ms)}</DetailField>
+              <DetailField label={t("timeToFirstToken")}>
                 {formatDuration(selected.ttft_ms)}
               </DetailField>
-              <DetailField label="Created">{formatDate(new Date(selected.created_at))}</DetailField>
+              <DetailField label={t("created")}>{formatDate(new Date(selected.created_at))}</DetailField>
             </div>
           )}
           {selected && isAdmin === true && (

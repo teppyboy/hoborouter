@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { safePersistStorage } from "./i18n/safe-storage";
 
 interface WorkspaceState {
   workspaceId: string | null;
@@ -13,6 +14,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       workspaceId: null,
       setWorkspaceId: (workspaceId) => set({ workspaceId }),
     }),
-    { name: "hbr-workspace" },
+    {
+    name: "hbr-workspace",
+    // Live-lookup storage (see i18n/safe-storage.ts): the default
+    // createJSONStorage(() => localStorage) bakes in the storage object at
+    // module load and breaks when the module loads before jsdom/tests install
+    // one; in the browser behavior is identical.
+    storage: safePersistStorage<WorkspaceState>(),
+  },
   ),
 );

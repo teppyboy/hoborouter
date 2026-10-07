@@ -31,6 +31,89 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Label } from "../../components/ui/label";
 import { DataTable, EmptyState, ErrorState, CopyButton, PageHeader } from "../../components/page";
 import type { ColumnDef } from "@tanstack/react-table";
+import { useT } from "../../lib/i18n/t";
+
+// API keys page copy: inline LocaleEntry set (see lib/i18n/common.ts). Key
+// prefixes, plaintext values and model IDs are never translated.
+const keysCopy = {
+  nameRequired: { en: "Name is required", vi: "Vui lòng nhập tên" },
+  nameTooLong: { en: "At most 128 characters", vi: "Tối đa 128 ký tự" },
+  createFailed: { en: "Create failed", vi: "Tạo thất bại" },
+  keyEnabled: { en: "Key enabled", vi: "Đã bật key" },
+  keyDisabled: { en: "Key disabled", vi: "Đã tắt key" },
+  updateFailed: { en: "Update failed", vi: "Cập nhật thất bại" },
+  keyRenamed: { en: "Key renamed", vi: "Đã đổi tên key" },
+  renameFailed: { en: "Rename failed", vi: "Đổi tên thất bại" },
+  keyRevoked: { en: "Key revoked", vi: "Đã thu hồi key" },
+  revokeFailed: { en: "Revoke failed", vi: "Thu hồi thất bại" },
+  nameCol: { en: "Name", vi: "Tên" },
+  keyCol: { en: "Key", vi: "Key" },
+  createdCol: { en: "Created", vi: "Ngày tạo" },
+  lastUsedCol: { en: "Last used", vi: "Dùng lần cuối" },
+  statusCol: { en: "Status", vi: "Trạng thái" },
+  keyActions: { en: "Key actions", vi: "Thao tác với key" },
+  disable: { en: "Disable", vi: "Tắt" },
+  enable: { en: "Enable", vi: "Bật" },
+  rename: { en: "Rename", vi: "Đổi tên" },
+  modelRestrictions: { en: "Model restrictions", vi: "Giới hạn mô hình" },
+  revoke: { en: "Revoke", vi: "Thu hồi" },
+  title: { en: "API keys", vi: "API key" },
+  description: {
+    en: "Keys authenticate requests to the router. Admin/owner only.",
+    vi: "Key dùng để xác thực request tới router. Chỉ dành cho quản trị/chủ sở hữu.",
+  },
+  createKey: { en: "Create key", vi: "Tạo key" },
+  notAvailable: { en: "Not available", vi: "Không khả dụng" },
+  notAvailableDesc: {
+    en: "Only workspace admins and owners can manage API keys.",
+    vi: "Chỉ quản trị viên và chủ sở hữu workspace mới có thể quản lý API key.",
+  },
+  noKeys: { en: "No API keys", vi: "Chưa có API key nào" },
+  noKeysDesc: {
+    en: "Create a key to start routing requests.",
+    vi: "Tạo một key để bắt đầu định tuyến request.",
+  },
+  copyYourKey: { en: "Copy your API key", vi: "Copy API key của bạn" },
+  onlyShownOnce: {
+    en: "This is the only time the full key for “{name}” is shown. Store it somewhere safe — it cannot be retrieved again.",
+    vi: "Đây là lần duy nhất full key của “{name}” được hiển thị. Hãy lưu ở nơi an toàn — không thể lấy lại.",
+  },
+  copyApiKey: { en: "Copy API key", vi: "Copy API key" },
+  done: { en: "Done", vi: "Xong" },
+  revokeKey: { en: "Revoke key", vi: "Thu hồi key" },
+  revokeConfirm: {
+    en: "Revoke “{name}”? Requests using this key will immediately fail. This cannot be undone.",
+    vi: "Thu hồi “{name}”? Request dùng key này sẽ thất bại ngay lập tức. Không thể hoàn tác.",
+  },
+  cancel: { en: "Cancel", vi: "Huỷ" },
+  renameKey: { en: "Rename key", vi: "Đổi tên key" },
+  renameCurrentName: {
+    en: "Current name: “{name}”. Renaming does not change the key value.",
+    vi: "Tên hiện tại: “{name}”. Đổi tên không thay đổi giá trị key.",
+  },
+  save: { en: "Save", vi: "Lưu" },
+  create: { en: "Create", vi: "Tạo" },
+  createKeyTitle: { en: "Create API key", vi: "Tạo API key" },
+  createKeyDesc: {
+    en: "Give the key a name so you can recognize it later.",
+    vi: "Đặt tên cho key để nhận ra nó về sau.",
+  },
+  restrictionsSaved: { en: "Model restrictions saved", vi: "Đã lưu giới hạn mô hình" },
+  saveFailed: { en: "Save failed", vi: "Lưu thất bại" },
+  restrictionsTitle: { en: "Model restrictions — {name}", vi: "Giới hạn mô hình — {name}" },
+  restrictionsDesc: {
+    en: "Leave empty to allow all models available to this workspace.",
+    vi: "Để trống để cho phép tất cả mô hình khả dụng với workspace này.",
+  },
+  notAvailableYet: { en: "Not available yet.", vi: "Chưa khả dụng." },
+} as const;
+
+const makeNameSchema = (t: (k: "nameRequired" | "nameTooLong") => string) =>
+  z.object({
+    // matches the API bound in apps/api/src/routes/keys.ts (MAX_KEY_NAME)
+    name: z.string().trim().min(1, t("nameRequired")).max(128, t("nameTooLong")),
+  });
+type NameValues = { name: string };
 
 interface ApiKey {
   id: string;
@@ -47,15 +130,10 @@ interface CatalogModelItem {
   public_id: string;
 }
 
-const nameSchema = z.object({
-  // matches the API bound in apps/api/src/routes/keys.ts (MAX_KEY_NAME)
-  name: z.string().trim().min(1, "Name is required").max(128, "At most 128 characters"),
-});
-type NameValues = z.infer<typeof nameSchema>;
-
 const is403 = (e: unknown) => e instanceof ApiError && e.status === 403;
 
 export default function KeysPage() {
+  const t = useT(keysCopy);
   const workspaceId = useCurrentWorkspaceId();
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
@@ -66,7 +144,6 @@ export default function KeysPage() {
   const [restrictFor, setRestrictFor] = useState<ApiKey | null>(null);
   const [renameFor, setRenameFor] = useState<ApiKey | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null);
-  const [removeTarget, setRemoveTarget] = useState<ApiKey | null>(null);
   const [filter, setFilter] = useState("");
 
   const keysQuery = useQuery({
@@ -89,7 +166,7 @@ export default function KeysPage() {
       setShowCreated(true);
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Create failed"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : t("createFailed")),
   });
 
   const statusMutation = useMutation({
@@ -99,10 +176,10 @@ export default function KeysPage() {
         body: JSON.stringify({ status }),
       }),
     onSuccess: (_d, v) => {
-      toast(v.status === "enabled" ? "Key enabled" : "Key disabled");
+      toast(v.status === "enabled" ? t("keyEnabled") : t("keyDisabled"));
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : t("updateFailed")),
   });
 
   const renameMutation = useMutation({
@@ -112,57 +189,46 @@ export default function KeysPage() {
         body: JSON.stringify({ name }),
       }),
     onSuccess: () => {
-      toast("Key renamed");
+      toast(t("keyRenamed"));
       setRenameFor(null);
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Rename failed"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : t("renameFailed")),
   });
 
   const revokeMutation = useMutation({
     mutationFn: (keyId: string) =>
       api(`/api/v1/workspaces/${workspaceId}/keys/${keyId}`, { method: "DELETE" }),
     onSuccess: () => {
-      toast("Key revoked");
+      toast(t("keyRevoked"));
       setRevokeTarget(null);
       invalidate();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Revoke failed"),
-  });
-
-  const removeMutation = useMutation({
-    mutationFn: (keyId: string) =>
-      api(`/api/v1/workspaces/${workspaceId}/keys/${keyId}/remove`, { method: "POST" }),
-    onSuccess: () => {
-      toast("Key removed");
-      setRemoveTarget(null);
-      invalidate();
-    },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Remove failed"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : t("revokeFailed")),
   });
 
   const columns: ColumnDef<ApiKey, unknown>[] = [
-    { accessorKey: "name", header: "Name" },
+    { accessorKey: "name", header: t("nameCol") },
     {
       accessorKey: "key_prefix",
-      header: "Key",
+      header: t("keyCol"),
       enableSorting: false,
       cell: ({ row }) => <span className="font-mono text-xs">{row.original.key_prefix}…</span>,
     },
     {
       accessorKey: "created_at",
-      header: "Created",
+      header: t("createdCol"),
       cell: ({ row }) => formatDate(new Date(row.original.created_at)),
     },
     {
       accessorKey: "last_used_at",
-      header: "Last used",
+      header: t("lastUsedCol"),
       cell: ({ row }) =>
         row.original.last_used_at ? formatDate(new Date(row.original.last_used_at)) : "—",
     },
     {
       accessorKey: "status",
-      header: "Status",
+      header: t("statusCol"),
       cell: ({ row }) => {
         const s = row.original.status;
         return (
@@ -182,7 +248,7 @@ export default function KeysPage() {
         return (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="size-7" aria-label="Key actions">
+              <Button variant="ghost" size="icon" className="size-7" aria-label={t("keyActions")}>
                 <MoreHorizontal className="size-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -195,18 +261,15 @@ export default function KeysPage() {
                   })
                 }
               >
-                {key.status === "enabled" ? "Disable" : "Enable"}
+                {key.status === "enabled" ? t("disable") : t("enable")}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setRenameFor(key)}>Rename</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setRenameFor(key)}>{t("rename")}</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setRestrictFor(key)}>
-                Model restrictions
+                {t("modelRestrictions")}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-destructive" onClick={() => setRevokeTarget(key)}>
-                Revoke
-              </DropdownMenuItem>
-              <DropdownMenuItem className="text-destructive" onClick={() => setRemoveTarget(key)}>
-                Remove
+                {t("revoke")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -220,8 +283,8 @@ export default function KeysPage() {
   return (
     <div className="grid gap-4">
       <PageHeader
-        title="API keys"
-        description="Keys authenticate requests to the router. Admin/owner only."
+        title={t("title")}
+        description={t("description")}
         actions={
           <Button
             size="sm"
@@ -230,7 +293,7 @@ export default function KeysPage() {
               setCreateOpen(true);
             }}
           >
-            <Plus className="size-4" /> Create key
+            <Plus className="size-4" /> {t("createKey")}
           </Button>
         }
       />
@@ -242,8 +305,8 @@ export default function KeysPage() {
       ) : keysQuery.isError ? (
         is403(keysQuery.error) ? (
           <EmptyState
-            title="Not available"
-            description="Only workspace admins and owners can manage API keys."
+            title={t("notAvailable")}
+            description={t("notAvailableDesc")}
           />
         ) : (
           <ErrorState message={(keysQuery.error as Error).message} />
@@ -251,8 +314,8 @@ export default function KeysPage() {
       ) : (keysQuery.data?.length ?? 0) === 0 ? (
         <EmptyState
           icon={KeyRound}
-          title="No API keys"
-          description="Create a key to start routing requests."
+          title={t("noKeys")}
+          description={t("noKeysDesc")}
         />
       ) : (
         <DataTable
@@ -279,21 +342,20 @@ export default function KeysPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Copy your API key</DialogTitle>
+            <DialogTitle>{t("copyYourKey")}</DialogTitle>
             <DialogDescription>
-              This is the only time the full key for “{created?.name}” is shown. Store it somewhere
-              safe — it cannot be retrieved again.
+              {t("onlyShownOnce", { name: created?.name ?? "" })}
             </DialogDescription>
           </DialogHeader>
           <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
             <code className="min-w-0 flex-1 truncate font-mono text-xs select-all">
               {created?.plaintext}
             </code>
-            <CopyButton value={created?.plaintext ?? ""} label="Copy API key" />
+            <CopyButton value={created?.plaintext ?? ""} label={t("copyApiKey")} />
           </div>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setShowCreated(false)}>
-              Done
+              {t("done")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -330,15 +392,14 @@ export default function KeysPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Revoke key</DialogTitle>
+            <DialogTitle>{t("revokeKey")}</DialogTitle>
             <DialogDescription>
-              Revoke “{revokeTarget?.name}”? Requests using this key will immediately fail. This
-              cannot be undone.
+              {t("revokeConfirm", { name: revokeTarget?.name ?? "" })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setRevokeTarget(null)}>
-              Cancel
+              {t("cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -346,39 +407,7 @@ export default function KeysPage() {
               disabled={revokeMutation.isPending}
               onClick={() => revokeTarget && revokeMutation.mutate(revokeTarget.id)}
             >
-              Revoke
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Remove = soft delete: hidden from the list, requests fail immediately.
-          Distinct from revoke, which keeps the key visible as a revoked row. */}
-      <Dialog
-        open={!!removeTarget}
-        onOpenChange={(open) => {
-          if (!open) setRemoveTarget(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Remove key</DialogTitle>
-            <DialogDescription>
-              Remove “{removeTarget?.name}” from this workspace? Requests using this key will
-              immediately fail and it will disappear from the list. This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setRemoveTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={removeMutation.isPending}
-              onClick={() => removeTarget && removeMutation.mutate(removeTarget.id)}
-            >
-              Remove
+              {t("revoke")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -398,8 +427,9 @@ function RenameKeyDialog({
   onSubmit: (name: string) => void;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useT(keysCopy);
   const form = useForm<NameValues>({
-    resolver: zodResolver(nameSchema),
+    resolver: zodResolver(makeNameSchema(t)),
     defaultValues: { name: apiKey.name },
   });
 
@@ -413,14 +443,14 @@ function RenameKeyDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Rename key</DialogTitle>
+          <DialogTitle>{t("renameKey")}</DialogTitle>
           <DialogDescription>
-            Current name: “{apiKey.name}”. Renaming does not change the key value.
+            {t("renameCurrentName", { name: apiKey.name })}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={form.handleSubmit((v) => onSubmit(v.name))} className="grid gap-4">
           <div className="grid gap-2">
-            <Label htmlFor="rename-key-name">Name</Label>
+            <Label htmlFor="rename-key-name">{t("nameCol")}</Label>
             <Input id="rename-key-name" autoFocus {...form.register("name")} />
             {form.formState.errors.name && (
               <p className="text-sm text-destructive">{form.formState.errors.name.message}</p>
@@ -437,7 +467,7 @@ function RenameKeyDialog({
               Cancel
             </Button>
             <Button type="submit" size="sm" disabled={pending}>
-              Rename
+              {t("rename")}
             </Button>
           </DialogFooter>
         </form>
@@ -457,8 +487,9 @@ function CreateKeyDialog({
   pending: boolean;
   onSubmit: (name: string) => void;
 }) {
+  const t = useT(keysCopy);
   const form = useForm<NameValues>({
-    resolver: zodResolver(nameSchema),
+    resolver: zodResolver(makeNameSchema(t)),
     defaultValues: { name: "" },
   });
 
@@ -472,12 +503,12 @@ function CreateKeyDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create API key</DialogTitle>
-          <DialogDescription>Give the key a name so you can recognize it later.</DialogDescription>
+          <DialogTitle>{t("createKeyTitle")}</DialogTitle>
+          <DialogDescription>{t("createKeyDesc")}</DialogDescription>
         </DialogHeader>
         <form onSubmit={form.handleSubmit((v) => onSubmit(v.name))} className="grid gap-4">
           <div className="grid gap-2">
-            <Label htmlFor="key-name">Name</Label>
+            <Label htmlFor="key-name">{t("nameCol")}</Label>
             <Input id="key-name" autoFocus {...form.register("name")} />
             {form.formState.errors.name && (
               <p className="text-sm text-destructive">{form.formState.errors.name.message}</p>
@@ -485,7 +516,7 @@ function CreateKeyDialog({
           </div>
           <DialogFooter>
             <Button type="submit" size="sm" disabled={pending}>
-              Create
+              {t("create")}
             </Button>
           </DialogFooter>
         </form>
@@ -505,6 +536,7 @@ function ModelRestrictionsDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const t = useT(keysCopy);
   const [selected, setSelected] = useState<string[] | null>(null);
 
   const currentQuery = useQuery({
@@ -530,10 +562,10 @@ function ModelRestrictionsDialog({
         body: JSON.stringify({ modelIds }),
       }),
     onSuccess: () => {
-      toast("Model restrictions saved");
+      toast(t("restrictionsSaved"));
       onSaved();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : t("saveFailed")),
   });
 
   const models = modelsQuery.data?.data ?? [];
@@ -546,9 +578,9 @@ function ModelRestrictionsDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[80vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Model restrictions — {apiKey.name}</DialogTitle>
+          <DialogTitle>{t("restrictionsTitle", { name: apiKey.name })}</DialogTitle>
           <DialogDescription>
-            Leave empty to allow all models available to this workspace.
+            {t("restrictionsDesc")}
           </DialogDescription>
         </DialogHeader>
         {currentQuery.isPending || modelsQuery.isPending ? (
@@ -557,7 +589,7 @@ function ModelRestrictionsDialog({
             <Skeleton className="h-8 w-full" />
           </div>
         ) : models.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Not available yet.</p>
+          <p className="text-sm text-muted-foreground">{t("notAvailableYet")}</p>
         ) : (
           <div className="grid gap-1">
             {models.map((m) => (
@@ -578,14 +610,14 @@ function ModelRestrictionsDialog({
         )}
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={onClose}>
-            Cancel
+            {t("cancel")}
           </Button>
           <Button
             size="sm"
             disabled={saveMutation.isPending || !selected}
             onClick={() => saveMutation.mutate(selected ?? [])}
           >
-            Save
+            {t("save")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -91,6 +91,12 @@ export const authCopy = {
     vi: "Liên kết xác thực có thể đã hết hạn hoặc đã được dùng. Dù vậy bạn vẫn có thể tiếp tục dùng Hoborouter — có thể gửi liên kết mới tới {email}.",
   },
   resendVerificationEmail: { en: "Resend verification email", vi: "Gửi lại email xác thực" },
+  passwordRequirements: {
+    en: "Password requirements",
+    vi: "Yêu cầu mật khẩu",
+  },
+  ruleMet: { en: "(met)", vi: "(đạt)" },
+  ruleNotMet: { en: "(not yet met)", vi: "(chưa đạt)" },
   backHome: { en: "Back to Hoborouter", vi: "Về Hoborouter" },
   processedTitle: { en: "Verification link processed", vi: "Đã xử lý liên kết xác thực" },
   processedBody: {

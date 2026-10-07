@@ -76,6 +76,9 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  // The locale store is process-global zustand state; reset it so files that
+  // run after this one see the English default (see tests/i18n.test.tsx).
+  useLocaleStore.getState().setLocale("en");
   for (const k of GLOBAL_KEYS) {
     const d = originals[k];
     if (d) Object.defineProperty(globalThis, k, d);

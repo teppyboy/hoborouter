@@ -9,6 +9,46 @@ import { PublicLayout } from "../../components/public-layout";
 import { Card, CardContent } from "../../components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { usePublicCatalog, usePublicInstance, type PublicInstance } from "../../lib/public-queries";
+import { useT } from "../../lib/i18n/t";
+
+// Quickstart copy: inline LocaleEntry set (see lib/i18n/common.ts). Code
+// snippets, language names (curl/Python/JavaScript) and literal tokens stay
+// verbatim — only the prose around them is translated.
+const quickstartCopy = {
+  title: { en: "Quickstart", vi: "Hướng dẫn nhanh" },
+  description: {
+    en: "Make your first request through the OpenAI-compatible gateway.",
+    vi: "Gửi request đầu tiên qua cổng API tương thích OpenAI.",
+  },
+  step1Title: { en: "1. Create an account and top up", vi: "1. Tạo tài khoản và nạp tín dụng" },
+  signUp: { en: "Sign up", vi: "Đăng ký" },
+  andSignIn: { en: "and sign in.", vi: "và đăng nhập." },
+  step1TopUp: {
+    en: "Top up credits in Billing → Credits by QR (PayOS) or manual confirmation.",
+    vi: "Nạp tín dụng tại Nạp tín dụng → Credits bằng QR (PayOS) hoặc xác nhận thủ công.",
+  },
+  step1ApiKey: {
+    en: "Create an API key under API Keys. It is shown once — store it safely.",
+    vi: "Tạo API key trong API Keys. Key chỉ hiển thị một lần — hãy lưu an toàn.",
+  },
+  step1Model: {
+    en: "Pick a model id from the pricing page, e.g.",
+    vi: "Chọn một model id tại trang bảng giá, ví dụ:",
+  },
+  step2Title: { en: "2. Call the API", vi: "2. Gọi API" },
+  step2SdkLead: {
+    en: "Any OpenAI SDK works: set the base URL to",
+    vi: "Bất kỳ SDK OpenAI nào cũng dùng được: đặt base URL thành",
+  },
+  step2SdkTail: { en: "and use your API key.", vi: "và dùng API key của bạn." },
+  copyExample: { en: "Copy {lang} example", vi: "Copy ví dụ {lang}" },
+  exampleAria: { en: "{lang} example", vi: "ví dụ {lang}" },
+  streamingLead: {
+    en: 'Responses follow the OpenAI chat-completions schema. Streaming is supported with',
+    vi: "Phản hồi theo schema chat-completions của OpenAI. Hỗ trợ streaming với",
+  },
+  streamingTail: { en: ".", vi: "." },
+} as const;
 
 // No line breaks in interpolated values: a newline in the base URL or model id
 // would inject a new shell statement / break the snippet layout.
@@ -82,13 +122,14 @@ export function buildSnippets(baseUrl: string, model: string) {
   return { curl, python, js };
 }
 
-function Snippet({ code, label }: { code: string; label: string }) {
+function Snippet({ code, lang }: { code: string; lang: string }) {
+  const t = useT(quickstartCopy);
   return (
     <div className="relative rounded-md border border-border bg-muted/40">
       <div className="absolute right-2 top-2">
-        <CopyButton value={code} label={`Copy ${label} example`} />
+        <CopyButton value={code} label={t("copyExample", { lang })} />
       </div>
-      <pre className="overflow-x-auto p-4 text-xs leading-relaxed" aria-label={`${label} example`}>
+      <pre className="overflow-x-auto p-4 text-xs leading-relaxed" aria-label={t("exampleAria", { lang })}>
         <code>{code}</code>
       </pre>
     </div>
@@ -103,6 +144,7 @@ export function Quickstart({
   /** A published public model id from the catalog; falls back to a placeholder. */
   exampleModelId?: string | null;
 }) {
+  const t = useT(quickstartCopy);
   // Trusted admin config; placeholder until it loads so SSR/tests never
   // invent a hostname. Interpolations are escaped inside buildSnippets.
   const baseUrl = instance?.api_base_url ?? "YOUR_BASE_URL";
@@ -121,30 +163,31 @@ export function Quickstart({
     <PublicLayout instance={instance}>
       <div className="space-y-6 py-6">
         <PageHeader
-          title="Quickstart"
-          description="Make your first request through the OpenAI-compatible gateway."
+          title={t("title")}
+          description={t("description")}
         />
 
         <section className="max-w-2xl">
-          <h2 className="text-lg font-semibold">1. Create an account and top up</h2>
+          <h2 className="text-lg font-semibold">{t("step1Title")}</h2>
           <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
             <li>
               <a href="/signup" className="underline hover:text-foreground">
-                Sign up
+                {t("signUp")}
               </a>{" "}
-              and sign in.
+              {t("andSignIn")}
             </li>
-            <li>Top up credits in Billing → Credits by QR (PayOS) or manual confirmation.</li>
-            <li>Create an API key under API Keys. It is shown once — store it safely.</li>
-            <li>Pick a model id from the pricing page, e.g. {modelDisplay}.</li>
+            <li>{t("step1TopUp")}</li>
+            <li>{t("step1ApiKey")}</li>
+            <li>{t("step1Model")} {modelDisplay}.</li>
           </ol>
         </section>
 
         <section className="max-w-3xl space-y-3">
-          <h2 className="text-lg font-semibold">2. Call the API</h2>
+          <h2 className="text-lg font-semibold">{t("step2Title")}</h2>
           <p className="text-sm text-muted-foreground">
-            Any OpenAI SDK works: set the base URL to{" "}
-            <code className="font-mono text-xs">{baseUrl}/v1</code> and use your API key.
+            {t("step2SdkLead")}{" "}
+            <code className="font-mono text-xs">{baseUrl}/v1</code>{" "}
+            {t("step2SdkTail")}
           </p>
           <Card>
             <CardContent className="pt-6">
@@ -155,20 +198,21 @@ export function Quickstart({
                   <TabsTrigger value="js">JavaScript</TabsTrigger>
                 </TabsList>
                 <TabsContent value="curl">
-                  <Snippet code={curl} label="curl" />
+                  <Snippet code={curl} lang="curl" />
                 </TabsContent>
                 <TabsContent value="python">
-                  <Snippet code={python} label="Python" />
+                  <Snippet code={python} lang="Python" />
                 </TabsContent>
                 <TabsContent value="js">
-                  <Snippet code={js} label="JavaScript" />
+                  <Snippet code={js} lang="JavaScript" />
                 </TabsContent>
               </Tabs>
             </CardContent>
           </Card>
           <p className="text-sm text-muted-foreground">
-            Responses follow the OpenAI chat-completions schema. Streaming is supported with{" "}
-            <code className="font-mono text-xs">"stream": true</code>.
+            {t("streamingLead")}{" "}
+            <code className="font-mono text-xs">"stream": true</code>
+            {t("streamingTail")}
           </p>
         </section>
       </div>

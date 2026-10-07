@@ -2,6 +2,16 @@ import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "../../components/ui/skeleton";
 import { EmptyState, ErrorState } from "../../components/page";
 import { ApiError, api } from "../../lib/api";
+import { useT } from "../../lib/i18n/t";
+
+// Admin gate copy: inline LocaleEntry set (see lib/i18n/common.ts).
+const adminGateCopy = {
+  title: { en: "Admin only", vi: "Chỉ dành cho quản trị" },
+  description: {
+    en: "This page requires instance admin access.",
+    vi: "Trang này cần quyền quản trị instance.",
+  },
+} as const;
 
 /** Raw model row from GET /api/v1/admin/catalog/models (Postgres: real booleans; capabilities is a JSON string). */
 export interface AdminModel {
@@ -73,6 +83,7 @@ export function AdminGate({
   query: { isPending: boolean; error: unknown };
   children: React.ReactNode;
 }) {
+  const t = useT(adminGateCopy);
   if (query.isPending)
     return (
       <div className="space-y-2">
@@ -84,7 +95,7 @@ export function AdminGate({
   if (query.error) {
     if (query.error instanceof ApiError && query.error.status === 403)
       return (
-        <EmptyState title="Admin only" description="This page requires instance admin access." />
+        <EmptyState title={t("title")} description={t("description")} />
       );
     return <ErrorState message={query.error instanceof Error ? query.error.message : undefined} />;
   }

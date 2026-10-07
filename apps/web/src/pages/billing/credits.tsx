@@ -28,6 +28,105 @@ import {
   FormMessage,
 } from "../../components/ui/form";
 import type { ColumnDef } from "@tanstack/react-table";
+import { useT } from "../../lib/i18n/t";
+
+// Credits page copy: inline LocaleEntry set (see lib/i18n/common.ts).
+// Money values, ledger kinds and API-derived data are never translated.
+const creditsCopy = {
+  wholeVnd: { en: "Must be a whole number of VND", vi: "Phải là số VND nguyên" },
+  minTopUp: { en: "Minimum top-up is 10.000 ₫", vi: "Nạp tối thiểu 10.000 ₫" },
+  enterUsd: { en: "Enter a USD amount", vi: "Nhập số tiền USD" },
+  usdFormat: {
+    en: "USD amount must be a number with at most 2 decimals",
+    vi: "Số tiền USD phải là số có tối đa 2 chữ số thập phân",
+  },
+  usdPositive: { en: "USD amount must be greater than zero", vi: "Số tiền USD phải lớn hơn 0" },
+  time: { en: "Time", vi: "Thời gian" },
+  source: { en: "Source", vi: "Nguồn" },
+  kind: { en: "Kind", vi: "Loại" },
+  amount: { en: "Amount", vi: "Số tiền" },
+  balanceAfter: { en: "Balance after", vi: "Số dư sau" },
+  request: { en: "Request", vi: "Request" },
+  title: { en: "Credits", vi: "Tín dụng" },
+  description: {
+    en: "Wallet balance, top-ups and the append-only credit ledger.",
+    vi: "Số dư ví, lịch sử nạp và sổ tín dụng chỉ-ghi-thêm.",
+  },
+  balance: { en: "Balance", vi: "Số dư" },
+  reserved: { en: "Reserved", vi: "Đang giữ" },
+  available: { en: "Available", vi: "Khả dụng" },
+  ledger: { en: "Ledger", vi: "Sổ tín dụng" },
+  noLedger: { en: "No ledger entries yet", vi: "Chưa có mục nào trong sổ" },
+  noLedgerBody: {
+    en: "Not available yet — entries appear after the first top-up or usage.",
+    vi: "Chưa có dữ liệu — mục xuất hiện sau lần nạp hoặc sử dụng đầu tiên.",
+  },
+  topUp: { en: "Top up", vi: "Nạp tín dụng" },
+  topUpCurrency: { en: "Top-up currency", vi: "Đơn vị nạp" },
+  amountVnd: { en: "Amount (VND)", vi: "Số tiền (VND)" },
+  amountUsd: { en: "Amount (USD)", vi: "Số tiền (USD)" },
+  approxExact: {
+    en: "(approximate — the server calculates the exact credit)",
+    vi: "(ước tính — server tính số tín dụng chính xác)",
+  },
+  maxTopUp: {
+    en: "Max top-up {max} · pending payments expire after {minutes} minutes.",
+    vi: "Nạp tối đa {max} · thanh toán chờ hết hạn sau {minutes} phút.",
+  },
+  paymentMethod: { en: "Payment method", vi: "Phương thức thanh toán" },
+  manualTransfer: { en: "Manual transfer", vi: "Chuyển khoản thủ công" },
+  manualTransferBody: {
+    en: "Create a pending payment; an admin confirms it out-of-band.",
+    vi: "Tạo thanh toán chờ; quản trị viên sẽ xác nhận riêng.",
+  },
+  payosBody: {
+    en: "Pay by bank app or QR at PayOS; you will be redirected there and the payment status here updates from the server.",
+    vi: "Thanh toán bằng ứng dụng ngân hàng hoặc QR tại PayOS; bạn sẽ được chuyển đến đó và trạng thái thanh toán tại đây cập nhật từ server.",
+  },
+  creating: { en: "Creating payment…", vi: "Đang tạo thanh toán…" },
+  continuePayos: { en: "Continue to PayOS", vi: "Tiếp tục tới PayOS" },
+  createPayment: { en: "Create payment", vi: "Tạo thanh toán" },
+  payosRedirect: { en: "Redirecting to PayOS checkout…", vi: "Đang chuyển tới trang thanh toán PayOS…" },
+  paymentCreated: {
+    en: "Payment created — waiting for admin confirmation",
+    vi: "Đã tạo thanh toán — đang chờ quản trị viên xác nhận",
+  },
+  topUpFailed: { en: "Top-up failed", vi: "Nạp tín dụng thất bại" },
+  completesWhen: {
+    en: "Payment completes when the provider confirms; status shows on the Payments page.",
+    vi: "Thanh toán hoàn tất khi nhà cung cấp xác nhận; trạng thái hiển thị tại trang Thanh toán.",
+  },
+  subscriptionCredit: { en: "Subscription credit", vi: "Tín dụng gói đăng ký" },
+  periodEnds: { en: "Period ends", vi: "Kỳ kết thúc" },
+  expired: { en: "(expired)", vi: "(hết hạn)" },
+  reqPerMinute: {
+    en: "{n} requests per minute",
+    vi: "{n} request mỗi phút",
+  },
+  unusedLost: {
+    en: "Unused subscription credit is lost when the period ends without a renewal.",
+    vi: "Tín dụng gói đăng ký không dùng hết sẽ mất khi kỳ kết thúc mà không gia hạn.",
+  },
+  usageDeductions: { en: "Usage deductions", vi: "Khấu trừ sử dụng" },
+  topUpHistory: { en: "Top-up history", vi: "Lịch sử nạp" },
+  adjustmentsRefunds: { en: "Adjustments & refunds", vi: "Điều chỉnh & hoàn tiền" },
+  noUsage: {
+    en: "No usage yet — deductions appear after the first request.",
+    vi: "Chưa có sử dụng — khấu trừ xuất hiện sau request đầu tiên.",
+  },
+  noTopUps: { en: "No top-ups yet.", vi: "Chưa có lần nạp nào." },
+  noAdjustments: { en: "No adjustments or refunds.", vi: "Không có điều chỉnh hay hoàn tiền." },
+  ledgerSections: { en: "Ledger sections", vi: "Phần của sổ tín dụng" },
+} as const;
+
+const makeSchema = (t: (k: keyof typeof creditsCopy) => string) =>
+  z.object({
+    amount: z.coerce
+      .number()
+      .int(t("wholeVnd"))
+      .min(10_000, t("minTopUp")),
+  });
+type Values = z.infer<ReturnType<typeof makeSchema>>;
 
 interface Wallet {
   currency: string;
@@ -61,14 +160,6 @@ export interface LedgerEntry {
   wallet_kind?: string;
 }
 
-const schema = z.object({
-  amount: z.coerce
-    .number()
-    .int("Must be a whole number of VND")
-    .min(10_000, "Minimum top-up is 10.000 ₫"),
-});
-type Values = z.infer<typeof schema>;
-
 /** Display-safe payment limits from GET /api/v1/payment-config (hints only — the server enforces the real limits). */
 export interface PaymentConfig {
   timeout_minutes: number;
@@ -83,11 +174,11 @@ type TopUpPayload = { currency: "VND"; amount: number } | { currency: "USD"; usd
 // decimals, at least one nonzero digit. The exact cents→VND conversion happens
 // only on the server (BigInt cents at the configured rate).
 const USD_INPUT_RE = /^\d+(\.\d{1,2})?$/;
-function validateUsdInput(text: string): string | null {
-  const t = text.trim();
-  if (t === "") return "Enter a USD amount";
-  if (!USD_INPUT_RE.test(t)) return "USD amount must be a number with at most 2 decimals";
-  if (!/[1-9]/.test(t)) return "USD amount must be greater than zero";
+function validateUsdInput(text: string, t: (k: keyof typeof creditsCopy) => string): string | null {
+  const s = text.trim();
+  if (s === "") return t("enterUsd");
+  if (!USD_INPUT_RE.test(s)) return t("usdFormat");
+  if (!/[1-9]/.test(s)) return t("usdPositive");
   return null;
 }
 
@@ -96,6 +187,7 @@ export type LedgerColumns = ColumnDef<LedgerEntry>[];
 const PRESETS = [50_000, 100_000, 200_000, 500_000];
 
 export default function BillingCreditsPage() {
+  const t = useT(creditsCopy);
   const workspaceId = useCurrentWorkspaceId();
   const navigate = useNavigate();
 
@@ -138,10 +230,10 @@ export default function BillingCreditsPage() {
   // Canonical ledger rows carry a positive amount; the sign comes from
   // `direction` and is applied exactly once via signedLedgerAmount.
   const columns: ColumnDef<LedgerEntry>[] = [
-    { accessorKey: "created_at", header: "Time", cell: (c) => formatDate(c.getValue<string>()) },
+    { accessorKey: "created_at", header: t("time"), cell: (c) => formatDate(c.getValue<string>()) },
     {
       accessorKey: "wallet_kind",
-      header: "Source",
+      header: t("source"),
       // balance_after (and amount) belong to this row's source wallet, never
       // an aggregate across wallets — the column makes that explicit.
       cell: (c) => (
@@ -152,7 +244,7 @@ export default function BillingCreditsPage() {
     },
     {
       accessorKey: "kind",
-      header: "Kind",
+      header: t("kind"),
       cell: (c) => {
         // Adjustment memos name the bonus source (bundle bonus, first topup
         // bonus); show the human label next to the kind so the rows are
@@ -171,7 +263,7 @@ export default function BillingCreditsPage() {
     },
     {
       accessorKey: "amount",
-      header: "Amount",
+      header: t("amount"),
       cell: (c) => {
         const signed = signedLedgerAmount(c.row.original);
         // Both formatters render the sign themselves (formatUsdFromVnd keeps
@@ -189,7 +281,7 @@ export default function BillingCreditsPage() {
     },
     {
       accessorKey: "balance_after",
-      header: "Balance after",
+      header: t("balanceAfter"),
       cell: (c) => {
         const v = c.getValue<number>();
         const usd = formatUsdFromVnd(v, rate);
@@ -205,7 +297,7 @@ export default function BillingCreditsPage() {
     },
     {
       accessorKey: "request_id",
-      header: "Request",
+      header: t("request"),
       cell: (c) => {
         const requestId = c.getValue<string | null>();
         if (requestId == null) return "—";
@@ -221,8 +313,8 @@ export default function BillingCreditsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Credits"
-        description="Wallet balance, top-ups and the append-only credit ledger."
+        title={t("title")}
+        description={t("description")}
       />
 
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -236,13 +328,13 @@ export default function BillingCreditsPage() {
             <ErrorState message={wallet.error.message} />
           ) : (
             <div className="grid gap-4 sm:grid-cols-3">
-              <StatCard label="Balance" value={wallet.data.balance} rate={rate} big />
-              <StatCard label="Reserved" value={wallet.data.reserved} rate={rate} />
-              <StatCard label="Available" value={wallet.data.available} rate={rate} />
+              <StatCard label={t("balance")} value={wallet.data.balance} rate={rate} big />
+              <StatCard label={t("reserved")} value={wallet.data.reserved} rate={rate} />
+              <StatCard label={t("available")} value={wallet.data.available} rate={rate} />
             </div>
           )}
 
-          <h2 className="text-sm font-semibold">Ledger</h2>
+          <h2 className="text-sm font-semibold">{t("ledger")}</h2>
           {ledger.isPending ? (
             <Skeleton className="h-40 w-full" />
           ) : ledger.isError ? (
@@ -250,8 +342,8 @@ export default function BillingCreditsPage() {
           ) : ledger.data.data.length === 0 ? (
             <EmptyState
               icon={WalletIcon}
-              title="No ledger entries yet"
-              description="Not available yet — entries appear after the first top-up or usage."
+              title={t("noLedger")}
+              description={t("noLedgerBody")}
             />
           ) : (
             <LedgerTabs columns={columns} sections={partitionLedger(ledger.data.data)} />
@@ -260,7 +352,7 @@ export default function BillingCreditsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm">Top up</CardTitle>
+            <CardTitle className="text-sm">{t("topUp")}</CardTitle>
           </CardHeader>
           <CardContent>
             {workspaceId ? (
@@ -300,7 +392,9 @@ export function TopUpForm({
   paymentConfig?: PaymentConfig | null;
   onNavigate: (href: string) => void;
 }) {
+  const t = useT(creditsCopy);
   const queryClient = useQueryClient();
+  const schema = makeSchema(t);
   const form = useForm<z.input<typeof schema>, unknown, Values>({
     resolver: zodResolver(schema),
     defaultValues: { amount: 100_000 },
@@ -314,7 +408,7 @@ export function TopUpForm({
   const [currency, setCurrency] = useState<"VND" | "USD">("VND");
   const [usdText, setUsdText] = useState("");
   const [usdError, setUsdError] = useState<string | null>(null);
-  const usdProblem = validateUsdInput(usdText);
+  const usdProblem = validateUsdInput(usdText, t);
 
   // Approximate VND readback for the USD input, using ONLY the configured
   // rate; display-only, never sent — the server computes the exact credit.
@@ -356,15 +450,15 @@ export function TopUpForm({
       // manual response) stays an in-app navigation. Status is never read
       // from query parameters.
       if (!payment.checkout_url.startsWith("/")) {
-        toast("Redirecting to PayOS checkout…");
+        toast(t("payosRedirect"));
         window.location.assign(payment.checkout_url);
         return;
       }
-      toast("Payment created — waiting for admin confirmation");
+      toast(t("paymentCreated"));
       onNavigate(`/billing/payments?payment=${payment.id}`);
     },
     onError: (err, payload) => {
-      const message = err instanceof ApiError ? err.message : "Top-up failed";
+      const message = err instanceof ApiError ? err.message : t("topUpFailed");
       // Server errors stay visible next to whichever input produced them.
       if (payload.currency === "USD") setUsdError(message);
       else form.setError("amount", { message });
@@ -374,7 +468,7 @@ export function TopUpForm({
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (currency === "USD") {
-      const problem = validateUsdInput(usdText);
+      const problem = validateUsdInput(usdText, t);
       if (problem !== null) {
         setUsdError(problem);
         return;
@@ -389,7 +483,7 @@ export function TopUpForm({
   return (
     <Form {...form}>
       <form onSubmit={submit} className="space-y-4">
-        <div className="flex gap-1" role="group" aria-label="Top-up currency">
+        <div className="flex gap-1" role="group" aria-label={t("topUpCurrency")}>
           {(["VND", "USD"] as const).map((c) => (
             <Button
               key={c}
@@ -412,7 +506,7 @@ export function TopUpForm({
               name="amount"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Amount (VND)</FormLabel>
+                  <FormLabel>{t("amountVnd")}</FormLabel>
                   <FormControl>
                     <Input
                       type="number"
@@ -448,7 +542,7 @@ export function TopUpForm({
         ) : (
           <>
             <FormItem>
-              <FormLabel htmlFor="topup_usd_amount">Amount (USD)</FormLabel>
+              <FormLabel htmlFor="topup_usd_amount">{t("amountUsd")}</FormLabel>
               <FormControl>
                 <Input
                   id="topup_usd_amount"
@@ -470,7 +564,7 @@ export function TopUpForm({
               <FormMessage>{usdError ?? undefined}</FormMessage>
               <p className="font-mono text-xs text-muted-foreground">
                 {usdApproxVnd !== null
-                  ? `≈ ${formatVnd(usdApproxVnd)} (approximate — the server calculates the exact credit)`
+                  ? `≈ ${formatVnd(usdApproxVnd)} ${t("approxExact")}`
                   : ""}
               </p>
             </FormItem>
@@ -478,13 +572,12 @@ export function TopUpForm({
         )}
         {paymentConfig && (
           <p className="text-xs text-muted-foreground">
-            Max top-up {formatVnd(paymentConfig.max_amount_vnd)} · pending payments expire after{" "}
-            {paymentConfig.timeout_minutes} minutes.
+            {t("maxTopUp", { max: formatVnd(paymentConfig.max_amount_vnd), minutes: paymentConfig.timeout_minutes })}
           </p>
         )}
         {payosAvailable && (
           <fieldset className="space-y-2">
-            <legend className="text-sm font-medium">Payment method</legend>
+            <legend className="text-sm font-medium">{t("paymentMethod")}</legend>
             <label className="flex items-start gap-2 text-sm">
               <input
                 type="radio"
@@ -495,9 +588,9 @@ export function TopUpForm({
                 className="mt-1"
               />
               <span>
-                Manual transfer
+                {t("manualTransfer")}
                 <span className="block text-xs text-muted-foreground">
-                  Create a pending payment; an admin confirms it out-of-band.
+                  {t("manualTransferBody")}
                 </span>
               </span>
             </label>
@@ -513,8 +606,7 @@ export function TopUpForm({
               <span>
                 PayOS
                 <span className="block text-xs text-muted-foreground">
-                  Pay by bank app or QR at PayOS; you will be redirected there and the payment
-                  status here updates from the server.
+                  {t("payosBody")}
                 </span>
               </span>
             </label>
@@ -522,13 +614,13 @@ export function TopUpForm({
         )}
         <Button type="submit" className="w-full" disabled={topUp.isPending}>
           {topUp.isPending
-            ? "Creating payment…"
+            ? t("creating")
             : provider === "payos"
-              ? "Continue to PayOS"
-              : "Create payment"}
+              ? t("continuePayos")
+              : t("createPayment")}
         </Button>
         <p className="text-xs text-muted-foreground">
-          Payment completes when the provider confirms; status shows on the Payments page.
+          {t("completesWhen")}
         </p>
       </form>
     </Form>
@@ -545,11 +637,12 @@ export function SubscriptionCard({
   subscription: SubscriptionInfo;
   rate: number | undefined;
 }) {
+  const t = useT(creditsCopy);
   const usd = formatUsdFromVnd(subscription.balance, rate);
   return (
     <div className="min-w-0 rounded-lg border border-border p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-sm font-semibold">Subscription credit</p>
+        <p className="text-sm font-semibold">{t("subscriptionCredit")}</p>
         <p className="text-xs text-muted-foreground">{subscription.plan_name}</p>
       </div>
       <p
@@ -558,14 +651,14 @@ export function SubscriptionCard({
         {usd ?? formatVnd(subscription.balance)}
       </p>
       <p className="mt-1 text-sm">
-        Period ends <span className="font-mono">{formatDate(subscription.period_end)}</span>
-        {subscription.expired ? " (expired)" : ""}
+        {t("periodEnds")} <span className="font-mono">{formatDate(subscription.period_end)}</span>
+        {subscription.expired ? ` ${t("expired")}` : ""}
       </p>
       <p className="text-sm text-muted-foreground">
-        {subscription.rate_limit_per_minute} requests per minute
+        {t("reqPerMinute", { n: subscription.rate_limit_per_minute })}
       </p>
       <p className="mt-2 text-xs text-muted-foreground">
-        Unused subscription credit is lost when the period ends without a renewal.
+        {t("unusedLost")}
       </p>
     </div>
   );
@@ -583,29 +676,30 @@ export function LedgerTabs({
   sections: LedgerSections<LedgerEntry>;
   columns: LedgerColumns;
 }) {
+  const t = useT(creditsCopy);
   const tabs = [
     {
       id: "usage",
-      title: "Usage deductions",
+      title: t("usageDeductions"),
       entries: sections.usage,
-      empty: "No usage yet — deductions appear after the first request.",
+      empty: t("noUsage"),
     },
     {
       id: "topups",
-      title: "Top-up history",
+      title: t("topUpHistory"),
       entries: sections.topups,
-      empty: "No top-ups yet.",
+      empty: t("noTopUps"),
     },
     {
       id: "adjustments",
-      title: "Adjustments & refunds",
+      title: t("adjustmentsRefunds"),
       entries: sections.adjustments,
-      empty: "No adjustments or refunds.",
+      empty: t("noAdjustments"),
     },
   ];
   return (
     <Tabs defaultValue="usage" className="min-w-0">
-      <TabsList aria-label="Ledger sections" className="h-auto max-w-full flex-wrap">
+      <TabsList aria-label={t("ledgerSections")} className="h-auto max-w-full flex-wrap">
         {tabs.map((t) => (
           <TabsTrigger key={t.id} value={t.id}>
             {t.title} ({t.entries.length})

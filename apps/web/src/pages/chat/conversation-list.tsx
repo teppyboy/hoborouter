@@ -30,6 +30,48 @@ import {
   saveConversation,
   type ConversationSummary,
 } from "./conversations";
+import { useT, translate } from "../../lib/i18n/t";
+import { useLocaleStore } from "../../lib/i18n/locale";
+
+// Conversation-list copy: inline LocaleEntry set (see lib/i18n/common.ts).
+const listCopy = {
+  convHistory: { en: "Conversation history", vi: "Lịch sử hội thoại" },
+  loadFailed: { en: "Could not load your conversations.", vi: "Không tải được hội thoại của bạn." },
+  retry: { en: "Retry", vi: "Thử lại" },
+  loading: { en: "Loading conversations…", vi: "Đang tải hội thoại…" },
+  none: { en: "No conversations yet.", vi: "Chưa có hội thoại nào." },
+  conversations: { en: "Conversations", vi: "Hội thoại" },
+  renameAria: { en: "Rename conversation: {title}", vi: "Đổi tên hội thoại: {title}" },
+  archiveAria: { en: "Archive conversation: {title}", vi: "Lưu trữ hội thoại: {title}" },
+  loadMore: { en: "Load more", vi: "Tải thêm" },
+  conflict: {
+    en: "This conversation changed elsewhere. Reload the list and try again.",
+    vi: "Hội thoại này đã thay đổi ở nơi khác. Hãy tải lại danh sách và thử lại.",
+  },
+  sessionExpired: { en: "Your session expired. Sign in again.", vi: "Phiên của bạn đã hết hạn. Đăng nhập lại." },
+  gone: { en: "This conversation no longer exists for you.", vi: "Hội thoại này không còn tồn tại với bạn." },
+  actionFailed: { en: "The action failed. Try again.", vi: "Thao tác thất bại. Thử lại." },
+  renameTitle: { en: "Rename conversation", vi: "Đổi tên hội thoại" },
+  renameDesc: {
+    en: "A short label for your history. At most 120 characters.",
+    vi: "Nhãn ngắn cho lịch sử của bạn. Tối đa 120 ký tự.",
+  },
+  titleLabel: { en: "Title", vi: "Tiêu đề" },
+  cancel: { en: "Cancel", vi: "Huỷ" },
+  saving: { en: "Saving…", vi: "Đang lưu…" },
+  save: { en: "Save", vi: "Lưu" },
+} as const;
+
+function listActionErrorMessage(e: unknown): string {
+  const locale = useLocaleStore.getState().locale;
+  if (e instanceof ConversationError) {
+    if (e.kind === "conflict") return translate(listCopy, "conflict", locale);
+    if (e.kind === "unauthorized" || e.kind === "forbidden")
+      return translate(listCopy, "sessionExpired", locale);
+    if (e.kind === "notFound") return translate(listCopy, "gone", locale);
+  }
+  return translate(listCopy, "actionFailed", locale);
+}
 
 // Single spelling of the history-list query key, shared with the chat page
 // so a successful create/save there can invalidate the exact same key.
@@ -39,17 +81,6 @@ export const conversationListKey = (userId: string, workspaceId: string) => [
   userId,
   workspaceId,
 ];
-
-function actionErrorMessage(e: unknown): string {
-  if (e instanceof ConversationError) {
-    if (e.kind === "conflict")
-      return "This conversation changed elsewhere. Reload the list and try again.";
-    if (e.kind === "unauthorized" || e.kind === "forbidden")
-      return "Your session expired. Sign in again.";
-    if (e.kind === "notFound") return "This conversation no longer exists for you.";
-  }
-  return "The action failed. Try again.";
-}
 
 export function ConversationList({
   userId,
@@ -73,6 +104,7 @@ export function ConversationList({
    *  active conversation (archived history must not stay on screen). */
   onArchive?: (chatId: string) => void;
 }) {
+  const t = useT(listCopy);
   const queryClient = useQueryClient();
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [renaming, setRenaming] = React.useState<ConversationSummary | null>(null);
@@ -110,7 +142,7 @@ export function ConversationList({
       onRenamed?.({ chatId, version: snap.version });
       void invalidate();
     },
-    onError: (e) => setActionError(actionErrorMessage(e)),
+    onError: (e) => setActionError(listActionErrorMessage(e)),
   });
 
   // Soft archive only — the server retains the row; there is no delete
@@ -121,7 +153,7 @@ export function ConversationList({
       onArchive?.(chatId);
       void invalidate();
     },
-    onError: (e) => setActionError(actionErrorMessage(e)),
+    onError: (e) => setActionError(listActionErrorMessage(e)),
   });
 
   function startRename(c: ConversationSummary) {
@@ -143,25 +175,25 @@ export function ConversationList({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <h2 className="sr-only">Conversation history</h2>
+      <h2 className="sr-only">{t("convHistory")}</h2>
       {list.isError ? (
         <p className="px-2 py-4 text-sm text-muted-foreground">
-          Could not load your conversations.{" "}
+          {t("loadFailed")}{" "}
           <Button
             variant="link"
             size="sm"
             className="h-auto p-0"
             onClick={() => void list.refetch()}
           >
-            Retry
+            {t("retry")}
           </Button>
         </p>
       ) : list.isLoading ? (
-        <p className="px-2 py-4 text-sm text-muted-foreground">Loading conversations…</p>
+        <p className="px-2 py-4 text-sm text-muted-foreground">{t("loading")}</p>
       ) : !resolved || items.length === 0 ? (
-        <p className="px-2 py-4 text-sm text-muted-foreground">No conversations yet.</p>
+        <p className="px-2 py-4 text-sm text-muted-foreground">{t("none")}</p>
       ) : (
-        <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto" aria-label="Conversations">
+        <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto" aria-label={t("conversations")}>
           {items.map((c) => (
             <li key={c.id} className="group relative">
               <button
@@ -183,7 +215,7 @@ export function ConversationList({
                   variant="ghost"
                   size="icon"
                   className="size-7"
-                  aria-label={`Rename conversation: ${c.title}`}
+                  aria-label={t("renameAria", { title: c.title })}
                   onClick={() => startRename(c)}
                 >
                   <Pencil className="size-3.5" aria-hidden />
@@ -192,7 +224,7 @@ export function ConversationList({
                   variant="ghost"
                   size="icon"
                   className="size-7"
-                  aria-label={`Archive conversation: ${c.title}`}
+                  aria-label={t("archiveAria", { title: c.title })}
                   disabled={archive.isPending}
                   onClick={() => {
                     setActionError(null);
@@ -216,7 +248,7 @@ export function ConversationList({
           disabled={list.isFetchingNextPage}
           onClick={() => void list.fetchNextPage()}
         >
-          {list.isFetchingNextPage ? "Loading…" : "Load more"}
+          {list.isFetchingNextPage ? t("loading") : t("loadMore")}
         </Button>
       )}
       {actionError && <p className="px-2 py-2 text-xs text-destructive">{actionError}</p>}
@@ -225,13 +257,13 @@ export function ConversationList({
       <Dialog open={renaming !== null} onOpenChange={(open) => !open && setRenaming(null)}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Rename conversation</DialogTitle>
+            <DialogTitle>{t("renameTitle")}</DialogTitle>
             <DialogDescription>
-              A short label for your history. At most 120 characters.
+              {t("renameDesc")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
-            <Label htmlFor="conversation-rename-title">Title</Label>
+            <Label htmlFor="conversation-rename-title">{t("titleLabel")}</Label>
             <Input
               id="conversation-rename-title"
               value={renameTitle}
@@ -247,14 +279,14 @@ export function ConversationList({
           </div>
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setRenaming(null)}>
-              Cancel
+              {t("cancel")}
             </Button>
             <Button
               size="sm"
               disabled={!renameTitle.trim() || rename.isPending}
               onClick={submitRename}
             >
-              {rename.isPending ? "Saving…" : "Save"}
+              {rename.isPending ? t("saving") : t("save")}
             </Button>
           </DialogFooter>
         </DialogContent>
