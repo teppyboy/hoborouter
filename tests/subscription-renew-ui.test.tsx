@@ -21,6 +21,8 @@ const GLOBAL_KEYS = [
 ] as const;
 const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
 let jsdomWindow: { close: () => void } | null = null;
+const roots: { unmount: () => void }[] = [];
+const containers: HTMLElement[] = [];
 type EventCtor<T, I> = new (type: string, init?: I) => T;
 interface JsdomRealm {
   Event: EventCtor<Event, EventInit>;
@@ -62,7 +64,18 @@ const matchMediaStub = () => ({
 (globalThis as { matchMedia?: unknown }).matchMedia = matchMediaStub;
 jsdomWindow = W;
 
-afterAll(() => {
+afterAll(async () => {
+  // react-dom 19.3's deferred commit callback reads `window.event`
+  // (react-dom-client commitRoot -> flushPassiveEffects). Roots left mounted
+  // keep a commit queued when the tests end, so removing the jsdom globals
+  // races that callback: it throws an unhandled "ReferenceError: window is
+  // not defined" after teardown and bun exits 1 with 0 failing tests (the
+  // v0.5.4-v0.5.7 CI failures). Unmount inside act while the globals are
+  // still installed (same pattern as tests/user-settings-menu-ui.test.tsx),
+  // drain the queued scheduler work, then restore.
+  for (const root of roots.splice(0)) act(() => root.unmount());
+  for (const c of containers.splice(0)) c.remove();
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
   for (const k of GLOBAL_KEYS) {
     const d = originals[k];
     if (d) Object.defineProperty(globalThis, k, d);
@@ -98,6 +111,8 @@ function mountSubCard(subscription: SubscriptionInfo): {
   document.body.appendChild(container);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const root = createRoot(container);
+  roots.push(root);
+  containers.push(container);
   const fetchCalls: { url: string; method: string }[] = [];
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);

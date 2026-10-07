@@ -170,8 +170,13 @@ describe("DELETE /api/v1/admin/requests/:id", () => {
     )[0]!;
     expect(Number(audits.n)).toBe(1);
 
-    // Money untouched across both calls.
+    // Money untouched across both calls. The summary request is
+    // authenticated: it must be awaited here, otherwise it outlives the
+    // global afterAll's DB drop and surfaces downstream as a bogus Better
+    // Auth "PostgresError: Connection closed" in the test log (which the CI
+    // retry gate greps for, triggering pointless reruns).
     const after = await snapshotMoney();
+    await after.summary.then((r) => r.json());
     expect(after.wallet).toBe(before.wallet);
     expect(after.ledger).toBe(before.ledger);
   });
