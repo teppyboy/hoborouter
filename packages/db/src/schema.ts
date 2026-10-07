@@ -81,8 +81,6 @@ export const apiKeys = pgTable(
     created_at: big("created_at").notNull(),
     last_used_at: big("last_used_at"),
     revoked_at: big("revoked_at"),
-    // Soft delete (remove). Row is kept so audit_log/usage joins still resolve
-    // names; removed keys never authenticate and are hidden from key lists.
     deleted_at: big("deleted_at"),
     deleted_by: text("deleted_by"),
   },
@@ -197,10 +195,11 @@ export const payments = pgTable(
     provider_order_code: text("provider_order_code").notNull(),
     created_at: big("created_at").notNull(),
     expires_at: big("expires_at"),
-    // Exactly one of these is set for bundle/plan purchases; both NULL means a
-    // plain top-up (whose settlement path must stay unchanged).
+    // Exactly one of these is set for a bundle/plan/throughput purchase; all
+    // NULL means a plain top-up (whose settlement path must stay unchanged).
     bundle_id: text("bundle_id").references(() => creditBundles.id),
     subscription_plan_id: text("subscription_plan_id").references(() => subscriptionPlans.id),
+    throughput_product_id: text("throughput_product_id").references(() => throughputProducts.id),
     // Creation-time snapshot of what the payer entered (never recomputed):
     // VND payments snapshot the VND amount text; USD top-ups snapshot the
     // exact input text plus the FX rate used for the ceiling conversion.
@@ -222,7 +221,7 @@ export const payments = pgTable(
     check("payments_amount_type", sql`${t.amount} > 0 AND ${t.amount} <= ${MAX_BOUND}`),
     check(
       "payments_one_purchase_kind",
-      sql`${t.bundle_id} IS NULL OR ${t.subscription_plan_id} IS NULL`,
+      sql`(CASE WHEN ${t.bundle_id} IS NULL THEN 1 ELSE 0 END + CASE WHEN ${t.subscription_plan_id} IS NULL THEN 1 ELSE 0 END + CASE WHEN ${t.throughput_product_id} IS NULL THEN 1 ELSE 0 END) >= 2`,
     ),
     check(
       "payments_fx_rate_positive",
@@ -512,6 +511,90 @@ export const promoRedemptions = pgTable(
     uniqueIndex("promo_redemptions_code_workspace").on(t.promo_code_id, t.workspace_id),
     check("pr_created_at", intBounded(t.created_at)),
     check("pr_one_gate", sql`(${t.ledger_entry_id} IS NULL) <> (${t.payment_id} IS NULL)`),
+  ],
+);
+
+// --- prepaid throughput allowance (gateway admission product) ---
+// A throughput product sells a fixed-window gateway admission cap for a
+// workspace: integer-VND price, bounded requests-per-minute, fixed duration.
+// It grants NO wallet credit — settlement activates an allowance row instead.
+export const throughputProducts = pgTable(
+  "throughput_products",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    price_vnd: big("price_vnd").notNull(),
+    // Per-minute gateway admission cap while the allowance window is active;
+    // same 1..600 bound as subscription_plans.rate_limit_per_minute.
+    requests_per_minute: integer("requests_per_minute").notNull(),
+    // Fixed active-window length; settlement computes ends_at = starts_at +
+    // duration_days. Immutable after create (pending payments settle against
+    // it, like bundle amounts).
+    duration_days: integer("duration_days").notNull(),
+    // Deactivated, never deleted — past payments keep their FK.
+    active: boolean("active").notNull().default(true),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    check("tp_price_vnd", sql`${t.price_vnd} > 0 AND ${t.price_vnd} <= ${MAX_BOUND}`),
+    check(
+      "tp_requests_per_minute",
+      sql`${t.requests_per_minute} >= 1 AND ${t.requests_per_minute} <= 600`,
+    ),
+    check("tp_duration_days", sql`${t.duration_days} >= 1 AND ${t.duration_days} <= 3650`),
+    check("tp_created_at", intBounded(t.created_at)),
+  ],
+);
+
+/**
+ * One purchased allowance per workspace payment. Status lifecycle:
+ * 'scheduled' (purchased, window not started — queued behind the incumbent
+ * by settlement chaining) -> 'active' (window started; at most ONE per
+ * workspace via the partial unique index, promoted lazily) -> 'expired'
+ * (window lapsed, flipped lazily) or 'deactivated' (admin removed the cap).
+ * The gateway gates on status='active' AND [starts_at, ends_at) containing
+ * now. The (workspace_id, starts_at) unique index makes concurrent
+ * settlement retries of the same chain position impossible to double-insert.
+ */
+export const throughputAllowances = pgTable(
+  "throughput_allowances",
+  {
+    id: text("id").primaryKey(),
+    workspace_id: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    payment_id: text("payment_id")
+      .notNull()
+      .references(() => payments.id),
+    product_id: text("product_id")
+      .notNull()
+      .references(() => throughputProducts.id),
+    requests_per_minute: integer("requests_per_minute").notNull(),
+    starts_at: big("starts_at").notNull(),
+    ends_at: big("ends_at").notNull(),
+    status: text("status", { enum: ["scheduled", "active", "expired", "deactivated"] })
+      .notNull()
+      .default("active"),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("throughput_allowances_one_active_per_workspace")
+      .on(t.workspace_id)
+      .where(sql`status = 'active'`),
+    // Two windows of one workspace can never START at the same instant;
+    // settlement chaining computes starts_at deterministically, so a
+    // concurrent settlement retry conflicts here instead of double-inserting.
+    uniqueIndex("throughput_allowances_one_start_per_workspace").on(t.workspace_id, t.starts_at),
+    index("throughput_allowances_workspace_status_idx").on(t.workspace_id, t.status),
+    check(
+      "ta_requests_per_minute",
+      sql`${t.requests_per_minute} >= 1 AND ${t.requests_per_minute} <= 600`,
+    ),
+    check("ta_window", sql`${t.starts_at} < ${t.ends_at}`),
+    check("ta_starts_at", intBounded(t.starts_at)),
+    check("ta_ends_at", intBounded(t.ends_at)),
+    check("ta_status", sql`${t.status} IN ('scheduled','active','expired','deactivated')`),
+    check("ta_created_at", intBounded(t.created_at)),
   ],
 );
 

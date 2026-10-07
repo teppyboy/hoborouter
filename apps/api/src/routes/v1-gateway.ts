@@ -18,19 +18,23 @@ import {
   WalletError,
 } from "@hoborouter/wallet";
 import { injectChatUsageOption, createUsageTap, resolveBillableUsage } from "@hoborouter/usage";
-import { and, eq, gt } from "drizzle-orm";
+import { transitionThroughputAllowances } from "@hoborouter/payments";
+import { and, eq, gt, lte } from "drizzle-orm";
 import {
   apiKeys,
   requests,
   instanceSettings,
   subscriptionPlans,
   subscriptions,
+  throughputAllowances,
 } from "@hoborouter/db";
 import { jsonError } from "../authz";
 import {
   checkSubscriptionRateLimit,
+  checkThroughputAllowanceLimit,
   rateLimitNow,
   uncountSubscriptionRateLimit,
+  uncountThroughputAllowanceLimit,
 } from "../rate-limit";
 
 const MAX_BODY_BYTES = 1024 * 1024; // 1 MiB inbound JSON body limit
@@ -438,6 +442,38 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
     // toward the limit only when it is actually funded by the subscription
     // wallet, so the tentative slot is returned on fallback/failure.
     const limNow = rateLimitNow();
+
+    // Prepaid throughput allowance (gateway admission limit): an active
+    // allowance caps ALL workspace traffic regardless of funding source —
+    // wallet kind does not matter, admission does. Lazy expiry/promotion
+    // runs first so a lapsed or queued window never misstates the cap.
+    // Product wording: this is a purchased admission cap, never a
+    // provider-capacity guarantee or priority promise.
+    try {
+      await transitionThroughputAllowances(db, key.workspace_id, limNow);
+    } catch {
+      // Best-effort lazy transition (e.g. concurrent promotion lost the
+      // unique-index race): the stored window state is still consistent;
+      // the next request or settlement retries the transition.
+    }
+    const allowanceRows = await db
+      .select({ rpm: throughputAllowances.requests_per_minute })
+      .from(throughputAllowances)
+      .where(
+        and(
+          eq(throughputAllowances.workspace_id, key.workspace_id),
+          eq(throughputAllowances.status, "active"),
+          lte(throughputAllowances.starts_at, limNow),
+          gt(throughputAllowances.ends_at, limNow),
+        ),
+      )
+      .limit(1);
+    const allowanceLimit = allowanceRows[0]?.rpm ?? null;
+    const allowanceCheck =
+      allowanceLimit !== null
+        ? checkThroughputAllowanceLimit(key.workspace_id, allowanceLimit, limNow)
+        : null;
+
     const subPlans = await db
       .select({ rate: subscriptionPlans.rate_limit_per_minute })
       .from(subscriptions)
@@ -453,15 +489,10 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
     const limit = subPlans[0]?.rate ?? null;
     const limiter =
       limit !== null ? checkSubscriptionRateLimit(key.workspace_id, limit, limNow) : null;
-    const rateLimited = (retryAfterSec: number) =>
+    const rateLimited = (retryAfterSec: number, code: string, message: string) =>
       new Response(
         JSON.stringify({
-          error: {
-            message:
-              "Subscription rate limit exceeded. Retry after the window ends or use top-up credit.",
-            type: "rate_limit_error",
-            code: "subscription_rate_limited",
-          },
+          error: { message, type: "rate_limit_error", code },
         }),
         {
           status: 429,
@@ -471,6 +502,16 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
           },
         },
       );
+
+    // Allowance over cap: 429 before any other check — no slot was counted
+    // by either limiter, so there is nothing to undo.
+    if (allowanceCheck && !allowanceCheck.underLimit) {
+      return rateLimited(
+        allowanceCheck.retryAfterSec,
+        "throughput_allowance_limited",
+        "Prepaid throughput allowance limit exceeded. This is a gateway admission limit for your workspace; retry after the window ends.",
+      );
+    }
 
     const requestId = crypto.randomUUID();
     const stream = body.stream === true;
@@ -493,6 +534,8 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
       // (underLimit): over-limit requests never incremented, so uncounting
       // them would erode quota already used by under-limit requests. The
       // ticket's windowStart guards against subtracting a newer window.
+      // The allowance slot caps ALL traffic, so any successful reserve
+      // consumes it — only reserve failures return it below.
       if (limiter?.underLimit && reserved.walletKind !== "subscription") {
         uncountSubscriptionRateLimit(key.workspace_id, limiter.windowStart);
       }
@@ -500,10 +543,22 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
       if (err instanceof WalletError) {
         if (limiter?.underLimit)
           uncountSubscriptionRateLimit(key.workspace_id, limiter.windowStart);
+        // Reserve failed: return the allowance admission slot so the next
+        // request is not falsely 429'd against quota it never used.
+        if (allowanceCheck?.underLimit)
+          uncountThroughputAllowanceLimit(key.workspace_id, allowanceCheck.windowStart);
         if (err.code === "insufficient") {
           // Over the limit and the topup wallet cannot fund it -> 429 (O3);
           // a 429 writes no rows. Otherwise 402 as today.
-          if (limiter && !limiter.underLimit) return rateLimited(limiter.retryAfterSec);
+          if (limiter && !limiter.underLimit) {
+            // The sub-limited slot was returned above only after the
+            // allowance slot was returned too — both tentatively counted.
+            return rateLimited(
+              limiter.retryAfterSec,
+              "subscription_rate_limited",
+              "Subscription rate limit exceeded. Retry after the window ends or use top-up credit.",
+            );
+          }
           return jsonError(402, "insufficient_balance", "Insufficient wallet balance");
         }
       }

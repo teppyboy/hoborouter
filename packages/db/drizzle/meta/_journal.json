@@ -85,6 +85,13 @@
       "when": 1791700000000,
       "tag": "0011_api_keys_soft_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791800000000,
+      "tag": "0012_throughput_allowances",
+      "breakpoints": true
     }
   ]
 }

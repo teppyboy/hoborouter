@@ -55,10 +55,11 @@ const PROMO_APPLY_STATUS: Record<string, { status: number; code: string; message
   },
 };
 
-/** Purchase FK columns carried on a bundle/plan purchase; both absent = plain top-up. */
+/** Purchase FK columns carried on a bundle/plan/throughput purchase; all absent = plain top-up. */
 export interface PayosPurchase {
   bundleId?: string;
   subscriptionPlanId?: string;
+  throughputProductId?: string;
   /** Server-catalog USD price text; never client-supplied. Omitted = VND amount. */
   priceUsd?: string;
 }
@@ -156,6 +157,7 @@ export const makePayosPaymentCreator =
         expires_at: deadlineMs,
         bundle_id: purchase?.bundleId,
         subscription_plan_id: purchase?.subscriptionPlanId,
+        throughput_product_id: purchase?.throughputProductId,
         input_currency: resolved.inputCurrency,
         input_amount_text: resolved.inputAmountText,
         fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd,
@@ -190,6 +192,9 @@ export const makePayosPaymentCreator =
           ...(purchase?.bundleId ? { bundle_id: purchase.bundleId } : {}),
           ...(purchase?.subscriptionPlanId
             ? { subscription_plan_id: purchase.subscriptionPlanId }
+            : {}),
+          ...(purchase?.throughputProductId
+            ? { throughput_product_id: purchase.throughputProductId }
             : {}),
           ...(voucher
             ? {

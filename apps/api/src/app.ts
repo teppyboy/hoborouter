@@ -19,6 +19,8 @@ import { gatewayRoutes } from "./routes/v1-gateway";
 import { recoverPending } from "@hoborouter/wallet";
 import { paymentsRoutes } from "./routes/payments";
 import { bundlesRoutes } from "./routes/bundles";
+import { throughputRoutes } from "./routes/throughput";
+import { adminThroughputRoutes } from "./routes/admin-throughput";
 import { adminBundlesRoutes } from "./routes/admin-bundles";
 import { mockWebhookRoutes } from "./routes/webhooks-mock";
 import { payosWebhookRoutes } from "./routes/webhooks-payos";
@@ -143,6 +145,8 @@ export const buildApp = async (deps: AppDeps = {}) => {
     adminSettingsRoutes(db, auth),
     adminCpaMutationRoutes(db, auth),
     adminBundlesRoutes(db, auth),
+    throughputRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch),
+    adminThroughputRoutes(db, auth),
     adminRequestsRoutes(db, auth),
     catalogPublicRoutes(db, auth),
     publicConfigRoutes(),

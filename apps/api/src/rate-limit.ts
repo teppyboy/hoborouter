@@ -7,7 +7,46 @@
 const WINDOW_MS = 60_000;
 
 type Window = { windowStart: number; count: number };
-const windows = new Map<string, Window>();
+
+// Fixed-window limiter factory: one counter space per instance so two limit
+// policies on the same workspace (subscription-funded vs ALL traffic under a
+// prepaid throughput allowance) never erode each other's counts.
+function makeWindowLimiter() {
+  const windows = new Map<string, Window>();
+  return {
+    check(
+      workspaceId: string,
+      limitPerMinute: number,
+      now: number,
+    ): { underLimit: boolean; retryAfterSec: number; windowStart: number } {
+      const windowStart = windowStartOf(now);
+      let w = windows.get(workspaceId);
+      if (!w || w.windowStart !== windowStart) {
+        w = { windowStart, count: 0 };
+        windows.set(workspaceId, w);
+      }
+      if (w.count >= limitPerMinute) {
+        return {
+          underLimit: false,
+          retryAfterSec: Math.max(1, Math.ceil((w.windowStart + WINDOW_MS - now) / 1000)),
+          windowStart,
+        };
+      }
+      w.count += 1;
+      return { underLimit: true, retryAfterSec: 0, windowStart };
+    },
+    uncount(workspaceId: string, windowStart: number): void {
+      const w = windows.get(workspaceId);
+      if (w && w.windowStart === windowStart && w.count > 0) w.count -= 1;
+    },
+    reset(): void {
+      windows.clear();
+    },
+  };
+}
+
+const subscriptionLimiter = makeWindowLimiter();
+const allowanceLimiter = makeWindowLimiter();
 
 // Test seam: the gateway asks this for "now" so rollover can be exercised
 // without sleeping 60s.
@@ -18,39 +57,21 @@ export function setRateLimitClock(fn: () => number): void {
 }
 
 export function resetSubscriptionRateLimits(): void {
-  windows.clear();
+  subscriptionLimiter.reset();
+}
+
+export function resetThroughputAllowanceLimits(): void {
+  allowanceLimiter.reset();
 }
 
 const windowStartOf = (now: number) => Math.floor(now / WINDOW_MS) * WINDOW_MS;
 
-/**
- * Returns underLimit=true (and counts the tentative slot) while the
- * workspace has made fewer than limitPerMinute requests in the current
- * window. Over the limit it does NOT count; the caller funds from topup or
- * returns 429 with retryAfterSec until the window ends. The returned
- * windowStart is the ticket: pass it to uncountSubscriptionRateLimit so a
- * late undo can never touch a newer window's count.
- */
 export function checkSubscriptionRateLimit(
   workspaceId: string,
   limitPerMinute: number,
   now: number,
 ): { underLimit: boolean; retryAfterSec: number; windowStart: number } {
-  const windowStart = windowStartOf(now);
-  let w = windows.get(workspaceId);
-  if (!w || w.windowStart !== windowStart) {
-    w = { windowStart, count: 0 };
-    windows.set(workspaceId, w);
-  }
-  if (w.count >= limitPerMinute) {
-    return {
-      underLimit: false,
-      retryAfterSec: Math.max(1, Math.ceil((w.windowStart + WINDOW_MS - now) / 1000)),
-      windowStart,
-    };
-  }
-  w.count += 1;
-  return { underLimit: true, retryAfterSec: 0, windowStart };
+  return subscriptionLimiter.check(workspaceId, limitPerMinute, now);
 }
 
 /**
@@ -61,6 +82,21 @@ export function checkSubscriptionRateLimit(
  * undo can never subtract a newer window's requests.
  */
 export function uncountSubscriptionRateLimit(workspaceId: string, windowStart: number): void {
-  const w = windows.get(workspaceId);
-  if (w && w.windowStart === windowStart && w.count > 0) w.count -= 1;
+  subscriptionLimiter.uncount(workspaceId, windowStart);
+}
+
+// Prepaid throughput allowance limiter: same fixed-window algorithm, separate
+// counter space. An active allowance caps ALL workspace traffic regardless of
+// funding source; the gateway returns the tentative slot on reserve failure
+// exactly like the subscription limiter.
+export function checkThroughputAllowanceLimit(
+  workspaceId: string,
+  limitPerMinute: number,
+  now: number,
+): { underLimit: boolean; retryAfterSec: number; windowStart: number } {
+  return allowanceLimiter.check(workspaceId, limitPerMinute, now);
+}
+
+export function uncountThroughputAllowanceLimit(workspaceId: string, windowStart: number): void {
+  allowanceLimiter.uncount(workspaceId, windowStart);
 }

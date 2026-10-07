@@ -5,6 +5,7 @@ export {
   MockSignatureConfigError,
 } from "./mock-signature";
 export { processMockPaymentEvent, MockPaymentError } from "./credit";
+export { transitionThroughputAllowances } from "./allowance";
 export { isFirstTopupBonusEnabled } from "./bonus-settings";
 export {
   PAYMENT_TIMEOUT_MINUTES_KEY,

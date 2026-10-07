@@ -5,7 +5,7 @@
 // provider_reference) -> creditWallet -> payments.status=succeeded -> COMMIT.
 // Replay hits the UNIQUE constraint and is answered 2xx with no second credit;
 // any failure rolls back everything.
-import { and, eq, ne } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import type { Db, Tx } from "@hoborouter/db";
 import {
   auditLog,
@@ -15,6 +15,8 @@ import {
   paymentEvents,
   payments,
   subscriptionPlans,
+  throughputAllowances,
+  throughputProducts,
   wallets,
 } from "@hoborouter/db";
 import { creditWallet, runInImmediate, WalletError } from "@hoborouter/wallet";
@@ -23,6 +25,7 @@ import {
   ensureSubscriptionWallet,
   extendOrCreateSubscription,
 } from "@hoborouter/wallet";
+import { transitionThroughputAllowances } from "./allowance";
 import { isFirstTopupBonusEnabled } from "./bonus-settings";
 
 export type MockPaymentErrorCode =
@@ -186,6 +189,7 @@ export async function processMockPaymentEvent(
         workspace_id: payments.workspace_id,
         bundle_id: payments.bundle_id,
         subscription_plan_id: payments.subscription_plan_id,
+        throughput_product_id: payments.throughput_product_id,
       })
       .from(payments)
       .where(
@@ -337,7 +341,7 @@ export async function processMockPaymentEvent(
 
     // Topup wallet for the payment's workspace (unique (workspace_id, kind)).
     const walletRows = await tx
-      .select({ id: wallets.id })
+      .select({ id: wallets.id, balance: wallets.balance })
       .from(wallets)
       .where(and(eq(wallets.workspace_id, payment.workspace_id), eq(wallets.kind, "topup")));
     const wallet = walletRows[0];
@@ -427,6 +431,64 @@ export async function processMockPaymentEvent(
         memo: plainMemo,
       });
       balanceAfter = credit.balanceAfter;
+    } else if (payment.throughput_product_id !== null) {
+      // Prepaid throughput allowance: the payment bought a fixed-window
+      // gateway admission cap. NO wallet credit, NO ledger entry, NO balance
+      // change — settlement only activates the allowance row. The
+      // payment_events replay gate above already makes this run once; the
+      // one-active-per-workspace partial unique index makes a concurrent
+      // second settlement lose, roll back, and chain after the winner.
+      const productRows = await tx
+        .select({
+          requests_per_minute: throughputProducts.requests_per_minute,
+          duration_days: throughputProducts.duration_days,
+        })
+        .from(throughputProducts)
+        .where(eq(throughputProducts.id, payment.throughput_product_id));
+      const product = productRows[0];
+      if (!product) {
+        throw new MockPaymentError(
+          "invalid",
+          `missing throughput product ${payment.throughput_product_id}`,
+        );
+      }
+      // Catalog rows are deactivated, never deleted, and their bounds are
+      // frozen at creation (like bundle amounts), so settlement reads them
+      // without an active check — deactivation after purchase must not
+      // strand a paid payment.
+      const now = Date.now();
+      // Lazy expiry + promotion first: the incumbent window state must be
+      // current before the new window chains behind it.
+      await transitionThroughputAllowances(tx, payment.workspace_id, now);
+      const incumbent = await tx
+        .select({ ends_at: throughputAllowances.ends_at })
+        .from(throughputAllowances)
+        .where(
+          and(
+            eq(throughputAllowances.workspace_id, payment.workspace_id),
+            // Non-terminal rows: the active window plus any queued one.
+            sql`${throughputAllowances.status} IN ('active','scheduled')`,
+          ),
+        )
+        .orderBy(desc(throughputAllowances.ends_at))
+        .limit(1);
+      const queued = incumbent.length > 0;
+      const startsAt = Math.max(now, incumbent[0]?.ends_at ?? now);
+      const endsAt = startsAt + product.duration_days * 86_400_000;
+      await tx.insert(throughputAllowances).values({
+        id: crypto.randomUUID(),
+        workspace_id: payment.workspace_id,
+        payment_id: payment.id,
+        product_id: payment.throughput_product_id,
+        requests_per_minute: product.requests_per_minute,
+        starts_at: startsAt,
+        ends_at: endsAt,
+        // First purchase activates immediately; a purchase while another
+        // window is live queues behind it, so active windows never overlap.
+        status: queued ? "scheduled" : "active",
+        created_at: now,
+      });
+      balanceAfter = wallet.balance;
     } else {
       // Plain top-up. Voucher payments (promo_code_id set) credit the
       // ORIGINAL top-up amount — the discount is the house's cost, not a
