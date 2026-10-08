@@ -95,6 +95,45 @@ const creditsCopy = {
     vi: "Đã tạo thanh toán — đang chờ quản trị viên xác nhận",
   },
   topUpFailed: { en: "Top-up failed", vi: "Nạp tín dụng thất bại" },
+  promoCode: { en: "Promo code (optional)", vi: "Mã khuyến mãi (tuỳ chọn)" },
+  promoPlaceholder: { en: "32-character code", vi: "Mã gồm 32 ký tự" },
+  errPromoFormat: {
+    en: "Codes are 32 letters or numbers — check for typos",
+    vi: "Mã gồm 32 chữ cái hoặc chữ số — bạn kiểm tra lại giúp mình",
+  },
+  errPromoReplay: {
+    en: "This code was already used by this workspace",
+    vi: "Mã này đã được workspace này sử dụng",
+  },
+  errPromoExpired: { en: "This code has expired", vi: "Mã này đã hết hạn" },
+  errPromoExhausted: {
+    en: "This code has no uses left",
+    vi: "Mã này đã hết lượt sử dụng",
+  },
+  errPromoInactive: {
+    en: "This code is not active",
+    vi: "Mã này hiện không hoạt động",
+  },
+  errPromoSuspended: {
+    en: "This workspace is suspended, so codes cannot be applied",
+    vi: "Workspace này đang bị tạm ngưng nên không thể áp dụng mã",
+  },
+  errPromoNotFound: {
+    en: "Unknown code — check it and try again",
+    vi: "Không tìm thấy mã — kiểm tra lại rồi thử nhé",
+  },
+  errPromoFixed: {
+    en: "Fixed-credit codes are redeemed with the Redeem form, not at checkout",
+    vi: "Mã tặng tín dụng cố định được đổi qua form Đổi mã, không dùng khi thanh toán",
+  },
+  errPromoGeneric: {
+    en: "Applying the code failed — try again in a moment",
+    vi: "Áp dụng mã không thành công — bạn thử lại sau ít phút nhé",
+  },
+  voucherApplied: {
+    en: "Voucher applied: credit {original} − discount {discount} = due {due}",
+    vi: "Đã áp mã: tín dụng {original} − giảm {discount} = phải thanh toán {due}",
+  },
   completesWhen: {
     en: "Payment completes when the provider confirms; status shows on the Payments page.",
     vi: "Thanh toán hoàn tất khi nhà cung cấp xác nhận; trạng thái hiển thị tại trang Thanh toán.",
@@ -168,7 +207,62 @@ export interface PaymentConfig {
 }
 
 /** Union sent to POST payments; USD input stays a string end to end. */
-type TopUpPayload = { currency: "VND"; amount: number } | { currency: "USD"; usdAmount: string };
+type TopUpPayload =
+  | { currency: "VND"; amount: number; promoCode?: string }
+  | { currency: "USD"; usdAmount: string; promoCode?: string };
+
+/** Server payment-creation response: voucher snapshot echo (absent when no promo). */
+interface TopUpResponse {
+  id: string;
+  status: string;
+  checkout_url: string;
+  amount: number;
+  original_amount_vnd?: number;
+  discount_vnd?: number;
+  promo_code_id?: string;
+}
+
+// Backend contract: promo codes are 32 hex characters, normalized
+// trim().toUpperCase() server-side (see apps/api routes/admin-promotions).
+const PROMO_CODE_PATTERN = /^[0-9a-f]{32}$/i;
+
+/**
+ * Total promo-apply error mapping: known server failure codes become one
+ * dictionary key each; anything else (400 INVALID with mixed causes, network)
+ * returns null so the caller can fall back to the server message verbatim.
+ * Mirrors PROMO_APPLY_STATUS in apps/api/src/routes/payments.ts.
+ */
+export function promoApplyErrorKey(
+  err: unknown,
+):
+  | "errPromoReplay"
+  | "errPromoExpired"
+  | "errPromoExhausted"
+  | "errPromoInactive"
+  | "errPromoSuspended"
+  | "errPromoNotFound"
+  | "errPromoFixed"
+  | null {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case "ALREADY_REDEEMED":
+        return "errPromoReplay";
+      case "PROMO_EXPIRED":
+        return "errPromoExpired";
+      case "PROMO_EXHAUSTED":
+        return "errPromoExhausted";
+      case "PROMO_INACTIVE":
+        return "errPromoInactive";
+      case "WORKSPACE_SUSPENDED":
+        return "errPromoSuspended";
+      case "NOT_FOUND":
+        return "errPromoNotFound";
+      case "PROMO_NOT_PERCENT":
+        return "errPromoFixed";
+    }
+  }
+  return null;
+}
 
 // USD input validation without numeric parsing: plain digits, at most 2
 // decimals, at least one nonzero digit. The exact cents→VND conversion happens
@@ -416,27 +510,54 @@ export function TopUpForm({
   const [providerChoice, setProviderChoice] = useState<"manual" | "payos">("manual");
   const provider = payosAvailable && providerChoice === "payos" ? "payos" : "manual";
 
+  // Optional percent-voucher code: controlled state only (same handling as the
+  // redeem form — never persisted, never logged). Empty means no promo_code is
+  // sent at all, so bodies without it stay byte-identical to the old shape.
+  const [promoText, setPromoText] = useState("");
+  const [promoError, setPromoError] = useState<string | null>(null);
+  // Voucher snapshot display: set only from the authoritative response echo,
+  // never from client math; cleared on the next submit attempt.
+  const [voucherNote, setVoucherNote] = useState<{
+    original: number;
+    discount: number;
+    due: number;
+  } | null>(null);
+  const promoCode = promoText.trim();
+  const promoFormatBad = promoCode !== "" && !PROMO_CODE_PATTERN.test(promoCode);
+
   const topUp = useMutation({
     // provider is sent only for PayOS, so the manual bodies keep their
     // pre-existing shapes byte-identical: {amount} for VND, {usd_amount} for USD.
-    mutationFn: (payload: TopUpPayload) =>
-      api<{ id: string; status: string; checkout_url: string }>(
-        `/api/v1/workspaces/${workspaceId}/payments`,
-        {
-          method: "POST",
-          body: JSON.stringify(
-            payload.currency === "USD"
-              ? provider === "payos"
-                ? { usd_amount: payload.usdAmount, provider }
-                : { usd_amount: payload.usdAmount }
-              : provider === "payos"
-                ? { amount: payload.amount, provider }
-                : { amount: payload.amount },
-          ),
-        },
-      ),
+    // promo_code is added only when a code was typed (both currencies support
+    // the voucher apply server-side; USD amounts resolve before the discount).
+    mutationFn: (payload: TopUpPayload) => {
+      const base =
+        payload.currency === "USD"
+          ? provider === "payos"
+            ? { usd_amount: payload.usdAmount, provider }
+            : { usd_amount: payload.usdAmount }
+          : provider === "payos"
+            ? { amount: payload.amount, provider }
+            : { amount: payload.amount };
+      const body = payload.promoCode ? { ...base, promo_code: payload.promoCode } : base;
+      return api<TopUpResponse>(`/api/v1/workspaces/${workspaceId}/payments`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
     onSuccess: async (payment) => {
       void queryClient.invalidateQueries({ queryKey: ["payments", workspaceId] });
+      // The voucher snapshot echo is authoritative: original credit, snapshot
+      // discount and final due come from the server response — never recomputed
+      // client-side, and absent entirely when no promo was applied.
+      if (payment.original_amount_vnd != null && payment.discount_vnd != null) {
+        setPromoText("");
+        setVoucherNote({
+          original: payment.original_amount_vnd,
+          discount: payment.discount_vnd,
+          due: payment.amount,
+        });
+      }
       // PayOS hands back an absolute provider checkout URL: the only correct
       // action is a full browser redirect — no fake success, status is later
       // shown by the Payments page polling the backend. A relative path (the
@@ -451,6 +572,13 @@ export function TopUpForm({
       onNavigate(`/billing/payments?payment=${payment.id}`);
     },
     onError: (err, payload) => {
+      // Promo-apply failures surface next to the promo field; everything else
+      // keeps its existing input routing.
+      if (payload.promoCode) {
+        const key = promoApplyErrorKey(err);
+        setPromoError(key ? t(key) : err instanceof ApiError ? err.message : t("errPromoGeneric"));
+        return;
+      }
       const message = err instanceof ApiError ? err.message : t("topUpFailed");
       // Server errors stay visible next to whichever input produced them.
       if (payload.currency === "USD") setUsdError(message);
@@ -460,6 +588,16 @@ export function TopUpForm({
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    // Promo format is validated before any POST (same 32-hex contract as the
+    // redeem endpoint); empty means no code is sent at all.
+    if (promoFormatBad) {
+      setPromoError(t("errPromoFormat"));
+      return;
+    }
+    setPromoError(null);
+    setVoucherNote(null);
+    const withPromo = <T extends object>(base: T) =>
+      promoCode === "" ? base : { ...base, promoCode };
     if (currency === "USD") {
       const problem = validateUsdInput(usdText, t);
       if (problem !== null) {
@@ -467,10 +605,12 @@ export function TopUpForm({
         return;
       }
       setUsdError(null);
-      topUp.mutate({ currency: "USD", usdAmount: usdText.trim() });
+      topUp.mutate(withPromo({ currency: "USD", usdAmount: usdText.trim() }));
       return;
     }
-    void form.handleSubmit((v: Values) => topUp.mutate({ currency: "VND", amount: v.amount }))(e);
+    void form.handleSubmit((v: Values) =>
+      topUp.mutate(withPromo({ currency: "VND", amount: v.amount })),
+    )(e);
   };
 
   return (
@@ -569,6 +709,35 @@ export function TopUpForm({
             })}
           </p>
         )}
+        <FormItem>
+          <FormLabel htmlFor="topup_promo_code">{t("promoCode")}</FormLabel>
+          <FormControl>
+            <Input
+              id="topup_promo_code"
+              value={promoText}
+              onChange={(e) => {
+                setPromoText(e.target.value);
+                setPromoError(null);
+              }}
+              autoComplete="off"
+              // A promo code is a bearer secret: no autofill, no save.
+              spellCheck={false}
+              placeholder={t("promoPlaceholder")}
+              className="font-mono"
+              aria-invalid={promoError !== null || promoFormatBad}
+            />
+          </FormControl>
+          <FormMessage>{promoError ?? undefined}</FormMessage>
+        </FormItem>
+        {voucherNote ? (
+          <p role="status" className="text-sm font-medium">
+            {t("voucherApplied", {
+              original: formatVnd(voucherNote.original),
+              discount: formatVnd(voucherNote.discount),
+              due: formatVnd(voucherNote.due),
+            })}
+          </p>
+        ) : null}
         {payosAvailable && (
           <fieldset className="space-y-2">
             <legend className="text-sm font-medium">{t("paymentMethod")}</legend>

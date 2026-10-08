@@ -19,6 +19,109 @@ import { DataTable, PageHeader, ScrollPanel } from "../../components/page";
 import { formatDate, formatUsdAmountText, formatVnd } from "../../lib/format";
 import { ApiError, api } from "../../lib/api";
 import { AdminGate, useAdminQuery } from "./shared";
+import { useT, type LocaleEntry } from "../../lib/i18n/t";
+
+// Admin catalog billing copy: keys name UI meaning (not the English sentence).
+// Currency codes (USD/VND), numbers and amounts are data — untranslated.
+export const adminBundlesCopy = {
+  title: { en: "Bundles & plans", vi: "Gói credit & gói đăng ký" },
+  description: {
+    en: "Purchasable credit bundles and subscription plans. Amounts are fixed at creation; deactivate instead of deleting.",
+    vi: "Gói credit mua được và gói đăng ký. Số tiền cố định khi tạo; hãy ngừng hoạt động thay vì xoá.",
+  },
+
+  // Shared chrome.
+  createdToast: { en: "Created", vi: "Đã tạo" },
+  requestFailed: { en: "Request failed", vi: "Yêu cầu thất bại" },
+  renameDialogTitle: { en: "Rename", vi: "Đổi tên" },
+  renameDialogDescription: {
+    en: "Amounts cannot be changed after creation.",
+    vi: "Không thể đổi số tiền sau khi tạo.",
+  },
+  newNameLabel: { en: "New name", vi: "Tên mới" },
+  cancel: { en: "Cancel", vi: "Huỷ" },
+  save: { en: "Save", vi: "Lưu" },
+
+  // Catalog table columns / row actions.
+  colName: { en: "Name", vi: "Tên" },
+  colPrice: { en: "Price", vi: "Giá" },
+  colStatus: { en: "Status", vi: "Trạng thái" },
+  colCreated: { en: "Created", vi: "Đã tạo" },
+  active: { en: "Active", vi: "Đang bán" },
+  inactive: { en: "Inactive", vi: "Đang ẩn" },
+  rename: { en: "Rename", vi: "Đổi tên" },
+  deactivate: { en: "Deactivate", vi: "Ngừng bán" },
+  reactivate: { en: "Reactivate", vi: "Bán lại" },
+  noRowsYet: { en: "No {thing} yet", vi: "Chưa có {thing} nào" },
+
+  // Bundles card.
+  bundlesCardTitle: { en: "Credit bundles", vi: "Gói credit" },
+  bundlesTableLabel: { en: "Credit bundles", vi: "Gói credit" },
+  nameLabel: { en: "Name", vi: "Tên" },
+  priceLabel: { en: "Price", vi: "Giá" },
+  creditLabel: { en: "Credit", vi: "Tín dụng" },
+  bonusLabel: { en: "Bonus", vi: "Thưởng" },
+  priceCurrency: { en: "Price currency", vi: "Đơn vị giá" },
+  creditCurrency: { en: "Credit currency", vi: "Đơn vị tín dụng" },
+  bonusCurrency: { en: "Bonus currency", vi: "Đơn vị thưởng" },
+  createBundle: { en: "Create bundle", vi: "Tạo gói" },
+  creating: { en: "Creating…", vi: "Đang tạo…" },
+
+  // Plans card.
+  plansCardTitle: { en: "Subscription plans", vi: "Gói đăng ký" },
+  plansTableLabel: { en: "Subscription plans", vi: "Gói đăng ký" },
+  planCreditDetailLabel: { en: "Credit/period", vi: "Tín dụng/kỳ" },
+  creditPerPeriodLabel: { en: "Credit per period", vi: "Tín dụng mỗi kỳ" },
+  creditPerPeriodCurrency: {
+    en: "Credit per period currency",
+    vi: "Đơn vị tín dụng mỗi kỳ",
+  },
+  planPriceCurrency: { en: "Plan price currency", vi: "Đơn vị giá gói" },
+  periodDaysLabel: { en: "Period days", vi: "Số ngày kỳ" },
+  rateLimitLabel: { en: "Rate limit (req/min)", vi: "Giới hạn (req/phút)" },
+  createPlan: { en: "Create plan", vi: "Tạo gói đăng ký" },
+
+  // Help text.
+  amountsHelp: {
+    en: "USD prices are stored exactly as authored; the VND credit is derived once at creation and never recomputed.",
+    vi: "Giá USD được lưu nguyên bản khi nhập; tín dụng VND được quy đổi một lần khi tạo và không bao giờ tính lại.",
+  },
+
+  // Credit detail line (amounts are formatted numbers; only the words move).
+  creditDetail: {
+    en: "{credit} credit · {grant} grant (fixed at creation){bonus}",
+    vi: "{credit} tín dụng · {grant} tặng (cố định khi tạo){bonus}",
+  },
+  bonusPartUsd: { en: " + {amount} bonus", vi: " + {amount} thưởng" },
+  planDetailTail: { en: "{days}d · {rate}/min", vi: "{days} ngày · {rate}/phút" },
+
+  // Amount validation (shared shapes per field).
+  usdInvalid: {
+    en: "Enter a USD amount like {example} (up to two decimals, no sign).",
+    vi: "Nhập số USD dạng {example} (tối đa hai chữ số thập phân, không có dấu).",
+  },
+  vndPositive: {
+    en: "Enter a whole VND amount greater than 0.",
+    vi: "Nhập số VND nguyên lớn hơn 0.",
+  },
+  vndNonNegative: {
+    en: "Enter a whole VND amount of 0 or more.",
+    vi: "Nhập số VND nguyên từ 0 trở lên.",
+  },
+  periodInvalid: {
+    en: "Enter a whole number of days, at least 1.",
+    vi: "Nhập số ngày nguyên, ít nhất là 1.",
+  },
+  rateInvalid: {
+    en: "Rate limit is between 1 and 600 requests per minute.",
+    vi: "Giới hạn nằm trong khoảng 1 đến 600 request mỗi phút.",
+  },
+} as const satisfies Record<string, LocaleEntry>;
+
+export type BundlesT = (
+  key: keyof typeof adminBundlesCopy,
+  vars?: Record<string, string | number>,
+) => string;
 
 interface Bundle {
   id: string;
@@ -83,14 +186,15 @@ export function parseUsdAmount(raw: string): string | null {
   return s;
 }
 
-function useCatalogMutation(path: string, key: readonly unknown[]) {
+function useCatalogMutation(path: string, key: readonly unknown[], t: BundlesT) {
   const qc = useQueryClient();
-  const onError = (e: unknown) => toast.error(e instanceof ApiError ? e.message : "Request failed");
+  const onError = (e: unknown) =>
+    toast.error(e instanceof ApiError ? e.message : t("requestFailed"));
   const create = useMutation({
     mutationFn: (body: Record<string, number | string>) =>
       api<CatalogRow>(path, { method: "POST", body: JSON.stringify(body) }),
     onSuccess: () => {
-      toast("Created");
+      toast(t("createdToast"));
       void qc.invalidateQueries({ queryKey: key });
     },
     onError,
@@ -262,6 +366,7 @@ function RenameDialog({
   extra?: { label: string; value: string; onChange: (v: string) => void; invalid: boolean };
 }) {
   const [name, setName] = useState<string | null>(null);
+  const t = useT(adminBundlesCopy);
   const value = name ?? row?.name ?? "";
   return (
     <Dialog
@@ -275,14 +380,14 @@ function RenameDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Rename</DialogTitle>
-          <DialogDescription>Amounts cannot be changed after creation.</DialogDescription>
+          <DialogTitle>{t("renameDialogTitle")}</DialogTitle>
+          <DialogDescription>{t("renameDialogDescription")}</DialogDescription>
         </DialogHeader>
         <Input
           id="rename-name"
           value={value}
           onChange={(e) => setName(e.target.value)}
-          aria-label="New name"
+          aria-label={t("newNameLabel")}
           autoFocus
         />
         {extra && (
@@ -300,7 +405,7 @@ function RenameDialog({
         )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
-            Cancel
+            {t("cancel")}
           </Button>
           <Button
             disabled={value.trim().length === 0 || (extra?.invalid ?? false)}
@@ -309,7 +414,7 @@ function RenameDialog({
               setName(null);
             }}
           >
-            Save
+            {t("save")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -339,11 +444,12 @@ function CatalogTable<T extends CatalogRow>({
   /** Optional second editable field in the rename dialog (plans: rate limit). */
   renameExtra?: { label: string; value: string; onChange: (v: string) => void; invalid: boolean };
 }) {
+  const t = useT(adminBundlesCopy);
   const columns: ColumnDef<T, unknown>[] = [
-    { accessorKey: "name", header: "Name" },
+    { accessorKey: "name", header: t("colName") },
     {
       accessorKey: "price_vnd",
-      header: "Price",
+      header: t("colPrice"),
       cell: (c) => {
         const row = c.row.original;
         if (row.price_usd) {
@@ -366,13 +472,17 @@ function CatalogTable<T extends CatalogRow>({
     },
     {
       accessorKey: "active",
-      header: "Status",
+      header: t("colStatus"),
       cell: (c) =>
-        c.getValue<boolean>() ? <Badge>Active</Badge> : <Badge variant="secondary">Inactive</Badge>,
+        c.getValue<boolean>() ? (
+          <Badge>{t("active")}</Badge>
+        ) : (
+          <Badge variant="secondary">{t("inactive")}</Badge>
+        ),
     },
     {
       accessorKey: "created_at",
-      header: "Created",
+      header: t("colCreated"),
       cell: (c) => (
         <span className="font-mono text-xs">{formatDate(new Date(c.getValue<number>()))}</span>
       ),
@@ -386,10 +496,10 @@ function CatalogTable<T extends CatalogRow>({
         return (
           <span className="flex flex-wrap items-center gap-1">
             <Button size="sm" variant="outline" onClick={() => setRenaming(row)}>
-              Rename
+              {t("rename")}
             </Button>
             <Button size="sm" variant="outline" onClick={() => onSetActive(row, !row.active)}>
-              {row.active ? "Deactivate" : "Reactivate"}
+              {row.active ? t("deactivate") : t("reactivate")}
             </Button>
           </span>
         );
@@ -403,7 +513,7 @@ function CatalogTable<T extends CatalogRow>({
         <DataTable
           columns={columns}
           data={data}
-          empty={`No ${detailLabel.toLowerCase()} yet`}
+          empty={t("noRowsYet", { thing: detailLabel.toLowerCase() })}
           globalFilter=""
         />
       </ScrollPanel>
@@ -421,7 +531,8 @@ const emptyAmount = (): AmountInput => ({ currency: "USD", usd: "", vnd: "" });
 const zeroAmount = (): AmountInput => ({ currency: "USD", usd: "0", vnd: "0" });
 
 function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
-  const { create, update } = useCatalogMutation("/api/v1/admin/bundles", ["admin", "bundles"]);
+  const t = useT(adminBundlesCopy);
+  const { create, update } = useCatalogMutation("/api/v1/admin/bundles", ["admin", "bundles"], t);
   const [name, setName] = useState("");
   const [price, setPrice] = useState<AmountInput>(emptyAmount);
   const [credit, setCredit] = useState<AmountInput>(emptyAmount);
@@ -450,26 +561,26 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
   const priceError =
     price.currency === "USD"
       ? price.usd !== "" && priceUsdT === null
-        ? "Enter a USD amount like 9.99 (up to two decimals, no sign)."
+        ? t("usdInvalid", { example: "9.99" })
         : null
       : price.vnd !== "" && (priceN === null || priceN <= 0)
-        ? "Enter a whole VND amount greater than 0."
+        ? t("vndPositive")
         : null;
   const creditError =
     credit.currency === "USD"
       ? credit.usd !== "" && creditUsdT === null
-        ? "Enter a USD amount like 12 (up to two decimals, no sign)."
+        ? t("usdInvalid", { example: "12" })
         : null
       : credit.vnd !== "" && (creditN === null || creditN < 0)
-        ? "Enter a whole VND amount of 0 or more."
+        ? t("vndNonNegative")
         : null;
   const bonusError =
     bonus.currency === "USD"
       ? bonus.usd !== "" && bonusUsdT === null
-        ? "Enter a USD amount like 2.50 (up to two decimals, no sign)."
+        ? t("usdInvalid", { example: "2.50" })
         : null
       : bonus.vnd !== "" && (bonusN === null || bonusN < 0)
-        ? "Enter a whole VND amount of 0 or more."
+        ? t("vndNonNegative")
         : null;
 
   const reset = () => {
@@ -494,7 +605,7 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Credit bundles</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("bundlesCardTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <form
@@ -506,15 +617,15 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
         >
           <CreateField
             id="bundle-name"
-            label="Name"
+            label={t("nameLabel")}
             value={name}
             onChange={setName}
             placeholder="500k pack"
           />
           <AmountField
             idPrefix="bundle-price"
-            label="Price"
-            groupLabel="Price currency"
+            label={t("priceLabel")}
+            groupLabel={t("priceCurrency")}
             field={price}
             onChange={setPrice}
             usdPlaceholder="9.99"
@@ -523,8 +634,8 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
           />
           <AmountField
             idPrefix="bundle-credit"
-            label="Credit"
-            groupLabel="Credit currency"
+            label={t("creditLabel")}
+            groupLabel={t("creditCurrency")}
             field={credit}
             onChange={setCredit}
             usdPlaceholder="12"
@@ -533,8 +644,8 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
           />
           <AmountField
             idPrefix="bundle-bonus"
-            label="Bonus"
-            groupLabel="Bonus currency"
+            label={t("bonusLabel")}
+            groupLabel={t("bonusCurrency")}
             field={bonus}
             onChange={setBonus}
             usdPlaceholder="0"
@@ -542,34 +653,31 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
             error={bonusError}
           />
           <Button type="submit" disabled={!valid || create.isPending}>
-            {create.isPending ? "Creating…" : "Create bundle"}
+            {create.isPending ? t("creating") : t("createBundle")}
           </Button>
         </form>
-        <p className="text-xs text-muted-foreground">
-          USD prices are stored exactly as authored; the VND credit is derived once at creation and
-          never recomputed.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("amountsHelp")}</p>
         <CatalogTable
           data={query.data?.data ?? []}
-          tableLabel="Credit bundles"
-          detailLabel="Credit"
+          tableLabel={t("bundlesTableLabel")}
+          detailLabel={t("creditLabel")}
           detail={(b) => {
             // Each grant uses its OWN USD metadata, independent of the price
             // currency: mixed rows may pair USD price with VND credit or
             // vice versa, and legacy rows keep plain VND display.
             const bonusPart = b.bonus_usd
               ? Number(b.bonus_usd) > 0
-                ? ` + ${formatUsdAmountText(b.bonus_usd)} bonus`
+                ? t("bonusPartUsd", { amount: formatUsdAmountText(b.bonus_usd) })
                 : ""
               : b.bonus_vnd > 0
-                ? ` + ${formatVnd(b.bonus_vnd)} bonus`
+                ? t("bonusPartUsd", { amount: formatVnd(b.bonus_vnd) })
                 : "";
             if (b.credit_usd) {
-              return (
-                `${formatUsdAmountText(b.credit_usd)} credit · ${formatVnd(b.credit_vnd)} grant` +
-                ` (fixed at creation)` +
-                bonusPart
-              );
+              return t("creditDetail", {
+                credit: formatUsdAmountText(b.credit_usd),
+                grant: formatVnd(b.credit_vnd),
+                bonus: bonusPart,
+              });
             }
             return formatVnd(b.credit_vnd) + bonusPart;
           }}
@@ -584,10 +692,12 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
 }
 
 function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
-  const { create, update } = useCatalogMutation("/api/v1/admin/subscription-plans", [
-    "admin",
-    "subscription-plans",
-  ]);
+  const t = useT(adminBundlesCopy);
+  const { create, update } = useCatalogMutation(
+    "/api/v1/admin/subscription-plans",
+    ["admin", "subscription-plans"],
+    t,
+  );
   const [name, setName] = useState("");
   const [price, setPrice] = useState<AmountInput>(emptyAmount);
   const [credit, setCredit] = useState<AmountInput>(emptyAmount);
@@ -610,27 +720,22 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
   const priceError =
     price.currency === "USD"
       ? price.usd !== "" && priceUsdT === null
-        ? "Enter a USD amount like 9.99 (up to two decimals, no sign)."
+        ? t("usdInvalid", { example: "9.99" })
         : null
       : price.vnd !== "" && (priceN === null || priceN <= 0)
-        ? "Enter a whole VND amount greater than 0."
+        ? t("vndPositive")
         : null;
   const creditError =
     credit.currency === "USD"
       ? credit.usd !== "" && creditUsdT === null
-        ? "Enter a USD amount like 12 (up to two decimals, no sign)."
+        ? t("usdInvalid", { example: "12" })
         : null
       : credit.vnd !== "" && (creditN === null || creditN < 0)
-        ? "Enter a whole VND amount of 0 or more."
+        ? t("vndNonNegative")
         : null;
   const periodError =
-    period !== "" && (periodN === null || periodN < 1)
-      ? "Enter a whole number of days, at least 1."
-      : null;
-  const rateError =
-    rateLimit !== "" && rateInvalid(rateN)
-      ? "Rate limit is between 1 and 600 requests per minute."
-      : null;
+    period !== "" && (periodN === null || periodN < 1) ? t("periodInvalid") : null;
+  const rateError = rateLimit !== "" && rateInvalid(rateN) ? t("rateInvalid") : null;
   // Only the field's own active currency is validated; the hidden text of a
   // toggled field is dormant state, never part of the request body.
   const valid =
@@ -662,7 +767,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Subscription plans</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("plansCardTitle")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <form
@@ -674,15 +779,15 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
         >
           <CreateField
             id="plan-name"
-            label="Name"
+            label={t("nameLabel")}
             value={name}
             onChange={setName}
             placeholder="Monthly"
           />
           <AmountField
             idPrefix="plan-price"
-            label="Price"
-            groupLabel="Plan price currency"
+            label={t("priceLabel")}
+            groupLabel={t("planPriceCurrency")}
             field={price}
             onChange={setPrice}
             usdPlaceholder="9.99"
@@ -691,8 +796,8 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
           />
           <AmountField
             idPrefix="plan-credit"
-            label="Credit per period"
-            groupLabel="Credit per period currency"
+            label={t("creditPerPeriodLabel")}
+            groupLabel={t("creditPerPeriodCurrency")}
             field={credit}
             onChange={setCredit}
             usdPlaceholder="12"
@@ -701,7 +806,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
           />
           <CreateField
             id="plan-period"
-            label="Period days"
+            label={t("periodDaysLabel")}
             value={period}
             onChange={setPeriod}
             placeholder="30"
@@ -709,31 +814,33 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
           />
           <CreateField
             id="plan-rate"
-            label="Rate limit (req/min)"
+            label={t("rateLimitLabel")}
             value={rateLimit}
             onChange={setRateLimit}
             placeholder="15"
             error={rateError}
           />
           <Button type="submit" disabled={!valid || create.isPending}>
-            {create.isPending ? "Creating…" : "Create plan"}
+            {create.isPending ? t("creating") : t("createPlan")}
           </Button>
         </form>
-        <p className="text-xs text-muted-foreground">
-          USD prices are stored exactly as authored; the VND credit is derived once at creation and
-          never recomputed.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("amountsHelp")}</p>
         <CatalogTable
           data={query.data?.data ?? []}
-          tableLabel="Subscription plans"
-          detailLabel="Credit/period"
+          tableLabel={t("plansTableLabel")}
+          detailLabel={t("planCreditDetailLabel")}
           detail={(p) => {
             const credit = p.credit_per_period_usd
-              ? `${formatUsdAmountText(p.credit_per_period_usd)} credit · ${formatVnd(
-                  p.credit_per_period_vnd,
-                )} grant (fixed at creation)`
+              ? t("creditDetail", {
+                  credit: formatUsdAmountText(p.credit_per_period_usd),
+                  grant: formatVnd(p.credit_per_period_vnd),
+                  bonus: "",
+                })
               : formatVnd(p.credit_per_period_vnd);
-            return `${credit} / ${p.period_days}d · ${p.rate_limit_per_minute}/min`;
+            return `${credit} / ${t("planDetailTail", {
+              days: p.period_days,
+              rate: p.rate_limit_per_minute,
+            })}`;
           }}
           onRename={(id, n) =>
             update.mutate({
@@ -748,7 +855,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
             setRenameLimit(row ? String((row as Plan).rate_limit_per_minute) : "");
           }}
           renameExtra={{
-            label: "Rate limit (req/min)",
+            label: t("rateLimitLabel"),
             value: renameLimit,
             onChange: setRenameLimit,
             invalid: rateInvalid(parseIntVnd(renameLimit)),
@@ -760,6 +867,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
 }
 
 export default function AdminBundlesPage() {
+  const t = useT(adminBundlesCopy);
   const bundles = useAdminQuery<{ data: Bundle[] }>(["admin", "bundles"], "/api/v1/admin/bundles");
   const plans = useAdminQuery<{ data: Plan[] }>(
     ["admin", "subscription-plans"],
@@ -767,10 +875,7 @@ export default function AdminBundlesPage() {
   );
   return (
     <div className="mx-auto w-full max-w-5xl space-y-4">
-      <PageHeader
-        title="Bundles & plans"
-        description="Purchasable credit bundles and subscription plans. Amounts are fixed at creation; deactivate instead of deleting."
-      />
+      <PageHeader title={t("title")} description={t("description")} />
       <AdminGate query={bundles}>
         <BundlesCard query={bundles} />
       </AdminGate>

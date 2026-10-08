@@ -37,6 +37,7 @@ import { useT } from "../../lib/i18n/t";
 // emails, identifiers and role values (admin/user badges) are never translated.
 const usersCopy = {
   title: { en: "Users", vi: "Người dùng" },
+  usersTable: { en: "Users list", vi: "Danh sách người dùng" },
   description: { en: "Instance users.", vi: "Người dùng trên instance." },
   addUser: { en: "Add user", vi: "Thêm người dùng" },
   email: { en: "Email", vi: "Email" },
@@ -336,7 +337,12 @@ export function UsersTable({
 
   return (
     <>
-      <DataTable columns={columns} data={users} empty={t("noUsers")} />
+      <DataTable
+        columns={columns}
+        data={users}
+        empty={t("noUsers")}
+        scroll={{ label: t("usersTable") }}
+      />
       <Dialog
         open={toRemove !== null}
         onOpenChange={(open) => {

@@ -73,6 +73,7 @@ const membersCopy = {
     vi: "Xoá {email} khỏi workspace này?",
   },
   cancel: { en: "Cancel", vi: "Huỷ" },
+  membersTable: { en: "Members", vi: "Thành viên" },
   memberAdded: { en: "Member added", vi: "Đã thêm thành viên" },
   inviteFailed: { en: "Invite failed", vi: "Mời thất bại" },
   inviteByEmail: { en: "Invite by email", vi: "Mời qua email" },
@@ -196,6 +197,7 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
           columns={columns}
           data={members ?? []}
           empty={members?.length ? undefined : t("noMembers")}
+          scroll={{ label: t("membersTable") }}
         />
       </div>
 

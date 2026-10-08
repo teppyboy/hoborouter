@@ -32,6 +32,7 @@ import { queryClient } from "./lib/query-client";
 
 const AdminAudit = lazy(() => import("./pages/admin/audit"));
 const AdminCpa = lazy(() => import("./pages/admin/cpa"));
+const AdminRequestLog = lazy(() => import("./pages/admin/request-log"));
 const AdminBundles = lazy(() => import("./pages/admin/bundles"));
 const AdminPromotions = lazy(() => import("./pages/admin/promotions"));
 
@@ -212,6 +213,7 @@ const protectedRoutes = [
   protectedRoute("/admin/promotions", AdminPromotions),
   protectedRoute("/admin/payments", adminPayments),
   protectedRoute("/admin/system", adminSystem),
+  protectedRoute("/admin/request-log", AdminRequestLog),
   protectedRoute("/admin/cpa", AdminCpa),
   protectedRoute("/admin/audit", AdminAudit),
 ];

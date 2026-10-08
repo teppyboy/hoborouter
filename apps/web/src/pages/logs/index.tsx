@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { PageHeader, EmptyState, ErrorState, CopyButton } from "../../components/page";
+import { PageHeader, EmptyState, ErrorState, CopyButton, ScrollPanel } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import {
@@ -94,6 +94,7 @@ const logsCopy = {
   tokens: { en: "Tokens", vi: "Token" },
   cost: { en: "Cost", vi: "Chi phí" },
   status: { en: "Status", vi: "Trạng thái" },
+  logsTable: { en: "Request logs", vi: "Nhật ký request" },
   ttft: {
     en: "Time to first token (streaming requests only)",
     vi: "Thời gian tới token đầu (chỉ request streaming)",
@@ -365,7 +366,7 @@ export default function LogsPage() {
               {t("refresh")}
             </Button>
           </div>
-          <div className="rounded-lg border border-border">
+          <ScrollPanel label={t("logsTable")} stickyHeader>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -453,7 +454,7 @@ export default function LogsPage() {
                 })}
               </TableBody>
             </Table>
-          </div>
+          </ScrollPanel>
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>
               {t("showing", { start: rangeStart, end: rangeEnd, total: filtered.length })}

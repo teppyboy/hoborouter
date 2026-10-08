@@ -1,9 +1,8 @@
-import type { ColumnDef } from "@tanstack/react-table";
 import { CheckCircle2, XCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
-import { DataTable, PageHeader } from "../../components/page";
-import { formatDate, formatVnd } from "../../lib/format";
+import { PageHeader } from "../../components/page";
+import { useT } from "../../lib/i18n/t";
 import { AdminGate, useAdminQuery } from "./shared";
 
 interface AdminSystem {
@@ -15,80 +14,101 @@ interface AdminSystem {
   counts: { users: number; workspaces: number; models: number; requests: number };
 }
 
-interface AdminUsageLog {
-  id: string;
-  workspace_name: string;
-  provider: string;
-  public_model: string;
-  input_tokens: number;
-  output_tokens: number;
-  status: string;
-  charged_vnd: number;
-  created_at: number;
-}
+/** Instance-system card copy; USD/VND codes and DB values stay verbatim. */
+const systemCopy = {
+  pageTitle: { en: "System", vi: "Hệ thống" },
+  pageDesc: { en: "Instance health and status.", vi: "Tình trạng và trạng thái instance." },
+  cardTitle: { en: "System", vi: "Hệ thống" },
+  loading: { en: "Loading…", vi: "Đang tải…" },
+  loadFailed: {
+    en: "Failed to load system info",
+    vi: "Không tải được thông tin hệ thống",
+  },
+  gateway: { en: "Gateway", vi: "Gateway" },
+  usdVndRate: { en: "USD/VND rate", vi: "Tỷ giá USD/VND" },
+  payos: { en: "PayOS", vi: "PayOS" },
+  manualPayments: { en: "Manual payments", vi: "Thanh toán thủ công" },
+  dbJournal: { en: "DB journal mode", vi: "Chế độ journal DB" },
+  counts: { en: "Counts", vi: "Số liệu" },
+  on: { en: "on", vi: "bật" },
+  off: { en: "off", vi: "tắt" },
+  configured: { en: "configured", vi: "đã cấu hình" },
+  notConfigured: { en: "not configured", vi: "chưa cấu hình" },
+  enabled: { en: "enabled", vi: "bật" },
+  disabled: { en: "disabled", vi: "tắt" },
+  countsLine: {
+    en: "users {users} · workspaces {workspaces} · models {models} · requests {requests}",
+    vi: "người dùng {users} · workspace {workspaces} · mô hình {models} · yêu cầu {requests}",
+  },
+} as const;
 
 function SystemCard() {
+  const t = useT(systemCopy);
   const query = useAdminQuery<AdminSystem>(["admin", "system"], "/api/v1/admin/system");
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">System</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("cardTitle")}</CardTitle>
       </CardHeader>
       <CardContent>
         {query.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">{t("loading")}</p>
         ) : query.error ? (
           <p className="flex items-center gap-2 text-sm text-destructive">
             <XCircle className="size-4" />
-            {query.error instanceof Error ? query.error.message : "Failed to load system info"}
+            {query.error instanceof Error ? query.error.message : t("loadFailed")}
           </p>
         ) : (
           <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
             <div>
-              <dt className="text-muted-foreground">Gateway</dt>
+              <dt className="text-muted-foreground">{t("gateway")}</dt>
               <dd className="flex items-center gap-1.5">
                 {query.data.gateway_enabled ? (
                   <>
-                    <CheckCircle2 className="size-4" /> on
+                    <CheckCircle2 className="size-4" /> {t("on")}
                   </>
                 ) : (
                   <>
-                    <XCircle className="size-4" /> off
+                    <XCircle className="size-4" /> {t("off")}
                   </>
                 )}
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">USD/VND rate</dt>
+              <dt className="text-muted-foreground">{t("usdVndRate")}</dt>
               <dd className="font-mono text-xs">
                 {query.data.usd_vnd_rate.toLocaleString("vi-VN")}
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">PayOS</dt>
+              <dt className="text-muted-foreground">{t("payos")}</dt>
               <dd>
                 <Badge variant={query.data.payos_configured ? "default" : "outline"}>
-                  {query.data.payos_configured ? "configured" : "not configured"}
+                  {query.data.payos_configured ? t("configured") : t("notConfigured")}
                 </Badge>
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Manual payments</dt>
+              <dt className="text-muted-foreground">{t("manualPayments")}</dt>
               <dd>
                 <Badge variant={query.data.manual_payments ? "secondary" : "outline"}>
-                  {query.data.manual_payments ? "enabled" : "disabled"}
+                  {query.data.manual_payments ? t("enabled") : t("disabled")}
                 </Badge>
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">DB journal mode</dt>
+              <dt className="text-muted-foreground">{t("dbJournal")}</dt>
               <dd className="font-mono text-xs">{query.data.db.wal}</dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Counts</dt>
+              <dt className="text-muted-foreground">{t("counts")}</dt>
               <dd className="break-words font-mono text-xs">
-                users {query.data.counts.users} · workspaces {query.data.counts.workspaces} · models{" "}
-                {query.data.counts.models} · requests {query.data.counts.requests}
+                {t("countsLine", {
+                  users: query.data.counts.users,
+                  workspaces: query.data.counts.workspaces,
+                  models: query.data.counts.models,
+                  requests: query.data.counts.requests,
+                })}
               </dd>
             </div>
           </dl>
@@ -98,72 +118,13 @@ function SystemCard() {
   );
 }
 
-const usageColumns: ColumnDef<AdminUsageLog, unknown>[] = [
-  {
-    accessorKey: "created_at",
-    header: "Time",
-    cell: (c) => (
-      <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>
-    ),
-  },
-  { accessorKey: "workspace_name", header: "Workspace" },
-  {
-    accessorKey: "provider",
-    header: "Provider",
-    cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
-  },
-  {
-    accessorKey: "public_model",
-    header: "Model",
-    cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
-  },
-  {
-    accessorKey: "input_tokens",
-    header: "Tokens in/out",
-    cell: (c) => (
-      <span className="font-mono text-xs">
-        {c.row.original.input_tokens.toLocaleString()} /{" "}
-        {c.row.original.output_tokens.toLocaleString()}
-      </span>
-    ),
-  },
-  {
-    accessorKey: "charged_vnd",
-    header: "Charged",
-    cell: (c) => <span className="font-mono text-xs">{formatVnd(c.getValue<number>())}</span>,
-  },
-  { accessorKey: "status", header: "Status" },
-];
-
-function UsageLogsTable() {
-  const query = useAdminQuery<{ data: AdminUsageLog[] }>(
-    ["admin", "usage-logs"],
-    "/api/v1/admin/usage-logs",
-  );
-  return (
-    <div className="space-y-2">
-      <h2 className="text-sm font-medium">Usage logs</h2>
-      {query.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : query.error ? (
-        <p className="flex items-center gap-2 text-sm text-destructive">
-          <XCircle className="size-4" />
-          {query.error instanceof Error ? query.error.message : "Failed to load usage logs"}
-        </p>
-      ) : (
-        <DataTable columns={usageColumns} data={query.data.data} empty="No usage logs" />
-      )}
-    </div>
-  );
-}
-
 export default function AdminSystemPage() {
+  const t = useT(systemCopy);
   return (
     <div className="space-y-4">
-      <PageHeader title="System" description="Instance health and status." />
+      <PageHeader title={t("pageTitle")} description={t("pageDesc")} />
       <AdminGate query={useAdminQuery<unknown>(["admin", "system"], "/api/v1/admin/system")}>
         <SystemCard />
-        <UsageLogsTable />
       </AdminGate>
     </div>
   );

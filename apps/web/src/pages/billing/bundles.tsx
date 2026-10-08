@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -20,6 +20,16 @@ import { PageHeader, EmptyState, ErrorState } from "../../components/page";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Skeleton } from "../../components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../components/ui/dialog";
+import { useT } from "../../lib/i18n/t";
 
 interface Bundle {
   id: string;
@@ -126,6 +136,7 @@ export function CurrencyToggle({
   /** Authored-USD rows show exact USD text without any FX rate. */
   usdAvailable?: boolean;
 }) {
+  const t = useT(bundlesCopy);
   if (!hasRate(rate) && !usdAvailable) return null;
   return (
     <Button
@@ -133,7 +144,7 @@ export function CurrencyToggle({
       size="sm"
       onClick={() => onChange(currency === "USD" ? "VND" : "USD")}
     >
-      {currency === "USD" ? "Show VND" : "Show USD"}
+      {currency === "USD" ? t("showVnd") : t("showUsd")}
     </Button>
   );
 }
@@ -204,12 +215,13 @@ function bonusText(
   vnd: number,
   currency: DisplayCurrency,
   rate: number | undefined,
+  word: string,
 ): string | null {
   const authored = isUsdText(usd) && Number(usd) > 0;
   if (!authored && vnd <= 0) return null;
-  if (authored && (currency === "USD" || vnd <= 0)) return `+${formatUsdAmountText(usd!)} bonus`;
-  if (currency === "USD" && hasRate(rate)) return `+${formatUsdFromVnd(vnd, rate)} bonus`;
-  return `+ ${formatVnd(vnd)} bonus`;
+  if (authored && (currency === "USD" || vnd <= 0)) return `+${formatUsdAmountText(usd!)} ${word}`;
+  if (currency === "USD" && hasRate(rate)) return `+${formatUsdFromVnd(vnd, rate)} ${word}`;
+  return `+ ${formatVnd(vnd)} ${word}`;
 }
 
 /**
@@ -234,6 +246,7 @@ export function CardPrice({
   testId?: string;
   className?: string;
 }) {
+  const t = useT(bundlesCopy);
   if (isUsdText(priceUsd)) {
     const usd = formatUsdAmountText(priceUsd);
     return (
@@ -244,9 +257,7 @@ export function CardPrice({
         <p className="text-xs text-muted-foreground">
           = {currency === "USD" ? formatVnd(priceVnd) : usd}
         </p>
-        <p className="text-xs text-muted-foreground">
-          VND estimate; the final amount is fixed when the payment is created.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("vndEstimate")}</p>
       </div>
     );
   }
@@ -255,9 +266,467 @@ export function CardPrice({
   );
 }
 
+// Checkout + tab copy introduced with the selection-gated checkout. New
+// visible strings are bilingual; money values and API-derived data never are.
+const bundlesCopy = {
+  tabBundles: { en: "Credit bundles", vi: "Gói tín dụng" },
+  tabPlans: { en: "Subscription plans", vi: "Gói đăng ký" },
+  tabThroughput: { en: "Prepaid throughput", vi: "Thông lượng trả trước" },
+  select: { en: "Select", vi: "Chọn" },
+  checkout: { en: "Checkout", vi: "Thanh toán" },
+  price: { en: "Price", vi: "Giá" },
+  paymentMethod: { en: "Payment method", vi: "Phương thức thanh toán" },
+  manualTransfer: { en: "Manual transfer", vi: "Chuyển khoản thủ công" },
+  manualTransferBody: {
+    en: "Create a pending payment; an admin confirms it out-of-band.",
+    vi: "Tạo thanh toán chờ; quản trị viên sẽ xác nhận riêng.",
+  },
+  payos: { en: "PayOS", vi: "PayOS" },
+  payosBody: {
+    en: "Pay by bank app or QR at PayOS; you will be redirected there and the payment status here updates from the server.",
+    vi: "Thanh toán qua ứng dụng ngân hàng hoặc mã QR tại PayOS; bạn sẽ được chuyển hướng đến đó và trạng thái thanh toán ở đây cập nhật từ server.",
+  },
+  confirmPurchase: { en: "Confirm purchase", vi: "Xác nhận mua" },
+  confirmSubscription: { en: "Confirm subscription", vi: "Xác nhận đăng ký" },
+  confirmRenewal: { en: "Confirm renewal", vi: "Xác nhận gia hạn" },
+  cancel: { en: "Cancel", vi: "Hủy" },
+  creatingPayment: { en: "Creating payment…", vi: "Đang tạo thanh toán…" },
+
+  // Section headers, empty states and error fallbacks.
+  bundlesDesc: {
+    en: "Buy credit in fixed bundles; credit lands in the wallet once the payment settles.",
+    vi: "Mua tín dụng theo gói cố định; tín dụng sẽ vào ví sau khi thanh toán được xác nhận.",
+  },
+  plansDesc: {
+    en: "A plan credits the subscription balance each period; the gateway spends it first while the period is active.",
+    vi: "Gói đăng ký nạp vào số dư đăng ký mỗi kỳ; gateway ưu tiên dùng số dư này trong khi kỳ còn hiệu lực.",
+  },
+  throughputTitle: {
+    en: "Prepaid throughput allowance",
+    vi: "Khoản thông lượng trả trước",
+  },
+  throughputDesc: {
+    en: "Buy a fixed-window gateway admission cap for the whole workspace; it activates once the payment settles.",
+    vi: "Mua giới hạn tiếp nhận gateway theo cửa sổ cố định cho toàn bộ workspace; kích hoạt sau khi thanh toán được xác nhận.",
+  },
+  loadFailed: {
+    en: "Couldn't load this section. Check your connection and try again.",
+    vi: "Không tải được mục này. Vui lòng kiểm tra kết nối và thử lại.",
+  },
+  noBundles: { en: "No bundles available", vi: "Chưa có gói tín dụng nào" },
+  noBundlesDesc: {
+    en: "No credit bundles are on sale right now — check back later.",
+    vi: "Hiện chưa có gói tín dụng nào được bán — vui lòng quay lại sau.",
+  },
+  noPlans: { en: "No plans available", vi: "Chưa có gói đăng ký nào" },
+  noPlansDesc: {
+    en: "No subscription plans are on sale right now — check back later.",
+    vi: "Hiện chưa có gói đăng ký nào được bán — vui lòng quay lại sau.",
+  },
+  noThroughput: {
+    en: "No throughput products available",
+    vi: "Chưa có gói thông lượng nào",
+  },
+  noThroughputDesc: {
+    en: "No prepaid throughput allowance products are on sale right now — check back later.",
+    vi: "Hiện chưa có gói thông lượng trả trước nào được bán — vui lòng quay lại sau.",
+  },
+
+  // Currency toggle and card copy.
+  showVnd: { en: "Show VND", vi: "Hiện VND" },
+  showUsd: { en: "Show USD", vi: "Hiện USD" },
+  vndEstimate: {
+    en: "VND estimate; the final amount is fixed when the payment is created.",
+    vi: "Ước tính theo VND; số tiền cuối cùng được chốt khi tạo thanh toán.",
+  },
+  creditWord: { en: "credit", vi: "tín dụng" },
+  bonusWord: { en: "bonus", vi: "thưởng" },
+  daysWord: { en: "days", vi: "ngày" },
+  creditUsdExact: {
+    en: "Credit is the exact authored USD amount; the VND grant is fixed at creation.",
+    vi: "Tín dụng là đúng số USD đã đặt; mức VND được chốt khi tạo.",
+  },
+  creditVndFixed: {
+    en: "Credit is a fixed VND amount set at creation; USD shows the current-rate equivalent.",
+    vi: "Tín dụng là mức VND cố định đặt khi tạo; USD hiển thị theo tỷ giá hiện tại.",
+  },
+  paymentSettles: {
+    en: "Payment completes when the provider confirms; status shows on the Payments page.",
+    vi: "Thanh toán hoàn tất khi nhà cung cấp xác nhận; trạng thái hiển thị trên trang Thanh toán.",
+  },
+  upToRpm: {
+    en: "Up to {n} requests per minute on subscription credit",
+    vi: "Tối đa {n} yêu cầu mỗi phút bằng tín dụng đăng ký",
+  },
+
+  // Throughput allowance card and product cards.
+  admissionCap: {
+    en: "{n} requests/minute gateway admission cap",
+    vi: "Giới hạn tiếp nhận gateway {n} yêu cầu/phút",
+  },
+  requestsPerMinute: { en: "{n} requests/minute", vi: "{n} yêu cầu/phút" },
+  activeForDay: { en: "Active for {n} day", vi: "Hoạt động trong {n} ngày" },
+  activeForDays: { en: "Active for {n} days", vi: "Hoạt động trong {n} ngày" },
+  activeAllowance: { en: "Active allowance", vi: "Khoản thông lượng đang hoạt động" },
+  limiting: { en: "Limiting", vi: "Đang giới hạn" },
+  queued: { en: "Queued", vi: "Đang chờ" },
+  allowanceBody: {
+    en: "The allowance caps all gateway traffic for this workspace while the window is active. It grants no wallet credit and adds no wallet balance.",
+    vi: "Khoản thông lượng này giới hạn toàn bộ lưu lượng gateway của workspace trong khi cửa sổ còn hiệu lực. Nó không cấp tín dụng vào ví và không làm tăng số dư ví.",
+  },
+  throughputDisclaimer: {
+    en: THROUGHPUT_ALLOWANCE_DISCLAIMER,
+    vi: "Khoản thông lượng trả trước là giới hạn tiếp nhận của gateway cho workspace của bạn: trong khi cửa sổ còn hiệu lực, gateway tiếp nhận tối đa số yêu cầu mỗi phút đã mua. Nó không cấp tín dụng vào ví. Đây không phải cam kết về năng lực của nhà cung cấp và không phải cam kết ưu tiên.",
+  },
+
+  // Checkout success/error toasts (fallbacks only; server messages win).
+  redirectToPayos: {
+    en: "Redirecting to PayOS checkout…",
+    vi: "Đang chuyển hướng đến thanh toán PayOS…",
+  },
+  paymentCreated: {
+    en: "Payment created — waiting for admin confirmation",
+    vi: "Đã tạo thanh toán — đang chờ quản trị viên xác nhận",
+  },
+  purchaseFailed: { en: "Purchase failed", vi: "Mua thất bại" },
+
+  // Subscription status card.
+  yourSubscription: { en: "Your subscription", vi: "Gói đăng ký của bạn" },
+  periodEnds: { en: "Period ends", vi: "Kỳ kết thúc vào" },
+  expiredSuffix: { en: " (expired)", vi: " (đã hết hạn)" },
+  canceledSuffix: {
+    en: " (canceled — will not renew)",
+    vi: " (đã hủy — sẽ không tự gia hạn)",
+  },
+  rpmPlain: { en: "{n} requests per minute", vi: "{n} yêu cầu mỗi phút" },
+  renewing: { en: "Renewing…", vi: "Đang gia hạn…" },
+  renew: { en: "Renew", vi: "Gia hạn" },
+  canceling: { en: "Canceling…", vi: "Đang hủy…" },
+  cancelSubscription: { en: "Cancel subscription", vi: "Hủy đăng ký" },
+  subCanceledToast: {
+    en: "Subscription canceled — credit stays usable until the period ends",
+    vi: "Đã hủy đăng ký — tín dụng vẫn dùng được đến khi kỳ kết thúc",
+  },
+  cancelFailed: { en: "Cancel failed", vi: "Hủy thất bại" },
+  subRenewedToast: {
+    en: "Subscription renewed — renewal re-enabled for the next period",
+    vi: "Đã gia hạn đăng ký — đã bật lại tự gia hạn cho kỳ tiếp theo",
+  },
+  renewFailed: { en: "Renew failed", vi: "Gia hạn thất bại" },
+  subExpiredNote: {
+    en: "The period has ended; unused credit is forfeited. Paying for a plan again starts a new period.",
+    vi: "Kỳ đã kết thúc; tín dụng chưa dùng sẽ mất. Thanh toán lại gói sẽ bắt đầu kỳ mới.",
+  },
+  subCanceledNote: {
+    en: "Renew re-enables renewal (no charge now): the next plan payment renews the period. Credit stays usable until the period ends, then unused credit is forfeited.",
+    vi: "Gia hạn sẽ bật lại tự gia hạn (không tính phí bây giờ): lần thanh toán gói tiếp theo sẽ gia hạn kỳ. Tín dụng vẫn dùng được đến khi kỳ kết thúc, sau đó tín dụng chưa dùng sẽ mất.",
+  },
+  subActiveNote: {
+    en: "Canceling stops renewal only (will not renew): credit stays usable until the period ends, then unused credit is forfeited.",
+    vi: "Hủy chỉ dừng việc tự gia hạn (sẽ không tự gia hạn): tín dụng vẫn dùng được đến khi kỳ kết thúc, sau đó tín dụng chưa dùng sẽ mất.",
+  },
+  shownInUsd: {
+    en: "Shown in USD from the VND ledger.",
+    vi: "Hiển thị theo USD từ sổ cái VND.",
+  },
+};
+
+/** Known purchase-failure API codes mapped to friendly localized copy; any
+ * other ApiError surfaces the server's own message (details never hidden). */
+const purchaseErrorCopy = {
+  INACTIVE: {
+    en: "This product is no longer available",
+    vi: "Sản phẩm này hiện không còn bán",
+  },
+  NOT_FOUND: {
+    en: "This product no longer exists",
+    vi: "Sản phẩm này không còn tồn tại",
+  },
+  WORKSPACE_SUSPENDED: {
+    en: "Workspace is suspended",
+    vi: "Workspace bị tạm ngưng",
+  },
+} as const;
+
+/**
+ * Selection-gated checkout state: no payment method and no mutation exist
+ * until a product card's Select puts one here. Tab switches clear it.
+ */
+interface SelectedProduct {
+  kind: "bundle" | "plan" | "throughput";
+  id: string;
+  name: string;
+  priceVnd: number;
+  priceUsd?: string | null;
+}
+
+/** Same endpoints and payload shapes as the pre-dialog purchase flow. */
+function purchasePath(workspaceId: string, selected: SelectedProduct): string {
+  const kind =
+    selected.kind === "bundle"
+      ? "bundles"
+      : selected.kind === "plan"
+        ? "subscription-plans"
+        : "throughput-products";
+  return `/api/v1/workspaces/${workspaceId}/${kind}/${selected.id}/purchase`;
+}
+
+/**
+ * Everything the purchase mutation needs, captured at confirm time. The
+ * workspace and product travel as mutation variables (never read from a
+ * closure at completion time), so a slow POST can never bill or refresh the
+ * wrong workspace. `gen` is the page's selection generation at confirm time.
+ */
+interface PurchaseVars {
+  workspaceId: string;
+  selected: SelectedProduct;
+  provider: "manual" | "payos";
+  gen: number;
+}
+
+/**
+ * Checkout for the selected product. The body is remounted per selection
+ * (keyed by the caller) so a stale provider choice never survives switching
+ * products: selecting another product resets the checkout to manual.
+ */
+function CheckoutBody({
+  selected,
+  workspaceId,
+  payosAvailable,
+  subscribed,
+  rate,
+  liveSelectionGen,
+  onClose,
+  onNavigate,
+}: {
+  selected: SelectedProduct;
+  workspaceId: string | undefined;
+  payosAvailable: boolean;
+  subscribed: boolean;
+  rate: number | undefined;
+  /** Page-level selection generation ref; read at completion time. */
+  liveSelectionGen: { current: number };
+  onClose: () => void;
+  onNavigate: (href: string) => void;
+}) {
+  const t = useT(bundlesCopy);
+  const terr = useT(purchaseErrorCopy);
+  const queryClient = useQueryClient();
+
+  // Same provider semantics as the top-up form: manual default, collapses
+  // back to manual when the backend stops advertising PayOS.
+  const [providerChoice, setProviderChoice] = useState<"manual" | "payos">("manual");
+  const provider = payosAvailable && providerChoice === "payos" ? "payos" : "manual";
+
+  const buy = useMutation({
+    // Body is empty for manual so the request matches the plain manual
+    // purchase shape; provider is sent only for PayOS. No amounts are ever
+    // sent: the server charges its own VND price (money invariant).
+    mutationFn: (vars: PurchaseVars) =>
+      api<{ id: string; status: string; checkout_url: string }>(
+        purchasePath(vars.workspaceId, vars.selected),
+        {
+          method: "POST",
+          body: JSON.stringify(vars.provider === "payos" ? { provider: vars.provider } : {}),
+        },
+      ),
+    onSuccess: (payment: { id: string; status: string; checkout_url: string }, vars) => {
+      // Refresh history for the workspace the payment was created in — the
+      // captured one, never the currently active one.
+      void queryClient.invalidateQueries({ queryKey: ["payments", vars.workspaceId] });
+      if (vars.selected.kind === "plan") {
+        void queryClient.invalidateQueries({ queryKey: ["wallet", vars.workspaceId] });
+      }
+      // The checkout may have moved on while the POST was in flight (tab or
+      // product change, workspace switch). The dispatched payment is never
+      // canceled or deleted — only its success UX is dropped: navigate/toast
+      // only when the selection generation that confirmed is still current.
+      if (liveSelectionGen.current !== vars.gen) return;
+      onClose();
+      // Same redirect rule as the top-up: an absolute checkout URL must be a
+      // full browser navigation; a relative path (manual) stays in-app.
+      // Status is never read from query parameters.
+      if (!payment.checkout_url.startsWith("/")) {
+        toast(t("redirectToPayos"));
+        window.location.assign(payment.checkout_url);
+        return;
+      }
+      toast(t("paymentCreated"));
+      onNavigate(`/billing/payments?payment=${payment.id}`);
+    },
+    onError: (err: unknown, vars: PurchaseVars) => {
+      // Stale-generation guard: if the selection moved on while the POST was
+      // in flight (tab/product change), the error belongs to a checkout the
+      // user already left — surface nothing (the dispatch itself is not
+      // canceled; only the error UX is dropped, same as the success UX).
+      if (liveSelectionGen.current !== vars.gen) return;
+      // Known API codes map to friendly localized copy; other ApiErrors
+      // surface the server's own message so details are never hidden.
+      if (err instanceof ApiError) {
+        toast.error(
+          err.code in purchaseErrorCopy
+            ? terr(err.code as keyof typeof purchaseErrorCopy)
+            : err.message,
+        );
+      } else {
+        toast.error(t("purchaseFailed"));
+      }
+    },
+  });
+
+  const confirmLabel =
+    selected.kind === "plan"
+      ? subscribed
+        ? t("confirmRenewal")
+        : t("confirmSubscription")
+      : t("confirmPurchase");
+
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>{t("checkout")}</DialogTitle>
+        <DialogDescription>{selected.name}</DialogDescription>
+      </DialogHeader>
+      <div className="space-y-4">
+        <div>
+          <p className="text-xs text-muted-foreground">{t("price")}</p>
+          {/* VND leads (ledger truth); authored USD text still shows verbatim. */}
+          <CardPrice
+            priceVnd={selected.priceVnd}
+            priceUsd={selected.priceUsd}
+            currency="VND"
+            rate={rate}
+            testId="checkout-price"
+            className="font-mono text-xl font-semibold"
+          />
+        </div>
+        {payosAvailable && (
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">{t("paymentMethod")}</legend>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="checkout-payment-provider"
+                value="manual"
+                checked={provider === "manual"}
+                onChange={() => setProviderChoice("manual")}
+                className="mt-1"
+              />
+              <span>
+                {t("manualTransfer")}
+                <span className="block text-xs text-muted-foreground">
+                  {t("manualTransferBody")}
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="checkout-payment-provider"
+                value="payos"
+                checked={provider === "payos"}
+                onChange={() => setProviderChoice("payos")}
+                className="mt-1"
+              />
+              <span>
+                {t("payos")}
+                <span className="block text-xs text-muted-foreground">{t("payosBody")}</span>
+              </span>
+            </label>
+          </fieldset>
+        )}
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>
+          {t("cancel")}
+        </Button>
+        <Button
+          disabled={buy.isPending}
+          onClick={() =>
+            buy.isPending ||
+            buy.mutate({
+              workspaceId: workspaceId!,
+              selected,
+              provider,
+              gen: liveSelectionGen.current,
+            })
+          }
+        >
+          {buy.isPending ? t("creatingPayment") : confirmLabel}
+        </Button>
+      </DialogFooter>
+    </>
+  );
+}
+
+/**
+ * Selection-gated checkout dialog: renders nothing (and no payment methods)
+ * until a product is selected. The body is keyed by the selection so picking
+ * another product always starts from a fresh manual-default checkout.
+ */
+function CheckoutDialog({
+  selected,
+  workspaceId,
+  onClose,
+  payosAvailable,
+  subscribed,
+  rate,
+  liveSelectionGen,
+  onNavigate,
+}: {
+  selected: SelectedProduct | null;
+  workspaceId: string | undefined;
+  onClose: () => void;
+  payosAvailable: boolean;
+  subscribed: boolean;
+  rate: number | undefined;
+  /** Page-level selection generation ref; read at completion time. */
+  liveSelectionGen: { current: number };
+  onNavigate: (href: string) => void;
+}) {
+  return (
+    <Dialog open={selected !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        {selected && (
+          <CheckoutBody
+            key={`${selected.kind}:${selected.id}`}
+            selected={selected}
+            workspaceId={workspaceId}
+            payosAvailable={payosAvailable}
+            subscribed={subscribed}
+            rate={rate}
+            liveSelectionGen={liveSelectionGen}
+            onClose={onClose}
+            onNavigate={onNavigate}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function BillingBundlesPage() {
   const workspaceId = useCurrentWorkspaceId();
   const navigate = useNavigate();
+
+  const t = useT(bundlesCopy);
+  // One page-level selection: switching tabs clears it (and its provider
+  // choice), so no stale checkout can ever be confirmed from another tab.
+  // Every selection change bumps the generation: an in-flight purchase whose
+  // confirm-time generation is superseded drops only its success UX (the
+  // dispatched payment itself is never canceled or deleted).
+  const [selected, setSelected] = useState<SelectedProduct | null>(null);
+  const selectionGenRef = useRef(0);
+  const selectProduct = (s: SelectedProduct | null) => {
+    selectionGenRef.current += 1;
+    setSelected(s);
+  };
+  // A workspace switch invalidates any open checkout: the selection and its
+  // payment-method choice belonged to the previous workspace's catalog.
+  useEffect(() => {
+    selectProduct(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
 
   const bundles = useQuery({
     queryKey: ["bundles"],
@@ -281,9 +750,12 @@ export default function BillingBundlesPage() {
 
   // Same provider-availability pattern as the Credits top-up: the backend
   // gates PayOS on its credentials; manual is the default and the fallback.
+  // Fetched only once a product is selected (a cached result is reused as-is;
+  // no network requirement is invented for an open checkout).
   const methods = useQuery({
     queryKey: ["payment-methods"],
     queryFn: () => api<{ manual: boolean; payos: boolean }>("/api/v1/payment-methods"),
+    enabled: selected !== null,
     staleTime: 60_000,
     retry: false,
   });
@@ -309,106 +781,146 @@ export default function BillingBundlesPage() {
   const rate = catalogEnvelopeRate(bundles.data, plans.data, walletRate);
 
   return (
-    <div className="space-y-6">
-      <section aria-label="Credit bundles" className="space-y-4">
-        <PageHeader
-          title="Credit bundles"
-          description="Buy credit in fixed bundles; credit lands in the wallet once the payment settles."
-        />
+    <Tabs defaultValue="bundles" onValueChange={() => selectProduct(null)} className="space-y-6">
+      <TabsList>
+        <TabsTrigger value="bundles">{t("tabBundles")}</TabsTrigger>
+        <TabsTrigger value="plans">{t("tabPlans")}</TabsTrigger>
+        <TabsTrigger value="throughput">{t("tabThroughput")}</TabsTrigger>
+      </TabsList>
 
-        {bundles.isPending ? (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            <Skeleton className="h-44 w-full" />
-            <Skeleton className="h-44 w-full" />
-            <Skeleton className="h-44 w-full" />
-          </div>
-        ) : bundles.isError ? (
-          <ErrorState message={bundles.error.message} />
-        ) : bundles.data.data.length === 0 ? (
-          <EmptyState
-            icon={PackageIcon}
-            title="No bundles available"
-            description="No credit bundles are on sale right now — check back later."
-          />
-        ) : (
-          <BundleCards
-            bundles={bundles.data.data}
-            workspaceId={workspaceId ?? undefined}
-            payosAvailable={payosAvailable}
-            rate={rate}
-            onNavigate={(href) => void navigate({ href })}
-          />
-        )}
-      </section>
+      <TabsContent value="bundles">
+        <section aria-label={t("tabBundles")} className="space-y-4">
+          <PageHeader title={t("tabBundles")} description={t("bundlesDesc")} />
 
-      <section aria-label="Subscription plans" className="space-y-4">
-        <PageHeader
-          title="Subscription plans"
-          description="A plan credits the subscription balance each period; the gateway spends it first while the period is active."
-        />
-        {wallet.data?.subscription && workspaceId ? (
-          <SubscriptionStatusCard
-            subscription={wallet.data.subscription}
-            workspaceId={workspaceId}
-            rate={rate}
-          />
-        ) : null}
-        {plans.isPending ? (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            <Skeleton className="h-44 w-full" />
-            <Skeleton className="h-44 w-full" />
-          </div>
-        ) : plans.isError ? (
-          <ErrorState message={plans.error.message} />
-        ) : plans.data.data.length === 0 ? (
-          <EmptyState
-            icon={RefreshCwIcon}
-            title="No plans available"
-            description="No subscription plans are on sale right now — check back later."
-          />
-        ) : (
-          <PlanCards
-            plans={plans.data.data}
-            workspaceId={workspaceId ?? undefined}
-            payosAvailable={payosAvailable}
-            subscribed={subscribed}
-            rate={rate}
-            onNavigate={(href) => void navigate({ href })}
-          />
-        )}
-      </section>
+          {bundles.isPending ? (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              <Skeleton className="h-44 w-full" />
+              <Skeleton className="h-44 w-full" />
+              <Skeleton className="h-44 w-full" />
+            </div>
+          ) : bundles.isError ? (
+            <ErrorState
+              message={bundles.error instanceof ApiError ? bundles.error.message : t("loadFailed")}
+            />
+          ) : bundles.data.data.length === 0 ? (
+            <EmptyState
+              icon={PackageIcon}
+              title={t("noBundles")}
+              description={t("noBundlesDesc")}
+            />
+          ) : (
+            <BundleCards
+              bundles={bundles.data.data}
+              workspaceId={workspaceId ?? undefined}
+              selectedId={selected?.kind === "bundle" ? selected.id : null}
+              onSelect={(bundle) =>
+                selectProduct({
+                  kind: "bundle",
+                  id: bundle.id,
+                  name: bundle.name,
+                  priceVnd: bundle.price_vnd,
+                  priceUsd: bundle.price_usd ?? null,
+                })
+              }
+              rate={rate}
+            />
+          )}
+        </section>
+      </TabsContent>
 
-      <section aria-label="Prepaid throughput allowance" className="space-y-4">
-        <PageHeader
-          title="Prepaid throughput allowance"
-          description="Buy a fixed-window gateway admission cap for the whole workspace; it activates once the payment settles."
-        />
-        {allowance.data?.allowance && workspaceId ? (
-          <ThroughputAllowanceStatus allowance={allowance.data.allowance} />
-        ) : null}
-        {products.isPending ? (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            <Skeleton className="h-44 w-full" />
-          </div>
-        ) : products.isError ? (
-          <ErrorState message={products.error.message} />
-        ) : products.data.data.length === 0 ? (
-          <EmptyState
-            icon={GaugeIcon}
-            title="No throughput products available"
-            description="No prepaid throughput allowance products are on sale right now — check back later."
-          />
-        ) : (
-          <ThroughputProductCards
-            products={products.data.data}
-            workspaceId={workspaceId ?? undefined}
-            payosAvailable={payosAvailable}
-            onNavigate={(href) => void navigate({ href })}
-          />
-        )}
-        <p className="text-xs text-muted-foreground">{THROUGHPUT_ALLOWANCE_DISCLAIMER}</p>
-      </section>
-    </div>
+      <TabsContent value="plans">
+        <section aria-label={t("tabPlans")} className="space-y-4">
+          <PageHeader title={t("tabPlans")} description={t("plansDesc")} />
+          {wallet.data?.subscription && workspaceId ? (
+            <SubscriptionStatusCard
+              subscription={wallet.data.subscription}
+              workspaceId={workspaceId}
+              rate={rate}
+            />
+          ) : null}
+          {plans.isPending ? (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              <Skeleton className="h-44 w-full" />
+              <Skeleton className="h-44 w-full" />
+            </div>
+          ) : plans.isError ? (
+            <ErrorState
+              message={plans.error instanceof ApiError ? plans.error.message : t("loadFailed")}
+            />
+          ) : plans.data.data.length === 0 ? (
+            <EmptyState icon={RefreshCwIcon} title={t("noPlans")} description={t("noPlansDesc")} />
+          ) : (
+            <PlanCards
+              plans={plans.data.data}
+              workspaceId={workspaceId ?? undefined}
+              selectedId={selected?.kind === "plan" ? selected.id : null}
+              onSelect={(plan) =>
+                selectProduct({
+                  kind: "plan",
+                  id: plan.id,
+                  name: plan.name,
+                  priceVnd: plan.price_vnd,
+                  priceUsd: plan.price_usd ?? null,
+                })
+              }
+              rate={rate}
+            />
+          )}
+        </section>
+      </TabsContent>
+
+      <TabsContent value="throughput">
+        <section aria-label={t("throughputTitle")} className="space-y-4">
+          <PageHeader title={t("throughputTitle")} description={t("throughputDesc")} />
+          {allowance.data?.allowance && workspaceId ? (
+            <ThroughputAllowanceStatus allowance={allowance.data.allowance} />
+          ) : null}
+          {products.isPending ? (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              <Skeleton className="h-44 w-full" />
+            </div>
+          ) : products.isError ? (
+            <ErrorState
+              message={
+                products.error instanceof ApiError ? products.error.message : t("loadFailed")
+              }
+            />
+          ) : products.data.data.length === 0 ? (
+            <EmptyState
+              icon={GaugeIcon}
+              title={t("noThroughput")}
+              description={t("noThroughputDesc")}
+            />
+          ) : (
+            <ThroughputProductCards
+              products={products.data.data}
+              workspaceId={workspaceId ?? undefined}
+              selectedId={selected?.kind === "throughput" ? selected.id : null}
+              onSelect={(product) =>
+                selectProduct({
+                  kind: "throughput",
+                  id: product.id,
+                  name: product.name,
+                  priceVnd: product.price_vnd,
+                })
+              }
+            />
+          )}
+          <p className="text-xs text-muted-foreground">{t("throughputDisclaimer")}</p>
+        </section>
+      </TabsContent>
+
+      <CheckoutDialog
+        selected={selected}
+        workspaceId={workspaceId ?? undefined}
+        liveSelectionGen={selectionGenRef}
+        onClose={() => selectProduct(null)}
+        payosAvailable={payosAvailable}
+        subscribed={subscribed}
+        rate={rate}
+        onNavigate={(href) => void navigate({ href })}
+      />
+    </Tabs>
   );
 }
 
@@ -418,113 +930,47 @@ export default function BillingBundlesPage() {
  * "limiting" claim until it begins.
  */
 export function ThroughputAllowanceStatus({ allowance }: { allowance: ThroughputAllowanceInfo }) {
+  const t = useT(bundlesCopy);
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Active allowance</CardTitle>
+        <CardTitle className="text-base">{t("activeAllowance")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
         <p data-testid="throughput-allowance-rpm" className="font-mono">
-          {allowance.requests_per_minute} requests/minute gateway admission cap
+          {t("admissionCap", { n: allowance.requests_per_minute })}
         </p>
         <p className="text-muted-foreground">
-          {allowance.limiting ? "Limiting" : "Queued"}: {formatDate(allowance.starts_at)} –{" "}
+          {t(allowance.limiting ? "limiting" : "queued")}: {formatDate(allowance.starts_at)} –{" "}
           {formatDate(allowance.ends_at)}
         </p>
-        <p className="text-xs text-muted-foreground">
-          The allowance caps all gateway traffic for this workspace while the window is active. It
-          grants no wallet credit and adds no wallet balance.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("allowanceBody")}</p>
       </CardContent>
     </Card>
   );
 }
 
 /**
- * Throughput product cards + shared provider choice, mirroring BundleCards.
- * Extracted for render tests; the purchase goes through the mutation, so
- * static rendering fires nothing. VND-only product: the price shows the
- * integer VND amount.
+ * Throughput product cards, selection-gated like BundleCards. Extracted for
+ * render tests; cards fire nothing — the checkout dialog owns the purchase.
+ * VND-only product: the price shows the integer VND amount.
  */
 export function ThroughputProductCards({
   products,
   workspaceId,
-  payosAvailable,
-  onNavigate,
+  selectedId,
+  onSelect,
 }: {
   products: ThroughputProduct[];
   workspaceId: string | undefined;
-  payosAvailable: boolean;
-  onNavigate: (href: string) => void;
+  /** Highlight hook for the selected card; the dialog itself lives above. */
+  selectedId: string | null;
+  onSelect: (product: ThroughputProduct) => void;
 }) {
-  const queryClient = useQueryClient();
-  const [providerChoice, setProviderChoice] = useState<"manual" | "payos">("manual");
-  const provider = payosAvailable && providerChoice === "payos" ? "payos" : "manual";
-
-  const buy = useMutation({
-    mutationFn: (productId: string) =>
-      api<{ id: string; status: string; checkout_url: string }>(
-        `/api/v1/workspaces/${workspaceId}/throughput-products/${productId}/purchase`,
-        {
-          method: "POST",
-          body: JSON.stringify(provider === "payos" ? { provider } : {}),
-        },
-      ),
-    onSuccess: async (payment: { id: string; status: string; checkout_url: string }) => {
-      void queryClient.invalidateQueries({ queryKey: ["payments", workspaceId] });
-      if (!payment.checkout_url.startsWith("/")) {
-        toast("Redirecting to PayOS checkout…");
-        window.location.assign(payment.checkout_url);
-        return;
-      }
-      toast("Payment created — waiting for admin confirmation");
-      onNavigate(`/billing/payments?payment=${payment.id}`);
-    },
-    onError: (err: unknown) => {
-      toast.error(err instanceof ApiError ? err.message : "Purchase failed");
-    },
-  });
+  const t = useT(bundlesCopy);
 
   return (
     <div className="space-y-4">
-      {payosAvailable && (
-        <fieldset className="space-y-2">
-          <legend className="text-sm font-medium">Payment method</legend>
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="radio"
-              name="throughput-payment-provider"
-              value="manual"
-              checked={provider === "manual"}
-              onChange={() => setProviderChoice("manual")}
-              className="mt-1"
-            />
-            <span>
-              Manual transfer
-              <span className="block text-xs text-muted-foreground">
-                Create a pending payment; an admin confirms it out-of-band.
-              </span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="radio"
-              name="throughput-payment-provider"
-              value="payos"
-              checked={provider === "payos"}
-              onChange={() => setProviderChoice("payos")}
-              className="mt-1"
-            />
-            <span>
-              PayOS
-              <span className="block text-xs text-muted-foreground">
-                Pay by bank app or QR at PayOS; you will be redirected there and the payment status
-                here updates from the server.
-              </span>
-            </span>
-          </label>
-        </fieldset>
-      )}
       {/* min-w-0 on cards: nothing may force the page wider than 375px. */}
       <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {products.map((product) => (
@@ -534,7 +980,7 @@ export function ThroughputProductCards({
             </CardHeader>
             <CardContent className="flex min-w-0 flex-1 flex-col gap-3">
               <div>
-                <p className="text-xs text-muted-foreground">Price</p>
+                <p className="text-xs text-muted-foreground">{t("price")}</p>
                 <p
                   data-testid={`throughput-price-${product.id}`}
                   className="font-mono text-xl font-semibold"
@@ -543,127 +989,60 @@ export function ThroughputProductCards({
                 </p>
               </div>
               <div className="text-sm">
-                <p className="font-mono">{product.requests_per_minute} requests/minute</p>
+                <p className="font-mono">
+                  {t("requestsPerMinute", { n: product.requests_per_minute })}
+                </p>
                 <p className="text-xs text-muted-foreground">
-                  Active for {product.duration_days} {product.duration_days === 1 ? "day" : "days"}
+                  {t(product.duration_days === 1 ? "activeForDay" : "activeForDays", {
+                    n: product.duration_days,
+                  })}
                 </p>
               </div>
               <Button
                 className="mt-auto w-full"
-                disabled={!workspaceId || buy.isPending}
-                onClick={() => buy.mutate(product.id)}
+                disabled={!workspaceId}
+                aria-pressed={selectedId === product.id}
+                onClick={() => onSelect(product)}
               >
-                {buy.isPending ? "Creating payment…" : "Buy"}
+                {t("select")}
               </Button>
             </CardContent>
           </Card>
         ))}
       </div>
-      <p className="text-xs text-muted-foreground">{THROUGHPUT_ALLOWANCE_DISCLAIMER}</p>
+      <p className="text-xs text-muted-foreground">{t("throughputDisclaimer")}</p>
     </div>
   );
 }
 
 /**
- * Bundle cards + shared provider choice. Extracted for render tests; the
- * purchase goes through the mutation, so static rendering fires nothing.
+ * Bundle cards, selection-gated: Buy became Select — the checkout dialog
+ * (page-level) owns the payment method and the purchase mutation, so cards
+ * fire nothing. Extracted for render tests; static rendering fires nothing.
  */
 export function BundleCards({
   bundles,
   workspaceId,
-  payosAvailable,
+  selectedId,
+  onSelect,
   rate,
-  onNavigate,
 }: {
   bundles: Bundle[];
   workspaceId: string | undefined;
-  payosAvailable: boolean;
+  /** Highlight hook for the selected card; the dialog itself lives above. */
+  selectedId: string | null;
+  onSelect: (bundle: Bundle) => void;
   /** Backend FX rate; undefined (older backend) keeps VND-only display. */
   rate?: number;
-  onNavigate: (href: string) => void;
 }) {
-  const queryClient = useQueryClient();
-
   // USD is the canonical display currency; without a rate the section stays
   // VND-only (behavior-preserving fallback).
   const [currency, setCurrency] = useState<DisplayCurrency>("USD");
-
-  // One provider choice shared by all cards, identical semantics to the
-  // top-up form: manual default, collapses back to manual when the backend
-  // stops advertising PayOS.
-  const [providerChoice, setProviderChoice] = useState<"manual" | "payos">("manual");
-  const provider = payosAvailable && providerChoice === "payos" ? "payos" : "manual";
-
-  const buy = useMutation({
-    // Body is empty for manual so the request matches the plain manual
-    // purchase shape; provider is sent only for PayOS.
-    mutationFn: (bundleId: string) =>
-      api<{ id: string; status: string; checkout_url: string }>(
-        `/api/v1/workspaces/${workspaceId}/bundles/${bundleId}/purchase`,
-        {
-          method: "POST",
-          body: JSON.stringify(provider === "payos" ? { provider } : {}),
-        },
-      ),
-    onSuccess: async (payment: { id: string; status: string; checkout_url: string }) => {
-      void queryClient.invalidateQueries({ queryKey: ["payments", workspaceId] });
-      // Same redirect rule as the top-up: an absolute checkout URL must be a
-      // full browser navigation; a relative path (manual) stays in-app.
-      // Status is never read from query parameters.
-      if (!payment.checkout_url.startsWith("/")) {
-        toast("Redirecting to PayOS checkout…");
-        window.location.assign(payment.checkout_url);
-        return;
-      }
-      toast("Payment created — waiting for admin confirmation");
-      onNavigate(`/billing/payments?payment=${payment.id}`);
-    },
-    onError: (err: unknown) => {
-      toast.error(err instanceof ApiError ? err.message : "Purchase failed");
-    },
-  });
+  const t = useT(bundlesCopy);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        {payosAvailable && (
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium">Payment method</legend>
-            <label className="flex items-start gap-2 text-sm">
-              <input
-                type="radio"
-                name="bundle-payment-provider"
-                value="manual"
-                checked={provider === "manual"}
-                onChange={() => setProviderChoice("manual")}
-                className="mt-1"
-              />
-              <span>
-                Manual transfer
-                <span className="block text-xs text-muted-foreground">
-                  Create a pending payment; an admin confirms it out-of-band.
-                </span>
-              </span>
-            </label>
-            <label className="flex items-start gap-2 text-sm">
-              <input
-                type="radio"
-                name="bundle-payment-provider"
-                value="payos"
-                checked={provider === "payos"}
-                onChange={() => setProviderChoice("payos")}
-                className="mt-1"
-              />
-              <span>
-                PayOS
-                <span className="block text-xs text-muted-foreground">
-                  Pay by bank app or QR at PayOS; you will be redirected there and the payment
-                  status here updates from the server.
-                </span>
-              </span>
-            </label>
-          </fieldset>
-        )}
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <CurrencyToggle
           currency={currency}
           rate={rate}
@@ -683,7 +1062,7 @@ export function BundleCards({
             </CardHeader>
             <CardContent className="flex min-w-0 flex-1 flex-col gap-3">
               <div>
-                <p className="text-xs text-muted-foreground">Price</p>
+                <p className="text-xs text-muted-foreground">{t("price")}</p>
                 <CardPrice
                   priceVnd={bundle.price_vnd}
                   priceUsd={bundle.price_usd}
@@ -695,10 +1074,17 @@ export function BundleCards({
               </div>
               <div className="text-sm">
                 <p className="font-mono">
-                  {grantText(bundle.credit_usd, bundle.credit_vnd, currency, rate)} credit
+                  {grantText(bundle.credit_usd, bundle.credit_vnd, currency, rate)}{" "}
+                  {t("creditWord")}
                 </p>
                 {(() => {
-                  const bonus = bonusText(bundle.bonus_usd, bundle.bonus_vnd, currency, rate);
+                  const bonus = bonusText(
+                    bundle.bonus_usd,
+                    bundle.bonus_vnd,
+                    currency,
+                    rate,
+                    t("bonusWord"),
+                  );
                   return bonus ? (
                     <p className="font-mono text-xs text-emerald-600 dark:text-emerald-400">
                       {bonus}
@@ -706,133 +1092,55 @@ export function BundleCards({
                   ) : null;
                 })()}
                 {isUsdText(bundle.credit_usd) ? (
-                  <p className="text-xs text-muted-foreground">
-                    Credit is the exact authored USD amount; the VND grant is fixed at creation.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("creditUsdExact")}</p>
                 ) : isUsdText(bundle.price_usd) ? (
-                  <p className="text-xs text-muted-foreground">
-                    Credit is a fixed VND amount set at creation; USD shows the current-rate
-                    equivalent.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("creditVndFixed")}</p>
                 ) : null}
               </div>
               <Button
                 className="mt-auto w-full"
-                disabled={!workspaceId || buy.isPending}
-                onClick={() => buy.mutate(bundle.id)}
+                disabled={!workspaceId}
+                aria-pressed={selectedId === bundle.id}
+                onClick={() => onSelect(bundle)}
               >
-                {buy.isPending ? "Creating payment…" : "Buy"}
+                {t("select")}
               </Button>
             </CardContent>
           </Card>
         ))}
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        Payment completes when the provider confirms; status shows on the Payments page.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("paymentSettles")}</p>
     </div>
   );
 }
 
 /**
- * Subscription plan cards + shared provider choice, mirroring BundleCards.
- * Extracted for render tests; static rendering fires nothing. The button
- * label is Subscribe normally and Renew while the workspace has an active,
- * unexpired subscription (a settled plan payment renews the period).
+ * Subscription plan cards, selection-gated like BundleCards: Subscribe/Renew
+ * wording moved into the checkout dialog's confirm label; cards fire nothing.
  */
 export function PlanCards({
   plans,
   workspaceId,
-  payosAvailable,
-  subscribed,
+  selectedId,
+  onSelect,
   rate,
-  onNavigate,
 }: {
   plans: Plan[];
   workspaceId: string | undefined;
-  payosAvailable: boolean;
-  subscribed: boolean;
+  /** Highlight hook for the selected card; the dialog itself lives above. */
+  selectedId: string | null;
+  onSelect: (plan: Plan) => void;
   /** Backend FX rate; undefined (older backend) keeps VND-only display. */
   rate?: number;
-  onNavigate: (href: string) => void;
 }) {
-  const queryClient = useQueryClient();
-
   // USD canonical display, same rules as BundleCards.
   const [currency, setCurrency] = useState<DisplayCurrency>("USD");
-
-  const [providerChoice, setProviderChoice] = useState<"manual" | "payos">("manual");
-  const provider = payosAvailable && providerChoice === "payos" ? "payos" : "manual";
-
-  const buy = useMutation({
-    mutationFn: (planId: string) =>
-      api<{ id: string; status: string; checkout_url: string }>(
-        `/api/v1/workspaces/${workspaceId}/subscription-plans/${planId}/purchase`,
-        {
-          method: "POST",
-          body: JSON.stringify(provider === "payos" ? { provider } : {}),
-        },
-      ),
-    onSuccess: async (payment: { id: string; status: string; checkout_url: string }) => {
-      void queryClient.invalidateQueries({ queryKey: ["payments", workspaceId] });
-      void queryClient.invalidateQueries({ queryKey: ["wallet", workspaceId] });
-      // Same redirect rule as the bundle purchase: absolute URL = provider
-      // checkout, relative path (manual) stays in-app.
-      if (!payment.checkout_url.startsWith("/")) {
-        toast("Redirecting to PayOS checkout…");
-        window.location.assign(payment.checkout_url);
-        return;
-      }
-      toast("Payment created — waiting for admin confirmation");
-      onNavigate(`/billing/payments?payment=${payment.id}`);
-    },
-    onError: (err: unknown) => {
-      toast.error(err instanceof ApiError ? err.message : "Purchase failed");
-    },
-  });
+  const t = useT(bundlesCopy);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        {payosAvailable && (
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium">Payment method</legend>
-            <label className="flex items-start gap-2 text-sm">
-              <input
-                type="radio"
-                name="plan-payment-provider"
-                value="manual"
-                checked={provider === "manual"}
-                onChange={() => setProviderChoice("manual")}
-                className="mt-1"
-              />
-              <span>
-                Manual transfer
-                <span className="block text-xs text-muted-foreground">
-                  Create a pending payment; an admin confirms it out-of-band.
-                </span>
-              </span>
-            </label>
-            <label className="flex items-start gap-2 text-sm">
-              <input
-                type="radio"
-                name="plan-payment-provider"
-                value="payos"
-                checked={provider === "payos"}
-                onChange={() => setProviderChoice("payos")}
-                className="mt-1"
-              />
-              <span>
-                PayOS
-                <span className="block text-xs text-muted-foreground">
-                  Pay by bank app or QR at PayOS; you will be redirected there and the payment
-                  status here updates from the server.
-                </span>
-              </span>
-            </label>
-          </fieldset>
-        )}
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <CurrencyToggle
           currency={currency}
           rate={rate}
@@ -852,7 +1160,7 @@ export function PlanCards({
             </CardHeader>
             <CardContent className="flex min-w-0 flex-1 flex-col gap-3">
               <div>
-                <p className="text-xs text-muted-foreground">Price</p>
+                <p className="text-xs text-muted-foreground">{t("price")}</p>
                 <CardPrice
                   priceVnd={plan.price_vnd}
                   priceUsd={plan.price_usd}
@@ -870,39 +1178,33 @@ export function PlanCards({
                     currency,
                     rate,
                   )}{" "}
-                  credit / {plan.period_days} days
+                  {t("creditWord")} / {plan.period_days} {t("daysWord")}
                 </p>
                 {!!plan.rate_limit_per_minute && (
                   <p className="text-xs text-muted-foreground">
-                    Up to {plan.rate_limit_per_minute} requests per minute on subscription credit
+                    {t("upToRpm", { n: plan.rate_limit_per_minute })}
                   </p>
                 )}
                 {isUsdText(plan.credit_per_period_usd) ? (
-                  <p className="text-xs text-muted-foreground">
-                    Credit is the exact authored USD amount; the VND grant is fixed at creation.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("creditUsdExact")}</p>
                 ) : isUsdText(plan.price_usd) ? (
-                  <p className="text-xs text-muted-foreground">
-                    Credit is a fixed VND amount set at creation; USD shows the current-rate
-                    equivalent.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("creditVndFixed")}</p>
                 ) : null}
               </div>
               <Button
                 className="mt-auto w-full"
-                disabled={!workspaceId || buy.isPending}
-                onClick={() => buy.mutate(plan.id)}
+                disabled={!workspaceId}
+                aria-pressed={selectedId === plan.id}
+                onClick={() => onSelect(plan)}
               >
-                {buy.isPending ? "Creating payment…" : subscribed ? "Renew" : "Subscribe"}
+                {t("select")}
               </Button>
             </CardContent>
           </Card>
         ))}
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        Payment completes when the provider confirms; status shows on the Payments page.
-      </p>
+      <p className="text-xs text-muted-foreground">{t("paymentSettles")}</p>
     </div>
   );
 }
@@ -924,6 +1226,7 @@ export function SubscriptionStatusCard({
 }) {
   const queryClient = useQueryClient();
   const [currency, setCurrency] = useState<DisplayCurrency>("USD");
+  const t = useT(bundlesCopy);
 
   const cancel = useMutation({
     mutationFn: () =>
@@ -933,10 +1236,10 @@ export function SubscriptionStatusCard({
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["wallet", workspaceId] });
-      toast("Subscription canceled — credit stays usable until the period ends");
+      toast(t("subCanceledToast"));
     },
     onError: (err: unknown) => {
-      toast.error(err instanceof ApiError ? err.message : "Cancel failed");
+      toast.error(err instanceof ApiError ? err.message : t("cancelFailed"));
     },
   });
 
@@ -951,10 +1254,10 @@ export function SubscriptionStatusCard({
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["wallet", workspaceId] });
-      toast("Subscription renewed — renewal re-enabled for the next period");
+      toast(t("subRenewedToast"));
     },
     onError: (err: unknown) => {
-      toast.error(err instanceof ApiError ? err.message : "Renew failed");
+      toast.error(err instanceof ApiError ? err.message : t("renewFailed"));
     },
   });
 
@@ -962,7 +1265,7 @@ export function SubscriptionStatusCard({
   return (
     <div className="min-w-0 rounded-lg border border-border p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-sm font-semibold">Your subscription</p>
+        <p className="text-sm font-semibold">{t("yourSubscription")}</p>
         <p className="text-xs text-muted-foreground">{subscription.plan_name}</p>
       </div>
       <Amount
@@ -973,18 +1276,18 @@ export function SubscriptionStatusCard({
         className={`mt-1 font-mono text-2xl font-semibold ${subscription.expired ? "text-muted-foreground" : ""}`}
       />
       <p className="mt-1 text-sm">
-        Period ends <span className="font-mono">{formatDate(subscription.period_end)}</span>
-        {subscription.expired ? " (expired)" : ""}
-        {subscription.canceled && !subscription.expired ? " (canceled — will not renew)" : ""}
+        {t("periodEnds")} <span className="font-mono">{formatDate(subscription.period_end)}</span>
+        {subscription.expired ? t("expiredSuffix") : ""}
+        {subscription.canceled && !subscription.expired ? t("canceledSuffix") : ""}
       </p>
       <p className="text-sm text-muted-foreground">
-        {subscription.rate_limit_per_minute} requests per minute
+        {t("rpmPlain", { n: subscription.rate_limit_per_minute })}
       </p>
       {!subscription.expired && (
         <div className="mt-2 flex flex-wrap items-center gap-3">
           {subscription.canceled ? (
             <Button size="sm" disabled={renew.isPending} onClick={() => renew.mutate()}>
-              {renew.isPending ? "Renewing…" : "Renew"}
+              {renew.isPending ? t("renewing") : t("renew")}
             </Button>
           ) : (
             <Button
@@ -993,7 +1296,7 @@ export function SubscriptionStatusCard({
               disabled={cancel.isPending}
               onClick={() => cancel.mutate()}
             >
-              {cancel.isPending ? "Canceling…" : "Cancel subscription"}
+              {cancel.isPending ? t("canceling") : t("cancelSubscription")}
             </Button>
           )}
           <CurrencyToggle currency={currency} rate={rate} onChange={setCurrency} />
@@ -1001,11 +1304,11 @@ export function SubscriptionStatusCard({
       )}
       <p className="mt-2 text-xs text-muted-foreground">
         {subscription.expired
-          ? "The period has ended; unused credit is forfeited. Paying for a plan again starts a new period."
+          ? t("subExpiredNote")
           : subscription.canceled
-            ? "Renew re-enables renewal (no charge now): the next plan payment renews the period. Credit stays usable until the period ends, then unused credit is forfeited."
-            : "Canceling stops renewal only (will not renew): credit stays usable until the period ends, then unused credit is forfeited."}{" "}
-        {usd !== null ? "Shown in USD from the VND ledger." : ""}
+            ? t("subCanceledNote")
+            : t("subActiveNote")}{" "}
+        {usd !== null ? t("shownInUsd") : ""}
       </p>
     </div>
   );

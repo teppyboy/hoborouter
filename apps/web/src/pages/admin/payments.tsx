@@ -23,6 +23,7 @@ import { useT } from "../../lib/i18n/t";
 // Admin payments copy: inline LocaleEntry set (see lib/i18n/common.ts).
 const adminPaymentsCopy = {
   title: { en: "Payments", vi: "Thanh toán" },
+  paymentsTable: { en: "Payments list", vi: "Danh sách thanh toán" },
   description: {
     en: "Top-up payments across workspaces.",
     vi: "Thanh toán nạp tín dụng trên mọi workspace.",
@@ -236,6 +237,7 @@ export function PaymentsTable({
         globalFilter={value}
         onGlobalFilterChange={setSearch}
         empty={t("noPayments")}
+        scroll={{ label: t("paymentsTable") }}
       />
       <Dialog open={toComplete !== null} onOpenChange={(open) => !open && setToComplete(null)}>
         <DialogContent>

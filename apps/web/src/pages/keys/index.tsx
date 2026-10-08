@@ -66,6 +66,7 @@ const keysCopy = {
   keyRemoved: { en: "Key removed", vi: "Đã xoá key" },
   removeFailed: { en: "Remove failed", vi: "Xoá thất bại" },
   title: { en: "API keys", vi: "API key" },
+  keysTable: { en: "Keys list", vi: "Danh sách key" },
   description: {
     en: "Keys authenticate requests to the router. Admin/owner only.",
     vi: "Key dùng để xác thực request tới router. Chỉ dành cho quản trị/chủ sở hữu.",
@@ -339,6 +340,7 @@ export default function KeysPage() {
           data={keysQuery.data ?? []}
           globalFilter={filter}
           onGlobalFilterChange={setFilter}
+          scroll={{ label: t("keysTable") }}
         />
       )}
 

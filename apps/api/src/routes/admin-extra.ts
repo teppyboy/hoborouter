@@ -262,7 +262,7 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
       {
         detail: {
           tags: ["Admin"],
-          summary: "List usage logs",
+          summary: "List usage logs (request log)",
           security: [{ cookieAuth: [] }],
         },
       },
@@ -270,6 +270,8 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
         // raw_payload excluded — may contain upstream response data.
+        // upstream_model excluded too: upstream model IDs are private
+        // (AGENTS.md); admins see the public model only.
         const rows = await db
           .select({
             id: usageLogs.id,
@@ -278,7 +280,6 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
             key_prefix: apiKeys.key_prefix,
             provider: usageLogs.provider,
             public_model: usageLogs.public_model,
-            upstream_model: usageLogs.upstream_model,
             input_tokens: usageLogs.input_tokens,
             output_tokens: usageLogs.output_tokens,
             cached_input_tokens: usageLogs.cached_input_tokens,
@@ -289,13 +290,53 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
             upstream_cost_usd_micro: usageLogs.upstream_cost_usd_micro,
             charged_vnd: usageLogs.charged_vnd,
             created_at: usageLogs.created_at,
+            api_key_id: usageLogs.api_key_id,
           })
           .from(usageLogs)
           .innerJoin(workspaces, eq(workspaces.id, usageLogs.workspace_id))
+          // leftJoin (no deleted_at filter): soft-deleted keys keep their history.
           .leftJoin(apiKeys, eq(apiKeys.id, usageLogs.api_key_id))
           .orderBy(desc(usageLogs.created_at))
           .limit(200);
-        return json({ data: rows });
+        // Actor identity: requests/usage_logs record no user, so the actor is
+        // the KEY CREATOR from the key.create audit (earliest audit wins on
+        // duplicates, like the payments initiator above) — clearly labeled
+        // actor_source so it is never mistaken for the actual caller. The
+        // workspace owner is never claimed. Historical keys without an audit
+        // yield actor null (unknown). Batched queries, no N+1.
+        const keyIds = [
+          ...new Set(rows.map((r) => r.api_key_id).filter((v): v is string => v !== null)),
+        ];
+        const creators = new Map<
+          string,
+          { id: string; name: string | null; email: string | null } | null
+        >();
+        if (keyIds.length > 0) {
+          const audits = await db
+            .select({
+              target: auditLog.target,
+              actor_id: auditLog.actor_user_id,
+              name: users.name,
+              email: users.email,
+            })
+            .from(auditLog)
+            .leftJoin(users, eq(users.id, auditLog.actor_user_id))
+            .where(and(eq(auditLog.action, "key.create"), inArray(auditLog.target, keyIds)))
+            .orderBy(auditLog.created_at, auditLog.id);
+          for (const a of audits) {
+            if (creators.has(a.target)) continue;
+            creators.set(
+              a.target,
+              a.actor_id ? { id: a.actor_id, name: a.name, email: a.email } : null,
+            );
+          }
+        }
+        return json({
+          data: rows.map(({ api_key_id, ...r }) => {
+            const actor = api_key_id ? (creators.get(api_key_id) ?? null) : null;
+            return { ...r, actor, actor_source: actor ? "key_creator" : null };
+          }),
+        });
       },
     )
     .get(

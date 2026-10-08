@@ -1,11 +1,13 @@
 // Instance-admin CPA management page. Contracts mirror
 // apps/api/src/routes/admin-cpa-mutations.ts (mutations) and the read surface
 // that actually exists: GET /api/v1/admin/cpa/health, the redacted
-// /api/v1/admin/cpa/management/config proxy, and GET /api/v1/admin/cpa/models.
-// There is deliberately no list read for api keys / auth files / aliases —
-// those sections are write-only forms against the mutation contracts.
-// Every mutation passes through an explicit confirm dialog; secret inputs are
-// write-only (type=password) and are never rendered back.
+// /api/v1/admin/cpa/management/config proxy, and GET /api/v1/admin/cpa/models
+// (rendered once, in the single "CPA models" section: alias-resolved model
+// table plus the alias/exclusion forms). There is deliberately no list read
+// for api keys / auth files / aliases — those sections are write-only forms
+// against the mutation contracts. Every mutation passes through an explicit
+// confirm dialog; secret inputs are write-only (type=password) and are never
+// rendered back.
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -18,7 +20,7 @@ import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import type { ColumnDef } from "@tanstack/react-table";
-import { DataTable, PageHeader } from "../../components/page";
+import { DataTable, PageHeader, ScrollPanel } from "../../components/page";
 import {
   Dialog,
   DialogContent,
@@ -28,6 +30,7 @@ import {
   DialogTitle,
 } from "../../components/ui/dialog";
 import { api } from "../../lib/api";
+import { useT, useLocaleEntry, type LocaleEntry } from "../../lib/i18n/t";
 import { AdminGate, useAdminQuery } from "./shared";
 
 // ── Backend contracts (admin-cpa-mutations.ts) ─────────────────────────────
@@ -193,21 +196,68 @@ const PROXY_URL_RE = /^(https?|socks5h?):\/\/[^\s]+$/;
 
 // ── Shared plumbing ─────────────────────────────────────────────────────────
 
+// Shared CPA-page copy: confirm dialog chrome, the danger disclosure and the
+// generic request-failure fallback. Card-specific dicts live next to the card.
+const cpaSharedCopy = {
+  confirmAction: { en: "Confirm action", vi: "Xác nhận thao tác" },
+  cancel: { en: "Cancel", vi: "Hủy" },
+  confirm: { en: "Confirm", vi: "Xác nhận" },
+  danger: {
+    en: "This talks to the pinned CPA management API and cannot be undone on this page.",
+    vi: "Thao tác này gọi trực tiếp API quản trị CPA và không thể hoàn tác trên trang này.",
+  },
+  requestFailed: { en: "Request failed", vi: "Yêu cầu thất bại" },
+} as const;
+
+/**
+ * Localized display strings for the known validation errors returned by
+ * `parseAliasesJson`. The function's English error contract is preserved
+ * (exported + tested); only the toast display maps to the active locale.
+ * Unknown (dynamic) errors surface raw instead of being hidden.
+ */
+const aliasValidationErrorCopy = {
+  "Invalid JSON": { en: "Invalid JSON", vi: "JSON không hợp lệ" },
+  "Expected a JSON array": { en: "Expected a JSON array", vi: "Phải là mảng JSON" },
+  "Each alias must be an object": {
+    en: "Each alias must be an object",
+    vi: "Mỗi alias phải là một đối tượng",
+  },
+  "Each alias needs non-empty name and alias": {
+    en: "Each alias needs non-empty name and alias",
+    vi: "Mỗi alias cần name và alias khác rỗng",
+  },
+  "fork must be a boolean": { en: "fork must be a boolean", vi: "fork phải là boolean" },
+  "display_name must be a string": {
+    en: "display_name must be a string",
+    vi: "display_name phải là chuỗi",
+  },
+  "force_mapping must be a boolean": {
+    en: "force_mapping must be a boolean",
+    vi: "force_mapping phải là boolean",
+  },
+  "At most 200 aliases per channel": {
+    en: "At most 200 aliases per channel",
+    vi: "Tối đa 200 alias mỗi kênh",
+  },
+} as const;
+
 type CpaMethod = "PATCH" | "PUT" | "POST" | "DELETE";
 
 function useCpaMutation(
   method: CpaMethod,
   path: string,
-  successMsg: string,
+  successMsg: LocaleEntry,
   onSuccessExtra?: () => void,
 ) {
+  const success = useLocaleEntry(successMsg);
+  const t = useT(cpaSharedCopy);
   return useMutation({
     mutationFn: (body: unknown) => api(path, { method, body: JSON.stringify(body) }),
     onSuccess: () => {
-      toast(successMsg);
+      toast(success);
       onSuccessExtra?.();
     },
-    onError: (e) => toast.error(e instanceof Error ? e.message : `${method} ${path} failed`),
+    onError: (e) => toast.error(e instanceof Error ? e.message : t("requestFailed")),
   });
 }
 
@@ -219,6 +269,7 @@ interface ConfirmRequest {
 
 /** Confirm dialog plumbing: every CPA mutation routes through `confirm(...)`. */
 function useConfirm() {
+  const t = useT(cpaSharedCopy);
   const [request, setRequest] = useState<ConfirmRequest | null>(null);
   const confirm = (r: ConfirmRequest) => setRequest(r);
   const dialog = (
@@ -226,12 +277,12 @@ function useConfirm() {
       {request && (
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Confirm action</DialogTitle>
+            <DialogTitle>{t("confirmAction")}</DialogTitle>
             <DialogDescription>{request.description}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRequest(null)}>
-              Cancel
+              {t("cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -241,7 +292,7 @@ function useConfirm() {
                 action();
               }}
             >
-              Confirm
+              {t("confirm")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -250,8 +301,6 @@ function useConfirm() {
   );
   return { confirm, dialog };
 }
-
-const danger = "This talks to the pinned CPA management API and cannot be undone on this page.";
 
 // ── Health ──────────────────────────────────────────────────────────────────
 
@@ -264,25 +313,38 @@ interface CpaHealth {
   checked_at: string;
 }
 
+const healthCopy = {
+  title: { en: "CPA health", vi: "Sức khỏe CPA" },
+  checking: { en: "Checking…", vi: "Đang kiểm tra…" },
+  unreachable: { en: "CPA unreachable", vi: "Không kết nối được CPA" },
+  managementApi: { en: "Management API", vi: "API quản trị" },
+  proxyEndpoint: { en: "Proxy endpoint", vi: "Endpoint proxy" },
+  healthy: { en: "Healthy ({status})", vi: "Hoạt động ({status})" },
+  down: { en: "Down ({status})", vi: "Mất kết nối ({status})" },
+  checkLatency: { en: "Check latency", vi: "Độ trễ kiểm tra" },
+  cpaHost: { en: "CPA host", vi: "Máy chủ CPA" },
+} as const;
+
 export function CpaHealthCard() {
+  const t = useT(healthCopy);
   const query = useAdminQuery<CpaHealth>(["admin", "cpa-health"], "/api/v1/admin/cpa/health");
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">CPA health</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("title")}</CardTitle>
       </CardHeader>
       <CardContent>
         {query.isPending ? (
-          <p className="text-sm text-muted-foreground">Checking…</p>
+          <p className="text-sm text-muted-foreground">{t("checking")}</p>
         ) : query.error ? (
           <p className="flex items-center gap-2 text-sm text-destructive">
             <XCircle className="size-4" />
-            {query.error instanceof Error ? query.error.message : "CPA unreachable"}
+            {query.error instanceof Error ? query.error.message : t("unreachable")}
           </p>
         ) : (
           <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
             <div>
-              <dt className="text-muted-foreground">Management API</dt>
+              <dt className="text-muted-foreground">{t("managementApi")}</dt>
               <dd className="flex items-center gap-1.5">
                 {query.data.management_api.healthy ? (
                   <CheckCircle2 className="size-4" />
@@ -290,12 +352,12 @@ export function CpaHealthCard() {
                   <XCircle className="size-4" />
                 )}
                 {query.data.management_api.healthy
-                  ? `Healthy (${query.data.management_api.http_status})`
-                  : `Down (${query.data.management_api.http_status})`}
+                  ? t("healthy", { status: query.data.management_api.http_status })
+                  : t("down", { status: query.data.management_api.http_status })}
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Proxy endpoint</dt>
+              <dt className="text-muted-foreground">{t("proxyEndpoint")}</dt>
               <dd className="flex items-center gap-1.5">
                 {query.data.proxy_endpoint.healthy ? (
                   <CheckCircle2 className="size-4" />
@@ -303,16 +365,16 @@ export function CpaHealthCard() {
                   <XCircle className="size-4" />
                 )}
                 {query.data.proxy_endpoint.healthy
-                  ? `Healthy (${query.data.proxy_endpoint.http_status})`
-                  : `Down (${query.data.proxy_endpoint.http_status})`}
+                  ? t("healthy", { status: query.data.proxy_endpoint.http_status })
+                  : t("down", { status: query.data.proxy_endpoint.http_status })}
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Check latency</dt>
+              <dt className="text-muted-foreground">{t("checkLatency")}</dt>
               <dd className="font-mono text-xs">{query.data.latency_ms} ms</dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">CPA host</dt>
+              <dt className="text-muted-foreground">{t("cpaHost")}</dt>
               <dd className="font-mono text-xs">{query.data.cpa_host}</dd>
             </div>
           </dl>
@@ -324,64 +386,164 @@ export function CpaHealthCard() {
 
 // ── Config YAML (read = redacted proxy; write = dangerous full replace) ────
 
-function ConfigCard() {
+// ConfigCard copy: inline LocaleEntry set (see lib/i18n/common.ts). YAML
+// content, placeholders and identifiers stay untranslated.
+const configCopy = {
+  title: { en: "Config", vi: "Cấu hình" },
+  loading: { en: "Loading current config…", vi: "Đang tải cấu hình hiện tại…" },
+  loadError: { en: "Failed to load config", vi: "Không tải được cấu hình" },
+  showCurrent: {
+    en: "View current config",
+    vi: "Xem cấu hình hiện tại",
+  },
+  hideCurrent: { en: "Hide current config", vi: "Ẩn cấu hình hiện tại" },
+  newLabel: {
+    en: "New config.yaml (full replace)",
+    vi: "config.yaml mới (thay thế toàn bộ)",
+  },
+  save: { en: "Save config", vi: "Lưu cấu hình" },
+  replaceTitle: { en: "Replace CPA config.yaml", vi: "Thay thế config.yaml của CPA" },
+  replaceDesc: {
+    en: "This replaces the entire upstream config file.",
+    vi: "Thao tác này thay thế toàn bộ tệp cấu hình upstream.",
+  },
+  fullscreen: {
+    en: "Fullscreen edit",
+    vi: "Chỉnh sửa toàn màn hình",
+  },
+  fullscreenTitle: {
+    en: "New config.yaml (full replace)",
+    vi: "config.yaml mới (thay thế toàn bộ)",
+  },
+  fullscreenDesc: {
+    en: "The editor starts empty on purpose: the current config is redacted, so it can never be pasted back. This replaces the entire upstream config file.",
+    vi: "Trình soạn thảo luôn trống ban đầu: cấu hình hiện tại đã bị che thông tin nhạy cảm nên không thể dán lại. Thao tác này thay thế toàn bộ tệp cấu hình upstream.",
+  },
+  saved: { en: "Config saved", vi: "Đã lưu cấu hình" },
+} as const;
+
+/**
+ * Single write-only YAML editor for the dangerous full-replace config PUT.
+ * The editable textarea never starts from the redacted read: the proxy output
+ * contains "[REDACTED]" placeholders, and pasting them back would write
+ * placeholders into real secret fields upstream. The redacted current config
+ * is only a collapsible read-only <pre> preview (never a textarea), so the
+ * two surfaces cannot be confused or round-tripped.
+ */
+export function ConfigCard() {
   const { confirm, dialog } = useConfirm();
+  const t = useT(configCopy);
+  const tS = useT(cpaSharedCopy);
   const query = useAdminQuery<unknown>(
     ["admin", "cpa-config"],
     "/api/v1/admin/cpa/management/config",
   );
   const [yaml, setYaml] = useState("");
-  const save = useCpaMutation("PUT", "/api/v1/admin/cpa/config", "Config saved", () => {
+  const [fullscreen, setFullscreen] = useState(false);
+  const [showCurrent, setShowCurrent] = useState(false);
+  const save = useCpaMutation("PUT", "/api/v1/admin/cpa/config", configCopy.saved, () => {
     setYaml("");
+    setFullscreen(false);
   });
+
+  // One logical editor rendered either inline or inside the fullscreen Dialog
+  // (never both at once), so the draft survives the mode switch.
+  const editor = (
+    <Textarea
+      id="cpa-config-yaml"
+      rows={fullscreen ? 16 : 8}
+      className="font-mono text-xs"
+      value={yaml}
+      onChange={(e) => setYaml(e.target.value)}
+      placeholder="port: 8317 …"
+      aria-label={t("newLabel")}
+    />
+  );
+  const saveButton = (
+    <Button
+      size="sm"
+      disabled={save.isPending || yaml.trim().length === 0}
+      onClick={() =>
+        confirm({
+          title: t("replaceTitle"),
+          description: `${t("replaceDesc")} ${tS("danger")}`,
+          action: () => save.mutate({ config_yaml: yaml, confirm: true }),
+        })
+      }
+    >
+      {t("save")}
+    </Button>
+  );
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Config</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         {query.isPending ? (
-          <p className="text-sm text-muted-foreground">Loading current config…</p>
+          <p className="text-sm text-muted-foreground">{t("loading")}</p>
         ) : query.error ? (
           <p className="text-sm text-destructive">
-            {query.error instanceof Error ? query.error.message : "Failed to load config"}
+            {query.error instanceof Error ? query.error.message : t("loadError")}
           </p>
         ) : (
           <div className="space-y-1">
-            <Label htmlFor="cpa-config-current">Current (secrets redacted by the API)</Label>
-            <Textarea
-              id="cpa-config-current"
-              readOnly
-              rows={8}
-              className="font-mono text-xs"
-              value={JSON.stringify(query.data, null, 2)}
-            />
+            <Button
+              size="sm"
+              variant="outline"
+              aria-expanded={showCurrent}
+              aria-label={showCurrent ? t("hideCurrent") : t("showCurrent")}
+              onClick={() => setShowCurrent((v) => !v)}
+            >
+              {showCurrent ? t("hideCurrent") : t("showCurrent")}
+            </Button>
+            {showCurrent && (
+              <pre
+                id="cpa-config-current"
+                aria-readonly="true"
+                className="max-h-64 overflow-auto rounded-md border border-border bg-muted/40 p-2 font-mono text-xs whitespace-pre-wrap"
+              >
+                {JSON.stringify(query.data, null, 2)}
+              </pre>
+            )}
           </div>
         )}
-        <div className="space-y-1">
-          <Label htmlFor="cpa-config-yaml">New config.yaml (full replace)</Label>
-          <Textarea
-            id="cpa-config-yaml"
-            rows={8}
-            className="font-mono text-xs"
-            value={yaml}
-            onChange={(e) => setYaml(e.target.value)}
-            placeholder="port: 8317 …"
-          />
+        {!fullscreen && (
+          <div className="space-y-1">
+            <Label htmlFor="cpa-config-yaml">{t("newLabel")}</Label>
+            {editor}
+          </div>
+        )}
+        <div className="flex flex-wrap gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label={t("fullscreen")}
+            disabled={fullscreen}
+            onClick={() => setFullscreen(true)}
+          >
+            {t("fullscreen")}
+          </Button>
+          {!fullscreen && saveButton}
         </div>
-        <Button
-          size="sm"
-          disabled={save.isPending || yaml.trim().length === 0}
-          onClick={() =>
-            confirm({
-              title: "Replace CPA config.yaml",
-              description: `This replaces the entire upstream config file. ${danger}`,
-              action: () => save.mutate({ config_yaml: yaml, confirm: true }),
-            })
-          }
+        <Dialog
+          open={fullscreen}
+          onOpenChange={(open) => {
+            if (!open) setFullscreen(false);
+          }}
         >
-          Save config
-        </Button>
+          <DialogContent
+            aria-label={t("fullscreenTitle")}
+            className="h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-[calc(100dvw-2rem)]"
+          >
+            <DialogHeader>
+              <DialogTitle>{t("fullscreenTitle")}</DialogTitle>
+              <DialogDescription>{t("fullscreenDesc")}</DialogDescription>
+            </DialogHeader>
+            {fullscreen && editor}
+            <DialogFooter>{saveButton}</DialogFooter>
+          </DialogContent>
+        </Dialog>
         {dialog}
       </CardContent>
     </Card>
@@ -390,20 +552,102 @@ function ConfigCard() {
 
 // ── Routing strategy, flags, retry tuning, proxy URL ───────────────────────
 
+const routingCopy = {
+  title: { en: "Routing & flags", vi: "Định tuyến & cờ" },
+  strategyLabel: {
+    en: "Credential routing strategy",
+    vi: "Chiến lược định tuyến credential",
+  },
+  useStrategy: { en: "Use {strategy}", vi: "Dùng {strategy}" },
+  setStrategyTitle: {
+    en: "Set routing strategy",
+    vi: "Đặt chiến lược định tuyến",
+  },
+  setStrategyDesc: {
+    en: 'Set the CPA credential routing strategy to "{strategy}"?',
+    vi: 'Đặt chiến lược định tuyến credential của CPA thành "{strategy}"?',
+  },
+  flagsLabel: { en: "Boolean config flags", vi: "Cờ cấu hình boolean" },
+  setFlagOn: { en: "Set {flag} on", vi: "Bật {flag}" },
+  setFlagOff: { en: "Set {flag} off", vi: "Tắt {flag}" },
+  toggleFlagTitle: { en: "Toggle CPA flag", vi: "Bật/tắt cờ CPA" },
+  enableFlagDesc: {
+    en: 'Enable "{flag}" upstream?',
+    vi: 'Bật "{flag}" phía upstream?',
+  },
+  disableFlagDesc: {
+    en: 'Disable "{flag}" upstream?',
+    vi: 'Tắt "{flag}" phía upstream?',
+  },
+  on: { en: "on", vi: "bật" },
+  off: { en: "off", vi: "tắt" },
+  retryLabel: {
+    en: "Retry tuning (integers 0–1000, blank = leave unchanged)",
+    vi: "Tinh chỉnh retry (số nguyên 0–1000, bỏ trống = giữ nguyên)",
+  },
+  retryInvalid: {
+    en: "Retry values must be integers between 0 and 1000",
+    vi: "Giá trị retry phải là số nguyên từ 0 đến 1000",
+  },
+  retryTitle: { en: "Update retry tuning", vi: "Cập nhật tinh chỉnh retry" },
+  retryDesc: {
+    en: "Send the changed retry fields to the CPA management API?",
+    vi: "Gửi các trường retry đã thay đổi tới API quản trị CPA?",
+  },
+  applyRetry: { en: "Apply retry tuning", vi: "Áp dụng tinh chỉnh retry" },
+  proxyLabel: {
+    en: "Upstream proxy URL (redirects all CPA traffic)",
+    vi: "URL proxy upstream (chuyển hướng toàn bộ lưu lượng CPA)",
+  },
+  proxyInvalid: {
+    en: "Proxy URL must be an http(s) or socks5(h) URL",
+    vi: "URL proxy phải là URL http(s) hoặc socks5(h)",
+  },
+  setProxyTitle: { en: "Set upstream proxy URL", vi: "Đặt URL proxy upstream" },
+  setProxyDesc: {
+    en: "All CPA upstream traffic will go through {value}.",
+    vi: "Toàn bộ lưu lượng upstream của CPA sẽ đi qua {value}.",
+  },
+  setProxyBtn: { en: "Set proxy URL", vi: "Đặt URL proxy" },
+  clearProxyTitle: { en: "Clear upstream proxy URL", vi: "Xóa URL proxy upstream" },
+  clearProxyDesc: {
+    en: "CPA will connect directly again.",
+    vi: "CPA sẽ kết nối trực tiếp trở lại.",
+  },
+  clearProxyBtn: { en: "Clear proxy URL", vi: "Xóa URL proxy" },
+  strategyUpdated: {
+    en: "Routing strategy updated",
+    vi: "Đã cập nhật chiến lược định tuyến",
+  },
+  flagUpdated: { en: "Flag updated", vi: "Đã cập nhật cờ" },
+  retryUpdated: {
+    en: "Retry tuning updated",
+    vi: "Đã cập nhật tinh chỉnh retry",
+  },
+  proxySet: { en: "Proxy URL set", vi: "Đã đặt URL proxy" },
+  proxyCleared: { en: "Proxy URL cleared", vi: "Đã xóa URL proxy" },
+} as const;
+
 function RoutingCard() {
   const { confirm, dialog } = useConfirm();
+  const t = useT(routingCopy);
+  const tS = useT(cpaSharedCopy);
   const strategy = useCpaMutation(
     "PUT",
     "/api/v1/admin/cpa/routing/strategy",
-    "Routing strategy updated",
+    routingCopy.strategyUpdated,
   );
-  const flags = useCpaMutation("PATCH", "/api/v1/admin/cpa/config/flags", "Flag updated");
-  const retry = useCpaMutation("PUT", "/api/v1/admin/cpa/config/retry", "Retry tuning updated");
-  const setProxy = useCpaMutation("PUT", "/api/v1/admin/cpa/config/proxy-url", "Proxy URL set");
+  const flags = useCpaMutation("PATCH", "/api/v1/admin/cpa/config/flags", routingCopy.flagUpdated);
+  const retry = useCpaMutation("PUT", "/api/v1/admin/cpa/config/retry", routingCopy.retryUpdated);
+  const setProxy = useCpaMutation(
+    "PUT",
+    "/api/v1/admin/cpa/config/proxy-url",
+    routingCopy.proxySet,
+  );
   const clearProxy = useCpaMutation(
     "DELETE",
     "/api/v1/admin/cpa/config/proxy-url",
-    "Proxy URL cleared",
+    routingCopy.proxyCleared,
   );
   const [retryForm, setRetryForm] = useState<Record<RetryField, string>>({
     request_retry: "",
@@ -414,22 +658,22 @@ function RoutingCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Routing &amp; flags</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-1">
-          <Label>Credential routing strategy</Label>
+          <Label>{t("strategyLabel")}</Label>
           <div className="flex flex-wrap gap-1.5">
             {CPA_ROUTING_STRATEGIES.map((s) => (
               <Button
                 key={s}
                 size="sm"
                 variant="outline"
-                aria-label={`Use ${s}`}
+                aria-label={t("useStrategy", { strategy: s })}
                 onClick={() =>
                   confirm({
-                    title: "Set routing strategy",
-                    description: `Set the CPA credential routing strategy to "${s}"?`,
+                    title: t("setStrategyTitle"),
+                    description: t("setStrategyDesc", { strategy: s }),
                     action: () => strategy.mutate({ strategy: s }),
                   })
                 }
@@ -440,7 +684,7 @@ function RoutingCard() {
           </div>
         </div>
         <div className="space-y-1">
-          <Label>Boolean config flags</Label>
+          <Label>{t("flagsLabel")}</Label>
           <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
             {CPA_BOOL_FLAGS.map((flag) => (
               <div key={flag} className="flex items-center justify-between gap-2">
@@ -449,30 +693,30 @@ function RoutingCard() {
                   <Button
                     size="sm"
                     variant="outline"
-                    aria-label={`Set ${flag} on`}
+                    aria-label={t("setFlagOn", { flag })}
                     onClick={() =>
                       confirm({
-                        title: "Toggle CPA flag",
-                        description: `Enable "${flag}" upstream?`,
+                        title: t("toggleFlagTitle"),
+                        description: t("enableFlagDesc", { flag }),
                         action: () => flags.mutate({ flag, value: true }),
                       })
                     }
                   >
-                    on
+                    {t("on")}
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    aria-label={`Set ${flag} off`}
+                    aria-label={t("setFlagOff", { flag })}
                     onClick={() =>
                       confirm({
-                        title: "Toggle CPA flag",
-                        description: `Disable "${flag}" upstream?`,
+                        title: t("toggleFlagTitle"),
+                        description: t("disableFlagDesc", { flag }),
                         action: () => flags.mutate({ flag, value: false }),
                       })
                     }
                   >
-                    off
+                    {t("off")}
                   </Button>
                 </div>
               </div>
@@ -480,7 +724,7 @@ function RoutingCard() {
           </div>
         </div>
         <div className="space-y-1">
-          <Label>Retry tuning (integers 0–1000, blank = leave unchanged)</Label>
+          <Label>{t("retryLabel")}</Label>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             <Input
               id="cpa-retry-request"
@@ -512,21 +756,21 @@ function RoutingCard() {
             onClick={() => {
               const body = retryBody(retryForm);
               if (!body) {
-                toast.error("Retry values must be integers between 0 and 1000");
+                toast.error(t("retryInvalid"));
                 return;
               }
               confirm({
-                title: "Update retry tuning",
-                description: "Send the changed retry fields to the CPA management API?",
+                title: t("retryTitle"),
+                description: t("retryDesc"),
                 action: () => retry.mutate(body),
               });
             }}
           >
-            Apply retry tuning
+            {t("applyRetry")}
           </Button>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="cpa-proxy-url">Upstream proxy URL (redirects all CPA traffic)</Label>
+          <Label htmlFor="cpa-proxy-url">{t("proxyLabel")}</Label>
           <div className="flex flex-wrap gap-1.5">
             <Input
               id="cpa-proxy-url"
@@ -541,17 +785,17 @@ function RoutingCard() {
               onClick={() => {
                 const value = proxyUrl.trim();
                 if (!PROXY_URL_RE.test(value)) {
-                  toast.error("Proxy URL must be an http(s) or socks5(h) URL");
+                  toast.error(t("proxyInvalid"));
                   return;
                 }
                 confirm({
-                  title: "Set upstream proxy URL",
-                  description: `All CPA upstream traffic will go through ${value}. ${danger}`,
+                  title: t("setProxyTitle"),
+                  description: `${t("setProxyDesc", { value })} ${tS("danger")}`,
                   action: () => setProxy.mutate({ value, confirm: true }),
                 });
               }}
             >
-              Set proxy URL
+              {t("setProxyBtn")}
             </Button>
             <Button
               size="sm"
@@ -559,13 +803,13 @@ function RoutingCard() {
               disabled={clearProxy.isPending}
               onClick={() =>
                 confirm({
-                  title: "Clear upstream proxy URL",
-                  description: `CPA will connect directly again. ${danger}`,
+                  title: t("clearProxyTitle"),
+                  description: `${t("clearProxyDesc")} ${tS("danger")}`,
                   action: () => clearProxy.mutate({ confirm: true }),
                 })
               }
             >
-              Clear proxy URL
+              {t("clearProxyBtn")}
             </Button>
           </div>
         </div>
@@ -577,10 +821,52 @@ function RoutingCard() {
 
 // ── Client access keys (no read exists — write-only forms) ─────────────────
 
+const keysCopy = {
+  title: { en: "Client access keys", vi: "Key truy cập client" },
+  secretsNote: {
+    en: "Key values are secrets: they are sent upstream only and never listed back.",
+    vi: "Giá trị key là thông tin bí mật: chỉ gửi lên upstream và không bao giờ hiển thị lại.",
+  },
+  newKeyValue: { en: "New key value", vi: "Giá trị key mới" },
+  oldKeyValue: {
+    en: "Old key value (rotation only)",
+    vi: "Giá trị key cũ (chỉ khi xoay vòng)",
+  },
+  addKey: { en: "Add key", vi: "Thêm key" },
+  rotateKey: { en: "Rotate key", vi: "Xoay vòng key" },
+  index: { en: "Index", vi: "Chỉ mục" },
+  replacementKey: { en: "Replacement key value", vi: "Giá trị key thay thế" },
+  setAtIndex: { en: "Set at index", vi: "Đặt tại chỉ mục" },
+  deleteKeyLabel: { en: "Key value to delete", vi: "Giá trị key cần xóa" },
+  deleteKeyBtn: { en: "Delete key", vi: "Xóa key" },
+  fillFields: {
+    en: "Fill the key fields (non-empty key value, whole-number index)",
+    vi: "Điền đủ các trường key (giá trị key khác rỗng, chỉ mục là số nguyên)",
+  },
+  updateTitle: { en: "Update client access keys", vi: "Cập nhật key truy cập client" },
+  updateDesc: {
+    en: "This rewrites CPA's access.api-keys list via the management API.",
+    vi: "Thao tác này ghi đè danh sách access.api-keys của CPA qua API quản trị.",
+  },
+  enterDeleteKey: {
+    en: "Enter the exact key value to delete",
+    vi: "Nhập chính xác giá trị key cần xóa",
+  },
+  deleteTitle: { en: "Delete client access key", vi: "Xóa key truy cập client" },
+  deleteDesc: {
+    en: "The key will stop working immediately.",
+    vi: "Key sẽ ngừng hoạt động ngay lập tức.",
+  },
+  updated: { en: "Access key updated", vi: "Đã cập nhật key truy cập" },
+  deleted: { en: "Access key deleted", vi: "Đã xóa key truy cập" },
+} as const;
+
 export function ApiKeysCard() {
   const { confirm, dialog } = useConfirm();
-  const patch = useCpaMutation("PATCH", "/api/v1/admin/cpa/api-keys", "Access key updated");
-  const del = useCpaMutation("DELETE", "/api/v1/admin/cpa/api-keys", "Access key deleted");
+  const t = useT(keysCopy);
+  const tS = useT(cpaSharedCopy);
+  const patch = useCpaMutation("PATCH", "/api/v1/admin/cpa/api-keys", keysCopy.updated);
+  const del = useCpaMutation("DELETE", "/api/v1/admin/cpa/api-keys", keysCopy.deleted);
   const [keyNew, setKeyNew] = useState("");
   const [keyOld, setKeyOld] = useState("");
   const [keyIndex, setKeyIndex] = useState("");
@@ -589,27 +875,25 @@ export function ApiKeysCard() {
   const runPatch = (input: Parameters<typeof apiKeyBody>[0]) => {
     const body = apiKeyBody(input);
     if (!body) {
-      toast.error("Fill the key fields (non-empty key value, whole-number index)");
+      toast.error(t("fillFields"));
       return;
     }
     confirm({
-      title: "Update client access keys",
-      description: "This rewrites CPA's access.api-keys list via the management API.",
+      title: t("updateTitle"),
+      description: t("updateDesc"),
       action: () => patch.mutate(body),
     });
   };
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Client access keys</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <p className="text-xs text-muted-foreground">
-          Key values are secrets: they are sent upstream only and never listed back.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("secretsNote")}</p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1">
-            <Label htmlFor="cpa-key-new">New key value</Label>
+            <Label htmlFor="cpa-key-new">{t("newKeyValue")}</Label>
             <Input
               id="cpa-key-new"
               type="password"
@@ -619,7 +903,7 @@ export function ApiKeysCard() {
             />
           </div>
           <div className="space-y-1">
-            <Label htmlFor="cpa-key-old">Old key value (rotation only)</Label>
+            <Label htmlFor="cpa-key-old">{t("oldKeyValue")}</Label>
             <Input
               id="cpa-key-old"
               type="password"
@@ -635,7 +919,7 @@ export function ApiKeysCard() {
             disabled={patch.isPending}
             onClick={() => runPatch({ mode: "add", key: keyNew })}
           >
-            Add key
+            {t("addKey")}
           </Button>
           <Button
             size="sm"
@@ -643,12 +927,12 @@ export function ApiKeysCard() {
             disabled={patch.isPending}
             onClick={() => runPatch({ mode: "rotate", key: keyNew, oldKey: keyOld })}
           >
-            Rotate key
+            {t("rotateKey")}
           </Button>
         </div>
         <div className="flex flex-wrap items-end gap-1.5">
           <div className="space-y-1">
-            <Label htmlFor="cpa-key-index">Index</Label>
+            <Label htmlFor="cpa-key-index">{t("index")}</Label>
             <Input
               id="cpa-key-index"
               className="w-24"
@@ -658,7 +942,7 @@ export function ApiKeysCard() {
             />
           </div>
           <div className="space-y-1">
-            <Label htmlFor="cpa-key-value">Replacement key value</Label>
+            <Label htmlFor="cpa-key-value">{t("replacementKey")}</Label>
             <Input
               id="cpa-key-value"
               type="password"
@@ -673,12 +957,12 @@ export function ApiKeysCard() {
             disabled={patch.isPending}
             onClick={() => runPatch({ mode: "set-index", key: keyValue, index: keyIndex })}
           >
-            Set at index
+            {t("setAtIndex")}
           </Button>
         </div>
         <div className="flex flex-wrap items-end gap-1.5">
           <div className="space-y-1">
-            <Label htmlFor="cpa-key-delete">Key value to delete</Label>
+            <Label htmlFor="cpa-key-delete">{t("deleteKeyLabel")}</Label>
             <Input
               id="cpa-key-delete"
               type="password"
@@ -694,17 +978,17 @@ export function ApiKeysCard() {
             onClick={() => {
               const key = deleteKey.trim();
               if (!key) {
-                toast.error("Enter the exact key value to delete");
+                toast.error(t("enterDeleteKey"));
                 return;
               }
               confirm({
-                title: "Delete client access key",
-                description: `The key will stop working immediately. ${danger}`,
+                title: t("deleteTitle"),
+                description: `${t("deleteDesc")} ${tS("danger")}`,
                 action: () => del.mutate({ key, confirm: true }),
               });
             }}
           >
-            Delete key
+            {t("deleteKeyBtn")}
           </Button>
         </div>
         {dialog}
@@ -715,24 +999,92 @@ export function ApiKeysCard() {
 
 // ── Auth files (no read exists — write-only forms) ─────────────────────────
 
+const authFilesCopy = {
+  title: { en: "Auth files (credentials)", vi: "Tệp xác thực (credential)" },
+  authName: { en: "Auth-file name", vi: "Tên auth-file" },
+  authIndex: { en: "Auth index (optional)", vi: "Chỉ mục auth (không bắt buộc)" },
+  disableAuth: { en: "Disable auth file", vi: "Vô hiệu hóa auth-file" },
+  enableAuth: { en: "Enable auth file", vi: "Kích hoạt auth-file" },
+  enterName: { en: "Enter the auth-file name first", vi: "Nhập tên auth-file trước" },
+  disableTitle: { en: "Disable auth file", vi: "Vô hiệu hóa auth-file" },
+  enableTitle: { en: "Enable auth file", vi: "Kích hoạt auth-file" },
+  disableDesc: {
+    en: 'Disable "{name}" on the CPA management API?',
+    vi: 'Vô hiệu hóa "{name}" trên API quản trị CPA?',
+  },
+  enableDesc: {
+    en: 'Enable "{name}" on the CPA management API?',
+    vi: 'Kích hoạt "{name}" trên API quản trị CPA?',
+  },
+  fieldsLabel: {
+    en: 'Metadata fields (JSON object, e.g. {"project_id": "…"})',
+    vi: 'Trường metadata (đối tượng JSON, ví dụ {"project_id": "…"})',
+  },
+  patchFields: { en: "Patch auth fields", vi: "Cập nhật trường metadata" },
+  fieldsInvalid: {
+    en: "Fields must be a JSON object with 1–32 keys",
+    vi: "Trường metadata phải là đối tượng JSON với 1–32 khóa",
+  },
+  patchTitle: { en: "Patch auth-file fields", vi: "Cập nhật trường metadata auth-file" },
+  patchDesc: {
+    en: 'Update metadata fields on "{name}"? CPA validates the field names.',
+    vi: 'Cập nhật trường metadata trên "{name}"? CPA sẽ kiểm tra tên trường.',
+  },
+  deleteLabel: {
+    en: "Auth files to delete (one name per line)",
+    vi: "Auth files cần xóa (mỗi tên một dòng)",
+  },
+  deleteBtn: { en: "Delete auth files", vi: "Xóa auth files" },
+  namesInvalid: {
+    en: "Enter 1–50 auth-file names",
+    vi: "Nhập 1–50 tên auth-file",
+  },
+  deleteTitle: { en: "Delete auth files", vi: "Xóa auth files" },
+  deleteDesc: {
+    en: "Named files only (never the destructive all-files variant).",
+    vi: "Chỉ các tệp được nêu tên (không bao giờ dùng biến thể xóa toàn bộ).",
+  },
+  refreshBtn: { en: "Refresh auth files", vi: "Làm mới auth files" },
+  refreshTitle: { en: "Refresh auth files", vi: "Làm mới auth files" },
+  refreshDesc: {
+    en: "Ask CPA to refresh token/credential state for all auth files?",
+    vi: "Yêu cầu CPA làm mới trạng thái token/credential cho tất cả auth files?",
+  },
+  refreshRequested: {
+    en: "Auth-file refresh requested",
+    vi: "Đã yêu cầu làm mới auth-file",
+  },
+  statusUpdated: {
+    en: "Auth-file status updated",
+    vi: "Đã cập nhật trạng thái auth-file",
+  },
+  fieldsUpdated: {
+    en: "Auth-file fields updated",
+    vi: "Đã cập nhật trường metadata auth-file",
+  },
+  deleted: { en: "Auth files deleted", vi: "Đã xóa auth files" },
+} as const;
+
 function AuthFilesCard() {
   const { confirm, dialog } = useConfirm();
+  const t = useT(authFilesCopy);
+  const tS = useT(cpaSharedCopy);
   const refresh = useCpaMutation(
     "POST",
     "/api/v1/admin/cpa/auth-files/refresh",
-    "Auth-file refresh requested",
+    authFilesCopy.refreshRequested,
   );
   const status = useCpaMutation(
     "PATCH",
     "/api/v1/admin/cpa/auth-files/status",
-    "Auth-file status updated",
+    authFilesCopy.statusUpdated,
   );
   const fields = useCpaMutation(
     "PATCH",
     "/api/v1/admin/cpa/auth-files/fields",
-    "Auth-file fields updated",
+    authFilesCopy.fieldsUpdated,
   );
-  const del = useCpaMutation("DELETE", "/api/v1/admin/cpa/auth-files", "Auth files deleted");
+  const del = useCpaMutation("DELETE", "/api/v1/admin/cpa/auth-files", authFilesCopy.deleted);
   const [name, setName] = useState("");
   const [authIndex, setAuthIndex] = useState("");
   const [fieldsJson, setFieldsJson] = useState("");
@@ -740,13 +1092,15 @@ function AuthFilesCard() {
   const setStatus = (disabled: boolean) => {
     const trimmed = name.trim();
     if (!trimmed) {
-      toast.error("Enter the auth-file name first");
+      toast.error(t("enterName"));
       return;
     }
     const auth_index = authIndex.trim();
     confirm({
-      title: disabled ? "Disable auth file" : "Enable auth file",
-      description: `${disabled ? "Disable" : "Enable"} "${trimmed}" on the CPA management API?`,
+      title: disabled ? t("disableTitle") : t("enableTitle"),
+      description: disabled
+        ? t("disableDesc", { name: trimmed })
+        : t("enableDesc", { name: trimmed }),
       action: () =>
         status.mutate({
           name: trimmed,
@@ -758,11 +1112,11 @@ function AuthFilesCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Auth files (credentials)</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-1">
-          <Label htmlFor="cpa-auth-name">Auth-file name</Label>
+          <Label htmlFor="cpa-auth-name">{t("authName")}</Label>
           <Input
             id="cpa-auth-name"
             value={name}
@@ -772,7 +1126,7 @@ function AuthFilesCard() {
         </div>
         <div className="flex flex-wrap items-end gap-1.5">
           <div className="space-y-1">
-            <Label htmlFor="cpa-auth-index">Auth index (optional)</Label>
+            <Label htmlFor="cpa-auth-index">{t("authIndex")}</Label>
             <Input
               id="cpa-auth-index"
               className="w-28"
@@ -786,7 +1140,7 @@ function AuthFilesCard() {
             disabled={status.isPending}
             onClick={() => setStatus(true)}
           >
-            Disable auth file
+            {t("disableAuth")}
           </Button>
           <Button
             size="sm"
@@ -794,13 +1148,11 @@ function AuthFilesCard() {
             disabled={status.isPending}
             onClick={() => setStatus(false)}
           >
-            Enable auth file
+            {t("enableAuth")}
           </Button>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="cpa-auth-fields">
-            Metadata fields (JSON object, e.g. &#123;&quot;project_id&quot;: &quot;…&quot;&#125;)
-          </Label>
+          <Label htmlFor="cpa-auth-fields">{t("fieldsLabel")}</Label>
           <Textarea
             id="cpa-auth-fields"
             rows={3}
@@ -815,26 +1167,26 @@ function AuthFilesCard() {
             onClick={() => {
               const trimmed = name.trim();
               if (!trimmed) {
-                toast.error("Enter the auth-file name first");
+                toast.error(t("enterName"));
                 return;
               }
               const parsed = parseAuthFields(fieldsJson);
               if (!parsed) {
-                toast.error("Fields must be a JSON object with 1–32 keys");
+                toast.error(t("fieldsInvalid"));
                 return;
               }
               confirm({
-                title: "Patch auth-file fields",
-                description: `Update metadata fields on "${trimmed}"? CPA validates the field names.`,
+                title: t("patchTitle"),
+                description: t("patchDesc", { name: trimmed }),
                 action: () => fields.mutate({ name: trimmed, fields: parsed }),
               });
             }}
           >
-            Patch auth fields
+            {t("patchFields")}
           </Button>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="cpa-auth-delete">Auth files to delete (one name per line)</Label>
+          <Label htmlFor="cpa-auth-delete">{t("deleteLabel")}</Label>
           <Textarea
             id="cpa-auth-delete"
             rows={3}
@@ -850,17 +1202,17 @@ function AuthFilesCard() {
               onClick={() => {
                 const names = parseAuthFileNames(deleteNames);
                 if (!names) {
-                  toast.error("Enter 1–50 auth-file names");
+                  toast.error(t("namesInvalid"));
                   return;
                 }
                 confirm({
-                  title: "Delete auth files",
-                  description: `Named files only (never the destructive all-files variant). ${danger}`,
+                  title: t("deleteTitle"),
+                  description: `${t("deleteDesc")} ${tS("danger")}`,
                   action: () => del.mutate({ names, confirm: true }),
                 });
               }}
             >
-              Delete auth files
+              {t("deleteBtn")}
             </Button>
             <Button
               size="sm"
@@ -868,13 +1220,13 @@ function AuthFilesCard() {
               disabled={refresh.isPending}
               onClick={() =>
                 confirm({
-                  title: "Refresh auth files",
-                  description: "Ask CPA to refresh token/credential state for all auth files?",
+                  title: t("refreshTitle"),
+                  description: t("refreshDesc"),
                   action: () => refresh.mutate(undefined),
                 })
               }
             >
-              Refresh auth files
+              {t("refreshBtn")}
             </Button>
           </div>
         </div>
@@ -884,57 +1236,7 @@ function AuthFilesCard() {
   );
 }
 
-// ── CPA models table (read: /cpa/models; moved here from the System page) ──
-
-export function CpaModelsTable() {
-  const models = useAdminQuery<{ data: CpaModel[] }>(
-    ["admin", "cpa-models"],
-    "/api/v1/admin/cpa/models",
-  );
-  const columns: ColumnDef<CpaModel, unknown>[] = [
-    {
-      accessorKey: "id",
-      header: "Model",
-      cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
-    },
-    {
-      accessorKey: "owned_by",
-      header: "Owned by",
-      cell: (c) => (
-        <span className="font-mono text-xs">{(c.getValue() as string | null) ?? "—"}</span>
-      ),
-    },
-    {
-      accessorKey: "mapped",
-      header: "Mapped",
-      cell: ({ row }) => {
-        const ids = row.original.mapped_public_ids;
-        return ids && ids.length > 0 ? (
-          <span className="font-mono text-xs">{ids.join(", ")}</span>
-        ) : (
-          <Badge variant="outline">unmapped</Badge>
-        );
-      },
-    },
-  ];
-  return (
-    <div className="space-y-2">
-      <h2 className="text-sm font-medium">CPA models</h2>
-      {models.isPending ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : models.error ? (
-        <p className="flex items-center gap-2 text-sm text-destructive">
-          <XCircle className="size-4" />
-          {models.error instanceof Error ? models.error.message : "CPA unreachable"}
-        </p>
-      ) : (
-        <DataTable columns={columns} data={models.data.data} empty="No CPA models" />
-      )}
-    </div>
-  );
-}
-
-// ── Model mappings (writes: alias + exclusions) ───────────────────────────
+// ── CPA models (read: /cpa/models; writes: alias + exclusions) ─────────────
 
 interface CpaModel {
   id: string;
@@ -942,6 +1244,52 @@ interface CpaModel {
   mapped: boolean;
   mapped_public_ids?: string[];
 }
+
+/** Bilingual copy for the merged CPA models section. */
+const cpaModelsCopy = {
+  title: { en: "CPA models", vi: "Mô hình CPA" },
+  listLabel: { en: "CPA upstream models", vi: "Mô hình upstream của CPA" },
+  hint: {
+    en: "IDs are original upstream model names; configured aliases are resolved for display.",
+    vi: "ID là tên gốc của mô hình upstream; alias đã cấu hình được ánh xạ lại để hiển thị.",
+  },
+  loading: { en: "Loading…", vi: "Đang tải…" },
+  unreachable: { en: "CPA unreachable", vi: "Không kết nối được CPA" },
+  colModel: { en: "Model", vi: "Mô hình" },
+  colOwnedBy: { en: "Owned by", vi: "Sở hữu bởi" },
+  colMapped: { en: "Mapped", vi: "Đã ánh xạ" },
+  unmapped: { en: "unmapped", vi: "chưa ánh xạ" },
+  empty: { en: "No CPA models", vi: "Chưa có mô hình CPA" },
+  aliasChannel: { en: "Alias channel", vi: "Kênh alias" },
+  aliasesJson: {
+    en: "Aliases JSON (empty array clears the channel)",
+    vi: "Danh sách alias JSON (mảng rỗng xóa sạch kênh)",
+  },
+  enterChannel: { en: "Enter the channel first", vi: "Nhập kênh trước" },
+  saveAliases: { en: "Save aliases", vi: "Lưu alias" },
+  saveAliasesTitle: { en: "Save model aliases", vi: "Lưu alias mô hình" },
+  saveAliasesDesc: {
+    en: 'Replace all aliases for channel "{channel}"? An empty list clears the channel.',
+    vi: 'Thay thế toàn bộ alias của kênh "{channel}"? Danh sách rỗng sẽ xóa sạch kênh.',
+  },
+  exclChannel: { en: "Exclusion channel", vi: "Kênh loại ngoại" },
+  exclModels: {
+    en: "Excluded models (one per line; empty clears)",
+    vi: "Mô hình loại ngoại (mỗi dòng một mô hình; để trống xóa sạch)",
+  },
+  exclLimit: {
+    en: "At most 500 excluded models per channel",
+    vi: "Tối đa 500 mô hình loại ngoại mỗi kênh",
+  },
+  saveExclusions: { en: "Save exclusions", vi: "Lưu loại ngoại" },
+  saveExclusionsTitle: { en: "Save model exclusions", vi: "Lưu mô hình loại ngoại" },
+  saveExclusionsDesc: {
+    en: 'Replace the excluded models for channel "{channel}"? An empty list clears the channel.',
+    vi: 'Thay thế danh sách mô hình loại ngoại của kênh "{channel}"? Danh sách rỗng sẽ xóa sạch kênh.',
+  },
+  aliasesSaved: { en: "Model aliases saved", vi: "Đã lưu alias mô hình" },
+  exclusionsSaved: { en: "Model exclusions saved", vi: "Đã lưu mô hình loại ngoại" },
+} as const;
 
 /**
  * Map client-visible alias/display-name IDs back to original upstream model
@@ -979,6 +1327,9 @@ export function aliasToOriginalMap(config: unknown): Map<string, string> {
 
 export function ModelMappingsCard() {
   const { confirm, dialog } = useConfirm();
+  const t = useT(cpaModelsCopy);
+  const tS = useT(cpaSharedCopy);
+  const tv = useT(aliasValidationErrorCopy);
   const models = useAdminQuery<{ data: CpaModel[] }>(
     ["admin", "cpa-models"],
     "/api/v1/admin/cpa/models",
@@ -1012,62 +1363,79 @@ export function ModelMappingsCard() {
     }
     return [...merged.values()];
   }, [models.data, aliasMap]);
-  const alias = useCpaMutation("PUT", "/api/v1/admin/cpa/model-alias", "Model aliases saved");
+  const alias = useCpaMutation("PUT", "/api/v1/admin/cpa/model-alias", cpaModelsCopy.aliasesSaved);
   const exclusions = useCpaMutation(
     "PUT",
     "/api/v1/admin/cpa/model-exclusions",
-    "Model exclusions saved",
+    cpaModelsCopy.exclusionsSaved,
   );
   const [aliasChannel, setAliasChannel] = useState("");
   const [aliasJson, setAliasJson] = useState("");
   const [exclChannel, setExclChannel] = useState("");
   const [exclModels, setExclModels] = useState("");
+  // Column defs for the single alias-resolved model table; headers are
+  // localized, model IDs and provider values stay verbatim.
+  const columns: ColumnDef<CpaModel, unknown>[] = [
+    {
+      accessorKey: "id",
+      header: t("colModel"),
+      cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
+    },
+    {
+      accessorKey: "owned_by",
+      header: t("colOwnedBy"),
+      cell: (c) => (
+        <span className="font-mono text-xs">{(c.getValue() as string | null) ?? "—"}</span>
+      ),
+    },
+    {
+      accessorKey: "mapped",
+      header: t("colMapped"),
+      cell: ({ row }) => {
+        const ids = row.original.mapped_public_ids;
+        return ids && ids.length > 0 ? (
+          <span className="font-mono text-xs">{ids.join(", ")}</span>
+        ) : (
+          <Badge variant="outline">{t("unmapped")}</Badge>
+        );
+      },
+    },
+  ];
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium">Model mappings</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-1">
-          <Label>CPA upstream models</Label>
+          <Label>{t("listLabel")}</Label>
           {models.isPending ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
+            <p className="text-sm text-muted-foreground">{t("loading")}</p>
           ) : models.error ? (
             <p className="text-sm text-destructive">
-              {models.error instanceof Error ? models.error.message : "CPA unreachable"}
+              {models.error instanceof Error ? models.error.message : t("unreachable")}
             </p>
-          ) : resolved.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No CPA models</p>
           ) : (
-            <ul className="space-y-1">
-              {resolved.map((model) => (
-                <li key={model.id} className="flex items-center gap-2 text-sm">
-                  <span className="font-mono text-xs">{model.id}</span>
-                  {model.mapped_public_ids && model.mapped_public_ids.length > 0 ? (
-                    <span className="font-mono text-xs text-muted-foreground">
-                      → {model.mapped_public_ids.join(", ")}
-                    </span>
-                  ) : (
-                    <Badge variant="outline">unmapped</Badge>
-                  )}
-                </li>
-              ))}
-            </ul>
+            // ScrollPanel: labelled focusable region (bilingual aria-label,
+            // tabIndex for keyboard scrolling, sticky thead); className caps
+            // the panel height at max-h-64 so the alias/exclusion forms below
+            // stay reachable without scrolling the tab.
+            <ScrollPanel label={t("listLabel")} stickyHeader className="max-h-64">
+              <DataTable columns={columns} data={resolved} empty={t("empty")} />
+            </ScrollPanel>
           )}
         </div>
-        <p className="text-xs text-muted-foreground">
-          IDs are original upstream model names; configured aliases are resolved for display.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("hint")}</p>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="space-y-1">
-            <Label htmlFor="cpa-alias-channel">Alias channel</Label>
+            <Label htmlFor="cpa-alias-channel">{t("aliasChannel")}</Label>
             <Input
               id="cpa-alias-channel"
               value={aliasChannel}
               onChange={(e) => setAliasChannel(e.target.value)}
               placeholder="gemini"
             />
-            <Label htmlFor="cpa-alias-json">Aliases JSON (empty array clears the channel)</Label>
+            <Label htmlFor="cpa-alias-json">{t("aliasesJson")}</Label>
             <Textarea
               id="cpa-alias-json"
               rows={4}
@@ -1082,33 +1450,36 @@ export function ModelMappingsCard() {
               onClick={() => {
                 const channel = aliasChannel.trim();
                 if (!channel) {
-                  toast.error("Enter the channel first");
+                  toast.error(t("enterChannel"));
                   return;
                 }
                 const parsed = parseAliasesJson(aliasJson);
                 if (!parsed.ok) {
-                  toast.error(parsed.error);
+                  // English validation contract preserved; known errors map to
+                  // the active locale, dynamic ones surface raw.
+                  const known = parsed.error as keyof typeof aliasValidationErrorCopy;
+                  toast.error(known in aliasValidationErrorCopy ? tv(known) : parsed.error);
                   return;
                 }
                 confirm({
-                  title: "Save model aliases",
-                  description: `Replace all aliases for channel "${channel}"? An empty list clears the channel. ${danger}`,
+                  title: t("saveAliasesTitle"),
+                  description: `${t("saveAliasesDesc", { channel })} ${tS("danger")}`,
                   action: () => alias.mutate({ channel, aliases: parsed.aliases }),
                 });
               }}
             >
-              Save aliases
+              {t("saveAliases")}
             </Button>
           </div>
           <div className="space-y-1">
-            <Label htmlFor="cpa-excl-channel">Exclusion channel</Label>
+            <Label htmlFor="cpa-excl-channel">{t("exclChannel")}</Label>
             <Input
               id="cpa-excl-channel"
               value={exclChannel}
               onChange={(e) => setExclChannel(e.target.value)}
               placeholder="codex"
             />
-            <Label htmlFor="cpa-excl-models">Excluded models (one per line; empty clears)</Label>
+            <Label htmlFor="cpa-excl-models">{t("exclModels")}</Label>
             <Textarea
               id="cpa-excl-models"
               rows={4}
@@ -1122,22 +1493,22 @@ export function ModelMappingsCard() {
               onClick={() => {
                 const channel = exclChannel.trim();
                 if (!channel) {
-                  toast.error("Enter the channel first");
+                  toast.error(t("enterChannel"));
                   return;
                 }
                 const parsed = parseExclusionModels(exclModels);
                 if (!parsed) {
-                  toast.error("At most 500 excluded models per channel");
+                  toast.error(t("exclLimit"));
                   return;
                 }
                 confirm({
-                  title: "Save model exclusions",
-                  description: `Replace the excluded models for channel "${channel}"? An empty list clears the channel. ${danger}`,
+                  title: t("saveExclusionsTitle"),
+                  description: `${t("saveExclusionsDesc", { channel })} ${tS("danger")}`,
                   action: () => exclusions.mutate({ channel, models: parsed }),
                 });
               }}
             >
-              Save exclusions
+              {t("saveExclusions")}
             </Button>
           </div>
         </div>
@@ -1147,37 +1518,50 @@ export function ModelMappingsCard() {
   );
 }
 
+const pageCopy = {
+  title: { en: "CPA management", vi: "Quản trị CPA" },
+  description: {
+    en: "CLIProxyAPI health, config, routing, keys, credentials and model mappings.",
+    vi: "Sức khỏe, cấu hình, định tuyến, key, credential và ánh xạ mô hình của CLIProxyAPI.",
+  },
+  sectionsAria: {
+    en: "CPA management sections",
+    vi: "Các phần quản trị CPA",
+  },
+  tabHealth: { en: "Health", vi: "Tình trạng" },
+  tabConfig: { en: "Config", vi: "Cấu hình" },
+  tabRouting: { en: "Routing", vi: "Định tuyến" },
+  tabKeys: { en: "Access keys", vi: "Key truy cập" },
+  tabAuth: { en: "Auth files", vi: "Tệp xác thực" },
+  tabModels: { en: "Models", vi: "Mô hình" },
+} as const;
+
 export default function AdminCpaPage() {
+  const t = useT(pageCopy);
   const health = useAdminQuery<unknown>(["admin", "cpa-health"], "/api/v1/admin/cpa/health");
   // Tabs keep each section inside a bounded scroll container so the page
-  // itself never scrolls; every tab panel is keyboard-scrollable.
-  const panelClass = "max-h-[calc(100vh-12rem)] space-y-4 overflow-y-auto pr-1";
+  // itself never scrolls; every tab panel is keyboard-scrollable. Scroll
+  // chaining is contained so an inner ScrollPanel (e.g. the CPA models list)
+  // does not scroll the whole tab panel once it hits its own edge.
+  const panelClass = "max-h-[calc(100vh-12rem)] space-y-4 overflow-y-auto overscroll-contain pr-1";
   const tabs: { value: string; label: string; content: React.ReactNode }[] = [
-    { value: "health", label: "Health", content: <CpaHealthCard /> },
-    { value: "config", label: "Config", content: <ConfigCard /> },
-    { value: "routing", label: "Routing", content: <RoutingCard /> },
-    { value: "keys", label: "Access keys", content: <ApiKeysCard /> },
-    { value: "auth", label: "Auth files", content: <AuthFilesCard /> },
+    { value: "health", label: t("tabHealth"), content: <CpaHealthCard /> },
+    { value: "config", label: t("tabConfig"), content: <ConfigCard /> },
+    { value: "routing", label: t("tabRouting"), content: <RoutingCard /> },
+    { value: "keys", label: t("tabKeys"), content: <ApiKeysCard /> },
+    { value: "auth", label: t("tabAuth"), content: <AuthFilesCard /> },
     {
       value: "models",
-      label: "Models",
-      content: (
-        <>
-          <CpaModelsTable />
-          <ModelMappingsCard />
-        </>
-      ),
+      label: t("tabModels"),
+      content: <ModelMappingsCard />,
     },
   ];
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-      <PageHeader
-        title="CPA management"
-        description="CLIProxyAPI health, config, routing, keys, credentials and model mappings."
-      />
+      <PageHeader title={t("title")} description={t("description")} />
       <AdminGate query={health}>
         <Tabs defaultValue="health" className="flex min-h-0 flex-col">
-          <TabsList aria-label="CPA management sections">
+          <TabsList aria-label={t("sectionsAria")}>
             {tabs.map((t) => (
               <TabsTrigger key={t.value} value={t.value}>
                 {t.label}

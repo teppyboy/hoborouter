@@ -37,6 +37,19 @@ export const promotionsDict = {
     vi: "Mã khuyến mãi nạp tiền. Số tiền, giới hạn lượt dùng và hạn dùng cố định khi tạo; vô hiệu hoá thay vì xoá.",
   },
   name: { en: "Name", vi: "Tên" },
+  kind: { en: "Type", vi: "Loại" },
+  kindFixed: { en: "Fixed credit", vi: "Tín dụng cố định" },
+  kindPercent: { en: "Percent off", vi: "Giảm theo phần trăm" },
+  percent: { en: "Percent (%)" as const, vi: "Phần trăm (%)" as const },
+  percentHint: {
+    en: "3 = 3% off · decimals up to 99.99, e.g. 3.5",
+    vi: "3 = giảm 3% · thập phân đến 99,99, ví dụ 3,5",
+  },
+  maxDiscount: { en: "Max discount (VND)", vi: "Giảm tối đa (VND)" },
+  maxDiscountHint: {
+    en: "Required: the discount never exceeds this cap.",
+    vi: "Bắt buộc: mức giảm không vượt quá trần này.",
+  },
   amount: { en: "Amount (VND)", vi: "Số tiền (VND)" },
   maxUses: { en: "Max uses", vi: "Số lượt tối đa" },
   expires: { en: "Expires (optional)", vi: "Hạn dùng (tuỳ chọn)" },
@@ -47,6 +60,14 @@ export const promotionsDict = {
     en: "Enter a positive whole VND amount.",
     vi: "Nhập số tiền VND nguyên dương.",
   },
+  errPercent: {
+    en: "Enter a percent between 0.01 and 99.99.",
+    vi: "Nhập phần trăm từ 0,01 đến 99,99.",
+  },
+  errMaxDiscount: {
+    en: "Enter a positive whole VND cap.",
+    vi: "Nhập mức trần VND nguyên dương.",
+  },
   errMaxUses: {
     en: "Enter a whole number of at least 1.",
     vi: "Nhập số nguyên từ 1 trở lên.",
@@ -55,7 +76,8 @@ export const promotionsDict = {
     en: "Expiry must be a future date.",
     vi: "Hạn dùng phải là ngày trong tương lai.",
   },
-  colAmount: { en: "Amount", vi: "Số tiền" },
+  colDiscount: { en: "Discount", vi: "Ưu đãi" },
+  capOf: { en: "cap {cap}", vi: "trần {cap}" },
   colUses: { en: "Uses", vi: "Lượt dùng" },
   colExpires: { en: "Expires", vi: "Hết hạn" },
   colStatus: { en: "Status", vi: "Trạng thái" },
@@ -93,7 +115,10 @@ export const promotionsDict = {
 export interface AdminPromo {
   id: string;
   name: string;
-  amount_vnd: number;
+  kind: "fixed" | "percent";
+  amount_vnd: number | null;
+  percent_bp: number | null;
+  max_discount_vnd: number | null;
   max_uses: number;
   uses: number;
   expires_at: number | null;
@@ -101,16 +126,32 @@ export interface AdminPromo {
   created_at: number;
 }
 
-export interface CreatePromoBody {
-  name: string;
-  amount_vnd: number;
-  max_uses: number;
-  expires_at: number | null;
-}
+/** Fixed = VND credit; percent = basis points + required VND cap (server shapes). */
+export type CreatePromoBody =
+  | {
+      name: string;
+      amount_vnd: number;
+      max_uses: number;
+      expires_at: number | null;
+    }
+  | {
+      name: string;
+      kind: "percent";
+      percent_bp: number;
+      max_discount_vnd: number;
+      max_uses: number;
+      expires_at: number | null;
+    };
 
 export interface PromoFormInput {
+  kind: "fixed" | "percent";
   name: string;
+  /** Fixed kind only. */
   amount: string;
+  /** Percent kind only: friendly percent text ("3", "3%", "3,5"). */
+  percent: string;
+  /** Percent kind only: required VND cap on the discount. */
+  maxDiscount: string;
   maxUses: string;
   expiresDate: string;
 }
@@ -119,6 +160,8 @@ export interface PromoFormState {
   valid: boolean;
   nameInvalid: boolean;
   amountInvalid: boolean;
+  percentInvalid: boolean;
+  maxDiscountInvalid: boolean;
   maxUsesInvalid: boolean;
   expiresInvalid: boolean;
   body: CreatePromoBody | null;
@@ -142,31 +185,82 @@ export function promoExpiryMs(dateStr: string, now: number): number | null | "in
   return ms > now ? ms : "invalid";
 }
 
+/**
+ * Friendly percent text -> integer basis points. Accepts an optional "%" and
+ * a comma decimal separator (Vietnamese input), at most two decimals. The
+ * conversion is exact by construction (string digits, Math.round for float
+ * dust) so 3% is always 300bp — never a float. Bounds mirror the backend:
+ * 1..9999 bp (0% and 100% are both rejected server-side too).
+ */
+export function parsePercentBp(text: string): number | null {
+  const s = text.trim().replace(/,/g, ".").replace(/%$/, "").trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  const bp = Math.round(Number(s) * 100);
+  return bp >= 1 && bp <= 9999 ? bp : null;
+}
+
+/** Display form of basis points: 300 -> "3%", 350 -> "3.5%", 333 -> "3.33%". */
+export function formatPercentBp(bp: number): string {
+  return `${Number((bp / 100).toFixed(2))}%`;
+}
+
 /** Pure create-form state shared by the form and its validation tests. */
 export function promoFormState(input: PromoFormInput, now: number): PromoFormState {
   const name = input.name.trim();
-  const amountN = parseIntVnd(input.amount);
   const maxUsesN = parseIntVnd(input.maxUses);
   const expiry = promoExpiryMs(input.expiresDate, now);
   const nameInvalid = name.length === 0;
-  const amountInvalid = amountN === null || amountN <= 0;
   const maxUsesInvalid = maxUsesN === null || maxUsesN < 1;
   const expiresInvalid = expiry === "invalid";
-  const valid = !nameInvalid && !amountInvalid && !maxUsesInvalid && !expiresInvalid;
+  let amountInvalid = false;
+  let percentInvalid = false;
+  let maxDiscountInvalid = false;
+  let funding: CreatePromoBody | null = null;
+  if (input.kind === "fixed") {
+    // Percent-only fields are ignored by the fixed kind (and vice versa), so
+    // a stale value in the hidden half can never block or corrupt a submit.
+    const amountN = parseIntVnd(input.amount);
+    amountInvalid = amountN === null || amountN <= 0;
+    if (!amountInvalid && !maxUsesInvalid && !expiresInvalid) {
+      funding = {
+        name,
+        amount_vnd: amountN as number,
+        max_uses: maxUsesN as number,
+        expires_at: expiry === null ? null : (expiry as number),
+      };
+    }
+  } else {
+    const bp = parsePercentBp(input.percent);
+    const capN = parseIntVnd(input.maxDiscount);
+    percentInvalid = bp === null;
+    maxDiscountInvalid = capN === null || capN <= 0;
+    if (!percentInvalid && !maxDiscountInvalid && !maxUsesInvalid && !expiresInvalid) {
+      funding = {
+        name,
+        kind: "percent",
+        percent_bp: bp as number,
+        max_discount_vnd: capN as number,
+        max_uses: maxUsesN as number,
+        expires_at: expiry === null ? null : (expiry as number),
+      };
+    }
+  }
+  const valid =
+    !nameInvalid &&
+    !amountInvalid &&
+    !percentInvalid &&
+    !maxDiscountInvalid &&
+    !maxUsesInvalid &&
+    !expiresInvalid;
   return {
     valid,
     nameInvalid,
     amountInvalid,
+    percentInvalid,
+    maxDiscountInvalid,
     maxUsesInvalid,
     expiresInvalid,
-    body: valid
-      ? {
-          name,
-          amount_vnd: amountN as number,
-          max_uses: maxUsesN as number,
-          expires_at: expiry === null ? null : (expiry as number),
-        }
-      : null,
+    body: funding,
   };
 }
 
@@ -299,7 +393,10 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
   const t = useT(promotionsDict);
   const qc = useQueryClient();
   const [name, setName] = useState("");
+  const [kind, setKind] = useState<"fixed" | "percent">("fixed");
   const [amount, setAmount] = useState("");
+  const [percent, setPercent] = useState("");
+  const [maxDiscount, setMaxDiscount] = useState("");
   const [maxUses, setMaxUses] = useState("");
   const [expiresDate, setExpiresDate] = useState("");
   const [renaming, setRenaming] = useState<AdminPromo | null>(null);
@@ -319,6 +416,8 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
       setRevealedCode(code);
       setName("");
       setAmount("");
+      setPercent("");
+      setMaxDiscount("");
       setMaxUses("");
       setExpiresDate("");
       toast.success(t("codeTitle"));
@@ -340,14 +439,36 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
     onError,
   });
 
-  const form = promoFormState({ name, amount, maxUses, expiresDate }, Date.now());
+  const form = promoFormState(
+    { kind, name, amount, percent, maxDiscount, maxUses, expiresDate },
+    Date.now(),
+  );
 
   const columns: ColumnDef<AdminPromo, unknown>[] = [
     { accessorKey: "name", header: t("name") },
     {
-      accessorKey: "amount_vnd",
-      header: t("colAmount"),
-      cell: (c) => <span className="font-mono text-xs">{formatVnd(c.getValue<number>())}</span>,
+      id: "discount",
+      header: t("colDiscount"),
+      // Percent rows show the friendly percent + their VND cap; fixed rows
+      // keep the VND credit. All values come from the server row snapshot.
+      cell: (c) => {
+        const row = c.row.original;
+        if (row.kind === "percent" && row.percent_bp != null) {
+          return (
+            <span className="font-mono text-xs">
+              {formatPercentBp(row.percent_bp)}
+              {row.max_discount_vnd != null
+                ? ` · ${t("capOf", { cap: formatVnd(row.max_discount_vnd) })}`
+                : ""}
+            </span>
+          );
+        }
+        return (
+          <span className="font-mono text-xs">
+            {row.amount_vnd == null ? "—" : formatVnd(row.amount_vnd)}
+          </span>
+        );
+      },
     },
     {
       id: "uses",
@@ -428,12 +549,28 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <form
-          className="grid gap-3 sm:grid-cols-5 sm:items-start"
+          className={`grid gap-3 sm:items-start ${kind === "percent" ? "sm:grid-cols-6" : "sm:grid-cols-5"}`}
           onSubmit={(e) => {
             e.preventDefault();
             if (form.body && !create.isPending) create.mutate(form.body);
           }}
         >
+          <div className="grid gap-1">
+            <Label>{t("kind")}</Label>
+            <div className="flex gap-1" role="group" aria-label={t("kind")}>
+              {(["fixed", "percent"] as const).map((k) => (
+                <Button
+                  key={k}
+                  type="button"
+                  size="sm"
+                  variant={kind === k ? "default" : "outline"}
+                  onClick={() => setKind(k)}
+                >
+                  {k === "fixed" ? t("kindFixed") : t("kindPercent")}
+                </Button>
+              ))}
+            </div>
+          </div>
           <Field
             id="promo-name"
             label={t("name")}
@@ -451,24 +588,75 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
               className={form.nameInvalid ? "border-destructive" : undefined}
             />
           </Field>
-          <Field
-            id="promo-amount"
-            label={t("amount")}
-            error={t("errAmount")}
-            errorId="promo-amount-error"
-            invalid={form.amountInvalid}
-          >
-            <Input
+          {kind === "fixed" ? (
+            <Field
               id="promo-amount"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="500000"
-              inputMode="numeric"
-              aria-invalid={form.amountInvalid}
-              aria-describedby={form.amountInvalid ? "promo-amount-error" : undefined}
-              className={form.amountInvalid ? "border-destructive" : undefined}
-            />
-          </Field>
+              label={t("amount")}
+              error={t("errAmount")}
+              errorId="promo-amount-error"
+              invalid={form.amountInvalid}
+            >
+              <Input
+                id="promo-amount"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="500000"
+                inputMode="numeric"
+                aria-invalid={form.amountInvalid}
+                aria-describedby={form.amountInvalid ? "promo-amount-error" : undefined}
+                className={form.amountInvalid ? "border-destructive" : undefined}
+              />
+            </Field>
+          ) : (
+            <>
+              <Field
+                id="promo-percent"
+                label={t("percent")}
+                error={t("errPercent")}
+                errorId="promo-percent-error"
+                invalid={form.percentInvalid}
+              >
+                <Input
+                  id="promo-percent"
+                  value={percent}
+                  onChange={(e) => setPercent(e.target.value)}
+                  placeholder="3"
+                  inputMode="decimal"
+                  aria-invalid={form.percentInvalid}
+                  aria-describedby={
+                    form.percentInvalid ? "promo-percent-error" : "promo-percent-hint"
+                  }
+                  className={form.percentInvalid ? "border-destructive" : undefined}
+                />
+                <p id="promo-percent-hint" className="text-xs text-muted-foreground">
+                  {t("percentHint")}
+                </p>
+              </Field>
+              <Field
+                id="promo-max-discount"
+                label={t("maxDiscount")}
+                error={t("errMaxDiscount")}
+                errorId="promo-max-discount-error"
+                invalid={form.maxDiscountInvalid}
+              >
+                <Input
+                  id="promo-max-discount"
+                  value={maxDiscount}
+                  onChange={(e) => setMaxDiscount(e.target.value)}
+                  placeholder="100000"
+                  inputMode="numeric"
+                  aria-invalid={form.maxDiscountInvalid}
+                  aria-describedby={
+                    form.maxDiscountInvalid ? "promo-max-discount-error" : "promo-max-discount-hint"
+                  }
+                  className={form.maxDiscountInvalid ? "border-destructive" : undefined}
+                />
+                <p id="promo-max-discount-hint" className="text-xs text-muted-foreground">
+                  {t("maxDiscountHint")}
+                </p>
+              </Field>
+            </>
+          )}
           <Field
             id="promo-max-uses"
             label={t("maxUses")}
