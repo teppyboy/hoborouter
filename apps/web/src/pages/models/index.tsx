@@ -15,8 +15,8 @@ import { useIsAdmin } from "../../components/app-shell";
 // Created by shell writer; route is splat "/models/$".
 import { modelHref } from "../../lib/models";
 import { formatProviderLabel } from "../../lib/display";
+import { capabilityFilterOptions, capabilityLabel } from "../../lib/capabilities";
 import {
-  allCapabilities,
   allProviders,
   sortModels,
   MODEL_SORT_OPTIONS,
@@ -25,6 +25,7 @@ import {
   type ModelSortMode,
 } from "./data";
 import { useT } from "../../lib/i18n/t";
+import { useLocaleStore } from "../../lib/i18n/locale";
 
 // Models catalog copy: inline LocaleEntry set (see lib/i18n/common.ts).
 // Model IDs, provider names and capability values stay verbatim.
@@ -77,7 +78,13 @@ export default function ModelsPage() {
   const isAdmin = useIsAdmin();
 
   const providers = useMemo(() => allProviders(models), [models]);
-  const caps = useMemo(() => allCapabilities(models), [models]);
+  // Filter options are distinct stored values (known keys labelled first,
+  // unknown values verbatim); filtering matches the stored value itself.
+  const caps = useMemo(
+    () => capabilityFilterOptions(models.flatMap((m) => m.capabilities)),
+    [models],
+  );
+  const locale = useLocaleStore((s) => s.locale);
 
   const filtered = useMemo(
     () =>
@@ -128,7 +135,7 @@ export default function ModelsPage() {
           <div className="flex flex-wrap gap-1">
             {cs.map((c) => (
               <Badge key={c} variant="secondary" className="font-mono text-xs">
-                {c}
+                {capabilityLabel(c, locale)}
               </Badge>
             ))}
           </div>
@@ -182,14 +189,14 @@ export default function ModelsPage() {
         </Select>
         {caps.length > 0 && (
           <Select value={cap} onValueChange={setCap}>
-            <SelectTrigger className="h-8 w-44">
+            <SelectTrigger aria-label="Filter by capability" className="h-8 w-44">
               <SelectValue placeholder={t("capabilityPlaceholder")} />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t("allCapabilities")}</SelectItem>
               {caps.map((c) => (
                 <SelectItem key={c} value={c}>
-                  {c}
+                  {capabilityLabel(c, locale)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -223,7 +230,9 @@ export default function ModelsPage() {
           }
         />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-border">
+        <div className="flex min-h-0 flex-col rounded-lg border border-border">
+          {/* No flex-1: the bordered wrapper hugs the table when rows are few
+              and caps to the remaining height only when rows overflow. */}
           <ScrollPanel label="Model catalog" stickyHeader fill>
             <DataTable key={sort} columns={columns} data={ordered} />
           </ScrollPanel>

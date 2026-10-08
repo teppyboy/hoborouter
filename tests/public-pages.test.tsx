@@ -28,7 +28,7 @@ const model = {
   display_name: "GPT-4o mini",
   provider: "openai",
   description: "Small fast chat model.",
-  capabilities: ["chat", "tools"],
+  capabilities: ["chat", "tools", "ocr"],
   context_window: 128000,
   // $0.15 input / 1M at 26000 VND/USD = 3900 VND (server-converted).
   price_vnd_per_1m: { input: 3900, output: 15600, cached_input: 975, reasoning: 0 },
@@ -87,11 +87,36 @@ test("pricing shows live VND prices, context window, capabilities and plans", ()
   expect(html).toContain("15.600 ₫"); // output per 1M
   expect(html).toContain("975 ₫"); // cached input per 1M
   expect(html).toContain("128.0K token context");
-  expect(html).toContain("chat"); // capability badge
+  expect(html).toContain("Chat"); // capability badge (canonical label, not raw "chat")
+  expect(html).toContain("Tools");
+  expect(html).toContain("ocr"); // unknown capability stays verbatim
+  expect(html).not.toContain(">chat<");
   expect(html).toContain("Group Pro");
   expect(html).toContain("200.000 ₫");
   expect(html).toContain("250.000 ₫ credit / 30 days");
   expect(html).toContain("15 requests per minute");
+});
+
+test("pricing keeps absent capabilities unknown: no invented Vision/chat claims", () => {
+  const html = renderToStaticMarkup(
+    <Pricing
+      instance={instance}
+      models={[{ ...model, capabilities: [] }]}
+      modelsState="ready"
+      plans={[]}
+      plansState="ready"
+    />,
+  );
+  expect(html).toContain("openai/gpt-4o-mini");
+  // Null/empty capabilities must not imply any capability (chat is a gateway
+  // convention, not a stored claim; vision is never inferred). Assertions are
+  // element-bounded badge text (">Vision<"), so the legitimate
+  // "Reasoning / 1M tokens" price row cannot false-positive.
+  expect(html).not.toContain(">Vision<");
+  expect(html).not.toContain(">Nhận diện ảnh<");
+  expect(html).not.toContain(">Chat<");
+  expect(html).not.toContain(">Suy luận<");
+  expect(html).not.toContain(">Công cụ<");
 });
 
 test("pricing loading / error / empty states", () => {

@@ -17,6 +17,7 @@ const GLOBAL_KEYS = [
   "HTMLElement",
   "HTMLInputElement",
   "HTMLFormElement",
+  "DocumentFragment",
   "getComputedStyle",
   "MutationObserver",
   "CustomEvent",
@@ -37,6 +38,7 @@ let W: {
   HTMLElement: typeof HTMLElement;
   HTMLInputElement: typeof HTMLInputElement;
   HTMLFormElement: typeof HTMLFormElement;
+  DocumentFragment: typeof DocumentFragment;
   getComputedStyle: typeof getComputedStyle;
   MutationObserver: typeof MutationObserver;
   CustomEvent: new (type: string, init?: CustomEventInit) => CustomEvent;
@@ -64,6 +66,7 @@ beforeAll(async () => {
     HTMLElement: W.HTMLElement,
     HTMLInputElement: W.HTMLInputElement,
     HTMLFormElement: W.HTMLFormElement,
+    DocumentFragment: W.DocumentFragment,
     getComputedStyle: W.getComputedStyle.bind(W),
     MutationObserver: W.MutationObserver,
     CustomEvent: W.CustomEvent,
@@ -184,6 +187,63 @@ function setInputValue(input: HTMLInputElement, value: string) {
 }
 
 // --- models page ----------------------------------------------------------
+
+test("capability input offers known suggestions (datalist) and stays freeform", async () => {
+  useLocaleStore.getState().setLocale("en");
+  serve((url) => {
+    if (url.includes("/admin/catalog/models")) return jsonResponse(200, [MODEL]);
+    if (url.includes("/admin/cpa/models")) return jsonResponse(200, { data: [{ id: "cpa-a" }] });
+    return jsonResponse(200, {});
+  });
+  const page = mountPage(<AdminModelsPage />);
+  await page.settle();
+  try {
+    clickButtonWithText(page.container, "Create model");
+    await page.settle();
+    const input = document.getElementById("capabilities") as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    const listId = input!.getAttribute("list");
+    expect(listId).toBeTruthy();
+    // Suggestions cover exactly the canonical known keys; free text stays valid.
+    const options = [...document.querySelectorAll(`datalist[id="${listId}"] option`)].map((o) =>
+      o.getAttribute("value"),
+    );
+    expect(options).toEqual(["chat", "vision", "tools", "reasoning"]);
+    setInputValue(input!, "chat, image-gen");
+    expect(input!.value).toBe("chat, image-gen");
+    // No backend restriction: the form schema keeps capabilities optional.
+    expect(page.bodyText()).not.toContain("Must be one of");
+  } finally {
+    page.unmount();
+  }
+});
+
+test("edit sheet capability input offers the same known suggestions", async () => {
+  useLocaleStore.getState().setLocale("en");
+  serve((url) => {
+    if (url.includes("/admin/catalog/models")) return jsonResponse(200, [MODEL]);
+    if (url.includes("/admin/cpa/models")) return jsonResponse(200, { data: [{ id: "cpa-a" }] });
+    return jsonResponse(200, {});
+  });
+  const page = mountPage(<AdminModelsPage />);
+  await page.settle();
+  try {
+    clickButtonWithText(page.container, "Open");
+    await page.settle();
+    const input = document.getElementById("capabilities") as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    const listId = input!.getAttribute("list");
+    expect(listId).toBeTruthy();
+    const options = [...document.querySelectorAll(`datalist[id="${listId}"] option`)].map((o) =>
+      o.getAttribute("value"),
+    );
+    expect(options).toEqual(["chat", "vision", "tools", "reasoning"]);
+    // Existing stored value loads verbatim (not rewritten to labels).
+    expect(input!.value).toBe("chat");
+  } finally {
+    page.unmount();
+  }
+});
 
 test("admin models page flips EN → VI and keeps model IDs untranslated", async () => {
   useLocaleStore.getState().setLocale("en");

@@ -7,8 +7,10 @@ import { Button } from "../../components/ui/button";
 import { Separator } from "../../components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { formatUsdMicroPer1m } from "../../lib/format";
+import { capabilityLabel } from "../../lib/capabilities";
 import { useCatalogModel } from "./data";
 import { useT } from "../../lib/i18n/t";
+import { useLocaleStore } from "../../lib/i18n/locale";
 
 // Model detail copy: inline LocaleEntry set (see lib/i18n/common.ts). The
 // public model id, capability values and code samples stay verbatim.
@@ -94,6 +96,7 @@ function PriceRow({ label, value }: { label: string; value: number }) {
 
 export default function ModelDetailPage() {
   const t = useT(detailCopy);
+  const locale = useLocaleStore((s) => s.locale);
   // Route is splat "/models/$"; public id may contain '/', read the splat param.
   const params = useParams({ strict: false }) as { _splat?: string; modelId?: string };
   const rawId = params._splat ?? params.modelId ?? "";
@@ -184,7 +187,7 @@ export default function ModelDetailPage() {
                   <div className="flex flex-wrap gap-1">
                     {model.capabilities.map((c) => (
                       <Badge key={c} variant="secondary" className="font-mono text-xs">
-                        {c}
+                        {capabilityLabel(c, locale)}
                       </Badge>
                     ))}
                   </div>

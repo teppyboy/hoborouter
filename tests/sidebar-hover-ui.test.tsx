@@ -274,14 +274,42 @@ test("collapsed rail keeps exactly one expand toggle, in the header (no bottom b
   expect(useSidebarStore.getState().collapsed).toBe(false);
 });
 
-test("collapsed rail header hides the brand: no logo, no name, one toggle", async () => {
+test("collapsed rail header shows the Shuffle logo as the sole expand affordance", async () => {
   await renderShell();
   const header = aside().firstElementChild as HTMLElement;
-  expect(header.querySelector("svg.lucide-shuffle")).toBeNull();
+  // The logo itself is the expand control: one button carrying the Shuffle
+  // brand icon, keyboard- and screen-reader-reachable, no separate toggle.
+  const toggle = header.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]');
+  expect(toggle).not.toBeNull();
+  expect(toggle!.querySelector("svg.lucide-shuffle")).not.toBeNull();
   expect(header.textContent).not.toContain("Hoborouter");
-  // Exactly one control remains: the accessible expand toggle.
   expect(header.querySelectorAll("button").length).toBe(1);
-  expect(header.querySelector('[aria-label="Expand sidebar"]')).not.toBeNull();
+  expect(toggle!.getAttribute("aria-expanded")).toBe("false");
+  expect(toggle!.getAttribute("title")).toBe("Expand sidebar");
+  // Clicking the logo expands persistently (store write, not hover state).
+  act(() => {
+    toggle!.click();
+  });
+  expect(useSidebarStore.getState().collapsed).toBe(false);
+  expect(W.localStorage.getItem("hbr-sidebar") ?? "").toContain('"collapsed":false');
+});
+
+test("hover-expanded rail keeps the expand action and adds brand text back", async () => {
+  await renderShell();
+  const header = aside().firstElementChild as HTMLElement;
+  hoverAside("enter");
+  // Persisted-collapsed + hover: the control must still offer Expand (the
+  // rail is not genuinely expanded yet), never Collapse.
+  const expand = header.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]');
+  expect(expand).not.toBeNull();
+  expect(expand!.getAttribute("aria-expanded")).toBe("false");
+  expect(header.querySelector('[aria-label="Collapse sidebar"]')).toBeNull();
+  // Genuine expansion (store collapsed=false) flips to the Collapse action.
+  act(() => {
+    expand!.click();
+  });
+  expect(useSidebarStore.getState().collapsed).toBe(false);
+  expect(header.querySelector('[aria-label="Collapse sidebar"]')).not.toBeNull();
 });
 
 test("expanded rail header shows brand, logo, and toggle", async () => {
@@ -305,8 +333,11 @@ test("hover-expanded rail shows the brand; mouse leave hides it again", async ()
   expect(useSidebarStore.getState().collapsed).toBe(true);
   expect(W.localStorage.getItem("hbr-sidebar") ?? "").toContain('"collapsed":true');
   hoverAside("leave");
-  expect(header.querySelector("svg.lucide-shuffle")).toBeNull();
+  // Back to collapsed: brand text and collapse action disappear, the single
+  // Shuffle logo expand affordance remains.
   expect(header.textContent).not.toContain("Hoborouter");
+  expect(header.querySelector('[aria-label="Collapse sidebar"]')).toBeNull();
+  expect(header.querySelector('[aria-label="Expand sidebar"]')).not.toBeNull();
 });
 
 test("mobile nav trigger untouched: aside hidden below md, hamburger present", async () => {

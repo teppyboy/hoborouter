@@ -55,7 +55,7 @@ import {
 } from "./attachments";
 import { useT, useLocaleEntry, translate, type LocaleEntry } from "../../lib/i18n/t";
 import { useLocaleStore } from "../../lib/i18n/locale";
-
+import { useCapabilityLabel } from "../../lib/capabilities";
 // Chat page copy: inline LocaleEntry set (see lib/i18n/common.ts). Model
 // names, message content and API errors stay verbatim — only chrome, notices
 // and controls are translated. Module-level helpers read the live locale via
@@ -327,6 +327,7 @@ function PromptChip({ chip, onPick }: { chip: LocaleEntry; onPick: (text: string
 
 export function ChatPage() {
   const t = useChatT();
+  const capabilityLabelFor = useCapabilityLabel();
   const { data: session } = useSession();
   const userId = session?.user?.id ?? null;
   const workspaceId = useCurrentWorkspaceId();
@@ -1186,6 +1187,8 @@ export function ChatPage() {
               aria-label={t("model")}
               className="h-9 min-w-0 max-w-56 flex-1 gap-1 border-0 bg-muted/50 shadow-none"
             >
+              {/* Explicit trigger label: the selected item's children also
+                carry the capability hint, which must stay dropdown-only. */}
               <SelectValue
                 className="min-w-0 truncate"
                 placeholder={
@@ -1195,12 +1198,27 @@ export function ChatPage() {
                       ? t("modelsUnavailable")
                       : t("chooseModel")
                 }
-              />
+              >
+                {models.find((m) => m.publicId === model)?.displayName ?? (model || undefined)}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {models.map((m) => (
-                <SelectItem key={m.publicId} value={m.publicId}>
+                <SelectItem
+                  key={m.publicId}
+                  value={m.publicId}
+                  textValue={m.displayName ?? m.publicId}
+                >
                   {m.displayName ?? m.publicId}
+                  {/* Server-published capability metadata inline in the
+                    picker only, via the shared capability label helper:
+                    known keys get localized EN/VI labels, unknown stored
+                    values stay verbatim (no inferred capabilities). */}
+                  {m.capabilities.length > 0 && (
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      {m.capabilities.map((c) => capabilityLabelFor(c)).join(", ")}
+                    </span>
+                  )}
                 </SelectItem>
               ))}
             </SelectContent>

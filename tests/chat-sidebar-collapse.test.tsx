@@ -132,6 +132,11 @@ test("desktop sidebar collapses with data-state + aria-expanded and persists acr
   // Expanded: the history list is reachable (empty-state text present).
   expect(document.body.textContent).toContain("No conversations yet.");
 
+  // The toggle button lives outside the swapped children, so keyboard focus
+  // survives the collapse (it must not be dropped on a re-mounted node).
+  // jsdom does not focus buttons on synthetic clicks; a keyboard user has the
+  // toggle focused before activating it, so focus it explicitly first.
+  toggle()!.focus();
   click(toggle()!);
   await flush();
   expect(aside()?.getAttribute("data-state")).toBe("collapsed");
@@ -139,6 +144,7 @@ test("desktop sidebar collapses with data-state + aria-expanded and persists acr
   expect(globalThis.localStorage?.getItem("chat.sidebar.collapsed")).toBe("1");
   // Collapsed rail keeps the New chat affordance reachable.
   expect(document.body.textContent).toContain("New chat");
+  expect(document.activeElement).toBe(toggle());
 
   // Remount: the collapsed preference survives (device UI pref, stored "1").
   roots.splice(0).forEach((r) => r.unmount());

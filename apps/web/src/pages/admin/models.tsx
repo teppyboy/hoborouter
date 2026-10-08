@@ -31,6 +31,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { api, ApiError } from "../../lib/api";
 import { formatDate, formatUsdMicroPer1m } from "../../lib/format";
 import { useT, type LocaleEntry } from "../../lib/i18n/t";
+import { KNOWN_CAPABILITIES } from "../../lib/capabilities";
 import {
   AdminGate,
   type AdminModel,
@@ -747,8 +748,14 @@ function DetailsSection({ model, onSaved }: { model: AdminModel; onSaved: () => 
         <Input
           id="capabilities"
           placeholder="chat, tools, vision"
+          list="capability-suggestions"
           {...form.register("capabilities")}
         />
+        <datalist id="capability-suggestions">
+          {KNOWN_CAPABILITIES.map((c) => (
+            <option key={c} value={c} />
+          ))}
+        </datalist>
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor="context_window">{t("contextWindowLabel")}</Label>
@@ -972,8 +979,14 @@ function CreateModelDialog({
             <Input
               id="capabilities"
               placeholder="chat, tools, vision"
+              list="capability-suggestions"
               {...form.register("capabilities")}
             />
+            <datalist id="capability-suggestions">
+              {KNOWN_CAPABILITIES.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="context_window">{t("contextWindowLabel")}</Label>

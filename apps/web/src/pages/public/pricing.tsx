@@ -9,7 +9,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Skeleton } from "../../components/ui/skeleton";
 import { formatVnd, formatTokens, formatUsdAmountText } from "../../lib/format";
 import { formatProviderLabel } from "../../lib/display";
+import { capabilityLabel } from "../../lib/capabilities";
 import { useLocaleEntry, type LocaleEntry } from "../../lib/i18n/t";
+import { useLocaleStore } from "../../lib/i18n/locale";
 
 // Chrome copy set for the pricing body; money VALUES stay server-formatted
 // (VND/USD invariants) — only the words around them are translated.
@@ -67,6 +69,7 @@ function ModelPriceRow({ label, value }: { label: LocaleEntry; value: number }) 
 
 function ModelCard({ model }: { model: PublicCatalogModel }) {
   const p = model.price_vnd_per_1m;
+  const locale = useLocaleStore((s) => s.locale);
   return (
     <Card>
       <CardHeader>
@@ -85,7 +88,7 @@ function ModelCard({ model }: { model: PublicCatalogModel }) {
           <div className="flex flex-wrap gap-1">
             {model.capabilities.map((c) => (
               <Badge key={c} variant="secondary" className="font-mono text-xs">
-                {c}
+                {capabilityLabel(c, locale)}
               </Badge>
             ))}
           </div>

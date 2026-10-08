@@ -5,6 +5,7 @@
 // available. Harness mirrors admin-cpa-model-names.test.tsx (jsdom + mocked
 // fetch) and auth-i18n.test.tsx (memory router for useNavigate).
 import { test, expect, beforeAll, afterAll, afterEach, mock } from "bun:test";
+import { act } from "react";
 import { registerFaithfulApiMock } from "./helpers/faithful-api-mock";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, createRootRoute, createMemoryHistory } from "@tanstack/react-router";
@@ -81,6 +82,11 @@ beforeAll(async () => {
   for (const [k, v] of Object.entries(values)) {
     (globalThis as Record<string, unknown>)[k] = v;
   }
+  // Radix Select scroll-highlight calls scrollIntoView; jsdom does not
+  // implement layout, so the method itself is absent (no-op stub only).
+  (
+    values.HTMLElement as unknown as { prototype: Record<string, unknown> }
+  ).prototype.scrollIntoView = () => {};
   jsdomWindow = win as unknown as { close: () => void };
   globalThis.fetch = mockFetch as typeof fetch;
   // lib/api is registered once per process via the shared faithful mock (see
@@ -170,7 +176,9 @@ const catalog = {
       display_name: "Zeta Premium",
       provider: "zeta",
       description: null,
-      capabilities: ["tools"],
+      // "ocr" is a deliberately unknown stored value: it must render verbatim
+      // and appear in the filter, never renamed or dropped.
+      capabilities: ["tools", "ocr"],
       context_window: 200000,
       price: {
         input_usd_micro_per_1m: 10_000_000,
@@ -310,6 +318,102 @@ test("existing filters remain: provider and capability selects still offered", a
   // Sort control labelled for assistive tech, defaulting to Recommended.
   const sortTrigger = document.querySelector('[aria-label="Sort models"]');
   expect(sortTrigger?.textContent).toContain("Recommended");
+});
+
+test("capability badges show bilingual labels for known keys and verbatim for unknown", async () => {
+  await mountPage();
+  // Known canonical keys render their display labels, not raw stored strings.
+  expect(bodyText()).toContain("Chat");
+  expect(bodyText()).toContain("Tools");
+  // Unknown stored value stays verbatim — never renamed or dropped.
+  expect(bodyText()).toContain("ocr");
+});
+
+test("capability filter options list display labels (known first, unknown verbatim)", async () => {
+  await mountPage();
+  const trigger = document.querySelector(
+    '[aria-label="Filter by capability"]',
+  ) as HTMLElement | null;
+  expect(trigger).not.toBeNull();
+  // Keyboard open: jsdom has no pointer-capture APIs, so Radix Select is
+  // driven the way keyboard users drive it (focus + ArrowDown).
+  trigger!.focus();
+  await act(async () => {
+    trigger!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  });
+  // Radix renders options into a body portal once open.
+  await waitFor(
+    () => document.body.querySelectorAll('[role="option"]').length > 0,
+    "capability filter options open",
+  );
+  const labels = [...document.body.querySelectorAll('[role="option"]')].map(
+    (o) => o.textContent ?? "",
+  );
+  // Known values show display labels; the unknown "ocr" stays verbatim.
+  expect(labels).toContain("Chat");
+  expect(labels).toContain("Tools");
+  expect(labels).toContain("ocr");
+  expect(labels).toContain("All capabilities");
+  // Raw stored strings are not shown as option labels.
+  expect(labels).not.toContain("chat");
+
+  // Select the unknown value by keyboard: filtering must match the stored
+  // value "ocr" (gateway truth), leaving only the model that declares it.
+  const ocrOption = [...document.body.querySelectorAll('[role="option"]')].find(
+    (o) => o.textContent === "ocr",
+  ) as HTMLElement;
+  ocrOption.focus();
+  await act(async () => {
+    ocrOption.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  await waitFor(() => !document.body.querySelector('[role="option"]'), "capability filter closed");
+  expect(renderedIds()).toEqual(["zeta/premium"]);
+});
+
+test("absent capabilities stay unknown: dash, no invented Vision claim", async () => {
+  const emptyCaps = {
+    ...catalog,
+    data: [
+      {
+        ...catalog.data[1]!,
+        public_id: "quiet/none",
+        capabilities: [],
+      },
+    ],
+  };
+  responder = async (path) => {
+    if (path === "/api/v1/catalog/models") return jsonRes(200, emptyCaps);
+    if (path === "/api/v1/me") return jsonRes(200, { is_instance_admin: false });
+    return jsonRes(200, {});
+  };
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const router = createRouter({
+    routeTree: createRootRoute({ component: () => null }),
+    history: createMemoryHistory({ initialEntries: ["/models"] }),
+  });
+  const root = mountRoot(container);
+  roots.push(root);
+  root.render(
+    <routerContext.Provider value={router}>
+      <QueryClientProvider client={qc}>
+        <ModelsPage />
+      </QueryClientProvider>
+    </routerContext.Provider>,
+  );
+  await waitFor(
+    () => bodyText().includes("quiet/none") && !bodyText().includes("Loading"),
+    "models rendered",
+  );
+  // Absent capabilities render the dash and never imply vision (gateway
+  // convention makes null-caps models chat-capable, but that is not a claim
+  // the UI may display).
+  expect(bodyText()).toContain("—");
+  expect(bodyText()).not.toContain("Vision");
+  expect(bodyText()).not.toContain("Nhận diện ảnh");
+  expect(bodyText()).not.toContain("Reasoning");
+  expect(bodyText()).not.toContain("Suy luận");
 });
 
 test("column-header sorting still works alongside the Recommended option", async () => {

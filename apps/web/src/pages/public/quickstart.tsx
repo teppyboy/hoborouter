@@ -73,6 +73,10 @@ const quickstartCopy = {
   agentCodexDocs: { en: "Codex config reference", vi: "Codex config reference" },
   agentOpencodeDocs: { en: "OpenCode providers docs", vi: "Tài liệu providers của OpenCode" },
   agentPiDocs: { en: "pi model catalog", vi: "Danh mục model của pi" },
+  agentClaudeLead: {
+    en: "Claude Code is not yet supported: it requires the Anthropic Messages API (/v1/messages), which this gateway does not serve yet. Use Codex, OpenCode, or pi with the OpenAI-compatible endpoint above — watch this page for updates.",
+    vi: "Claude Code chưa được hỗ trợ: nó cần Anthropic Messages API (/v1/messages), mà cổng API này chưa phục vụ. Hãy dùng Codex, OpenCode hoặc pi với endpoint tương thích OpenAI ở trên — theo dõi trang này để cập nhật.",
+  },
   agentExampleAria: { en: "{lang} config example", vi: "ví dụ cấu hình {lang}" },
   agentCopyExample: { en: "Copy {lang} config", vi: "Copy cấu hình {lang}" },
 } as const;
@@ -387,6 +391,7 @@ export function Quickstart({
                   <TabsTrigger value="codex">Codex</TabsTrigger>
                   <TabsTrigger value="opencode">OpenCode</TabsTrigger>
                   <TabsTrigger value="pi">pi</TabsTrigger>
+                  <TabsTrigger value="claude">Claude Code</TabsTrigger>
                 </TabsList>
                 <TabsContent value="codex" className="space-y-2">
                   <p className="text-sm text-muted-foreground">
@@ -405,6 +410,13 @@ export function Quickstart({
                     {t("agentPiLead")} <AgentDocsLinks target="pi" />.
                   </p>
                   <AgentSnippet code={pi} lang="pi" />
+                </TabsContent>
+                {/* Honest notice only: the gateway serves no /v1/messages
+                  route, so any config snippet here would fake support. */}
+                <TabsContent value="claude">
+                  <p className="text-sm text-muted-foreground" role="note">
+                    {t("agentClaudeLead")}
+                  </p>
                 </TabsContent>
               </Tabs>
             </CardContent>

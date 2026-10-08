@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
   BarChart3,
+  BookOpen,
   Boxes,
   CreditCard,
   Cpu,
@@ -88,6 +89,14 @@ const NAV_GROUPS: { label: LocaleEntry | ""; items: NavItem[] }[] = [
       { label: { en: "Credits", vi: "Số dư" }, to: "/billing/credits", icon: Wallet },
       { label: { en: "Bundles", vi: "Gói" }, to: "/billing/bundles", icon: Package },
       { label: { en: "Payments", vi: "Giao dịch" }, to: "/billing/payments", icon: CreditCard },
+    ],
+  },
+  {
+    label: { en: "Help", vi: "Trợ giúp" },
+    items: [
+      // Links to the existing public routes; no duplicated tutorial/about page.
+      { label: { en: "Tutorials", vi: "Hướng dẫn" }, to: "/docs/quickstart", icon: BookOpen },
+      { label: { en: "About", vi: "Giới thiệu" }, to: "/about", icon: Info },
     ],
   },
   {
@@ -570,18 +579,40 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               displayCollapsed && "justify-center px-0",
             )}
           >
-            {/* Collapsed rail keeps a single control: the expand toggle. */}
-            {!displayCollapsed && <Shuffle className="size-4 shrink-0" aria-hidden />}
-            {!displayCollapsed && <span className="text-sm font-semibold">Hoborouter</span>}
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn("size-7", !displayCollapsed && "ml-auto")}
-              aria-label={collapsed ? st("expandSidebar") : st("collapseSidebar")}
-              onClick={toggleCollapsed}
-            >
-              <ToggleIcon className="size-4" />
-            </Button>
+            {/* Collapsed rail keeps a single control: the Shuffle logo itself
+              acts as the expand affordance (keyboard- and pointer-reachable,
+              same persisted toggle as the expanded rail's close button). */}
+            {displayCollapsed ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label={st("expandSidebar")}
+                aria-expanded={false}
+                title={st("expandSidebar")}
+                onClick={toggleCollapsed}
+              >
+                <Shuffle className="size-4" />
+              </Button>
+            ) : (
+              <>
+                <Shuffle className="size-4 shrink-0" aria-hidden />
+                <span className="text-sm font-semibold">Hoborouter</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="ml-auto size-7"
+                  // The action follows the persisted state, not the hover-only
+                  // expansion: a hover-expanded rail still offers Expand.
+                  aria-label={collapsed ? st("expandSidebar") : st("collapseSidebar")}
+                  aria-expanded={!collapsed}
+                  title={collapsed ? st("expandSidebar") : st("collapseSidebar")}
+                  onClick={toggleCollapsed}
+                >
+                  <ToggleIcon className="size-4" />
+                </Button>
+              </>
+            )}
           </div>
           <nav className="flex-1 overflow-y-auto p-2 text-sm">
             <NavLinks pathname={pathname} collapsed={displayCollapsed} isAdmin={isAdmin} />
