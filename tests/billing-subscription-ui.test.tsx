@@ -1,7 +1,8 @@
-// Subscription UI contract (SSR): plan cards show price, per-period credit and
-// the Subscribe/Renew label; the Credits subscription card shows balance,
-// period end, per-minute limit and the forfeit note; expired ledger memo gets
-// its human label. Static markup fires no requests.
+// Subscription UI contract (SSR): plan cards show price and per-period credit
+// (Subscribe/Renew wording lives in the checkout dialog, not on the card); the
+// Credits subscription card shows balance, period end, per-minute limit and
+// the forfeit note; expired ledger memo gets its human label. Static markup
+// fires no requests.
 import { test, expect } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -9,6 +10,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // lib/auth runs createAuthClient (window.location.origin) at module load;
 // stub a minimal window so the SSR render test can import the pages.
 (globalThis as { window?: unknown }).window ??= { location: { origin: "http://localhost" } };
+// Radix (pulled in by the billing page) captures document availability when
+// its modules first load; without any document the captured state breaks
+// Radix event wiring for later jsdom tests sharing this bun process
+// (billing-checkout-ui). The shared fixture installs a faithful jsdom
+// document; the previous value is restored after this file's tests.
+import { afterAll } from "bun:test";
+import { installSsrDom } from "./helpers/ssr-dom";
+const restoreSsrDom = installSsrDom();
+afterAll(restoreSsrDom);
 const { PlanCards } = await import("../apps/web/src/pages/billing/bundles");
 const { SubscriptionCard } = await import("../apps/web/src/pages/billing/credits");
 const { formatLedgerMemoLabel } = await import("../apps/web/src/lib/display");
@@ -22,17 +32,11 @@ const plan = {
   rate_limit_per_minute: 15,
 };
 
-function renderPlans(subscribed: boolean): string {
+function renderPlans(): string {
   const qc = new QueryClient();
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <PlanCards
-        plans={[plan]}
-        workspaceId="ws_1"
-        payosAvailable={false}
-        subscribed={subscribed}
-        onNavigate={() => {}}
-      />
+      <PlanCards plans={[plan]} workspaceId="ws_1" selectedId={null} onSelect={() => {}} />
     </QueryClientProvider>,
   );
 }
@@ -57,22 +61,18 @@ function renderSubscriptionCard(): string {
 }
 
 test("plan card shows name, price, per-period credit and the rate limit", () => {
-  const html = renderPlans(false);
+  const html = renderPlans();
   expect(html).toContain("Pro");
   expect(html).toContain("200.000");
   expect(html).toContain("250.000 ₫ credit / 30 days");
   expect(html).toContain("15 requests per minute");
 });
 
-test("Subscribe label without an active subscription", () => {
-  const html = renderPlans(false);
-  expect(html).toContain("Subscribe");
-  expect(html).not.toContain("Renew");
-});
-
-test("Renew label while subscribed", () => {
-  const html = renderPlans(true);
-  expect(html).toContain("Renew");
+test("card button selects, it never subscribes directly; dialog owns Subscribe/Renew", () => {
+  const html = renderPlans();
+  expect(html).toContain("Select");
+  expect(html).not.toContain("Subscribe");
+  expect(html).not.toContain(">Renew</button>");
 });
 
 test("subscription card shows balance, period end, rate limit and the forfeit note", () => {

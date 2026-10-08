@@ -5,6 +5,7 @@
 // available. Harness mirrors admin-cpa-model-names.test.tsx (jsdom + mocked
 // fetch) and auth-i18n.test.tsx (memory router for useNavigate).
 import { test, expect, beforeAll, afterAll, afterEach, mock } from "bun:test";
+import { registerFaithfulApiMock } from "./helpers/faithful-api-mock";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, createRootRoute, createMemoryHistory } from "@tanstack/react-router";
 import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js";
@@ -42,37 +43,6 @@ const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor
 let jsdomWindow: { close: () => void } | null = null;
 
 beforeAll(async () => {
-  // mock.module is process-global in Bun and outlives mock.restore(), so the
-  // mocked module must stay faithful to the real one: same ApiError shape and
-  // an api() that goes through globalThis.fetch. Otherwise test files sharing
-  // a worker process (e.g. admin-cpa-model-names) get a network layer that
-  // never touches their fetch mock and render empty lists.
-  mock.module("../apps/web/src/lib/api", () => {
-    class ApiError extends Error {
-      status: number;
-      code: string;
-      constructor(status: number, code: string, message: string) {
-        super(message);
-        this.name = "ApiError";
-        this.status = status;
-        this.code = code;
-      }
-    }
-    return {
-      ApiError,
-      api: async <T,>(path: string, init?: RequestInit): Promise<T> => {
-        const res = await fetch(path, init);
-        if (!res.ok) throw new ApiError(res.status, "unknown", `Request failed (${res.status})`);
-        const text = await res.text();
-        if (!text) return undefined as T;
-        return JSON.parse(text) as T;
-      },
-    };
-  });
-  mock.module("../apps/web/src/lib/workspace-queries", () => ({
-    useCurrentWorkspaceId: () => "ws-models",
-    useWorkspaces: () => ({ data: [], isSuccess: false }),
-  }));
   const win = new JSDOM("", { url: "http://localhost:5173" }).window as unknown as Record<
     string,
     unknown
@@ -113,6 +83,18 @@ beforeAll(async () => {
   }
   jsdomWindow = win as unknown as { close: () => void };
   globalThis.fetch = mockFetch as typeof fetch;
+  // lib/api is registered once per process via the shared faithful mock (see
+  // tests/helpers/faithful-api-mock.ts): stable ApiError identity and an api()
+  // that reads globalThis.fetch live, so this file's fetch mock intercepts
+  // requests and later files sharing the worker keep correct error-code
+  // mapping. mock.module is process-global in Bun and outlives mock.restore(),
+  // so a per-file hand-rolled mock would leak a wrong ApiError into files
+  // like promo-ui, which do `instanceof ApiError` for friendly error mapping.
+  registerFaithfulApiMock();
+  mock.module("../apps/web/src/lib/workspace-queries", () => ({
+    useCurrentWorkspaceId: () => "ws-models",
+    useWorkspaces: () => ({ data: [], isSuccess: false }),
+  }));
   ({ sortModels, MODEL_SORT_OPTIONS } = await import("../apps/web/src/pages/models/data"));
   ({ default: ModelsPage } = await import("../apps/web/src/pages/models"));
   // react-dom/client is not linked from the tests workspace; resolve through

@@ -6,6 +6,7 @@ import { test, expect, beforeAll, afterAll, mock } from "bun:test";
 import { act } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { JSDOM } from "jsdom";
+import { registerFaithfulApiMock } from "./helpers/faithful-api-mock";
 
 const GLOBAL_KEYS = [
   "window",
@@ -79,33 +80,14 @@ const keysFixture = [
 
 let calls: ApiCall[] = [];
 
-// mock.module is process-global in Bun and outlives mock.restore(), so the
-// mocked module must stay faithful to the real one: same ApiError shape and an
-// api() that goes through globalThis.fetch. Otherwise test files sharing a
-// worker process (e.g. admin-cpa-model-names, which mocks fetch itself) see a
-// network layer that never touches fetch and render empty lists.
-mock.module("../apps/web/src/lib/api", () => {
-  class ApiError extends Error {
-    status: number;
-    code: string;
-    constructor(status: number, code: string, message: string) {
-      super(message);
-      this.name = "ApiError";
-      this.status = status;
-      this.code = code;
-    }
-  }
-  return {
-    ApiError,
-    api: async <T,>(path: string, init?: RequestInit): Promise<T> => {
-      const res = await fetch(path, init);
-      if (!res.ok) throw new ApiError(res.status, "unknown", `Request failed (${res.status})`);
-      const text = await res.text();
-      if (!text) return undefined as T;
-      return JSON.parse(text) as T;
-    },
-  };
-});
+// lib/api is registered once per process via the shared faithful mock (see
+// tests/helpers/faithful-api-mock.ts): stable ApiError identity and an api()
+// that reads globalThis.fetch live, so this file's fetch mock intercepts
+// requests and later files sharing the worker keep correct error-code
+// mapping. mock.module is process-global in Bun and outlives mock.restore(),
+// so a per-file hand-rolled mock would leak a wrong ApiError into files like
+// promo-ui, which do `instanceof ApiError` for friendly error mapping.
+registerFaithfulApiMock();
 
 const realFetch = globalThis.fetch;
 const jsonRes = (status: number, body: unknown) =>
@@ -125,6 +107,13 @@ mock.module("../apps/web/src/lib/workspace-queries", () => ({
 let KeysPage: (typeof import("../apps/web/src/pages/keys/index"))["default"];
 
 beforeAll(async () => {
+  // Capture originals BEFORE any replacement: bun runs beforeAll hooks in
+  // declaration order, so capturing them in a later hook would snapshot the
+  // jsdom realm itself and make afterAll's restore a no-op (leaking this
+  // file's realm into every later file in the combined run).
+  for (const key of GLOBAL_KEYS) {
+    originals[key] = Object.getOwnPropertyDescriptor(globalThis, key);
+  }
   const win = new JSDOM("", { url: "http://localhost:5173" }).window as unknown as Record<
     string,
     unknown
@@ -200,22 +189,28 @@ beforeAll(async () => {
     (globalThis as Record<string, unknown>)[k] = v;
   }
   globalThis.fetch = mockFetch as typeof fetch;
+  // react-dom computes canUseDOM / isInputEventSupported once at first module
+  // load. Importing it at top level (before any DOM globals exist) permanently
+  // disables delegated onChange for controlled inputs in this process and
+  // breaks every later jsdom file that types into a text input. It must be
+  // loaded only after the jsdom realm is installed.
+  ({ createRoot } = (await import(Bun.resolveSync("react-dom/client", webDir))) as {
+    createRoot: (c: HTMLElement) => { render: (n: unknown) => void; unmount: () => void };
+  });
   ({ default: KeysPage } = await import("../apps/web/src/pages/keys/index"));
 });
 
 const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
-
-beforeAll(() => {
-  for (const key of GLOBAL_KEYS) {
-    originals[key] = Object.getOwnPropertyDescriptor(globalThis, key);
-  }
-});
 
 // Globals are restored after mock.restore(); radix's MutationObserver callbacks
 // can still fire briefly after unmount, so drain one macrotask first.
 afterAll(async () => {
   await new Promise((resolve) => setTimeout(resolve, 50));
   mock.restore();
+  // mock.module registrations are process-global and outlives mock.restore();
+  // re-registering the real namespaces here is a no-op in bun 1.4 (first
+  // registration wins), so the registered mocks above are kept faithful to
+  // the real modules instead.
   for (const key of GLOBAL_KEYS) {
     const descriptor = originals[key];
     if (descriptor) Object.defineProperty(globalThis, key, descriptor);
@@ -227,9 +222,7 @@ afterAll(async () => {
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
 const webDir = new URL("../apps/web/src/", import.meta.url).pathname;
-const { createRoot } = (await import(Bun.resolveSync("react-dom/client", webDir))) as {
-  createRoot: (c: HTMLElement) => { render: (n: unknown) => void; unmount: () => void };
-};
+let createRoot: (c: HTMLElement) => { render: (n: unknown) => void; unmount: () => void };
 
 function mount(node: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });

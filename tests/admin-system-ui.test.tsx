@@ -1,5 +1,6 @@
-// System page scope: instance system facts + usage logs only. CPA health and
-// CPA models moved to the CPA page's tabs — their absence here is the contract.
+// System page scope: instance system facts only. CPA health and CPA models
+// moved to the CPA page's tabs; the usage/request log moved to the dedicated
+// /admin/request-log page — their absence here is the contract.
 import { test, expect, beforeAll, afterAll, afterEach } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { JSDOM } from "jsdom";
@@ -112,22 +113,6 @@ const responder = async (_input: RequestInfo | URL, _init?: RequestInit): Promis
       db: { wal: "wal" },
       counts: { users: 3, workspaces: 2, models: 11, requests: 99 },
     });
-  if (String(_input) === "/api/v1/admin/usage-logs")
-    return jsonRes(200, {
-      data: [
-        {
-          id: "u1",
-          workspace_name: "ws",
-          provider: "gemini",
-          public_model: "pub-model",
-          input_tokens: 10,
-          output_tokens: 20,
-          status: "ok",
-          charged_vnd: 1234,
-          created_at: 1_700_000_000_000,
-        },
-      ],
-    });
   return jsonRes(404, {});
 };
 
@@ -154,7 +139,7 @@ async function waitFor(cond: () => boolean, label: string, timeoutMs = 3000) {
 
 const bodyText = () => document.body.textContent ?? "";
 
-test("system page renders system facts and usage logs only — no CPA sections", async () => {
+test("system page renders system facts only — no usage log, no CPA sections", async () => {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -165,16 +150,16 @@ test("system page renders system facts and usage logs only — no CPA sections",
       <AdminSystemPage />
     </QueryClientProvider>,
   );
-  await waitFor(() => bodyText().includes("pub-model"), "system page rendered");
+  await waitFor(() => bodyText().includes("USD/VND rate"), "system page rendered");
   // System card facts still render.
   expect(bodyText()).toContain("Gateway");
   expect(bodyText()).toContain("USD/VND rate");
   expect(bodyText()).toContain("Manual payments");
-  // Usage logs table still renders with its row data.
-  expect(bodyText()).toContain("ws");
-  expect(bodyText()).toContain("pub-model");
-  expect(calls.some((c) => c.path === "/api/v1/admin/usage-logs")).toBe(true);
-  // CPA info moved to the CPA page: neither section may appear here, and no
+  // Request log moved to /admin/request-log: no usage-log section here and
+  // no usage-logs endpoint fetched from this page.
+  expect(bodyText()).not.toContain("Usage logs");
+  expect(calls.some((c) => c.path === "/api/v1/admin/usage-logs")).toBe(false);
+  // CPA info lives on the CPA page: neither section may appear here, and no
   // CPA endpoints are fetched from this page.
   expect(bodyText()).not.toContain("CPA health");
   expect(bodyText()).not.toContain("CPA models");

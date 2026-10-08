@@ -22,6 +22,7 @@ const GLOBAL_KEYS = [
   "Event",
   "MouseEvent",
   "localStorage",
+  "matchMedia",
 ] as const;
 const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
 let jsdomWindow: { close: () => void } | null = null;
@@ -68,7 +69,40 @@ const matchMediaStub = () => ({
 (globalThis as { matchMedia?: unknown }).matchMedia = matchMediaStub;
 jsdomWindow = W;
 
-afterAll(() => {
+// Saved at module scope, before any stub is installed: mountSubCard swaps
+// globalThis.fetch for a stub and it must be restored before the globals go
+// away (previously the stub leaked into every later file in the worker).
+const realFetch = globalThis.fetch;
+
+// Every mount registers itself here; teardownMounted() unmounts inside act,
+// cancels in-flight queries, and removes containers while the jsdom globals
+// are still installed. An unflushed update scheduled by a test runs through
+// react-dom's scheduler after the last test and that callback dereferences
+// window — restoring globals with roots still mounted made it throw between
+// test files (the fixed sleep this replaces only shrank that race window).
+const mounted: {
+  root: { unmount: () => void };
+  container: HTMLElement;
+  qc: QueryClient;
+  fetchStub?: { restore: () => void };
+}[] = [];
+
+async function teardownMounted(): Promise<void> {
+  for (const m of mounted.splice(0)) {
+    await act(async () => {
+      m.root.unmount();
+    });
+    // Stop pending query callbacks before the containers disappear: a query
+    // settling after unmount would otherwise flush against removed DOM.
+    await m.qc.cancelQueries();
+    m.container.remove();
+    m.fetchStub?.restore();
+  }
+}
+
+afterAll(async () => {
+  await teardownMounted();
+  globalThis.fetch = realFetch;
   for (const k of GLOBAL_KEYS) {
     const d = originals[k];
     if (d) Object.defineProperty(globalThis, k, d);
@@ -175,7 +209,6 @@ function mountCards(
   Component: typeof BundleCards | typeof PlanCards,
   opts: {
     rate: number | undefined;
-    subscribed?: boolean;
     bundles?: TestBundle[];
     plans?: TestPlan[];
   },
@@ -189,17 +222,16 @@ function mountCards(
       ? {
           bundles: opts.bundles ?? BUNDLES,
           workspaceId: "ws_1",
-          payosAvailable: false,
+          selectedId: null,
+          onSelect: () => {},
           rate: opts.rate,
-          onNavigate: () => {},
         }
       : {
           plans: opts.plans ?? PLANS,
           workspaceId: "ws_1",
-          payosAvailable: false,
-          subscribed: opts.subscribed ?? false,
+          selectedId: null,
+          onSelect: () => {},
           rate: opts.rate,
-          onNavigate: () => {},
         };
   act(() => {
     root.render(
@@ -213,6 +245,7 @@ function mountCards(
     act(() => {
       el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
+  mounted.push({ root, container, qc });
   return {
     container,
     click,
@@ -274,7 +307,10 @@ const ACTIVE_SUB: SubscriptionInfo = {
   canceled: false,
 };
 
-function mountSubCard(subscription: SubscriptionInfo): {
+function mountSubCard(
+  subscription: SubscriptionInfo,
+  opts: { respond?: () => Promise<Response> } = {},
+): {
   container: HTMLElement;
   fetchCalls: { url: string; method: string }[];
   clickCancel: () => Promise<void>;
@@ -284,10 +320,10 @@ function mountSubCard(subscription: SubscriptionInfo): {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const root = createRoot(container);
   const fetchCalls: { url: string; method: string }[] = [];
-  const realFetch = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     fetchCalls.push({ url, method: init?.method ?? "GET" });
+    if (opts.respond) return opts.respond();
     return jsonResponse(200, {
       id: "sub-1",
       status: "active",
@@ -312,10 +348,19 @@ function mountSubCard(subscription: SubscriptionInfo): {
       await Promise.resolve();
     });
   };
-  const cleanup = () => {
-    globalThis.fetch = realFetch;
-  };
-  void cleanup;
+  mounted.push({
+    root,
+    container,
+    qc,
+    fetchStub: {
+      restore: () => {
+        // Restore the module-scope realFetch, not the value captured at mount:
+        // with several mounts chained, the captured value would be a previous
+        // stub, pinning it instead of the genuine fetch.
+        globalThis.fetch = realFetch;
+      },
+    },
+  });
   return { container, fetchCalls, clickCancel };
 }
 
@@ -340,6 +385,51 @@ test("cancel button DELETEs the workspace subscription", async () => {
 test("expired subscription shows no cancel button", () => {
   const m = mountSubCard({ ...ACTIVE_SUB, expired: true });
   expect(m.container.textContent).not.toContain("Cancel subscription");
+});
+
+test("teardown drains a deferred callback: unmount + cancelQueries + container removal settle safely before globals are restored", async () => {
+  // Regression for the teardown hazard this file's afterAll fixes: a network
+  // callback still pending at teardown must not flush against removed DOM or
+  // restored globals. The network response is gated on a deferred promise so
+  // the mutation is genuinely in flight when teardown runs.
+  let resolveGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    resolveGate = resolve;
+  });
+  const m = mountSubCard(ACTIVE_SUB, {
+    respond: () =>
+      gate.then(() =>
+        jsonResponse(200, {
+          id: "sub-1",
+          status: "active",
+          canceled_at: Date.now(),
+          period_end: ACTIVE_SUB.period_end,
+        }),
+      ),
+  });
+  await m.clickCancel();
+  expect(m.fetchCalls.some((c) => c.method === "DELETE")).toBe(true);
+
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => {
+    rejections.push(reason);
+  };
+  process.on("unhandledRejection", onRejection);
+  try {
+    // Exact teardown order the afterAll performs: unmount in act, cancel
+    // queries, remove containers, restore fetch — all before globals go.
+    await teardownMounted();
+    expect(globalThis.fetch).toBe(realFetch);
+    expect(document.body.contains(m.container)).toBe(false);
+
+    // The deferred callback resolves AFTER teardown: cancelled clients and
+    // unmounted roots must swallow it — no unhandled rejection, no throw.
+    resolveGate();
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+    expect(rejections).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onRejection);
+  }
 });
 
 // --- USD-authored catalog rows (Task 3 member display) ---------------------
@@ -477,61 +567,7 @@ test("catalog envelope rate wins over the wallet rate", async () => {
 });
 
 // --- purchase request shape ------------------------------------------------
-
-test("buy request carries the provider choice only, never amounts", async () => {
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const root = createRoot(container);
-  const calls: { url: string; method: string; body: string }[] = [];
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    calls.push({
-      url: String(input),
-      method: init?.method ?? "GET",
-      body: typeof init?.body === "string" ? init.body : "",
-    });
-    if (String(input).includes("/purchase")) {
-      return jsonResponse(200, {
-        id: "pay_1",
-        status: "PENDING",
-        checkout_url: "/billing/payments",
-      });
-    }
-    return jsonResponse(200, {});
-  }) as typeof fetch;
-  try {
-    act(() => {
-      root.render(
-        <QueryClientProvider client={qc}>
-          <BundleCards
-            bundles={USD_BUNDLES}
-            workspaceId="ws_1"
-            payosAvailable={true}
-            rate={undefined}
-            onNavigate={() => {}}
-          />
-        </QueryClientProvider>,
-      );
-    });
-    const selectPayos = [...container.querySelectorAll("input[type=radio]")].find(
-      (r) => (r as HTMLInputElement).value === "payos",
-    );
-    if (!selectPayos) throw new Error("payos radio missing");
-    await act(async () => {
-      selectPayos.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await Promise.resolve();
-    });
-    const buy = [...container.querySelectorAll("button")].find((b) => b.textContent === "Buy");
-    if (!buy) throw new Error("buy button missing");
-    await act(async () => {
-      buy.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      await new Promise((r) => setTimeout(r, 0));
-    });
-    const purchase = calls.find((c) => c.method === "POST" && c.url.includes("/purchase"));
-    if (!purchase) throw new Error("no purchase call");
-    expect(purchase.body).toBe('{"provider":"payos"}');
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-});
+// The payos-payload purchase contract moved to the selection-gated checkout
+// dialog and is covered end-to-end at page level by billing-checkout-ui.test.tsx
+// ("payos confirm keeps the exact payload shape"); the cards themselves no
+// longer own the mutation, so no card-level request-shape test remains here.

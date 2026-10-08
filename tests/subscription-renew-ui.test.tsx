@@ -18,6 +18,7 @@ const GLOBAL_KEYS = [
   "Event",
   "MouseEvent",
   "localStorage",
+  "matchMedia",
 ] as const;
 const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
 let jsdomWindow: { close: () => void } | null = null;
@@ -36,6 +37,13 @@ interface JsdomRealm {
   close: () => void;
 }
 const W = new JSDOM("", { url: "http://localhost:5173" }).window as unknown as JsdomRealm;
+
+// Saved at module scope, before any stub is installed, so afterAll restores
+// the genuine fetch even if another file's stub was still installed here.
+// The mount() fetch stub was previously never restored, leaking it into every
+// later file in the same worker (relative-path api() calls then hit Bun's
+// native fetch and fail with ERR_INVALID_URL).
+const realFetch = globalThis.fetch;
 
 for (const k of GLOBAL_KEYS) originals[k] = Object.getOwnPropertyDescriptor(globalThis, k);
 for (const [k, v] of Object.entries({
@@ -76,6 +84,11 @@ afterAll(async () => {
   for (const root of roots.splice(0)) act(() => root.unmount());
   for (const c of containers.splice(0)) c.remove();
   for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  // Restore the genuine fetch after the drain so queued commits still use
+  // this file's stub; without this the mount() stub leaked into every later
+  // file in the same worker (relative-path api() calls then hit Bun's native
+  // fetch and fail with ERR_INVALID_URL).
+  globalThis.fetch = realFetch;
   for (const k of GLOBAL_KEYS) {
     const d = originals[k];
     if (d) Object.defineProperty(globalThis, k, d);

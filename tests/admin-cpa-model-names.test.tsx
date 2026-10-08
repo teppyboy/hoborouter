@@ -278,3 +278,15 @@ test("empty model list renders the empty state", async () => {
   await mountCard({ config: aliasConfig, models: { data: [] } });
   expect(bodyText()).toContain("No CPA models");
 });
+
+test("model list is a labelled keyboard-scrollable region with header semantics", async () => {
+  await mountCard({ config: aliasConfig });
+  // ScrollPanel exposes the list as a semantic, focusable scroll region with a
+  // bilingual label; the table header stays inside it.
+  const region = document.querySelector('[role="region"][aria-label="CPA upstream models"]');
+  expect(region).not.toBeNull();
+  expect(region?.getAttribute("tabindex")).toBe("0");
+  expect(region?.querySelector("table")).not.toBeNull();
+  expect(region?.querySelector("thead")).not.toBeNull();
+  expect(region?.textContent).toContain("gemma-3");
+});

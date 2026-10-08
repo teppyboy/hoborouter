@@ -23,14 +23,23 @@ const REAL_WINDOW = (globalThis as { window?: unknown }).window;
     removeListener() {},
   }),
 };
+// Radix (Tabs/Dialog, pulled in by the billing page) captures document
+// availability when its modules first load. Without any document the captured
+// state breaks Radix event wiring for every later jsdom test sharing this bun
+// process (e.g. billing-checkout-ui): tab activation and dialog mounts die
+// silently. The shared fixture installs a faithful jsdom document; the
+// previous value is restored after this file's tests.
 import { afterAll } from "bun:test";
+import { installSsrDom } from "./helpers/ssr-dom";
+const restoreSsrDom = installSsrDom();
 afterAll(() => {
   (globalThis as { window?: unknown }).window = REAL_WINDOW;
+  restoreSsrDom();
 });
 const { BundleCards } = await import("../apps/web/src/pages/billing/bundles");
 const { formatLedgerMemoLabel } = await import("../apps/web/src/lib/display");
 
-function render(payosAvailable: boolean): string {
+function render(): string {
   const qc = new QueryClient();
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
@@ -52,15 +61,15 @@ function render(payosAvailable: boolean): string {
           },
         ]}
         workspaceId="ws_1"
-        payosAvailable={payosAvailable}
-        onNavigate={() => {}}
+        selectedId={null}
+        onSelect={() => {}}
       />
     </QueryClientProvider>,
   );
 }
 
 test("cards show name, price, credit and bonus", () => {
-  const html = render(false);
+  const html = render();
   expect(html).toContain("Starter");
   expect(html).toContain("Value");
   expect(html).toContain("50.000");
@@ -70,31 +79,24 @@ test("cards show name, price, credit and bonus", () => {
 });
 
 test("no bonus line for a zero-bonus bundle", () => {
-  const html = render(false);
+  const html = render();
   const starter = html.indexOf("Starter");
   const value = html.indexOf("Value");
   const starterCard = html.slice(starter, value);
   expect(starterCard).not.toContain("bonus");
 });
 
-test("PayOS advertised: provider choice shown, Manual checked by default", () => {
-  const html = render(true);
-  expect(html).toContain("Payment method");
-  expect(html).toContain("PayOS");
-  expect(html).toContain("Manual transfer");
-  expect(html).toContain('checked="" value="manual"');
-  expect(html).not.toContain('checked="" value="payos"');
-});
-
-test("PayOS not advertised: manual-only, no provider choice", () => {
-  const html = render(false);
+test("cards gate payment methods: provider choice lives in the checkout dialog only", () => {
+  const html = render();
   expect(html).not.toContain("Payment method");
   expect(html).not.toContain("PayOS");
+  expect(html).not.toContain("Manual transfer");
 });
 
-test("Buy button and settle expectation present", () => {
-  const html = render(false);
-  expect(html).toContain("Buy");
+test("Select button and settle expectation present", () => {
+  const html = render();
+  expect(html).toContain("Select");
+  expect(html).not.toContain(">Buy</button>");
   expect(html).toContain("status shows on the Payments page");
 });
 

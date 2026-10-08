@@ -220,7 +220,10 @@ const getCodeInDom = () => bodyText().match(/[0-9A-F]{32}/)?.[0] ?? null;
 const promoRow = (): AdminPromo => ({
   id: "promo_1",
   name: "Summer promo",
+  kind: "fixed",
   amount_vnd: 500000,
+  percent_bp: null,
+  max_discount_vnd: null,
   max_uses: 10,
   uses: 2,
   expires_at: new Date(2026, 5, 30, 23, 59, 59, 999).getTime(),
@@ -265,8 +268,11 @@ const getCalls = () =>
 const NOW = new Date(2026, 0, 10, 12, 0, 0, 0).getTime(); // 2026-01-10 noon local
 
 const base = {
+  kind: "fixed" as const,
   name: "Summer promo",
   amount: "500000",
+  percent: "",
+  maxDiscount: "",
   maxUses: "10",
   expiresDate: "",
 };
@@ -331,13 +337,93 @@ test("invalid form yields no body to submit", () => {
   expect(form({ amount: "0" }).body).toBeNull();
 });
 
+// --- percent form state ----------------------------------------------------
+
+const percentBase = { ...base, kind: "percent" as const, maxDiscount: "10000" };
+
+function percentForm(overrides: Partial<typeof percentBase>) {
+  return promoFormState({ ...percentBase, ...overrides }, NOW);
+}
+
+// Friendly percentage input: "3" (or "3%", "3,5") maps exactly to basis
+// points — 3% is 300bp, never a float. Bounds match the backend: 1..9999 bp.
+test("friendly percent input: 3 -> 300bp, 3% -> 300bp, 3,5 -> 350bp, 0.5 -> 50bp", () => {
+  expect(percentForm({ percent: "3" }).percentInvalid).toBe(false);
+  expect(percentForm({ percent: "3%" }).percentInvalid).toBe(false);
+  expect(percentForm({ percent: "3,5" }).percentInvalid).toBe(false);
+  expect(percentForm({ percent: "0.5" }).percentInvalid).toBe(false);
+  const body = percentForm({ percent: "3,5" }).body as { kind: string; percent_bp: number };
+  expect(body.kind).toBe("percent");
+  expect(body.percent_bp).toBe(350);
+});
+
+test("percent bounds: bp must land in 1..9999 (0% and 100% rejected)", () => {
+  for (const bad of ["0", "100", "99.995", "", "  ", "3.333", "-3", "abc", "1e2"]) {
+    expect(percentForm({ percent: bad }).valid).toBe(false);
+    expect(percentForm({ percent: bad }).percentInvalid).toBe(true);
+    expect(percentForm({ percent: bad }).body).toBeNull();
+  }
+  expect(percentForm({ percent: "99.99" }).valid).toBe(true);
+  expect(percentForm({ percent: "0.01" }).valid).toBe(true);
+});
+
+test("percent cap (max_discount_vnd) is required and must be a positive whole VND amount", () => {
+  for (const bad of ["", "0", "-5", "500.5", "50a"]) {
+    expect(percentForm({ maxDiscount: bad }).valid).toBe(false);
+    expect(percentForm({ maxDiscount: bad }).maxDiscountInvalid).toBe(true);
+    expect(percentForm({ maxDiscount: bad }).body).toBeNull();
+  }
+  const body = percentForm({
+    percent: "3",
+    maxDiscount: "10000",
+  }).body as { max_discount_vnd: number };
+  expect(body.max_discount_vnd).toBe(10000);
+});
+
+test("percent body posts the exact server shape: kind/percent_bp/max_discount_vnd, no amount_vnd", () => {
+  const s = percentForm({ percent: "3", maxDiscount: "10000" });
+  expect(s.valid).toBe(true);
+  expect(s.body).toEqual({
+    name: "Summer promo",
+    kind: "percent",
+    percent_bp: 300,
+    max_discount_vnd: 10000,
+    max_uses: 10,
+    expires_at: null,
+  });
+  expect("amount_vnd" in (s.body as object)).toBe(false);
+});
+
+test("fixed kind ignores percent fields; percent kind ignores amount field", () => {
+  // Fixed body is unchanged even with garbage in the percent-only fields.
+  const fixed = form({ percent: "junk", maxDiscount: "-1" });
+  expect(fixed.valid).toBe(true);
+  expect(fixed.amountInvalid).toBe(false);
+  expect(fixed.percentInvalid).toBe(false);
+  expect(fixed.maxDiscountInvalid).toBe(false);
+  expect(fixed.body).toEqual({
+    name: "Summer promo",
+    amount_vnd: 500000,
+    max_uses: 10,
+    expires_at: null,
+  });
+  // Percent body ignores the amount field.
+  const percent = percentForm({ amount: "-999", percent: "3", maxDiscount: "10000" });
+  expect(percent.valid).toBe(true);
+  expect(percent.amountInvalid).toBe(false);
+});
+
 // --- semantic SSR render ---------------------------------------------------
 
+/** Safe-subset promo row factory: kind/percent fields default to a fixed promo. */
 function promo(partial: Partial<AdminPromo> = {}): AdminPromo {
   return {
     id: "promo_1",
     name: "Summer promo",
+    kind: "fixed",
     amount_vnd: 500000,
+    percent_bp: null,
+    max_discount_vnd: null,
     max_uses: 10,
     uses: 2,
     expires_at: new Date(2026, 5, 30, 23, 59, 59, 999).getTime(),
@@ -421,11 +507,42 @@ test("translate interpolates row-label vars literally in both locales", () => {
 
 // --- interaction: real ReactDOM, real hooks, mocked fetch boundary --------
 
+test("percent rows render the friendly percent + VND cap; fixed rows render VND", () => {
+  const html = renderCard([
+    promo({ kind: "percent", amount_vnd: null, percent_bp: 300, max_discount_vnd: 10000 }),
+  ]);
+  expect(html).toContain("3%");
+  expect(html).toContain("10.000 ₫");
+  const half = renderCard([
+    promo({ kind: "percent", amount_vnd: null, percent_bp: 350, max_discount_vnd: 10000 }),
+  ]);
+  expect(half).toContain("3.5%");
+});
+
+// --- interaction: percent create flow -------------------------------------
+
 function fillCreateForm(name: string, amount: string, maxUses: string, expiresDate = "") {
   setInput(document.getElementById("promo-name")!, name);
   setInput(document.getElementById("promo-amount")!, amount);
   setInput(document.getElementById("promo-max-uses")!, maxUses);
   if (expiresDate) setInput(document.getElementById("promo-expires")!, expiresDate);
+}
+
+async function choosePercentKind() {
+  // Kind toggle: click the percent option (same accessible group pattern as
+  // the top-up currency toggle).
+  const btn = buttonByText("Percent off");
+  if (!btn) throw new Error("percent kind button not found");
+  click(btn);
+  await flush();
+}
+
+async function fillPercentForm(name: string, percent: string, cap: string, maxUses: string) {
+  await choosePercentKind();
+  setInput(document.getElementById("promo-name")!, name);
+  setInput(document.getElementById("promo-percent")!, percent);
+  setInput(document.getElementById("promo-max-discount")!, cap);
+  setInput(document.getElementById("promo-max-uses")!, maxUses);
 }
 
 test("valid create posts the exact server body and reveals the code once", async () => {
@@ -565,6 +682,45 @@ test("code copy uses clipboard; closing the dialog clears it from memory and sto
   await waitFor(() => getCodeInDom() === null, "code cleared on close");
   expect(bodyText()).not.toContain("DEADDEAD");
   expect(window.localStorage.length).toBe(0);
+});
+
+test("percent create posts the exact server body and clears the percent fields", async () => {
+  await mountPage([]);
+  responder = async (call) => {
+    if (call.init?.method === "POST")
+      return jsonRes(201, {
+        promo: promo({
+          kind: "percent",
+          amount_vnd: null,
+          percent_bp: 300,
+          max_discount_vnd: 10000,
+        }),
+        code: "FACE00FACE00FACE00FACE00FACE00FA",
+      });
+    return jsonRes(200, { data: [] });
+  };
+  await fillPercentForm("Summer percent", "3", "10000", "10");
+  click(buttonByText("Create code")!);
+  await waitFor(() => postCalls().length === 1, "percent post sent");
+  expect(JSON.parse(String(postCalls()[0]!.init?.body))).toEqual({
+    name: "Summer percent",
+    kind: "percent",
+    percent_bp: 300,
+    max_discount_vnd: 10000,
+    max_uses: 10,
+    expires_at: null,
+  });
+  await waitFor(() => getCodeInDom() !== null, "code revealed");
+  expect((document.getElementById("promo-percent") as HTMLInputElement).value).toBe("");
+  expect((document.getElementById("promo-max-discount") as HTMLInputElement).value).toBe("");
+});
+
+test("percent form blocks an invalid percent/cap before any POST", async () => {
+  await mountPage([]);
+  await fillPercentForm("Bad percent", "100", "0", "10");
+  click(buttonByText("Create code")!);
+  await flush();
+  expect(postCalls().length).toBe(0);
 });
 
 test("rename PATCHes name only and refreshes the list", async () => {

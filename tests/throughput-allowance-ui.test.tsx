@@ -22,14 +22,22 @@ const REAL_WINDOW = (globalThis as { window?: unknown }).window;
     removeListener() {},
   }),
 };
+// Radix (pulled in by the billing page) captures document availability when
+// its modules first load; without any document the captured state breaks
+// Radix event wiring for later jsdom tests sharing this bun process
+// (billing-checkout-ui). The shared fixture installs a faithful jsdom
+// document; the previous value is restored after this file's tests.
 import { afterAll } from "bun:test";
+import { installSsrDom } from "./helpers/ssr-dom";
+const restoreSsrDom = installSsrDom();
 afterAll(() => {
   (globalThis as { window?: unknown }).window = REAL_WINDOW;
+  restoreSsrDom();
 });
 const { ThroughputProductCards, ThroughputAllowanceStatus, THROUGHPUT_ALLOWANCE_DISCLAIMER } =
   await import("../apps/web/src/pages/billing/bundles");
 
-function renderCards(payosAvailable: boolean): string {
+function renderCards(): string {
   const qc = new QueryClient();
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
@@ -44,20 +52,20 @@ function renderCards(payosAvailable: boolean): string {
           },
         ]}
         workspaceId="ws_1"
-        payosAvailable={payosAvailable}
-        onNavigate={() => {}}
+        selectedId={null}
+        onSelect={() => {}}
       />
     </QueryClientProvider>,
   );
 }
 
 test("cards show name, price, admission cap and duration", () => {
-  const html = renderCards(false);
+  const html = renderCards();
   expect(html).toContain("Turbo 30");
   expect(html).toContain("150.000");
   expect(html).toContain("30 requests/minute");
   expect(html).toContain("7 days");
-  expect(html).toContain("Buy");
+  expect(html).toContain("Select");
 });
 
 test("disclaimer states gateway admission limit, never capacity or priority", () => {
@@ -65,7 +73,7 @@ test("disclaimer states gateway admission limit, never capacity or priority", ()
   expect(THROUGHPUT_ALLOWANCE_DISCLAIMER).toContain("not a provider-capacity guarantee");
   expect(THROUGHPUT_ALLOWANCE_DISCLAIMER).toContain("not a priority promise");
   expect(THROUGHPUT_ALLOWANCE_DISCLAIMER).toContain("no wallet credit");
-  const html = renderCards(false);
+  const html = renderCards();
   expect(html).toContain("gateway admission limit");
   // Negated phrasing must stay negated: the disclaimer contains the full
   // "not a provider-capacity guarantee" / "not a priority promise" strings.
@@ -73,12 +81,11 @@ test("disclaimer states gateway admission limit, never capacity or priority", ()
   expect(html).toContain("not a priority promise");
 });
 
-test("PayOS advertised: provider choice shown; manual default", () => {
-  const html = renderCards(true);
-  expect(html).toContain("Payment method");
-  expect(html).toContain("PayOS");
-  expect(html).toContain('checked="" value="manual"');
-  expect(html).not.toContain('checked="" value="payos"');
+test("payment methods stay behind product selection (checkout dialog)", () => {
+  const html = renderCards();
+  expect(html).not.toContain("Payment method");
+  expect(html).not.toContain("PayOS");
+  expect(html).not.toContain("Manual transfer");
 });
 
 test("status card shows the admission cap and window, grants nothing else", () => {
