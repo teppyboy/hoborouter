@@ -97,11 +97,11 @@ function RequestLogCard() {
     "/api/v1/admin/usage-logs",
   );
   return (
-    <Card>
+    <Card className="flex min-h-0 flex-1 flex-col">
       <CardHeader>
         <CardTitle className="text-sm font-medium">{t("panel")}</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex min-h-0 flex-1 flex-col">
         {query.isPending ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : query.error ? (
@@ -110,8 +110,9 @@ function RequestLogCard() {
             {query.error instanceof Error ? query.error.message : t("loadError")}
           </p>
         ) : (
-          // Internally scrolling: 200 rows never grow the page.
-          <ScrollPanel label={t("panel")} stickyHeader>
+          // Internally scrolling: 200 rows never grow the page; fill stretches
+          // the panel to the remaining bounded shell height.
+          <ScrollPanel label={t("panel")} stickyHeader fill>
             <DataTable columns={columns(t)} data={query.data.data} empty={t("empty")} />
           </ScrollPanel>
         )}
@@ -123,7 +124,7 @@ function RequestLogCard() {
 export default function AdminRequestLogPage() {
   const t = useT(requestLogCopy);
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <PageHeader title={t("title")} description={t("description")} />
       <AdminGate
         query={useAdminQuery<unknown>(["admin", "usage-logs"], "/api/v1/admin/usage-logs")}

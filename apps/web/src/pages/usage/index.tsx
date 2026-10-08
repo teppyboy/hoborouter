@@ -188,13 +188,18 @@ export function UsageDataTabs({
 }) {
   const t = useT(usageCopy);
   return (
-    <Tabs defaultValue="chart" className="min-w-0">
+    <Tabs defaultValue="chart" className="flex min-h-0 min-w-0 flex-1 flex-col">
       <TabsList aria-label={t("dataViews")}>
         <TabsTrigger value="chart">{t("chart")}</TabsTrigger>
         <TabsTrigger value="per-model">{t("perModel")}</TabsTrigger>
       </TabsList>
       <TabsContent value="chart">{chart}</TabsContent>
-      <TabsContent value="per-model">{perModel}</TabsContent>
+      <TabsContent
+        value="per-model"
+        className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
+      >
+        {perModel}
+      </TabsContent>
     </Tabs>
   );
 }
@@ -215,7 +220,7 @@ export function PerModelTable({
   const t = useT(usageCopy);
   if (byModel.length === 0) return <EmptyState title={t("noRequests")} />;
   return (
-    <ScrollPanel label={t("perModelUsage")} stickyHeader>
+    <ScrollPanel label={t("perModelUsage")} stickyHeader fill>
       <Table>
         <TableHeader>
           <TableRow>
@@ -362,7 +367,7 @@ export default function UsagePage() {
   const totalTokens = totals.input_tokens + totals.output_tokens;
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       {header}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

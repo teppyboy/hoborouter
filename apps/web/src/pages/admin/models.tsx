@@ -1123,7 +1123,7 @@ export default function AdminModelsPage() {
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <PageHeader
         title={t("title")}
         description={t("description")}
@@ -1141,7 +1141,7 @@ export default function AdminModelsPage() {
             columns={columns}
             data={query.data ?? []}
             empty={t("noModelsMatch")}
-            scroll={{ label: t("catalogScrollLabel") }}
+            scroll={{ label: t("catalogScrollLabel"), fill: true }}
           />
         )}
       </AdminGate>

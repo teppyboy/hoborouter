@@ -84,7 +84,7 @@ export default function AdminPaymentsPage() {
     "/api/v1/admin/payments",
   );
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <PageHeader title={t("title")} description={t("description")} />
       <AdminGate query={query}>
         <PaymentsTable payments={query.data?.data ?? []} />
@@ -237,7 +237,7 @@ export function PaymentsTable({
         globalFilter={value}
         onGlobalFilterChange={setSearch}
         empty={t("noPayments")}
-        scroll={{ label: t("paymentsTable") }}
+        scroll={{ label: t("paymentsTable"), fill: true }}
       />
       <Dialog open={toComplete !== null} onOpenChange={(open) => !open && setToComplete(null)}>
         <DialogContent>

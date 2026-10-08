@@ -305,7 +305,7 @@ export default function KeysPage() {
   if (!workspaceId) return null;
 
   return (
-    <div className="grid gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <PageHeader
         title={t("title")}
         description={t("description")}
@@ -340,7 +340,7 @@ export default function KeysPage() {
           data={keysQuery.data ?? []}
           globalFilter={filter}
           onGlobalFilterChange={setFilter}
-          scroll={{ label: t("keysTable") }}
+          scroll={{ label: t("keysTable"), fill: true }}
         />
       )}
 

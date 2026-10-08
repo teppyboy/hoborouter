@@ -158,7 +158,7 @@ export default function ModelsPage() {
   if (error) return <ErrorState message={error} />;
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <PageHeader title={t("title")} description={t("description")} />
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -223,8 +223,8 @@ export default function ModelsPage() {
           }
         />
       ) : (
-        <div className="rounded-lg border border-border">
-          <ScrollPanel label="Model catalog" stickyHeader>
+        <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-border">
+          <ScrollPanel label="Model catalog" stickyHeader fill>
             <DataTable key={sort} columns={columns} data={ordered} />
           </ScrollPanel>
         </div>

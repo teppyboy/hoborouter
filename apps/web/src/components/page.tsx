@@ -26,11 +26,13 @@ export function PageHeader({
 }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
-      <div>
+      {/* min-w-0 lets the title column shrink instead of pushing actions out; */}
+      {/* flex-1 lets actions wrap to their own row when the title needs width. */}
+      <div className="min-w-0 flex-1">
         <h1 className="text-lg font-semibold">{title}</h1>
         {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }
@@ -92,9 +94,13 @@ interface DataTableProps<TData> {
    * When set, the table itself is wrapped in a bounded ScrollPanel so long
    * lists scroll inside the panel (sticky header) instead of growing the
    * page. The search input stays above the region. Omit when the caller
-   * already wraps the DataTable in a ScrollPanel.
+   * already wraps the DataTable in a ScrollPanel. `fill` opts the panel
+   * into occupying the remaining bounded-shell height (flex-1 min-h-0)
+   * instead of the max-h-96 cap; only for primary lists whose page root is
+   * a bounded flex column. With fill the panel always spans the remaining
+   * height (flex-grow), even when rows are few — it does not collapse.
    */
-  scroll?: { label: string };
+  scroll?: { label: string; fill?: boolean };
 }
 
 /** Generic TanStack Table wrapper: sorting + optional external global filter. */
@@ -174,7 +180,11 @@ export function DataTable<TData>({
   );
 
   return (
-    <div>
+    // fill: the wrapper must be a bounded flex column or the ScrollPanel's
+    // min-h-0 flex-1 has no bounded parent and the panel loses its height
+    // constraint entirely. Search input stays a flex item above the region.
+    // No-fill callers keep the original plain block wrapper.
+    <div className={cn(scroll?.fill ? "flex min-h-0 flex-1 flex-col" : undefined)}>
       {onGlobalFilterChange && (
         <Input
           placeholder="Search…"
@@ -184,7 +194,7 @@ export function DataTable<TData>({
         />
       )}
       {scroll ? (
-        <ScrollPanel label={scroll.label} stickyHeader>
+        <ScrollPanel label={scroll.label} stickyHeader fill={scroll.fill}>
           {tableEl}
         </ScrollPanel>
       ) : (
@@ -201,16 +211,23 @@ export { Check };
  * instead of growing the whole page. Exposed as a labelled region and
  * keyboard-scrollable (tabIndex) per WCAG 2.1.1; stickyHeader keeps the
  * table header visible while rows scroll.
+ *
+ * `fill` swaps the max-h-96 cap for flex-1 min-h-0 so the panel occupies the
+ * bottom of a bounded flex-column parent (app-shell main). Opt-in per route;
+ * with fill the panel always spans the remaining height (flex-grow), even
+ * when rows are few — it does not collapse to its natural height.
  */
 export function ScrollPanel({
   label,
   children,
   stickyHeader,
+  fill,
   className,
 }: {
   label: string;
   children: React.ReactNode;
   stickyHeader?: boolean;
+  fill?: boolean;
   className?: string;
 }) {
   return (
@@ -219,7 +236,8 @@ export function ScrollPanel({
       aria-label={label}
       tabIndex={0}
       className={cn(
-        "max-h-96 overflow-auto overscroll-contain rounded-lg border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        fill ? "min-h-0 flex-1" : "max-h-96",
+        "overflow-auto overscroll-contain rounded-lg border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         stickyHeader && "[&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [&_thead]:bg-background",
         className,
       )}

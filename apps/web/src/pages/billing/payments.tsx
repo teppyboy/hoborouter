@@ -102,7 +102,7 @@ export default function BillingPaymentsPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="flex min-h-0 flex-1 flex-col gap-6">
       <PageHeader title={t("title")} description={t("description")} />
       {selectedId && workspaceId ? (
         <PaymentsTabs
@@ -131,14 +131,19 @@ export function PaymentsTabs({
 }) {
   const t = useT(paymentsCopy);
   return (
-    <Tabs defaultValue="status" className="min-w-0">
+    <Tabs defaultValue="status" className="flex min-h-0 min-w-0 flex-1 flex-col">
       <TabsList aria-label={t("paymentsSections")}>
         <TabsTrigger value="status">{t("paymentStatus")}</TabsTrigger>
         <TabsTrigger value="history">{t("history")}</TabsTrigger>
       </TabsList>
 
       <TabsContent value="status">{status}</TabsContent>
-      <TabsContent value="history">{history}</TabsContent>
+      <TabsContent
+        value="history"
+        className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
+      >
+        {history}
+      </TabsContent>
     </Tabs>
   );
 }
@@ -195,7 +200,7 @@ export function PaymentHistory({ payments, rate }: { payments: Payment[]; rate?:
   ];
 
   return (
-    <ScrollPanel label={t("paymentHistory")} stickyHeader>
+    <ScrollPanel label={t("paymentHistory")} stickyHeader fill>
       <DataTable columns={columns} data={payments} empty={t("noPaymentsRows")} />
     </ScrollPanel>
   );

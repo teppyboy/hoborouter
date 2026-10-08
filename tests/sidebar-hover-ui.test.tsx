@@ -274,6 +274,41 @@ test("collapsed rail keeps exactly one expand toggle, in the header (no bottom b
   expect(useSidebarStore.getState().collapsed).toBe(false);
 });
 
+test("collapsed rail header hides the brand: no logo, no name, one toggle", async () => {
+  await renderShell();
+  const header = aside().firstElementChild as HTMLElement;
+  expect(header.querySelector("svg.lucide-shuffle")).toBeNull();
+  expect(header.textContent).not.toContain("Hoborouter");
+  // Exactly one control remains: the accessible expand toggle.
+  expect(header.querySelectorAll("button").length).toBe(1);
+  expect(header.querySelector('[aria-label="Expand sidebar"]')).not.toBeNull();
+});
+
+test("expanded rail header shows brand, logo, and toggle", async () => {
+  act(() => {
+    useSidebarStore.setState({ collapsed: false });
+  });
+  await renderShell();
+  const header = aside().firstElementChild as HTMLElement;
+  expect(header.querySelector("svg.lucide-shuffle")).not.toBeNull();
+  expect(header.textContent).toContain("Hoborouter");
+  expect(header.querySelector('[aria-label="Collapse sidebar"]')).not.toBeNull();
+});
+
+test("hover-expanded rail shows the brand; mouse leave hides it again", async () => {
+  await renderShell();
+  const header = aside().firstElementChild as HTMLElement;
+  hoverAside("enter");
+  expect(header.querySelector("svg.lucide-shuffle")).not.toBeNull();
+  expect(header.textContent).toContain("Hoborouter");
+  // Display-only expansion: hover writes nothing to persistence.
+  expect(useSidebarStore.getState().collapsed).toBe(true);
+  expect(W.localStorage.getItem("hbr-sidebar") ?? "").toContain('"collapsed":true');
+  hoverAside("leave");
+  expect(header.querySelector("svg.lucide-shuffle")).toBeNull();
+  expect(header.textContent).not.toContain("Hoborouter");
+});
+
 test("mobile nav trigger untouched: aside hidden below md, hamburger present", async () => {
   await renderShell();
   expect(aside().className).toContain("hidden");

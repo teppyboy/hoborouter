@@ -52,7 +52,10 @@ const Quickstart = lazy(() => import("./pages/public/quickstart"));
 const About = lazy(() => import("./pages/public/about"));
 
 function Page({ children }: { children: React.ReactNode }) {
-  return <div className="p-4 sm:p-6">{children}</div>;
+  // Bounded flex column: pages opting into `fill` ScrollPanels stretch to the
+  // remaining shell height; tall form content still overflows into main's
+  // scroll (min-h-0, visible overflow propagates to main).
+  return <div className="flex min-h-0 flex-1 flex-col p-4 sm:p-6">{children}</div>;
 }
 
 const rootRoute = createRootRoute({

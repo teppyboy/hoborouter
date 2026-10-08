@@ -314,7 +314,7 @@ export default function LogsPage() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <PageHeader title={t("title")} description={t("description")} />
       {query.data.length === 0 ? (
         <EmptyState title={t("noRequests")} description={t("noRequestsDesc")} />
@@ -366,7 +366,7 @@ export default function LogsPage() {
               {t("refresh")}
             </Button>
           </div>
-          <ScrollPanel label={t("logsTable")} stickyHeader>
+          <ScrollPanel label={t("logsTable")} stickyHeader fill>
             <Table>
               <TableHeader>
                 <TableRow>

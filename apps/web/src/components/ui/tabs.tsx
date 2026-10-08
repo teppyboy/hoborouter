@@ -7,7 +7,12 @@ const Tabs = TabsPrimitive.Root;
 function TabsList({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.List>) {
   return (
     <TabsPrimitive.List
-      className={cn("inline-flex h-8 items-center gap-1 rounded-md bg-muted p-1", className)}
+      className={cn(
+        // Wrap between triggers instead of overflowing at 375px; vertical
+        // callers must stay a single column, so they never inherit wrapping.
+        "flex h-auto max-w-full flex-wrap items-center gap-1 rounded-md bg-muted p-1 data-[orientation=vertical]:flex-nowrap",
+        className,
+      )}
       {...props}
     />
   );

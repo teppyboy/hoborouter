@@ -307,10 +307,20 @@ function UserMenu() {
           <span className="hidden truncate sm:inline">{session?.user?.name ?? account}</span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent
+        align="end"
+        // Radix popper sizes to fit-content: without a viewport-bounded
+        // max-width, a long email (wrap-anywhere needs a bounded container)
+        // would push the menu past a 375px viewport.
+        className="max-w-[calc(100vw-1.5rem)]"
+      >
         <DropdownMenuLabel>
           <p className="text-sm font-medium text-foreground">{session?.user?.name ?? account}</p>
-          <p className="text-xs font-normal text-muted-foreground">{session?.user?.email}</p>
+          {/* wrap-anywhere keeps long emails inside the panel without */}
+          {/* masking: the full address stays rendered and accessible. */}
+          <p className="text-xs font-normal text-muted-foreground wrap-anywhere">
+            {session?.user?.email}
+          </p>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
@@ -427,9 +437,11 @@ export function UnverifiedEmailBanner({ user }: { user: SessionUser | null }) {
   return (
     <div
       role="status"
-      className="flex flex-wrap items-center gap-2 border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm"
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm"
     >
-      <span>{verifyEmail.replace("{email}", user.email)}</span>
+      {/* wrap-anywhere: the email must break rather than force the row past */}
+      {/* the viewport; the full sentence stays visible (no overflow mask). */}
+      <span className="wrap-anywhere">{verifyEmail.replace("{email}", user.email)}</span>
       <span className="ml-auto flex items-center gap-1">
         <Button variant="outline" size="sm" onClick={() => void resend()} disabled={sending}>
           {sending ? sendingLabel : resendLabel}
@@ -533,7 +545,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <TooltipProvider>
-      <div className="flex min-h-screen pb-safe">
+      {/* h-dvh bounds the authenticated shell so main can hand a fixed
+        height to fill-list pages; main stays the default scroller for forms
+        and other non-fill pages. */}
+      <div className="flex h-dvh pb-safe">
         <aside
           onMouseEnter={() => collapsed && setHovered(true)}
           onMouseLeave={() => setHovered(false)}
@@ -548,7 +563,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               displayCollapsed && "justify-center px-0",
             )}
           >
-            <Shuffle className="size-4 shrink-0" aria-hidden />
+            {/* Collapsed rail keeps a single control: the expand toggle. */}
+            {!displayCollapsed && <Shuffle className="size-4 shrink-0" aria-hidden />}
             {!displayCollapsed && <span className="text-sm font-semibold">Hoborouter</span>}
             <Button
               variant="ghost"
@@ -564,8 +580,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <NavLinks pathname={pathname} collapsed={displayCollapsed} isAdmin={isAdmin} />
           </nav>
         </aside>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 flex h-12 items-center gap-3 border-b border-border bg-background/80 pr-4 pl-[max(1rem,env(safe-area-inset-left))] backdrop-blur">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background/80 pr-4 pl-[max(1rem,env(safe-area-inset-left))] backdrop-blur">
             <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
               <SheetTrigger asChild>
                 <Button
@@ -603,7 +619,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <Separator orientation="vertical" className="h-4" />
             <UserMenu />
           </header>
-          <main className="min-w-0 flex-1">
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
             <UnverifiedEmailBanner user={session?.user ?? null} />
             {emptyWorkspaces ? <CreateWorkspace /> : children}
           </main>
