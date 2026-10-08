@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowDown,
   History,
   Paperclip,
   PanelLeftClose,
@@ -249,6 +250,7 @@ const chatCopy = {
   attachFilesTitle: { en: "Attach files. {hint}", vi: "Đính kèm tệp. {hint}" },
   stopGenerating: { en: "Stop generating", vi: "Dừng tạo" },
   sendMessage: { en: "Send message", vi: "Gửi tin nhắn" },
+  jumpToLatest: { en: "Jump to latest", vi: "Nhảy tới tin nhắn mới nhất" },
 } as const;
 
 /** Structured rejection code -> localized copy key (see AttachError in
@@ -456,6 +458,10 @@ export function ChatPage() {
   // auto-scrolls when the user hasn't scrolled up to read history.
   const logRef = React.useRef<HTMLDivElement | null>(null);
   const followLogRef = React.useRef(true);
+  // Render mirror of "user is away from the bottom" (the onScroll latch): a
+  // ref alone cannot drive the Jump-to-latest button, and the boolean only
+  // changes at the 80px threshold, so React bails out of the extra renders.
+  const [logAway, setLogAway] = React.useState(false);
   // Last user prompt for the explicit Retry button. Retrying re-runs the same
   // paid gateway call — it is never fired automatically.
   const lastUserRef = React.useRef<string | null>(null);
@@ -517,6 +523,8 @@ export function ChatPage() {
     applyAttachments([]);
     multimodalRef.current.clear();
     lastUserRef.current = null;
+    followLogRef.current = true;
+    setLogAway(false);
   }, [userId, workspaceId]);
 
   // Model changes are a per-message choice, not a conversation boundary:
@@ -586,6 +594,11 @@ export function ChatPage() {
     setLastTurnAttached(false);
     applyAttachments([]);
     lastUserRef.current = null;
+    // A fresh view always starts pinned to its latest message (same contract
+    // as a deliberate send): reading position from a previous view must not
+    // leak into the new one.
+    followLogRef.current = true;
+    setLogAway(false);
   }
 
   function dropTrailingEmptyAssistant() {
@@ -651,6 +664,8 @@ export function ChatPage() {
     setLastTurnAttached(false);
     applyAttachments([]);
     lastUserRef.current = null;
+    followLogRef.current = true;
+    setLogAway(false);
     if (!ws) return;
     setLoadingChat(true);
     try {
@@ -919,6 +934,7 @@ export function ChatPage() {
       // even if they had scrolled up, and even if a late scroll event during
       // layout of the previous turn latched followLogRef off.
       followLogRef.current = true;
+      setLogAway(false);
       // The view keeps each prior message's reasoning (the Reasoning section
       // stays visible across sends); only the paid request body above strips
       // it to role+content.
@@ -1037,6 +1053,25 @@ export function ChatPage() {
     if (el && followLogRef.current) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
+  /** One user-triggered jump to the newest message. Smooth ONCE (user
+   *  intent), never per stream chunk; prefers-reduced-motion gets an instant
+   *  pin. followLogRef stays false until the scroll actually arrives near the
+   *  bottom (the onScroll latch re-engages it) — setting it here would let
+   *  the layout-effect pin override the smooth animation with an instant
+   *  jump on the next render. */
+  function jumpToLatest() {
+    const el = logRef.current;
+    if (!el) return;
+    const reduceMotion =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion) {
+      el.scrollTop = el.scrollHeight;
+    } else {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
+  }
+
   const autoEligible = Boolean(userId && workspaceId);
   const canSend = Boolean(
     (input.trim() || attachments.length > 0) &&
@@ -1113,7 +1148,7 @@ export function ChatPage() {
       <aside
         id="chat-history-aside"
         data-state={sidebarCollapsed ? "collapsed" : "expanded"}
-        className={`hidden ${sidebarCollapsed ? "w-14" : "w-64"} shrink-0 flex-col border-r border-border px-2 py-2 lg:flex`}
+        className={`hidden ${sidebarCollapsed ? "w-14" : "w-64"} shrink-0 flex-col border-r border-border px-2 py-2 transition-[width] duration-200 lg:flex`}
       >
         <div className={`flex items-center ${sidebarCollapsed ? "justify-center" : "justify-end"}`}>
           <Button
@@ -1133,7 +1168,7 @@ export function ChatPage() {
           </Button>
         </div>
         {sidebarCollapsed ? (
-          <div className="flex flex-1 flex-col items-center pt-2">
+          <div className="flex flex-1 animate-in flex-col items-center pt-2 fade-in duration-150">
             <Button
               variant="ghost"
               size="icon"
@@ -1145,7 +1180,9 @@ export function ChatPage() {
             </Button>
           </div>
         ) : (
-          historyList
+          <div className="flex min-h-0 flex-1 animate-in flex-col fade-in duration-150">
+            {historyList}
+          </div>
         )}
       </aside>
 
@@ -1283,65 +1320,88 @@ export function ChatPage() {
             {!userId && <p className="text-sm text-muted-foreground">{t("signInStart")}</p>}
           </div>
         ) : (
-          <div
-            className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
-            role="log"
-            aria-live="polite"
-            aria-label={t("conversation")}
-            onScroll={() => {
-              const el = logRef.current;
-              if (!el) return;
-              followLogRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-            }}
-            ref={logRef}
-          >
-            <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-4">
-              {messages.map((m, i) =>
-                m.role === "user" ? (
-                  <div key={i} className="flex justify-end">
-                    <div className="max-w-[85%] wrap-anywhere whitespace-pre-wrap rounded-2xl bg-muted px-4 py-2 text-sm">
-                      {m.content}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <div
+              className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
+              role="log"
+              aria-live="polite"
+              aria-label={t("conversation")}
+              onScroll={() => {
+                const el = logRef.current;
+                if (!el) return;
+                const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+                followLogRef.current = fromBottom < 80;
+                setLogAway(fromBottom >= 80);
+              }}
+              ref={logRef}
+            >
+              <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-4">
+                {messages.map((m, i) =>
+                  m.role === "user" ? (
+                    <div key={i} className="flex justify-end">
+                      <div className="max-w-[85%] wrap-anywhere whitespace-pre-wrap rounded-2xl bg-muted px-4 py-2 text-sm">
+                        {m.content}
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div key={i} className="w-full space-y-1 text-sm leading-relaxed">
-                    {m.reasoning && (
-                      <details className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-                        <summary className="cursor-pointer select-none font-medium">
-                          {t("reasoning")}
-                        </summary>
-                        <div className="mt-1 wrap-anywhere whitespace-pre-wrap">{m.reasoning}</div>
-                      </details>
-                    )}
-                    {m.content ? (
-                      <>
-                        <ChatMarkdown
-                          content={m.content}
-                          streaming={streaming && i === messages.length - 1}
-                        />
-                        {/* Muted ACTUAL-USED model label: the public ID from
+                  ) : (
+                    <div key={i} className="w-full space-y-1 text-sm leading-relaxed">
+                      {m.reasoning && (
+                        <details className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+                          <summary className="cursor-pointer select-none font-medium">
+                            {t("reasoning")}
+                          </summary>
+                          <div className="mt-1 wrap-anywhere whitespace-pre-wrap">
+                            {m.reasoning}
+                          </div>
+                        </details>
+                      )}
+                      {m.content ? (
+                        <>
+                          <ChatMarkdown
+                            content={m.content}
+                            streaming={streaming && i === messages.length - 1}
+                          />
+                          {/* Muted ACTUAL-USED model label: the public ID from
                           the SSE stream / saved history, not the picker's
                           selection guess (the gateway rewrites to public IDs). */}
-                        {m.role === "assistant" && m.model && (
-                          <p className="text-xs text-muted-foreground">{m.model}</p>
-                        )}
-                        <div className="flex justify-end">
-                          <CopyButton value={m.content} label={t("copyReply")} />
-                        </div>
-                      </>
-                    ) : (
-                      !m.reasoning &&
-                      streaming &&
-                      i === messages.length - 1 && (
-                        <div className="animate-pulse motion-reduce:animate-none text-muted-foreground">
-                          {t("thinking")}
-                        </div>
-                      )
-                    )}
-                  </div>
-                ),
-              )}
+                          {m.role === "assistant" && m.model && (
+                            <p className="text-xs text-muted-foreground">{m.model}</p>
+                          )}
+                          <div className="flex justify-end">
+                            <CopyButton value={m.content} label={t("copyReply")} />
+                          </div>
+                        </>
+                      ) : (
+                        !m.reasoning &&
+                        streaming &&
+                        i === messages.length - 1 && (
+                          <div className="animate-pulse motion-reduce:animate-none text-muted-foreground">
+                            {t("thinking")}
+                          </div>
+                        )
+                      )}
+                    </div>
+                  ),
+                )}
+              </div>
             </div>
+            {/* Jump to latest: shown whenever the user is reading older
+              messages (static history included, not just mid-stream). One
+              user-triggered scroll; the onScroll latch re-engages follow only
+              when the target arrives. */}
+            {logAway && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={jumpToLatest}
+                aria-label={t("jumpToLatest")}
+                title={t("jumpToLatest")}
+                className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 shadow-md animate-in fade-in slide-in-from-bottom-2 duration-150"
+              >
+                <ArrowDown className="size-4" aria-hidden />
+                {t("jumpToLatest")}
+              </Button>
+            )}
           </div>
         )}
 

@@ -39,7 +39,7 @@ afterAll(() => {
 const { BundleCards } = await import("../apps/web/src/pages/billing/bundles");
 const { formatLedgerMemoLabel } = await import("../apps/web/src/lib/display");
 
-function render(): string {
+function render(currency?: "USD" | "VND"): string {
   const qc = new QueryClient();
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
@@ -63,6 +63,7 @@ function render(): string {
         workspaceId="ws_1"
         selectedId={null}
         onSelect={() => {}}
+        currency={currency}
       />
     </QueryClientProvider>,
   );
@@ -84,6 +85,13 @@ test("no bonus line for a zero-bonus bundle", () => {
   const value = html.indexOf("Value");
   const starterCard = html.slice(starter, value);
   expect(starterCard).not.toContain("bonus");
+});
+
+test("explicit VND selection renders VND-only amounts", () => {
+  const html = render("VND");
+  expect(html).toContain("50.000 ₫");
+  expect(html).toContain("110.000 ₫ credit");
+  expect(html).not.toContain("$");
 });
 
 test("cards gate payment methods: provider choice lives in the checkout dialog only", () => {

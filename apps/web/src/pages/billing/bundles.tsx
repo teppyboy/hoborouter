@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -121,10 +122,13 @@ export function catalogEnvelopeRate(
 }
 
 /**
- * Seamless USD⇄VND toggle. Renders nothing without a backend rate: VND-only
- * display is the behavior-preserving fallback.
+ * One compact segmented display-currency selector for the whole billing page:
+ * a radiogroup of USD/VND beside the product TabsList. Renders nothing
+ * without a backend rate or authored USD rows: VND-only display is the
+ * behavior-preserving fallback, never a suggestion that USD prices exist.
+ * Display-only: it changes no price, checkout amount or API payload.
  */
-export function CurrencyToggle({
+export function DisplayCurrencyPicker({
   currency,
   rate,
   onChange,
@@ -137,15 +141,60 @@ export function CurrencyToggle({
   usdAvailable?: boolean;
 }) {
   const t = useT(bundlesCopy);
+  const groupRef = useRef<HTMLDivElement>(null);
   if (!hasRate(rate) && !usdAvailable) return null;
+
+  // WAI-ARIA radio pattern: Arrow keys (both axes) and Home/End choose the
+  // next option; focus follows the selection so the group stays ONE tab stop
+  // (roving tabindex). The DOM node for the target already exists, so focus
+  // is safe to set synchronously with the state change.
+  const options = ["USD", "VND"] as const;
+  const choose = (c: DisplayCurrency) => {
+    onChange(c);
+    groupRef.current?.querySelector<HTMLButtonElement>(`[data-currency="${c}"]`)?.focus();
+  };
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const idx = options.indexOf(currency);
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      e.preventDefault();
+      // Two options wrap: the other one; the tuple makes the index defined.
+      choose(idx === 0 ? options[1] : options[0]);
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      e.preventDefault();
+      choose(idx === 0 ? options[1] : options[0]);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      choose(options[0]);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      choose(options[1]);
+    }
+  };
+
   return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => onChange(currency === "USD" ? "VND" : "USD")}
+    <div
+      ref={groupRef}
+      role="radiogroup"
+      aria-label={t("displayCurrency")}
+      className="flex shrink-0 items-center gap-0.5 rounded-md border border-border p-0.5"
     >
-      {currency === "USD" ? t("showVnd") : t("showUsd")}
-    </Button>
+      {options.map((c) => (
+        <Button
+          key={c}
+          role="radio"
+          data-currency={c}
+          aria-checked={currency === c}
+          tabIndex={currency === c ? 0 : -1}
+          variant={currency === c ? "secondary" : "ghost"}
+          size="sm"
+          className="px-2"
+          onKeyDown={onKeyDown}
+          onClick={() => onChange(c)}
+        >
+          {c}
+        </Button>
+      ))}
+    </div>
   );
 }
 
@@ -332,9 +381,9 @@ const bundlesCopy = {
     vi: "Hiện chưa có gói thông lượng trả trước nào được bán — vui lòng quay lại sau.",
   },
 
-  // Currency toggle and card copy.
-  showVnd: { en: "Show VND", vi: "Hiện VND" },
-  showUsd: { en: "Show USD", vi: "Hiện USD" },
+  // Currency toggle and card copy. The segmented picker's label; USD/VND
+  // option labels are script-neutral.
+  displayCurrency: { en: "Display currency", vi: "Đơn vị hiển thị" },
   vndEstimate: {
     en: "VND estimate; the final amount is fixed when the payment is created.",
     vi: "Ước tính theo VND; số tiền cuối cùng được chốt khi tạo thanh toán.",
@@ -721,6 +770,12 @@ export default function BillingBundlesPage() {
     selectionGenRef.current += 1;
     setSelected(s);
   };
+  // One display-currency selection for every section on the page; USD is the
+  // authored-canonical default. Not persisted: the ledger truth stays VND.
+  const [currency, setCurrency] = useState<DisplayCurrency>("USD");
+  // Active tab drives the picker's visibility: throughput is a VND-only
+  // product, so the picker hides there instead of suggesting USD prices.
+  const [tab, setTab] = useState("bundles");
   // A workspace switch invalidates any open checkout: the selection and its
   // payment-method choice belonged to the previous workspace's catalog.
   useEffect(() => {
@@ -780,13 +835,42 @@ export default function BillingBundlesPage() {
   const walletRate = useUsdVndRate(workspaceId).data;
   const rate = catalogEnvelopeRate(bundles.data, plans.data, walletRate);
 
+  // The picker shows whenever any section can display USD: a known FX rate
+  // or any authored `*_usd` catalog row (exact USD text needs no rate).
+  const usdAvailable =
+    (bundles.data?.data ?? []).some(
+      (b) => isUsdText(b.price_usd) || isUsdText(b.credit_usd) || isUsdText(b.bonus_usd),
+    ) ||
+    (plans.data?.data ?? []).some(
+      (p) => isUsdText(p.price_usd) || isUsdText(p.credit_per_period_usd),
+    );
+
   return (
-    <Tabs defaultValue="bundles" onValueChange={() => selectProduct(null)} className="space-y-6">
-      <TabsList>
-        <TabsTrigger value="bundles">{t("tabBundles")}</TabsTrigger>
-        <TabsTrigger value="plans">{t("tabPlans")}</TabsTrigger>
-        <TabsTrigger value="throughput">{t("tabThroughput")}</TabsTrigger>
-      </TabsList>
+    <Tabs
+      defaultValue="bundles"
+      onValueChange={(v) => {
+        setTab(v);
+        selectProduct(null);
+      }}
+      className="space-y-6"
+    >
+      {/* One currency control for the whole page, beside the TabsList; wraps
+          under the tabs on narrow screens instead of overflowing 375px. */}
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <TabsList>
+          <TabsTrigger value="bundles">{t("tabBundles")}</TabsTrigger>
+          <TabsTrigger value="plans">{t("tabPlans")}</TabsTrigger>
+          <TabsTrigger value="throughput">{t("tabThroughput")}</TabsTrigger>
+        </TabsList>
+        {tab !== "throughput" && (
+          <DisplayCurrencyPicker
+            currency={currency}
+            rate={rate}
+            usdAvailable={usdAvailable}
+            onChange={setCurrency}
+          />
+        )}
+      </div>
 
       <TabsContent value="bundles">
         <section aria-label={t("tabBundles")} className="space-y-4">
@@ -823,6 +907,7 @@ export default function BillingBundlesPage() {
                 })
               }
               rate={rate}
+              currency={currency}
             />
           )}
         </section>
@@ -836,6 +921,7 @@ export default function BillingBundlesPage() {
               subscription={wallet.data.subscription}
               workspaceId={workspaceId}
               rate={rate}
+              currency={currency}
             />
           ) : null}
           {plans.isPending ? (
@@ -864,6 +950,7 @@ export default function BillingBundlesPage() {
                 })
               }
               rate={rate}
+              currency={currency}
             />
           )}
         </section>
@@ -1026,6 +1113,7 @@ export function BundleCards({
   selectedId,
   onSelect,
   rate,
+  currency = "USD",
 }: {
   bundles: Bundle[];
   workspaceId: string | undefined;
@@ -1034,25 +1122,13 @@ export function BundleCards({
   onSelect: (bundle: Bundle) => void;
   /** Backend FX rate; undefined (older backend) keeps VND-only display. */
   rate?: number;
+  /** Hoisted page-level display currency; the section owns no toggle. */
+  currency?: DisplayCurrency;
 }) {
-  // USD is the canonical display currency; without a rate the section stays
-  // VND-only (behavior-preserving fallback).
-  const [currency, setCurrency] = useState<DisplayCurrency>("USD");
   const t = useT(bundlesCopy);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <CurrencyToggle
-          currency={currency}
-          rate={rate}
-          onChange={setCurrency}
-          usdAvailable={bundles.some(
-            (b) => isUsdText(b.price_usd) || isUsdText(b.credit_usd) || isUsdText(b.bonus_usd),
-          )}
-        />
-      </div>
-
       {/* min-w-0 on cards: nothing may force the page wider than 375px. */}
       <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {bundles.map((bundle) => (
@@ -1125,6 +1201,7 @@ export function PlanCards({
   selectedId,
   onSelect,
   rate,
+  currency = "USD",
 }: {
   plans: Plan[];
   workspaceId: string | undefined;
@@ -1133,24 +1210,13 @@ export function PlanCards({
   onSelect: (plan: Plan) => void;
   /** Backend FX rate; undefined (older backend) keeps VND-only display. */
   rate?: number;
+  /** Hoisted page-level display currency; the section owns no toggle. */
+  currency?: DisplayCurrency;
 }) {
-  // USD canonical display, same rules as BundleCards.
-  const [currency, setCurrency] = useState<DisplayCurrency>("USD");
   const t = useT(bundlesCopy);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <CurrencyToggle
-          currency={currency}
-          rate={rate}
-          onChange={setCurrency}
-          usdAvailable={plans.some(
-            (p) => isUsdText(p.price_usd) || isUsdText(p.credit_per_period_usd),
-          )}
-        />
-      </div>
-
       {/* min-w-0 on cards: nothing may force the page wider than 375px. */}
       <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {plans.map((plan) => (
@@ -1219,13 +1285,15 @@ export function SubscriptionStatusCard({
   subscription,
   workspaceId,
   rate,
+  currency = "USD",
 }: {
   subscription: SubscriptionInfo;
   workspaceId: string;
   rate: number | undefined;
+  /** Hoisted page-level display currency; the card owns no toggle. */
+  currency?: DisplayCurrency;
 }) {
   const queryClient = useQueryClient();
-  const [currency, setCurrency] = useState<DisplayCurrency>("USD");
   const t = useT(bundlesCopy);
 
   const cancel = useMutation({
@@ -1299,7 +1367,6 @@ export function SubscriptionStatusCard({
               {cancel.isPending ? t("canceling") : t("cancelSubscription")}
             </Button>
           )}
-          <CurrencyToggle currency={currency} rate={rate} onChange={setCurrency} />
         </div>
       )}
       <p className="mt-2 text-xs text-muted-foreground">

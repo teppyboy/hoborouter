@@ -546,3 +546,66 @@ test("throughput purchase posts the throughput endpoint; plan posts subscription
   expect(posts()[1]!.path).toBe("/api/v1/workspaces/ws-test/subscription-plans/p1/purchase");
   expect(posts()[1]!.init?.body).toBe("{}");
 });
+
+// --- page-level display-currency control -----------------------------------
+// One segmented USD/VND radiogroup beside the TabsList drives every section;
+// the checkout dialog stays VND-authoritative regardless of the selection.
+
+test("one display-currency control beside the tabs drives every section", async () => {
+  mountPage();
+  await waitFor(() => bodyText().includes("Starter"), "bundles tab content");
+  const group = () => document.body.querySelector("[role='radiogroup']");
+  // Exactly one control for the whole page: the per-section Show VND/USD
+  // buttons are gone.
+  expect(document.body.querySelectorAll("[role='radiogroup']")).toHaveLength(1);
+  expect(document.body.querySelectorAll("[role='radio']")).toHaveLength(2);
+  expect(group()!.getAttribute("aria-label")).toBe("Display currency");
+  // USD default: bundle price leads with USD, VND integer secondary.
+  const bundlePrice = () =>
+    document.body.querySelector('[data-testid="price-b1"]')?.textContent ?? "";
+  expect(bundlePrice()).toBe("$1.92"); // 50000 / 26000
+  const selected = () => group()!.querySelector("[role='radio'][aria-checked='true']");
+  expect(selected()!.textContent).toBe("USD");
+
+  await click(
+    [...group()!.querySelectorAll("[role='radio']")].find((r) => r.textContent === "VND")!,
+  );
+  // Every bundle price updates to VND; the primary line is the ledger truth.
+  expect(bundlePrice()).toBe("50.000 ₫");
+  expect(selected()!.textContent).toBe("VND");
+
+  // The same hoisted state carries into the plans tab.
+  await tabTrigger("Subscription plans");
+  await waitFor(() => bodyText().includes("Pro"), "plans tab content");
+  expect(document.body.querySelector('[data-testid="price-p1"]')?.textContent).toBe("200.000 ₫");
+  expect(document.body.querySelectorAll("[role='radiogroup']")).toHaveLength(1);
+
+  // Prepaid throughput is a VND-only product: the control hides there and no
+  // USD option is suggested for it.
+  await tabTrigger("Prepaid throughput");
+  await waitFor(() => bodyText().includes("Turbo 30"), "throughput tab content");
+  expect(document.body.querySelectorAll("[role='radiogroup']")).toHaveLength(0);
+
+  // Back on bundles the selection is retained (same page state, not persisted).
+  await tabTrigger("Credit bundles");
+  expect(document.body.querySelectorAll("[role='radiogroup']")).toHaveLength(1);
+  expect(bundlePrice()).toBe("50.000 ₫");
+  expect(selected()!.textContent).toBe("VND");
+});
+
+test("checkout price stays VND-authoritative with the page in USD display", async () => {
+  mountPage();
+  await waitFor(() => bodyText().includes("Starter"), "bundles tab content");
+  await selectCard("Starter");
+  const dialog = dialogEl()!;
+  // The dialog price is the ledger-truth VND amount (USD only as the small
+  // secondary line), and the payload shape is untouched by the display.
+  expect(dialog.querySelector('[data-testid="checkout-price"]')?.textContent).toBe("50.000 ₫");
+  const confirm = [...dialog.querySelectorAll("button")].find((b) =>
+    (b.textContent ?? "").startsWith("Confirm purchase"),
+  )!;
+  await click(confirm);
+  await waitFor(() => calls.some((c) => c.init?.method === "POST"), "purchase POST");
+  const posted = calls.find((c) => c.init?.method === "POST")!;
+  expect(posted.init?.body).toBe("{}");
+});

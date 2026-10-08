@@ -9,7 +9,7 @@
 // the provider choice; the server charges the VND bundle/plan price.
 import { test, expect, afterAll } from "bun:test";
 import { JSDOM } from "jsdom";
-import { act } from "react";
+import { act, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const GLOBAL_KEYS = [
@@ -21,6 +21,7 @@ const GLOBAL_KEYS = [
   "HTMLInputElement",
   "Event",
   "MouseEvent",
+  "KeyboardEvent",
   "localStorage",
   "matchMedia",
 ] as const;
@@ -30,6 +31,7 @@ type EventCtor<T, I> = new (type: string, init?: I) => T;
 interface JsdomRealm {
   Event: EventCtor<Event, EventInit>;
   MouseEvent: EventCtor<MouseEvent, MouseEventInit>;
+  KeyboardEvent: EventCtor<KeyboardEvent, KeyboardEventInit>;
   document: Document;
   Node: typeof Node;
   Element: typeof Element;
@@ -50,6 +52,7 @@ for (const [k, v] of Object.entries({
   HTMLInputElement: W.HTMLInputElement,
   Event: W.Event,
   MouseEvent: W.MouseEvent,
+  KeyboardEvent: W.KeyboardEvent,
   localStorage: W.localStorage,
 })) {
   (globalThis as Record<string, unknown>)[k] = v;
@@ -114,7 +117,7 @@ afterAll(async () => {
 
 // @ts-expect-error relative specifier has no declaration file under tests tsconfig
 const { createRoot } = await import("../apps/web/node_modules/react-dom/client");
-const { BundleCards, PlanCards, SubscriptionStatusCard } =
+const { BundleCards, PlanCards, SubscriptionStatusCard, DisplayCurrencyPicker } =
   await import("../apps/web/src/pages/billing/bundles");
 import type { SubscriptionInfo } from "../apps/web/src/pages/billing/bundles";
 
@@ -202,15 +205,17 @@ interface Mount {
   container: HTMLElement;
   click: (el: Element) => void;
   priceText: (id: string) => string;
-  toggleButton: () => HTMLButtonElement | null;
 }
 
+// The page owns the single display-currency control; the card sections are
+// pure views of the hoisted `currency` state passed in as a prop.
 function mountCards(
   Component: typeof BundleCards | typeof PlanCards,
   opts: {
     rate: number | undefined;
     bundles?: TestBundle[];
     plans?: TestPlan[];
+    currency?: "USD" | "VND";
   },
 ): Mount {
   const container = document.createElement("div");
@@ -225,6 +230,7 @@ function mountCards(
           selectedId: null,
           onSelect: () => {},
           rate: opts.rate,
+          currency: opts.currency,
         }
       : {
           plans: opts.plans ?? PLANS,
@@ -232,6 +238,7 @@ function mountCards(
           selectedId: null,
           onSelect: () => {},
           rate: opts.rate,
+          currency: opts.currency,
         };
   act(() => {
     root.render(
@@ -251,10 +258,6 @@ function mountCards(
     click,
     priceText: (id: string) =>
       container.querySelector(`[data-testid="price-${id}"]`)?.textContent ?? "",
-    toggleButton: () =>
-      [...container.querySelectorAll("button")].find((b) =>
-        /^Show (VND|USD)$/.test(b.textContent ?? ""),
-      ) ?? null,
   };
 }
 
@@ -263,21 +266,14 @@ test("USD is canonical: price shows USD primary with the VND integer secondary",
   expect(m.priceText("b1")).toContain("$1.92");
   expect(m.container.textContent).toContain("50.000 ₫");
   expect(m.container.textContent).toContain("$3.85"); // 100000 / 26000
-  expect(m.toggleButton()?.textContent).toBe("Show VND");
 });
 
-test("toggle converts the section to VND and back to USD", () => {
-  const m = mountCards(BundleCards, { rate: RATE });
-  const btn = m.toggleButton();
-  if (!btn) throw new Error("toggle missing");
-  m.click(btn);
+test("VND selection renders VND primary for the whole section, USD selection converts back", () => {
+  const m = mountCards(BundleCards, { rate: RATE, currency: "VND" });
   expect(m.priceText("b1")).toContain("50.000 ₫");
   expect(m.priceText("b1")).not.toContain("$");
-  expect(m.toggleButton()?.textContent).toBe("Show USD");
-  const back = m.toggleButton();
-  if (!back) throw new Error("toggle missing");
-  m.click(back);
-  expect(m.priceText("b1")).toContain("$1.92");
+  const back = mountCards(BundleCards, { rate: RATE, currency: "USD" });
+  expect(back.priceText("b1")).toContain("$1.92");
 });
 
 test("bonus and per-period credit follow the selected currency too", () => {
@@ -286,13 +282,19 @@ test("bonus and per-period credit follow the selected currency too", () => {
   const p = mountCards(PlanCards, { rate: RATE });
   expect(p.priceText("p1")).toContain("$7.69"); // 200000 / 26000
   expect(p.container.textContent).toContain("$9.62"); // 250000 / 26000 per period
+  const vnd = mountCards(BundleCards, { rate: RATE, currency: "VND" });
+  expect(vnd.container.textContent).toContain("+ 10.000 ₫ bonus");
+  const pv = mountCards(PlanCards, { rate: RATE, currency: "VND" });
+  expect(pv.priceText("p1")).toContain("200.000 ₫");
+  expect(pv.container.textContent).toContain("250.000 ₫ credit");
 });
 
-test("no rate: VND-only display, no toggle", () => {
+test("no rate: VND-only display regardless of selection", () => {
   const m = mountCards(BundleCards, { rate: undefined });
   expect(m.priceText("b1")).toContain("50.000 ₫");
   expect(m.priceText("b1")).not.toContain("$");
-  expect(m.toggleButton()).toBeNull();
+  const v = mountCards(BundleCards, { rate: undefined, currency: "VND" });
+  expect(v.priceText("b1")).toContain("50.000 ₫");
 });
 
 // --- cancel subscription --------------------------------------------------
@@ -439,8 +441,7 @@ test("authored USD price shows the exact price_usd text even without any FX rate
   expect(m.priceText("u1")).toBe("$9.99");
   // VND secondary is the server quote, not a client conversion.
   expect(m.container.textContent).toContain("259.750 ₫");
-  // USD rows still allow the toggle without a wallet rate.
-  expect(m.toggleButton()?.textContent).toBe("Show VND");
+
   // Credit renders its OWN authored USD metadata exactly, never a
   // rate-recomputed equivalent.
   expect(m.container.textContent).toContain("$5.00 credit");
@@ -448,48 +449,160 @@ test("authored USD price shows the exact price_usd text even without any FX rate
 });
 
 test("VND mode shows the frozen integer VND grant for USD-credit rows", () => {
-  const m = mountCards(BundleCards, { rate: undefined, bundles: USD_BUNDLES });
-  const btn = m.toggleButton();
-  if (!btn) throw new Error("toggle missing");
-  m.click(btn);
+  const m = mountCards(BundleCards, {
+    rate: undefined,
+    bundles: USD_BUNDLES,
+    currency: "VND",
+  });
   // Integer VND display/history preserved; no re-derived USD text.
   expect(m.container.textContent).toContain("130.005 ₫ credit");
   expect(m.container.textContent).not.toContain("$5.00 credit");
-  const back = m.toggleButton();
-  if (!back) throw new Error("toggle missing");
-  m.click(back);
-  expect(m.container.textContent).toContain("$5.00 credit");
+  const back = mountCards(BundleCards, { rate: undefined, bundles: USD_BUNDLES });
+  expect(back.container.textContent).toContain("$5.00 credit");
 });
 
-test("toggle is usable when only credit or bonus USD metadata exists", () => {
-  // No authored price, but an authored USD credit still enables exact USD display.
+// --- page-level segmented control (rendered once, beside the TabsList) ------
+
+function mountPicker(opts: {
+  currency?: "USD" | "VND";
+  rate: number | undefined;
+  usdAvailable?: boolean;
+}): {
+  container: HTMLElement;
+  radios: () => Element[];
+  checked: () => string | null;
+  changes: ("USD" | "VND")[];
+  click: (label: string) => void;
+  key: (label: string, key: string) => void;
+  tabIndex: (label: string) => string | null;
+} {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const root = createRoot(container);
+  // Stateful harness: the picker is controlled by the page in production, so
+  // keyboard/selection assertions need the same controlled wiring here.
+  const changes: ("USD" | "VND")[] = [];
+  const initial = opts.currency ?? "USD";
+  function Harness() {
+    const [currency, setCurrency] = useState<"USD" | "VND">(initial);
+    return (
+      <DisplayCurrencyPicker
+        currency={currency}
+        rate={opts.rate}
+        usdAvailable={opts.usdAvailable}
+        onChange={(c) => {
+          changes.push(c);
+          setCurrency(c);
+        }}
+      />
+    );
+  }
+  act(() => {
+    root.render(
+      <QueryClientProvider client={qc}>
+        <Harness />
+      </QueryClientProvider>,
+    );
+  });
+  mounted.push({ root, container, qc });
+  const radio = (label: string) => {
+    const el = [...container.querySelectorAll("[role='radio']")].find(
+      (r) => r.textContent === label,
+    );
+    if (!el) throw new Error(`radio ${label} missing`);
+    return el;
+  };
+  return {
+    container,
+    radios: () => [...container.querySelectorAll("[role='radio']")],
+    checked: () =>
+      container.querySelector("[role='radio'][aria-checked='true']")?.textContent ?? null,
+    changes,
+    click: (label: string) =>
+      act(() => {
+        radio(label).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      }),
+    key: (label: string, key: string) =>
+      act(() => {
+        radio(label).dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      }),
+    tabIndex: (label: string) => radio(label).getAttribute("tabindex"),
+  };
+}
+
+test("picker is a labeled radiogroup of USD and VND with the selection marked", () => {
+  const m = mountPicker({ currency: "USD", rate: RATE });
+  expect(m.container.querySelector("[role='radiogroup']")).not.toBeNull();
+  expect(m.radios().map((r) => r.textContent)).toEqual(["USD", "VND"]);
+  expect(m.checked()).toBe("USD");
+  m.click("VND");
+  // Display-only control: clicking fires the callback; no money values exist
+  // anywhere in the control.
+  expect(m.container.textContent).toMatch(/^(USDVND|VNDUSD)$/);
+});
+
+test("arrow keys choose and focus the next radio, wrapping; Home/End jump to the ends", () => {
+  const m = mountPicker({ rate: RATE });
+  // Roving tabindex: the selected option is the group's only tab stop.
+  expect(m.tabIndex("USD")).toBe("0");
+  expect(m.tabIndex("VND")).toBe("-1");
+
+  m.key("USD", "ArrowRight");
+  expect(m.changes).toEqual(["VND"]);
+  expect(document.activeElement?.textContent).toBe("VND");
+  m.key("VND", "ArrowDown");
+  expect(m.changes).toEqual(["VND", "USD"]); // wraps forward to USD
+  m.key("USD", "ArrowLeft");
+  expect(m.changes).toEqual(["VND", "USD", "VND"]); // wraps backward to VND
+  m.key("VND", "ArrowUp");
+  expect(m.changes[m.changes.length - 1]).toBe("USD");
+
+  m.key("USD", "Home");
+  expect(m.changes[m.changes.length - 1]).toBe("USD");
+  m.key("USD", "End");
+  expect(m.changes[m.changes.length - 1]).toBe("VND");
+
+  // The controlled selection and roving tab stop followed the keys.
+  expect(m.checked()).toBe("VND");
+  expect(m.tabIndex("VND")).toBe("0");
+  expect(m.tabIndex("USD")).toBe("-1");
+  expect(document.activeElement?.textContent).toBe("VND");
+
+  // Unrelated keys never move the selection.
+  m.key("VND", "A");
+  expect(m.changes[m.changes.length - 1]).toBe("VND");
+  expect(m.changes).toHaveLength(6);
+});
+
+test("keyboard works in the other initial selection state too", () => {
+  const m = mountPicker({ currency: "VND", rate: RATE });
+  expect(m.tabIndex("VND")).toBe("0");
+  expect(m.tabIndex("USD")).toBe("-1");
+  m.key("VND", "ArrowLeft");
+  expect(m.changes).toEqual(["USD"]);
+  expect(document.activeElement?.textContent).toBe("USD");
+});
+
+test("picker hidden without a rate or authored USD; shown for authored USD without a rate", () => {
+  const hidden = mountPicker({ currency: "USD", rate: undefined });
+  expect(hidden.container.textContent).toBe("");
+  const authored = mountPicker({ currency: "USD", rate: undefined, usdAvailable: true });
+  expect(authored.radios()).toHaveLength(2);
+});
+
+test("VND mode on a USD row shows the server quote and labels it an estimate", () => {
   const m = mountCards(BundleCards, {
     rate: undefined,
-    bundles: [usdBundle({ price_usd: undefined, credit_usd: "5" })],
+    bundles: USD_QUOTED_BUNDLES,
+    currency: "VND",
   });
-  expect(m.toggleButton()?.textContent).toBe("Show VND");
-  expect(m.container.textContent).toContain("$5.00 credit");
-  // Authored USD bonus alone enables the toggle too.
-  const m2 = mountCards(BundleCards, {
-    rate: undefined,
-    bundles: [usdBundle({ price_usd: undefined, credit_usd: undefined, bonus_usd: "1" })],
-  });
-  expect(m2.toggleButton()?.textContent).toBe("Show VND");
-});
-
-test("VND toggle on a USD row shows the server quote and labels it an estimate", () => {
-  const m = mountCards(BundleCards, { rate: undefined, bundles: USD_QUOTED_BUNDLES });
-  const btn = m.toggleButton();
-  if (!btn) throw new Error("toggle missing");
-  m.click(btn);
   // Current server price_vnd quote (27001), never the creation fallback.
   expect(m.priceText("u1")).toContain("269.740 ₫");
   expect(m.priceText("u1")).not.toContain("259.750");
   expect(m.container.textContent.toLowerCase()).toContain("estimate");
-  const back = m.toggleButton();
-  if (!back) throw new Error("toggle missing");
-  m.click(back);
-  expect(m.priceText("u1")).toBe("$9.99");
+  const back = mountCards(BundleCards, { rate: undefined, bundles: USD_QUOTED_BUNDLES });
+  expect(back.priceText("u1")).toBe("$9.99");
 });
 
 // --- authored USD plan display (own per-period metadata) -------------------
@@ -530,16 +643,16 @@ test("authored USD credit is never reinterpreted through the rate", () => {
 test("authored USD plan shows the exact price and its own USD per-period credit", () => {
   const m = mountCards(PlanCards, { rate: undefined, plans: USD_PLANS });
   expect(m.priceText("up1")).toBe("$9.99");
-  expect(m.toggleButton()?.textContent).toBe("Show VND");
   // Exact authored per-period credit, no rate needed.
   expect(m.container.textContent).toContain("$12.00 credit / 30 days");
   expect(m.container.textContent).not.toContain("$11.99");
   // VND mode keeps the frozen integer VND grant.
-  const btn = m.toggleButton();
-  if (!btn) throw new Error("toggle missing");
-  m.click(btn);
-  expect(m.container.textContent).toContain("312.012 ₫ credit / 30 days");
-  // Authored per-period credit alone enables the toggle.
+  const v = mountCards(PlanCards, {
+    rate: undefined,
+    plans: USD_PLANS,
+    currency: "VND",
+  });
+  expect(v.container.textContent).toContain("312.012 ₫ credit / 30 days");
   const m2 = mountCards(PlanCards, {
     rate: undefined,
     plans: [
@@ -554,7 +667,6 @@ test("authored USD plan shows the exact price and its own USD per-period credit"
       },
     ],
   });
-  expect(m2.toggleButton()?.textContent).toBe("Show VND");
   expect(m2.container.textContent).toContain("$12.00 credit / 30 days");
 });
 
