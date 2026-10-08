@@ -9,7 +9,8 @@ const { PublicLayout } = await import("../apps/web/src/components/public-layout"
 const { SupportLinks, supportLinks } = await import("../apps/web/src/components/support-links");
 const { Landing } = await import("../apps/web/src/pages/public/landing");
 const { Pricing } = await import("../apps/web/src/pages/public/pricing");
-const { Quickstart, buildSnippets } = await import("../apps/web/src/pages/public/quickstart");
+const { Quickstart, buildSnippets, buildAgentConfigSnippets } =
+  await import("../apps/web/src/pages/public/quickstart");
 
 const instance = {
   name: "Hoborouter",
@@ -154,6 +155,125 @@ test("buildSnippets escapes hostile values: no shell/JS breakout, no newline inj
   expect(s.python).toContain('model="m\\"\\\\model NEXT"');
   expect(s.js).toContain('baseURL: "https://x\\"; rm -rf /; echo \\"$(danger)`t/v1"');
   expect(s.js).toContain('model: "m\\"\\\\model NEXT"');
+});
+
+test("buildAgentConfigSnippets: codex/opencode/pi target the gateway base url, model and env key", () => {
+  const s = buildAgentConfigSnippets("https://hoborouter.example", "openai/gpt-4o-mini");
+  // Same base URL (with /v1), same published model id, same env var name in
+  // every client; only the HBR_API_KEY env reference is ever shown.
+  for (const snippet of [s.codex, s.opencode, s.pi]) {
+    expect(snippet).toContain("https://hoborouter.example/v1");
+    expect(snippet).toContain("openai/gpt-4o-mini");
+    expect(snippet).toContain("HBR_API_KEY");
+    expect(snippet).not.toContain("sk-");
+  }
+  // Codex: user-level config.toml, custom provider, Responses wire (default).
+  expect(s.codex).toContain('model = "openai/gpt-4o-mini"');
+  expect(s.codex).toContain('model_provider = "hoborouter"');
+  expect(s.codex).toContain('base_url = "https://hoborouter.example/v1"');
+  expect(s.codex).toContain('env_key = "HBR_API_KEY"');
+  // OpenCode: OpenAI-compatible provider with env-var interpolation.
+  const oc = JSON.parse(s.opencode) as {
+    provider?: Record<
+      string,
+      { options: { baseURL: string; apiKey: string }; models: Record<string, unknown> }
+    >;
+  };
+  expect(oc.provider?.hoborouter?.options.baseURL).toBe("https://hoborouter.example/v1");
+  expect(oc.provider?.hoborouter?.options.apiKey).toBe("{env:HBR_API_KEY}");
+  expect(Object.keys(oc.provider?.hoborouter?.models ?? {})).toEqual(["openai/gpt-4o-mini"]);
+  // pi: models.json compatible endpoint, env-interpolated key.
+  const piCfg = JSON.parse(s.pi) as {
+    providers?: Record<string, { baseUrl: string; apiKey: string; models: { id: string }[] }>;
+  };
+  expect(piCfg.providers?.hoborouter?.baseUrl).toBe("https://hoborouter.example/v1");
+  expect(piCfg.providers?.hoborouter?.apiKey).toBe("$HBR_API_KEY");
+  expect(piCfg.providers?.hoborouter?.models[0]?.id).toBe("openai/gpt-4o-mini");
+});
+
+test("buildAgentConfigSnippets: placeholders without config/catalog", () => {
+  const s = buildAgentConfigSnippets("YOUR_BASE_URL", "YOUR_MODEL_ID");
+  expect(s.codex).toContain('base_url = "YOUR_BASE_URL/v1"');
+  expect(s.codex).toContain('model = "YOUR_MODEL_ID"');
+  expect(s.opencode).toContain("YOUR_MODEL_ID");
+  expect(s.pi).toContain("YOUR_MODEL_ID");
+});
+
+test("buildAgentConfigSnippets escapes hostile values: JSON parses, TOML values stay single-line", () => {
+  const s = buildAgentConfigSnippets('https://x"y\nz', 'm"\\model\nNEXT');
+  // Newlines are stripped (never interpolated) and quotes never terminate a
+  // string early: both JSON snippets still parse with the full value intact.
+  const oc = JSON.parse(s.opencode) as {
+    provider?: Record<string, { options: { baseURL: string } }>;
+  };
+  expect(oc.provider?.hoborouter?.options.baseURL).toBe('https://x"y z/v1');
+  const piCfg = JSON.parse(s.pi) as {
+    providers?: Record<string, { baseUrl: string; models: { id: string }[] }>;
+  };
+  expect(piCfg.providers?.hoborouter?.baseUrl).toBe('https://x"y z/v1');
+  expect(piCfg.providers?.hoborouter?.models[0]?.id).toBe('m"\\model NEXT');
+  // TOML: quotes escaped; every line keeps balanced double quotes once
+  // escaped quotes (\") are excluded from the count.
+  expect(s.codex).toContain('model = "m\\"\\\\model NEXT"');
+  for (const line of s.codex.split("\n")) {
+    expect((line.replace(/\\"/g, "").match(/"/g) ?? []).length % 2).toBe(0);
+  }
+});
+
+test("base url is normalized so /v1 is appended exactly once (host, slash, /v1, /v1/)", () => {
+  const variants = [
+    "https://hoborouter.example",
+    "https://hoborouter.example/",
+    "https://hoborouter.example/v1",
+    "https://hoborouter.example/v1/",
+  ];
+  for (const base of variants) {
+    const s = buildSnippets(base, "openai/gpt-4o-mini");
+    expect(s.curl).toContain('curl "https://hoborouter.example/v1/chat/completions" \\');
+    expect(s.python).toContain('base_url="https://hoborouter.example/v1"');
+    expect(s.js).toContain('baseURL: "https://hoborouter.example/v1"');
+    // Exactly one /v1 per SDK snippet: never doubled (/v1/v1) or //v1.
+    for (const snippet of [s.curl, s.python, s.js]) {
+      expect(snippet.split("/v1").length - 1).toBe(1);
+      expect(snippet).not.toContain("/v1/v1");
+      expect(snippet).not.toContain("//v1");
+    }
+    const a = buildAgentConfigSnippets(base, "openai/gpt-4o-mini");
+    expect(a.codex).toContain('base_url = "https://hoborouter.example/v1"');
+    for (const snippet of [a.codex, a.opencode, a.pi]) {
+      expect(snippet.split("/v1").length - 1).toBe(1);
+      expect(snippet).not.toContain("/v1/v1");
+      expect(snippet).not.toContain("//v1");
+    }
+    // JSON snippets still parse with the normalized URL.
+    const oc = JSON.parse(a.opencode) as {
+      provider?: Record<string, { options?: { baseURL?: string } }>;
+    };
+    expect(oc.provider?.hoborouter?.options?.baseURL).toBe("https://hoborouter.example/v1");
+    const piCfg = JSON.parse(a.pi) as {
+      providers?: Record<string, { baseUrl?: string }>;
+    };
+    expect(piCfg.providers?.hoborouter?.baseUrl).toBe("https://hoborouter.example/v1");
+  }
+});
+
+test("both tablists are named for assistive technology (bilingual aria-labels)", () => {
+  const html = renderToStaticMarkup(
+    <Quickstart instance={instance} exampleModelId={model.public_id} />,
+  );
+  expect(html).toContain('aria-label="Request examples"');
+  expect(html).toContain('aria-label="Coding agent clients"');
+});
+
+test("quickstart renders the agent tabs card with configured base url", () => {
+  const html = renderToStaticMarkup(
+    <Quickstart instance={instance} exampleModelId={model.public_id} />,
+  );
+  expect(html).toContain("Connect your coding agent");
+  // The active agent tab (Codex) renders the real configured base URL;
+  // SSR escapes the TOML quotes inside the code block.
+  expect(html).toContain("base_url = &quot;https://hoborouter.example/v1&quot;");
+  expect(html).toContain('aria-label="Codex config example"');
 });
 
 test("quickstart renders real snippets with configured base url and published model", () => {

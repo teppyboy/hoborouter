@@ -48,6 +48,33 @@ const quickstartCopy = {
     vi: "Phản hồi theo schema chat-completions của OpenAI. Hỗ trợ streaming với",
   },
   streamingTail: { en: ".", vi: "." },
+  agentTitle: {
+    en: "3. Connect your coding agent",
+    vi: "3. Kết nối coding agent của bạn",
+  },
+  sdkTabsAria: { en: "Request examples", vi: "Ví dụ gọi API" },
+  agentTabsAria: { en: "Coding agent clients", vi: "Các coding agent" },
+  agentCodexLead: {
+    en: "Codex reads providers from the user-level ~/.codex/config.toml:",
+    vi: "Codex đọc provider từ file user-level ~/.codex/config.toml:",
+  },
+  agentOpencodeLead: {
+    en: "OpenCode reads opencode.json from your project root:",
+    vi: "OpenCode đọc opencode.json ở thư mục gốc dự án:",
+  },
+  agentPiLead: {
+    en: "pi reads ~/.pi/agent/models.json (run /model afterwards to reload):",
+    vi: "pi đọc ~/.pi/agent/models.json (chạy /model sau đó để nạp lại):",
+  },
+  agentNote: {
+    en: 'Use the same API key: set HBR_API_KEY once in your shell with export HBR_API_KEY="YOUR_API_KEY". The snippets below reference the variable — no client shows the key itself.',
+    vi: 'Dùng cùng một API key: đặt HBR_API_KEY một lần trong shell bằng export HBR_API_KEY="YOUR_API_KEY". Các đoạn cấu hình dưới đây chỉ tham chiếu biến — không client nào hiển thị key.',
+  },
+  agentCodexDocs: { en: "Codex config reference", vi: "Codex config reference" },
+  agentOpencodeDocs: { en: "OpenCode providers docs", vi: "Tài liệu providers của OpenCode" },
+  agentPiDocs: { en: "pi model catalog", vi: "Danh mục model của pi" },
+  agentExampleAria: { en: "{lang} config example", vi: "ví dụ cấu hình {lang}" },
+  agentCopyExample: { en: "Copy {lang} config", vi: "Copy cấu hình {lang}" },
 } as const;
 
 // No line breaks in interpolated values: a newline in the base URL or model id
@@ -61,6 +88,13 @@ const escapeShellDq = (s: string) =>
 // Escape for a double-quoted string in Python/JS.
 const escapeDq = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
+// Normalize the admin-configured base URL so "/v1" is appended exactly once:
+// strip trailing slashes, then a trailing "/v1" (it is re-appended at every
+// use site). The admin config may or may not include the suffix
+// (trustedBaseUrl() passes BETTER_AUTH_URL/HBR_BASE_URL through raw), so both
+// SDK snippets and agent config snippets must go through this.
+const normalizeBase = (s: string) => oneLine(s).replace(/\/+$/, "").replace(/\/v1$/, "");
+
 /**
  * The three quickstart snippets for a base URL + model id. Exported for tests:
  * Radix Tabs renders only the active tab in SSR, so the Python/JS bodies are
@@ -69,7 +103,8 @@ const escapeDq = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
  * escaped per language before interpolation.
  */
 export function buildSnippets(baseUrl: string, model: string) {
-  const url = `${oneLine(baseUrl)}/v1/chat/completions`;
+  const normalized = normalizeBase(baseUrl);
+  const url = `${normalized}/v1/chat/completions`;
   const safeModel = oneLine(model);
 
   const body = JSON.stringify(
@@ -94,7 +129,7 @@ export function buildSnippets(baseUrl: string, model: string) {
     ``,
     `client = OpenAI(`,
     `    api_key="YOUR_API_KEY",`,
-    `    base_url="${escapeDq(oneLine(baseUrl))}/v1",`,
+    `    base_url="${escapeDq(normalized)}/v1",`,
     `)`,
     ``,
     `response = client.chat.completions.create(`,
@@ -109,7 +144,7 @@ export function buildSnippets(baseUrl: string, model: string) {
     ``,
     `const client = new OpenAI({`,
     `  apiKey: "YOUR_API_KEY",`,
-    `  baseURL: "${escapeDq(oneLine(baseUrl))}/v1",`,
+    `  baseURL: "${escapeDq(normalized)}/v1",`,
     `});`,
     ``,
     `const response = await client.chat.completions.create({`,
@@ -120,6 +155,94 @@ export function buildSnippets(baseUrl: string, model: string) {
   ].join("\n");
 
   return { curl, python, js };
+}
+
+// Escape for a TOML basic (double-quoted) string: backslash and quote would
+// otherwise terminate the string, and raw control characters (including tab)
+// are forbidden in TOML basic strings.
+const escapeTomlDq = (s: string) =>
+  oneLine(s)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    // TOML basic strings forbid raw control characters; escape them per the
+    // TOML spec (\t, other C0/del as \uXXXX). Char map avoids a control-char
+    // regex (lint no-control-regex).
+    .split("")
+    .map((c) => {
+      const code = c.charCodeAt(0);
+      if (code < 32 || code === 127) {
+        return c === "\t" ? "\\t" : "\\u" + code.toString(16).padStart(4, "0");
+      }
+      return c;
+    })
+    .join("");
+
+/**
+ * Coding-agent config snippets (Codex / OpenCode / pi) for a base URL +
+ * model id. Exported for tests: Radix Tabs renders only the active tab in
+ * SSR. JSON snippets are built with JSON.stringify so any value is safely
+ * embedded; TOML values go through escapeTomlDq. Keys are only ever
+ * referenced by the HBR_API_KEY environment variable — never rendered.
+ *
+ * Wire facts (do not invent fields):
+ * - Codex: user-level ~/.codex/config.toml; project config ignores
+ *   model_providers. `wire_api` omitted — `responses` is the documented
+ *   default and the gateway serves /v1/responses.
+ * - OpenCode: `npm: "@ai-sdk/openai-compatible"` with the documented
+ *   `{env:VAR}` interpolation in provider options (no literal key).
+ * - pi: ~/.pi/agent/models.json, `api: "openai-completions"`; the key option
+ *   supports `$NAME`/`${NAME}` env interpolation per the installed pi docs.
+ */
+export function buildAgentConfigSnippets(baseUrl: string, model: string) {
+  const safeUrl = `${normalizeBase(baseUrl)}/v1`;
+  const safeModel = oneLine(model);
+
+  const codex = [
+    `# ~/.codex/config.toml`,
+    `model = "${escapeTomlDq(safeModel)}"`,
+    `model_provider = "hoborouter"`,
+    ``,
+    `[model_providers.hoborouter]`,
+    `name = "Hoborouter"`,
+    `base_url = "${escapeTomlDq(safeUrl)}"`,
+    `env_key = "HBR_API_KEY"`,
+  ].join("\n");
+
+  const opencode = JSON.stringify(
+    {
+      $schema: "https://opencode.ai/config.json",
+      provider: {
+        hoborouter: {
+          npm: "@ai-sdk/openai-compatible",
+          name: "Hoborouter",
+          options: {
+            baseURL: safeUrl,
+            apiKey: "{env:HBR_API_KEY}",
+          },
+          models: { [safeModel]: { name: safeModel } },
+        },
+      },
+    },
+    null,
+    2,
+  );
+
+  const pi = JSON.stringify(
+    {
+      providers: {
+        hoborouter: {
+          baseUrl: safeUrl,
+          api: "openai-completions",
+          apiKey: "$HBR_API_KEY",
+          models: [{ id: safeModel }],
+        },
+      },
+    },
+    null,
+    2,
+  );
+
+  return { codex, opencode, pi };
 }
 
 function Snippet({ code, lang }: { code: string; lang: string }) {
@@ -139,6 +262,42 @@ function Snippet({ code, lang }: { code: string; lang: string }) {
   );
 }
 
+function AgentSnippet({ code, lang }: { code: string; lang: string }) {
+  const t = useT(quickstartCopy);
+  return (
+    <div className="relative rounded-md border border-border bg-muted/40">
+      <div className="absolute right-2 top-2">
+        <CopyButton value={code} label={t("agentCopyExample", { lang })} />
+      </div>
+      <pre
+        className="overflow-x-auto p-4 text-xs leading-relaxed"
+        aria-label={t("agentExampleAria", { lang })}
+      >
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
+function AgentDocsLinks({ target }: { target: "codex" | "opencode" | "pi" }) {
+  const t = useT(quickstartCopy);
+  const links = {
+    codex: {
+      href: "https://developers.openai.com/codex/config-reference",
+      label: t("agentCodexDocs"),
+    },
+    opencode: { href: "https://opencode.ai/docs/providers/", label: t("agentOpencodeDocs") },
+    // pi ships its docs with the install; the catalog is the canonical URL.
+    pi: { href: "https://pi.dev/models", label: t("agentPiDocs") },
+  };
+  const link = links[target];
+  return (
+    <a href={link.href} className="underline hover:text-foreground" rel="noreferrer">
+      {link.label}
+    </a>
+  );
+}
+
 export function Quickstart({
   instance,
   exampleModelId,
@@ -153,6 +312,7 @@ export function Quickstart({
   const baseUrl = instance?.api_base_url ?? "YOUR_BASE_URL";
   const model = exampleModelId ?? "YOUR_MODEL_ID";
   const { curl, python, js } = buildSnippets(baseUrl, model);
+  const { codex, opencode, pi } = buildAgentConfigSnippets(baseUrl, model);
 
   const modelDisplay = exampleModelId ? (
     <a href="/pricing" className="underline hover:text-foreground">
@@ -187,13 +347,14 @@ export function Quickstart({
         <section className="max-w-3xl space-y-3">
           <h2 className="text-lg font-semibold">{t("step2Title")}</h2>
           <p className="text-sm text-muted-foreground">
-            {t("step2SdkLead")} <code className="font-mono text-xs">{baseUrl}/v1</code>{" "}
+            {t("step2SdkLead")}{" "}
+            <code className="font-mono text-xs">{normalizeBase(baseUrl)}/v1</code>{" "}
             {t("step2SdkTail")}
           </p>
           <Card>
             <CardContent className="pt-6">
               <Tabs defaultValue="curl">
-                <TabsList>
+                <TabsList aria-label={t("sdkTabsAria")}>
                   <TabsTrigger value="curl">curl</TabsTrigger>
                   <TabsTrigger value="python">Python</TabsTrigger>
                   <TabsTrigger value="js">JavaScript</TabsTrigger>
@@ -214,6 +375,40 @@ export function Quickstart({
             {t("streamingLead")} <code className="font-mono text-xs">"stream": true</code>
             {t("streamingTail")}
           </p>
+        </section>
+
+        <section className="max-w-3xl space-y-3">
+          <h2 className="text-lg font-semibold">{t("agentTitle")}</h2>
+          <p className="text-sm text-muted-foreground">{t("agentNote")}</p>
+          <Card>
+            <CardContent className="space-y-3 pt-6">
+              <Tabs defaultValue="codex">
+                <TabsList aria-label={t("agentTabsAria")}>
+                  <TabsTrigger value="codex">Codex</TabsTrigger>
+                  <TabsTrigger value="opencode">OpenCode</TabsTrigger>
+                  <TabsTrigger value="pi">pi</TabsTrigger>
+                </TabsList>
+                <TabsContent value="codex" className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {t("agentCodexLead")} <AgentDocsLinks target="codex" />.
+                  </p>
+                  <AgentSnippet code={codex} lang="Codex" />
+                </TabsContent>
+                <TabsContent value="opencode" className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {t("agentOpencodeLead")} <AgentDocsLinks target="opencode" />.
+                  </p>
+                  <AgentSnippet code={opencode} lang="OpenCode" />
+                </TabsContent>
+                <TabsContent value="pi" className="space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {t("agentPiLead")} <AgentDocsLinks target="pi" />.
+                  </p>
+                  <AgentSnippet code={pi} lang="pi" />
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
         </section>
       </div>
     </PublicLayout>
