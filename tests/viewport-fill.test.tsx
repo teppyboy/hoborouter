@@ -1,10 +1,13 @@
 // Viewport fill opt-in: ScrollPanel/DataTable accept a `fill` flag so list
-// panels stretch to the remaining bounded-shell height instead of capping at
-// max-h-96. Fill is pure CSS layout, which jsdom cannot measure — these tests
+// panels use the remaining bounded-shell height instead of capping at
+// max-h-96. Fill is adaptive CSS layout (natural height when rows are few,
+// capped only when rows overflow), which jsdom cannot measure — these tests
 // pin the semantic contract that must survive the fill opt-in: labelled,
 // keyboard-scrollable region (WCAG 2.1.1), sticky header, search input and
-// pagination stay outside the region. Pixel verification is browser-side
-// (parent run) and reported separately as unverified.
+// pagination stay outside the region, and the panel keeps its bounded-flex
+// parent (no auto-height wrapper that would drop the height constraint).
+// Pixel verification is browser-side (parent run) and reported separately as
+// unverified.
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
@@ -190,8 +193,9 @@ test("DataTable scroll fill keeps search outside the region and sorting working"
   const cells = region?.querySelectorAll("tbody td");
   expect(cells?.[0]?.textContent).toBe("alpha");
   // Structural fill contract: the region's parent is the DataTable wrapper
-  // that also holds the search input, so the panel's remaining-height flex
-  // sizing resolves inside a bounded parent while search stays outside.
+  // that also holds the search input, so the panel's adaptive sizing
+  // (natural height, capped only on overflow) resolves inside a bounded
+  // parent while search stays outside.
   const wrapper = region?.parentElement;
   expect(wrapper).not.toBeNull();
   expect(wrapper?.contains(search!)).toBe(true);
@@ -237,4 +241,36 @@ test("DataTable fill with a single row keeps region semantics and wrapper struct
   const wrapper = region?.parentElement;
   expect(wrapper?.children.length).toBe(1);
   expect(wrapper?.firstElementChild).toBe(region);
+});
+
+test("ScrollPanel fill keeps the bounded flex parent as its direct parent", async () => {
+  // Mirrors the direct-ScrollPanel fill routes (logs, billing payments,
+  // usage per-model, admin request log): the panel must be a direct child
+  // of a bounded flex column. An auto-height wrapper between them would
+  // drop the height constraint and the panel would never cap on overflow.
+  await render(
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="bounded">
+      <ScrollPanel label="Request logs" stickyHeader fill>
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>row</td>
+            </tr>
+          </tbody>
+        </table>
+      </ScrollPanel>
+    </div>,
+  );
+  const bounded = container.querySelector<HTMLElement>('[data-testid="bounded"]');
+  const region = bounded?.querySelector<HTMLElement>('[role="region"]');
+  expect(region).not.toBeNull();
+  expect(region?.getAttribute("aria-label")).toBe("Request logs");
+  expect(region?.getAttribute("tabindex")).toBe("0");
+  expect(region?.parentElement).toBe(bounded);
+  expect(bounded?.children.length).toBe(1);
 });

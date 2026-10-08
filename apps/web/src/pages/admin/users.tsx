@@ -216,7 +216,7 @@ export default function AdminUsersPage() {
   const { data: session } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <PageHeader
         title={t("title")}
         description={t("description")}
@@ -341,7 +341,7 @@ export function UsersTable({
         columns={columns}
         data={users}
         empty={t("noUsers")}
-        scroll={{ label: t("usersTable") }}
+        scroll={{ label: t("usersTable"), fill: true }}
       />
       <Dialog
         open={toRemove !== null}

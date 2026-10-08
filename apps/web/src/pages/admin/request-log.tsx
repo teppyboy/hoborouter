@@ -97,11 +97,16 @@ function RequestLogCard() {
     "/api/v1/admin/usage-logs",
   );
   return (
-    <Card className="flex min-h-0 flex-1 flex-col">
+    <Card className="flex min-h-0 flex-col">
+      {/* No flex-1: the bordered Card hugs header+panel when rows are few;
+          min-h-0 keeps it shrinking to the remaining page height on overflow. */}
       <CardHeader>
         <CardTitle className="text-sm font-medium">{t("panel")}</CardTitle>
       </CardHeader>
-      <CardContent className="flex min-h-0 flex-1 flex-col">
+      <CardContent className="flex min-h-0 flex-col">
+        {/* No flex-1 either: basis 0% would contribute no intrinsic height to
+            the now content-sized Card and collapse it; min-h-0 keeps shrinking
+            so the panel inside caps on overflow. */}
         {query.isPending ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : query.error ? (
@@ -110,8 +115,8 @@ function RequestLogCard() {
             {query.error instanceof Error ? query.error.message : t("loadError")}
           </p>
         ) : (
-          // Internally scrolling: 200 rows never grow the page; fill stretches
-          // the panel to the remaining bounded shell height.
+          // Internally scrolling: 200 rows never grow the page; fill keeps
+          // the panel within the remaining bounded shell height.
           <ScrollPanel label={t("panel")} stickyHeader fill>
             <DataTable columns={columns(t)} data={query.data.data} empty={t("empty")} />
           </ScrollPanel>

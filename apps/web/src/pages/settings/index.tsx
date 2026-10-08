@@ -38,12 +38,14 @@ export default function SettingsPage() {
   const members = useLocaleEntry(settingsCopy.members);
   const account = useLocaleEntry(settingsCopy.account);
   return (
-    <div className="mx-auto w-full max-w-4xl p-6">
+    <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col p-6">
       <PageHeader title={title} description={description} />
       {!workspaceId ? (
         <p className="mt-6 text-sm text-muted-foreground">{unavailable}</p>
       ) : (
-        <Tabs defaultValue="general" className="mt-6">
+        <Tabs defaultValue="general" className="mt-6 flex min-h-0 flex-1 flex-col">
+          {/* Bounded flex column so the members tab's table panel can take the
+              remaining height; other tabs keep their natural block layout. */}
           <TabsList>
             <TabsTrigger value="general">{general}</TabsTrigger>
             <TabsTrigger value="members">{members}</TabsTrigger>
@@ -55,7 +57,7 @@ export default function SettingsPage() {
               <DangerZone workspaceId={workspaceId} workspaceName={ws?.name ?? workspaceId} />
             </div>
           </TabsContent>
-          <TabsContent value="members" className="mt-4">
+          <TabsContent value="members" className="mt-4 flex min-h-0 flex-1 flex-col">
             <MembersTab workspaceId={workspaceId} />
           </TabsContent>
           <TabsContent value="account" className="mt-4">

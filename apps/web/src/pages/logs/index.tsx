@@ -321,7 +321,11 @@ export default function LogsPage() {
       ) : visible.length === 0 ? (
         <EmptyState title={t("noUsageRequests")} description={t("noUsageDesc")} />
       ) : (
-        <div className="space-y-2">
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          {/* Bounded flex column: filters and the pagination footer stay
+              outside the scroll region; the adaptive panel below takes natural
+              height when short and the remaining height only when it must
+              scroll. */}
           <div className="flex flex-wrap items-center gap-2">
             <Input
               className="h-8 w-56 text-sm"

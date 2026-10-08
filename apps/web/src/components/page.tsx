@@ -95,10 +95,11 @@ interface DataTableProps<TData> {
    * lists scroll inside the panel (sticky header) instead of growing the
    * page. The search input stays above the region. Omit when the caller
    * already wraps the DataTable in a ScrollPanel. `fill` opts the panel
-   * into occupying the remaining bounded-shell height (flex-1 min-h-0)
-   * instead of the max-h-96 cap; only for primary lists whose page root is
-   * a bounded flex column. With fill the panel always spans the remaining
-   * height (flex-grow), even when rows are few — it does not collapse.
+   * into the remaining bounded-shell height instead of the max-h-96 cap;
+   * only for primary lists whose page root is a bounded flex column. The
+   * panel itself is adaptive: natural content height when rows are few,
+   * capped to the remaining height (flex 0 1 auto, min-h-0) only when rows
+   * overflow — it never stretches empty space below the last row.
    */
   scroll?: { label: string; fill?: boolean };
 }
@@ -181,8 +182,10 @@ export function DataTable<TData>({
 
   return (
     // fill: the wrapper must be a bounded flex column or the ScrollPanel's
-    // min-h-0 flex-1 has no bounded parent and the panel loses its height
-    // constraint entirely. Search input stays a flex item above the region.
+    // min-h-0 max-h-full has no bounded parent and the panel loses its height
+    // constraint entirely. The wrapper keeps the remaining-space constraint
+    // (flex-1); the panel inside is adaptive (natural height, capped only on
+    // overflow). Search input stays a flex item above the region.
     // No-fill callers keep the original plain block wrapper.
     <div className={cn(scroll?.fill ? "flex min-h-0 flex-1 flex-col" : undefined)}>
       {onGlobalFilterChange && (
@@ -212,10 +215,11 @@ export { Check };
  * keyboard-scrollable (tabIndex) per WCAG 2.1.1; stickyHeader keeps the
  * table header visible while rows scroll.
  *
- * `fill` swaps the max-h-96 cap for flex-1 min-h-0 so the panel occupies the
- * bottom of a bounded flex-column parent (app-shell main). Opt-in per route;
- * with fill the panel always spans the remaining height (flex-grow), even
- * when rows are few — it does not collapse to its natural height.
+ * `fill` swaps the max-h-96 cap for adaptive sizing in a bounded flex-column
+ * parent (app-shell main): the panel is flex 0 1 auto with min-h-0, so it is
+ * as tall as its content when rows are few and capped to the remaining height
+ * only when rows overflow. Opt-in per route; it never stretches empty space
+ * below the last row.
  */
 export function ScrollPanel({
   label,
@@ -236,7 +240,7 @@ export function ScrollPanel({
       aria-label={label}
       tabIndex={0}
       className={cn(
-        fill ? "min-h-0 flex-1" : "max-h-96",
+        fill ? "min-h-0 max-h-full" : "max-h-96",
         "overflow-auto overscroll-contain rounded-lg border border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         stickyHeader && "[&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10 [&_thead]:bg-background",
         className,

@@ -190,14 +190,16 @@ export default function MembersTab({ workspaceId }: { workspaceId: string }) {
   ];
 
   return (
-    <div className="max-w-2xl">
+    <div className="flex min-h-0 max-w-2xl flex-1 flex-col">
       <InviteForm workspaceId={workspaceId} onInvited={invalidate} />
-      <div className="mt-6">
+      {/* Natural height when the member list is short; the fill panel takes
+          the remaining bounded height only when it must scroll. */}
+      <div className="mt-6 flex min-h-0 flex-1 flex-col">
         <DataTable
           columns={columns}
           data={members ?? []}
           empty={members?.length ? undefined : t("noMembers")}
-          scroll={{ label: t("membersTable") }}
+          scroll={{ label: t("membersTable"), fill: true }}
         />
       </div>
 
