@@ -14,8 +14,68 @@ import { type Db, workspaces, apiKeys, models, apiKeyModelPermissions } from "@h
 // Shared display-name bound for create and rename; keeps the two paths consistent.
 const MAX_KEY_NAME = 128;
 
-export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
-  new Elysia({ name: "keys" })
+export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
+  // Shared key creation for POST /keys (generic) and POST /chat-key (chat):
+  // same session + owner/admin gate, plaintext shown exactly once, audit
+  // carries only non-secret metadata. purpose is server-owned state; clients
+  // never set it.
+  const createKey = async (
+    request: Request,
+    params: { id: string },
+    body: { name?: unknown } | null,
+    purpose: "generic" | "chat",
+  ) => {
+    const gate = await requireSession(auth, request);
+    if ("error" in gate) return gate.error;
+    const userId = gate.session.user.id;
+    const denied = await requireWsRole(db, params.id, userId, "admin");
+    if (denied) return denied;
+    const ws = await db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(eq(workspaces.id, params.id))
+      .limit(1);
+    if (!ws[0]) return jsonError(404, "NOT_FOUND", "Workspace not found");
+    const raw = (body as { name?: unknown } | null)?.name;
+    const name = typeof raw === "string" ? raw.trim() : "";
+    if (!name) return jsonError(400, "INVALID", "name is required");
+    if (name.length > MAX_KEY_NAME)
+      return jsonError(400, "INVALID", `name must be at most ${MAX_KEY_NAME} characters`);
+
+    const { plaintext, hash, prefix } = generateApiKey();
+    const id = crypto.randomUUID();
+    const now = Date.now();
+    await db.transaction(async (tx) => {
+      await tx.insert(apiKeys).values({
+        id,
+        workspace_id: params.id,
+        key_hash: hash,
+        key_prefix: prefix,
+        name,
+        status: "enabled",
+        created_at: now,
+        purpose,
+      });
+      // audit detail carries only non-secret metadata — never plaintext or full hash
+      await writeAudit(tx, {
+        actorUserId: userId,
+        workspaceId: params.id,
+        action: "key.create",
+        target: id,
+        detail: { name, key_prefix: prefix, purpose },
+      });
+    });
+    // The ONLY place plaintext is ever emitted.
+    return new Response(
+      JSON.stringify({ id, name, key_prefix: prefix, status: "enabled", plaintext, purpose }),
+      {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      },
+    );
+  };
+
+  return new Elysia({ name: "keys" })
     .post(
       "/api/v1/workspaces/:id/keys",
       {
@@ -27,55 +87,20 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
           security: [{ cookieAuth: [] }],
         },
       },
-      async ({ request, params, body }) => {
-        const gate = await requireSession(auth, request);
-        if ("error" in gate) return gate.error;
-        const userId = gate.session.user.id;
-        const denied = await requireWsRole(db, params.id, userId, "admin");
-        if (denied) return denied;
-        const ws = await db
-          .select({ id: workspaces.id })
-          .from(workspaces)
-          .where(eq(workspaces.id, params.id))
-          .limit(1);
-        if (!ws[0]) return jsonError(404, "NOT_FOUND", "Workspace not found");
-        const raw = (body as { name?: unknown } | null)?.name;
-        const name = typeof raw === "string" ? raw.trim() : "";
-        if (!name) return jsonError(400, "INVALID", "name is required");
-        if (name.length > MAX_KEY_NAME)
-          return jsonError(400, "INVALID", `name must be at most ${MAX_KEY_NAME} characters`);
-
-        const { plaintext, hash, prefix } = generateApiKey();
-        const id = crypto.randomUUID();
-        const now = Date.now();
-        await db.transaction(async (tx) => {
-          await tx.insert(apiKeys).values({
-            id,
-            workspace_id: params.id,
-            key_hash: hash,
-            key_prefix: prefix,
-            name,
-            status: "enabled",
-            created_at: now,
-          });
-          // audit detail carries only non-secret metadata — never plaintext or full hash
-          await writeAudit(tx, {
-            actorUserId: userId,
-            workspaceId: params.id,
-            action: "key.create",
-            target: id,
-            detail: { name, key_prefix: prefix },
-          });
-        });
-        // The ONLY place plaintext is ever emitted.
-        return new Response(
-          JSON.stringify({ id, name, key_prefix: prefix, status: "enabled", plaintext }),
-          {
-            status: 201,
-            headers: { "content-type": "application/json" },
-          },
-        );
+      async ({ request, params, body }) => createKey(request, params, body, "generic"),
+    )
+    .post(
+      "/api/v1/workspaces/:id/chat-key",
+      {
+        params: t.Object({ id: t.String() }),
+        body: t.Object({ name: t.Optional(t.String()) }),
+        detail: {
+          tags: ["Keys"],
+          summary: "Create chat-purpose API key",
+          security: [{ cookieAuth: [] }],
+        },
       },
+      async ({ request, params, body }) => createKey(request, params, body, "chat"),
     )
     .get(
       "/api/v1/workspaces/:id/keys",
@@ -409,3 +434,4 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) =>
         return new Response(null, { status: 200 });
       },
     );
+};

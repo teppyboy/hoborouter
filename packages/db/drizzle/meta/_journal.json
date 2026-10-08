@@ -92,6 +92,13 @@
       "when": 1791800000000,
       "tag": "0012_throughput_allowances",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791900000000,
+      "tag": "0013_api_keys_purpose",
+      "breakpoints": true
     }
   ]
 }

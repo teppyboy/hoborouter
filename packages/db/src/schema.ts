@@ -78,6 +78,11 @@ export const apiKeys = pgTable(
     status: text("status", { enum: ["active", "enabled", "disabled", "revoked"] })
       .notNull()
       .default("active"),
+    // Server-owned key provenance: only the chat-key route writes 'chat';
+    // the gateway resolves the 1 MiB vs 16 MiB body cap from this.
+    purpose: text("purpose", { enum: ["generic", "chat"] })
+      .notNull()
+      .default("generic"),
     created_at: big("created_at").notNull(),
     last_used_at: big("last_used_at"),
     revoked_at: big("revoked_at"),
@@ -87,6 +92,7 @@ export const apiKeys = pgTable(
   (t) => [
     uniqueIndex("api_keys_key_hash").on(t.key_hash),
     check("api_keys_status", sql`${t.status} IN ('active','enabled','disabled','revoked')`),
+    check("api_keys_purpose", sql`${t.purpose} IN ('generic','chat')`),
   ],
 );
 

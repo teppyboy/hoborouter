@@ -25,13 +25,19 @@ export interface ApiKeyRecord {
   api_key_id: string;
   workspace_id: string;
   status: string;
+  purpose: "generic" | "chat";
 }
 
 /** Hash + lookup. Returns null for unknown/disabled/revoked/removed keys. Used by /v1 auth. */
 export async function verifyApiKey(db: Db | Tx, plaintext: string): Promise<ApiKeyRecord | null> {
   if (typeof plaintext !== "string" || !plaintext.startsWith(PREFIX)) return null;
   const rows = await db
-    .select({ api_key_id: apiKeys.id, workspace_id: apiKeys.workspace_id, status: apiKeys.status })
+    .select({
+      api_key_id: apiKeys.id,
+      workspace_id: apiKeys.workspace_id,
+      status: apiKeys.status,
+      purpose: apiKeys.purpose,
+    })
     .from(apiKeys)
     .where(
       and(

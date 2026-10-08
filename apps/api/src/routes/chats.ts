@@ -7,8 +7,8 @@
 import { Elysia, t } from "elysia";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, jsonError, writeAudit } from "../authz";
-import { and, desc, eq, lt, or, sql } from "drizzle-orm";
-import { type Db, chatConversations } from "@hoborouter/db";
+import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { type Db, chatConversations, models } from "@hoborouter/db";
 
 const MAX_BODY_BYTES = 512 * 1024; // 512 KiB inbound JSON body limit
 const MAX_MESSAGES = 500;
@@ -16,7 +16,14 @@ const MAX_MESSAGE_CONTENT = 64 * 1024; // 64 KiB per message content
 const MAX_TITLE = 120;
 const LIST_LIMIT = 50;
 
-type ChatMessage = { role: "user" | "assistant"; content: string; reasoning?: string };
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  reasoning?: string;
+  // Assistant-only public model ID (validated against enabled+published
+  // models.public_id under the row lock); no DB column — lives in this JSONB.
+  model?: string;
+};
 
 /** Read the request body with a hard byte cap, canceling the stream on overflow. */
 async function readBoundedBody(
@@ -92,6 +99,17 @@ function validateMessages(raw: unknown): { messages?: ChatMessage[]; error?: Res
         return { error: jsonError(400, "INVALID", "message reasoning must be a string") };
       }
       msg.reasoning = rec.reasoning;
+    }
+    // Model is assistant-only metadata; shape validation here, catalog
+    // membership under the row lock in the PUT handler (all-or-nothing).
+    if (rec.model !== undefined) {
+      if (rec.role !== "assistant") {
+        return { error: jsonError(400, "INVALID", "model is only allowed on assistant messages") };
+      }
+      if (typeof rec.model !== "string") {
+        return { error: jsonError(400, "INVALID", "message model must be a string") };
+      }
+      msg.model = rec.model;
     }
     messages.push(msg);
   }
@@ -288,6 +306,7 @@ export const chatsRoutes = (db: Db, auth: BetterAuthInstance) =>
               title: chatConversations.title,
               version: chatConversations.version,
               archived_at: chatConversations.archived_at,
+              messages: chatConversations.messages,
             })
             .from(chatConversations)
             .where(
@@ -306,6 +325,51 @@ export const chatsRoutes = (db: Db, auth: BetterAuthInstance) =>
           }
           if (row.version !== version) {
             return jsonError(409, "CONFLICT", "Version conflict");
+          }
+          // Historical-model retention, under the same row lock so a concurrent
+          // save cannot change the stored snapshot mid-validation: model strings
+          // already present on stored assistant messages pass even if now
+          // unpublished/disabled (catalog churn never invalidates history);
+          // NEWLY introduced values must be members of the enabled+published
+          // models.public_id set (membership-only — no id/slug blacklist). One
+          // catalog query per request, only when new values exist. Invalid →
+          // 400 before any write (messages, title, version all-or-nothing).
+          const retained = new Set<string>();
+          if (Array.isArray(row.messages)) {
+            for (const m of row.messages) {
+              if (
+                typeof m === "object" &&
+                m !== null &&
+                (m as Record<string, unknown>).role === "assistant" &&
+                typeof (m as Record<string, unknown>).model === "string"
+              ) {
+                retained.add((m as Record<string, unknown>).model as string);
+              }
+            }
+          }
+          const fresh = new Set<string>();
+          for (const m of messages.messages!) {
+            if (m.role === "assistant" && m.model !== undefined && !retained.has(m.model)) {
+              fresh.add(m.model);
+            }
+          }
+          if (fresh.size > 0) {
+            const members = await tx
+              .select({ public_id: models.public_id })
+              .from(models)
+              .where(
+                and(
+                  eq(models.enabled, true),
+                  eq(models.published, true),
+                  inArray(models.public_id, [...fresh]),
+                ),
+              );
+            const memberSet = new Set(members.map((r) => r.public_id));
+            for (const value of fresh) {
+              if (!memberSet.has(value)) {
+                return jsonError(400, "INVALID", "message model is not a published model");
+              }
+            }
           }
           const saved = await tx
             .update(chatConversations)

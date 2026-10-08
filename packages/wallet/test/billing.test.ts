@@ -146,6 +146,29 @@ describe("estimateCapVnd", () => {
     expect(cap).toBe(104_000);
   });
 
+  test("overflow: calculateCharge money-bound RangeError maps to WalletError('overflow'), not RangeError", () => {
+    // Bounded tokens (1e6) x price 8e15 µUSD/1M x fx 2e6 -> capVnd past
+    // maxStoredMoney. The gateway maps WalletError to 400; an escaping
+    // RangeError would surface as an unhandled 500.
+    try {
+      estimateCapVnd(
+        { maxInputTokens: 1_000_000, maxOutputTokens: 4096 },
+        {
+          inputUsdMicroPer1m: 8_000_000_000_000_000,
+          outputUsdMicroPer1m: 2_000_000,
+          cachedInputUsdMicroPer1m: 500_000,
+          reasoningUsdMicroPer1m: 3_000_000,
+        },
+        2_000_000,
+        1_000_000,
+      );
+      throw new Error("expected estimateCapVnd to throw");
+    } catch (err) {
+      expect(err instanceof WalletError).toBe(true);
+      expect((err as WalletError).code).toBe("overflow");
+    }
+  });
+
   test("rejects non-positive and unsafe bounds", () => {
     const price = {
       inputUsdMicroPer1m: 1,

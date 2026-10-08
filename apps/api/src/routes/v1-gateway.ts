@@ -38,6 +38,9 @@ import {
 } from "../rate-limit";
 
 const MAX_BODY_BYTES = 1024 * 1024; // 1 MiB inbound JSON body limit
+const CHAT_MAX_BODY_BYTES = 16 * 1024 * 1024; // chat-purpose key on /v1/chat/completions: 10 MiB raw attachments x 4/3 base64 + JSON headroom
+
+export { MAX_BODY_BYTES, CHAT_MAX_BODY_BYTES };
 
 const openAiError = (status: number, message: string, code: string) =>
   new Response(JSON.stringify({ error: { message, type: "invalid_request_error", code } }), {
@@ -325,25 +328,31 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
   const monotonic = () => performance.now();
   const roundMs = (n: number) => Math.round(n);
   return async ({ request }: { request: Request }): Promise<Response> => {
-    // 1. Disabled gate before any DB write.
+    // 1. Disabled gate before any DB write (the body gates below keep the
+    // preflight side-effect-free: no DB write before they pass).
     if (process.env.HBR_GATEWAY_ENABLED === "0") {
       return jsonError(503, "gateway_disabled", "Paid gateway is disabled");
     }
 
-    // 2. Auth.
+    // 2. Auth lookup only — needed to resolve the body limit. NO writes yet:
+    // the preflight (size gates) must be side-effect-free, so last_used_at is
+    // written only after both gates pass below.
     const header = request.headers.get("authorization") ?? "";
     const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
     const key = token ? await verifyApiKey(db, token) : null;
     if (!key) return openAiError(401, "Invalid API key provided.", "invalid_api_key");
-    await db
-      .update(apiKeys)
-      .set({ last_used_at: Date.now() })
-      .where(eq(apiKeys.id, key.api_key_id));
 
     // 3. Body validation — size-limited BEFORE buffering (memory DoS guard).
+    // Cap resolution: chat-purpose provenance lifts the cap only on the exact
+    // chat path; /v1/responses and every generic key stay at 1 MiB.
+    const bodyLimit =
+      path === "/v1/chat/completions" && key.purpose === "chat"
+        ? CHAT_MAX_BODY_BYTES
+        : MAX_BODY_BYTES;
+    const limitLabel = `${Math.floor(bodyLimit / (1024 * 1024))} MiB`;
     const declaredLength = Number(request.headers.get("content-length"));
-    if (Number.isSafeInteger(declaredLength) && declaredLength > MAX_BODY_BYTES) {
-      return jsonError(413, "payload_too_large", "Request body exceeds 1 MiB");
+    if (Number.isSafeInteger(declaredLength) && declaredLength > bodyLimit) {
+      return jsonError(413, "payload_too_large", `Request body exceeds ${limitLabel}`);
     }
     const bodyReader = request.body?.getReader();
     if (!bodyReader) return jsonError(400, "INVALID", "Body must be a JSON object");
@@ -354,12 +363,18 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
       const { done, value } = await bodyReader.read();
       if (done) break;
       bodyBytes += value.byteLength;
-      if (bodyBytes > MAX_BODY_BYTES) {
+      if (bodyBytes > bodyLimit) {
         await bodyReader.cancel().catch(() => {});
-        return jsonError(413, "payload_too_large", "Request body exceeds 1 MiB");
+        return jsonError(413, "payload_too_large", `Request body exceeds ${limitLabel}`);
       }
       chunks.push(value);
     }
+
+    // Both gates passed — the first (and only) DB write of the preflight.
+    await db
+      .update(apiKeys)
+      .set({ last_used_at: Date.now() })
+      .where(eq(apiKeys.id, key.api_key_id));
     const raw = decoder.decode(Buffer.concat(chunks));
     let body: Record<string, unknown>;
     try {

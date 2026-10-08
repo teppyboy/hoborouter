@@ -72,15 +72,25 @@ export function estimateCapVnd(
     usdVndRate: BigInt(fx),
     markupPpm: BigInt(markup),
   };
-  const { chargedVnd } = calculateCharge(
-    {
-      inputTokens: BigInt(maxInput),
-      cachedInputTokens: 0n,
-      outputTokens: BigInt(maxOutput),
-      reasoningTokens: 0n,
-    },
-    snapshot,
-  );
+  let chargedVnd: bigint;
+  try {
+    ({ chargedVnd } = calculateCharge(
+      {
+        inputTokens: BigInt(maxInput),
+        cachedInputTokens: 0n,
+        outputTokens: BigInt(maxOutput),
+        reasoningTokens: 0n,
+      },
+      snapshot,
+    ));
+  } catch (err) {
+    // calculateCharge guards both money bounds with RangeError; callers of
+    // estimateCapVnd handle the typed WalletError("overflow") — the gateway
+    // maps it to 400 instead of an unhandled 500.
+    if (err instanceof RangeError)
+      throw new WalletError("overflow", "estimated cap exceeds maxStoredMoney");
+    throw err;
+  }
   if (chargedVnd <= 0n) throw new WalletError("invalid", "estimated cap must be positive");
   if (chargedVnd > maxStoredMoney)
     throw new WalletError("overflow", "estimated cap exceeds maxStoredMoney");
