@@ -23,14 +23,20 @@ const instance = {
   },
 };
 
+// Full 40-hex commit SHA used across the revision assertions.
+const SHA = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
+
 afterAll(() => {
   useLocaleStore.getState().setLocale("en");
 });
 
-test("about shows version, contact link and nav entry to /about", () => {
-  const html = renderToStaticMarkup(<About instance={instance} version="0.0.0" />);
+test("about shows version, revision, contact link and nav entry to /about", () => {
+  const html = renderToStaticMarkup(<About instance={instance} version="0.0.0" revision={SHA} />);
   // Version row carries the build-injected package version as verbatim text.
   expect(html).toContain('<span class="font-mono text-foreground">0.0.0</span>');
+  // Revision row shows the full commit SHA verbatim (nothing truncated).
+  expect(html).toContain("Revision");
+  expect(html).toContain(SHA);
   // Contact: only the configured, validated channel; nothing invented.
   expect(html).toContain('href="mailto:support@example.com"');
   expect(html).not.toContain("t.me");
@@ -42,13 +48,21 @@ test("about shows version, contact link and nav entry to /about", () => {
   expect(html).toContain('aria-labelledby="about-contact-heading"');
 });
 
-test("about falls back honestly: placeholder brand, no version literal, no invented contacts", () => {
-  const html = renderToStaticMarkup(<About instance={null} version={null} />);
+test("about falls back honestly: placeholder brand, no version or revision literal, no invented contacts", () => {
+  const html = renderToStaticMarkup(<About instance={null} version={null} revision={null} />);
   expect(html).toContain("Hoborouter"); // PublicLayout brand fallback
   expect(html).toContain("Version: —");
+  expect(html).toContain("Revision: —");
   expect(html).not.toMatch(/Version:\s*\d/);
+  expect(html).not.toContain(SHA);
   expect(html).toContain("No contact channels are configured");
   expect(html).not.toContain("mailto:");
+});
+
+test("gitRevision is null outside a Vite build (no injected build constant)", async () => {
+  const { appVersion: pkgVersion, gitRevision } = await import("../apps/web/src/lib/version");
+  expect(gitRevision()).toBeNull();
+  expect(pkgVersion()).toBeNull();
 });
 
 test("public nav links to the about route", () => {
@@ -116,13 +130,14 @@ test("about labels flip EN → VI with the language toggle", async () => {
     root.render(
       <>
         <LanguageToggle />
-        <About instance={instance} version="0.0.0" />
+        <About instance={instance} version="0.0.0" revision={SHA} />
       </>,
     ),
   );
   const text = () => container.textContent ?? "";
   try {
     expect(text()).toContain("Version: 0.0.0");
+    expect(text()).toContain("Revision: 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b");
     await act(async () => {
       const button = container.querySelector<HTMLButtonElement>(
         'button[aria-label="Switch to Vietnamese"]',
@@ -134,6 +149,7 @@ test("about labels flip EN → VI with the language toggle", async () => {
     });
     expect(useLocaleStore.getState().locale).toBe("vi");
     expect(text()).toContain("Phiên bản: 0.0.0");
+    expect(text()).toContain("Bản dựng: 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b");
     expect(text()).toContain("Giới thiệu");
     expect(text()).toContain("Liên hệ");
   } finally {

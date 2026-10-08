@@ -1,5 +1,6 @@
-// Public About page: app version (build-time injected package version, never
-// a hardcoded literal) and the instance's admin-configured support channels.
+// Public About page: app version and full git revision (both build-time
+// injected, never hardcoded literals) and the instance's admin-configured
+// support channels.
 // Contact info is rendered by SupportLinks, which validates every channel
 // value; nothing here can leak credentials because the public instance
 // endpoint only exposes display name, base URL and support links.
@@ -7,7 +8,7 @@ import { PageHeader } from "../../components/page";
 import { PublicLayout } from "../../components/public-layout";
 import { SupportLinks, supportLinks } from "../../components/support-links";
 import { useLocaleEntry, type LocaleEntry } from "../../lib/i18n/t";
-import { appVersion } from "../../lib/version";
+import { appVersion, gitRevision } from "../../lib/version";
 import { usePublicInstance, type PublicInstance } from "../../lib/public-queries";
 
 const aboutTitle: LocaleEntry = { en: "About", vi: "Giới thiệu" };
@@ -16,6 +17,7 @@ const aboutDescription: LocaleEntry = {
   vi: "Hoborouter là cổng API tương thích OpenAI phía trước nhiều nhà cung cấp AI, tính tiền theo token bằng VND.",
 };
 const versionLabel: LocaleEntry = { en: "Version", vi: "Phiên bản" };
+const revisionLabel: LocaleEntry = { en: "Revision", vi: "Bản dựng" };
 const contactHeading: LocaleEntry = { en: "Contact", vi: "Liên hệ" };
 const noContact: LocaleEntry = {
   en: "No contact channels are configured on this instance yet.",
@@ -25,17 +27,22 @@ const noContact: LocaleEntry = {
 export function About({
   instance,
   version,
+  revision,
 }: {
   instance?: PublicInstance | null;
-  /** Package version injected at build time; hidden when unavailable. */
+  /** Release version injected at build time; hidden when unavailable. */
   version?: string | null;
+  /** Full commit SHA injected at build time; shown as "—" when unavailable. */
+  revision?: string | null;
 }) {
   const title = useLocaleEntry(aboutTitle);
   const description = useLocaleEntry(aboutDescription);
   const versionWord = useLocaleEntry(versionLabel);
+  const revisionWord = useLocaleEntry(revisionLabel);
   const contact = useLocaleEntry(contactHeading);
   const noContactText = useLocaleEntry(noContact);
   const shownVersion = version ?? null;
+  const shownRevision = revision ?? null;
   const hasContact = supportLinks(instance?.support).length > 0;
   return (
     <PublicLayout instance={instance}>
@@ -52,6 +59,16 @@ export function About({
             </p>
           ) : (
             <p className="text-sm text-muted-foreground">{versionWord}: —</p>
+          )}
+          {/* Full SHA: select-all keeps the whole revision one click away
+              without shipping a copy button; "—" when the build had no SHA. */}
+          {shownRevision ? (
+            <p className="text-sm text-muted-foreground">
+              {revisionWord}:{" "}
+              <span className="font-mono text-foreground select-all">{shownRevision}</span>
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">{revisionWord}: —</p>
           )}
         </section>
 
@@ -74,5 +91,5 @@ export function About({
 
 export default function AboutPage() {
   const instance = usePublicInstance();
-  return <About instance={instance.data ?? null} version={appVersion()} />;
+  return <About instance={instance.data ?? null} version={appVersion()} revision={gitRevision()} />;
 }

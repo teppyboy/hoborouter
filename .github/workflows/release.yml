@@ -102,6 +102,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Tag names and the nearest-tag fallback for workflow_dispatch runs
+          # need tags; a default depth-1 checkout has none.
+          fetch-depth: 0
+      - name: Resolve build metadata
+        id: meta
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="$GITHUB_REF_NAME"
+          else
+            # workflow_dispatch on a branch: never present the branch name
+            # (e.g. "main") as a semver version; use the nearest valid tag
+            # instead, or leave empty so the About page shows its explicit
+            # "—" fallback (resolveBuildMetadata rejects non-release names).
+            VERSION="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # github.sha is the exact commit built for both tag pushes and
+          # workflow_dispatch, so image metadata and bundle revision agree.
+          echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -116,3 +136,6 @@ jobs:
           tags: |
             ghcr.io/teppyboy/hoborouter:${{ github.ref_name }}
             ghcr.io/teppyboy/hoborouter:latest
+          build-args: |
+            HBR_APP_VERSION=${{ steps.meta.outputs.version }}
+            HBR_GIT_SHA=${{ steps.meta.outputs.sha }}

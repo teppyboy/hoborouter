@@ -8,6 +8,7 @@ import {
   CreditCard,
   Cpu,
   Gift,
+  Info,
   Settings2,
   KeyRound,
   LayoutDashboard,
@@ -291,6 +292,7 @@ function UserAvatar({
 
 function UserMenu() {
   const st = useShellT();
+  const aboutLabel = useLocaleEntry({ en: "About", vi: "Giới thiệu" });
   const settingsLabel = useLocaleEntry({ en: "Settings", vi: "Cài đặt" });
   const { data: session } = useSession();
   const queryClient = useQueryClient();
@@ -323,6 +325,11 @@ function UserMenu() {
           </p>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link to="/about" preload="intent">
+            <Info className="size-4" /> {aboutLabel}
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <Link
             to="/settings"

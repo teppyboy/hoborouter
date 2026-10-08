@@ -29,6 +29,12 @@ COPY --from=deps /app/packages/payments/node_modules ./packages/payments/node_mo
 COPY --from=deps /app/packages/usage/node_modules ./packages/usage/node_modules
 COPY --from=deps /app/packages/wallet/node_modules ./packages/wallet/node_modules
 COPY . .
+# Build metadata injected by CI (release.yml); local builds fall back to git
+# via vite.config.ts (build-config time only — no .git in this context).
+ARG HBR_APP_VERSION=""
+ARG HBR_GIT_SHA=""
+ENV HBR_APP_VERSION=${HBR_APP_VERSION} \
+    HBR_GIT_SHA=${HBR_GIT_SHA}
 RUN cd apps/web && bunx vp build
 
 # Production-only deps for the runtime stage: same lockfile, dev deps stripped.
@@ -49,6 +55,11 @@ RUN bun install --frozen-lockfile --production
 
 FROM oven/bun:1.4.2
 WORKDIR /app
+# Re-declared in this exact stage's scope for OCI image labels only.
+ARG HBR_APP_VERSION=""
+ARG HBR_GIT_SHA=""
+LABEL org.opencontainers.image.version=${HBR_APP_VERSION} \
+      org.opencontainers.image.revision=${HBR_GIT_SHA}
 ENV NODE_ENV=production \
     PORT=3000 \
     HBR_AVATAR_DIR=/data/avatars \
