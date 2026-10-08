@@ -7,6 +7,8 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   reasoning?: string;
+  /** Assistant only: the public model ID actually used. */
+  model?: string;
 }
 
 export interface ConversationSummary {

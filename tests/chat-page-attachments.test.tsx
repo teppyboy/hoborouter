@@ -189,8 +189,13 @@ async function mountPage(historyMessages: unknown[] = []) {
       return jsonRes(200, snapshot(1, historyMessages));
     if (path === "/api/v1/workspaces/ws1/chats/c1" && call.init?.method === "PUT")
       return jsonRes(200, snapshot(99, historyMessages));
-    if (path === "/api/v1/workspaces/ws1/keys")
-      return jsonRes(200, { id: "k1", plaintext: "sk-hbr-TESTKEY123", name: "Chat" });
+    if (path === "/api/v1/workspaces/ws1/chat-key")
+      return jsonRes(200, {
+        id: "k1",
+        plaintext: "sk-hbr-TESTKEY123",
+        name: "Chat",
+        purpose: "chat",
+      });
     if (path === "/v1/chat/completions")
       return new Response('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\ndata: [DONE]\n\n', {
         status: 200,
@@ -300,7 +305,9 @@ test("overlapping picks serialize against the live list: budget cannot be bypass
 });
 
 test("oversized payload is rejected before any side effect and the draft survives", async () => {
-  await mountPage([{ role: "user", content: "x".repeat(600_000) }]);
+  // The chat-purpose cap is 16 MiB: a ~0.5 MiB data URL plus ~16.3 MB of
+  // history pushes the JSON body over the client-side pre-send guard.
+  await mountPage([{ role: "user", content: "x".repeat(16_300_000) }]);
   await openConversation();
   await pickFiles([pngFile(384 * 1024)]);
   await waitFor(() => chipCount() === 1, "chip attached");
@@ -312,7 +319,7 @@ test("oversized payload is rejected before any side effect and the draft survive
   expect((textarea as HTMLTextAreaElement).value).toBe("hello");
   expect(chipCount()).toBe(1);
   expect(calls.filter((c) => c.path === "/v1/chat/completions")).toHaveLength(0);
-  expect(calls.filter((c) => c.path.endsWith("/keys"))).toHaveLength(0);
+  expect(calls.filter((c) => c.path.endsWith("/chat-key"))).toHaveLength(0);
   expect(
     calls.filter((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT"),
   ).toHaveLength(0);

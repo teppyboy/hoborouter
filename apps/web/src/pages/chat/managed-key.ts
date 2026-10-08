@@ -1,7 +1,8 @@
 // Managed chat key: lazily mints exactly one device-named key ("Chat -
-// iPhone") per user + workspace via POST /api/v1/workspaces/:id/keys
+// iPhone") per user + workspace via POST /api/v1/workspaces/:id/chat-key
 // (owner/admin only — members get 403 and cannot chat from the UI, never a
-// weaker endpoint). Plaintext is cached in memory and persisted to
+// weaker endpoint), which mints with server-side purpose "chat" (16 MiB
+// gateway allowance). Plaintext is cached in memory and persisted to
 // localStorage (sessionStorage fallback when localStorage is unavailable)
 // under a user+workspace-scoped key, so the SAME identity reuses its browser
 // chat key across sessions instead of minting a duplicate on every visit.
@@ -12,9 +13,17 @@
 // Failures are never cached; every retry is an explicit caller action.
 import * as React from "react";
 
+export type ManagedKeyPurpose = "generic" | "chat";
+
 export interface ManagedKey {
   id: string;
   plaintext: string;
+  /** Client-side UX metadata ONLY — which 413 recovery flow the page offers.
+   *  Never an authorization anchor: the gateway reads server-side
+   *  api_keys.purpose exclusively; a metadata mismatch degrades safely to
+   *  the generic flow. Legacy stored records without the field restore as
+   *  "generic" (every pre-change key was generic). */
+  purpose: ManagedKeyPurpose;
 }
 
 export type ManagedKeyFailure =
@@ -100,18 +109,22 @@ function resolveStorages(preferred?: KeyStorage | KeyStorage[]): KeyStorage[] {
   return list;
 }
 
-// Server returns { id, name, key_prefix, status, plaintext }; plaintext always
-// starts with the sk-hbr- prefix. Anything else is treated as invalid.
-function parseManagedKey(body: unknown): ManagedKey {
-  const b = body as { id?: unknown; plaintext?: unknown } | null;
-  if (
-    typeof b?.id === "string" &&
-    b.id !== "" &&
-    typeof b.plaintext === "string" &&
-    b.plaintext.startsWith("sk-hbr-")
-  ) {
-    return { id: b.id, plaintext: b.plaintext };
-  }
+// Stored browser records: { id, plaintext, purpose? }. Legacy records lack
+// purpose and restore as "generic"; anything without a valid id/plaintext is
+// corrupt and dropped. purpose other than "chat" is stored as "generic".
+function parseStoredKey(body: unknown): ManagedKey | null {
+  const b = body as { id?: unknown; plaintext?: unknown; purpose?: unknown } | null;
+  if (typeof b?.id !== "string" || b.id === "") return null;
+  if (typeof b?.plaintext !== "string" || !b.plaintext.startsWith("sk-hbr-")) return null;
+  return { id: b.id, plaintext: b.plaintext, purpose: b.purpose === "chat" ? "chat" : "generic" };
+}
+
+// Mint response from POST /chat-key: purpose "chat" is REQUIRED — a response
+// without it (or with any other value) is never trusted.
+function parseMintResponse(body: unknown): ManagedKey {
+  const b = body as { purpose?: unknown } | null;
+  const key = parseStoredKey(body);
+  if (key && b?.purpose === "chat") return { ...key, purpose: "chat" };
   throw new ManagedKeyError("invalid", "Key service returned an unexpected response. Try again.");
 }
 
@@ -127,7 +140,17 @@ function restoreManagedKey(storages: KeyStorage[], ck: string): ManagedKey | nul
     }
     if (!raw) continue;
     try {
-      return parseManagedKey(JSON.parse(raw));
+      const key = parseStoredKey(JSON.parse(raw));
+      if (key) {
+        cache.set(ck, key);
+        return key;
+      }
+      // Shape-invalid entry: drop it and mint a fresh key below.
+      try {
+        s.removeItem(STORAGE_PREFIX + ck);
+      } catch {
+        // Read-only store: the entry is simply ignored on every read.
+      }
     } catch {
       // Corrupt or stale entry: drop it and mint a fresh key below.
       try {
@@ -199,7 +222,7 @@ export async function startManagedChatKey(opts: StartManagedChatKeyOptions): Pro
 
     let res: Response;
     try {
-      res = await doFetch(`/api/v1/workspaces/${workspaceId}/keys`, {
+      res = await doFetch(`/api/v1/workspaces/${workspaceId}/chat-key`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -234,7 +257,7 @@ export async function startManagedChatKey(opts: StartManagedChatKeyOptions): Pro
     }
 
     const body: unknown = await res.json().catch(() => null);
-    const key = parseManagedKey(body);
+    const key = parseMintResponse(body);
     if (isInvalidated()) return key; // cleared mid-flight: persist nothing
     cache.set(ck, key);
     persistManagedKey(storages, ck, key);

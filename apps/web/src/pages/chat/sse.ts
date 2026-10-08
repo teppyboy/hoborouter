@@ -15,6 +15,9 @@ export interface SseParser {
   push(chunk: string): StreamDelta[];
   /** True once the `data: [DONE]` sentinel has been seen. */
   readonly done: boolean;
+  /** First non-empty top-level string `model` seen on any data payload —
+   *  the gateway delivers the PUBLIC model ID here. Null until captured. */
+  readonly model: string | null;
 }
 
 function extractDelta(obj: unknown): StreamDelta {
@@ -42,9 +45,13 @@ function extractDelta(obj: unknown): StreamDelta {
 export function createSseParser(): SseParser {
   let buffer = "";
   let done = false;
+  let model: string | null = null;
   return {
     get done() {
       return done;
+    },
+    get model() {
+      return model;
     },
     push(chunk: string): StreamDelta[] {
       buffer += chunk;
@@ -68,6 +75,12 @@ export function createSseParser(): SseParser {
           obj = JSON.parse(payload);
         } catch {
           continue; // malformed data line ignored
+        }
+        // Record the first non-empty top-level model (public ID from the
+        // gateway); later chunks never override it.
+        if (model === null) {
+          const m = (obj as { model?: unknown } | null)?.model;
+          if (typeof m === "string" && m !== "") model = m;
         }
         const delta = extractDelta(obj);
         if (delta.content || delta.reasoning) events.push(delta);

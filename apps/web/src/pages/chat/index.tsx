@@ -1,6 +1,15 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { History, Paperclip, Plus, Send, Square, X } from "lucide-react";
+import {
+  History,
+  Paperclip,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Send,
+  Square,
+  X,
+} from "lucide-react";
 import { createSseParser, type StreamDelta } from "./sse";
 import { ConversationList, conversationListKey } from "./conversation-list";
 import { buildPersistMessages, findRetryTurn, isEmptyAssistant, type TurnMessage } from "./turn";
@@ -12,6 +21,7 @@ import {
 } from "./conversations";
 import { ChatMarkdown } from "../../components/chat-markdown";
 import { ErrorState, CopyButton } from "../../components/page";
+import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { Textarea } from "../../components/ui/textarea";
 import {
@@ -25,15 +35,21 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../../components/
 import { useSession } from "../../lib/auth";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useCatalogModels } from "../models/data";
-import { ManagedKeyError, clearManagedChatKey, useManagedChatKey } from "./managed-key";
 import {
-  ATTACHMENT_HINT,
+  ManagedKeyError,
+  clearManagedChatKey,
+  useManagedChatKey,
+  type ManagedKeyPurpose,
+} from "./managed-key";
+import {
   ATTACHMENT_RETENTION_NOTICE,
   addAttachments,
   buildUserContent,
   removeAttachment,
   utf8ByteLength,
   withMultimodalContent,
+  AttachError,
+  type AttachErrorCode,
   type ChatAttachment,
   type UserContent,
 } from "./attachments";
@@ -98,8 +114,76 @@ const chatCopy = {
     vi: "Không tạo được chat key. Thử lại.",
   },
   tooLarge: {
-    en: "This message is too large to send — attachments plus history exceed the request limit. Remove some attachments and try again.",
-    vi: "Tin nhắn quá lớn để gửi — tệp đính kèm cộng lịch sử vượt giới hạn request. Hãy bớt tệp đính kèm và thử lại.",
+    en: "This message is too large to send — attachments plus history exceed the 16 MB request limit. Remove some attachments and try again.",
+    vi: "Tin nhắn quá lớn để gửi — tệp đính kèm cộng lịch sử vượt giới hạn 16 MB. Hãy bớt tệp đính kèm và thử lại.",
+  },
+  attachHint: {
+    en: "PNG, JPEG, WebP or GIF images and text/code files up to 64 KB; up to 4 files, 10 MB total per message.",
+    vi: "Ảnh PNG, JPEG, WebP hoặc GIF và tệp văn bản/mã nguồn tối đa 64 KB; tối đa 4 tệp, tổng 10 MB mỗi tin nhắn.",
+  },
+  attachUnsupported: {
+    en: "“${name}” is not a supported file type. Supported: PNG, JPEG, WebP, GIF images and plain text/code files.",
+    vi: "“${name}” không phải loại tệp được hỗ trợ. Chỉ nhận ảnh PNG, JPEG, WebP, GIF và tệp văn bản/mã nguồn.",
+  },
+  attachImageTooLarge: {
+    en: "“${name}” is too large (max 10 MB per image).",
+    vi: "“${name}” quá lớn (tối đa 10 MB mỗi ảnh).",
+  },
+  attachTextTooLarge: {
+    en: "“${name}” is too large (max 64 KB as text).",
+    vi: "“${name}” quá lớn (tối đa 64 KB dưới dạng văn bản).",
+  },
+  attachTooMany: {
+    en: "You can attach at most 4 files per message.",
+    vi: "Bạn chỉ có thể đính kèm tối đa 4 tệp mỗi tin nhắn.",
+  },
+  attachTotalTooLarge: {
+    en: "Attachments exceed the 10 MB total limit. Remove something and try again.",
+    vi: "Tệp đính kèm vượt giới hạn tổng 10 MB. Hãy bớt tệp rồi thử lại.",
+  },
+  attachReadFailed: {
+    en: "Could not read that file.",
+    vi: "Không đọc được tệp đó.",
+  },
+  dismissAlert: { en: "Dismiss", vi: "Đóng thông báo" },
+  keyTooLargeTitle: {
+    en: "This chat key has a 1 MB request limit.",
+    vi: "Chat key này có giới hạn request 1 MB.",
+  },
+  keyTooLargeBody: {
+    en: "Attachments this large need a new chat key. Reconnect to create one — your message stays here, nothing is deleted.",
+    vi: "Tệp đính kèm cỡ này cần chat key mới. Kết nối lại để tạo key — tin nhắn của bạn vẫn còn nguyên, không có gì bị xóa.",
+  },
+  keyTooLargeAction: { en: "Reconnect", vi: "Kết nối lại" },
+  keyTooLargeChatTitle: {
+    en: "This conversation is over the 16 MB request limit.",
+    vi: "Hội thoại này vượt quá giới hạn request 16 MB.",
+  },
+  keyTooLargeChatBody: {
+    en: "Reduce attachments or message history in this conversation, then send again — no new key is needed.",
+    vi: "Hãy giảm tệp đính kèm hoặc lịch sử tin nhắn trong hội thoại này rồi gửi lại — không cần key mới.",
+  },
+  catalogUnavailable: {
+    en: "The model catalog could not be loaded, so sending is disabled. Try reloading the page.",
+    vi: "Không tải được danh mục mô hình nên không thể gửi tin. Hãy thử tải lại trang.",
+  },
+  restoreDraftAction: {
+    en: "Restore original draft",
+    vi: "Khôi phục bản nháp ban đầu",
+  },
+  restoreDraftConfirm: {
+    en: "Restoring replaces what you have typed since. Restore the original draft and attachments?",
+    vi: "Khôi phục sẽ thay những gì bạn vừa gỡ/thêm. Khôi phục bản nháp và tệp đính kèm ban đầu?",
+  },
+  restoreConfirmYes: { en: "Restore", vi: "Khôi phục" },
+  restoreConfirmNo: { en: "Keep my edits", vi: "Giữ bản đang soạn" },
+  collapseSidebar: {
+    en: "Collapse conversation list",
+    vi: "Thu gọn danh sách hội thoại",
+  },
+  expandSidebar: {
+    en: "Expand conversation list",
+    vi: "Mở rộng danh sách hội thoại",
   },
   keyReconnectFresh: {
     en: "Your chat key is no longer valid. Reconnect to create a fresh one.",
@@ -119,7 +203,6 @@ const chatCopy = {
   modelsUnavailable: { en: "Model list unavailable", vi: "Không tải được danh sách mô hình" },
   chooseModel: { en: "Choose a model", vi: "Chọn một mô hình" },
   newChat: { en: "New chat", vi: "Trò chuyện mới" },
-  modelsPrefix: { en: "Models: {error}", vi: "Mô hình: {error}" },
   conflictTitle: {
     en: "This conversation changed on another device or tab.",
     vi: "Hội thoại này đã thay đổi trên thiết bị hoặc tab khác.",
@@ -168,6 +251,16 @@ const chatCopy = {
   sendMessage: { en: "Send message", vi: "Gửi tin nhắn" },
 } as const;
 
+/** Structured rejection code -> localized copy key (see AttachError in
+ *  attachments.ts; the page localizes via chatCopy). */
+const ATTACH_ERROR_COPY: Record<AttachErrorCode, keyof typeof chatCopy> = {
+  unsupported: "attachUnsupported",
+  imageTooLarge: "attachImageTooLarge",
+  textTooLarge: "attachTextTooLarge",
+  tooMany: "attachTooMany",
+  totalTooLarge: "attachTotalTooLarge",
+};
+
 /** Reactive translator for the chat page; component-scope only. */
 const useChatT = () => useT(chatCopy);
 
@@ -177,10 +270,24 @@ type ChatMessage = TurnMessage;
 // Actionable starters: each is a real prompt a user can send or edit.
 const PROMPT_CHIPS: LocaleEntry[] = [chatCopy.chip1, chatCopy.chip2, chatCopy.chip3];
 
-// Gateway caps the request body in UTF-8 BYTES (1 MiB); keep the client-side
-// pre-check well under that so attachment data URLs plus history never trip a
-// raw 413. Byte-accurate: measured with TextEncoder, not UTF-16 .length.
-const MAX_REQUEST_BODY_BYTES = 900_000;
+// Gateway caps the request body in UTF-8 BYTES — 1 MiB for generic keys,
+// 16 MiB for chat-purpose keys (approved attachment budget). Keep the
+// client-side pre-check at the same 16 MiB ceiling: byte-accurate, measured
+// with TextEncoder, not UTF-16 .length. The guard runs BEFORE any side
+// effect (key mint, conversation create, draft reset).
+const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
+
+// Desktop conversation-list collapse is a device UI preference — persisted
+// in localStorage, independent of the signed-in identity.
+const SIDEBAR_PREF_KEY = "chat.sidebar.collapsed";
+
+function readSidebarPref(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(SIDEBAR_PREF_KEY) === "1";
+  } catch {
+    return false; // unavailable storage: default expanded
+  }
+}
 
 function readableError(status: number, body: { error?: { message?: string } } | null): string {
   const msg = body?.error?.message;
@@ -193,11 +300,12 @@ function readableError(status: number, body: { error?: { message?: string } } | 
   return msg ?? translate(chatCopy, "errRequestFailed", locale, { status });
 }
 
-function appendDelta(msg: ChatMessage, delta: StreamDelta): ChatMessage {
+function appendDelta(msg: ChatMessage, delta: StreamDelta, model: string | null): ChatMessage {
   return {
     ...msg,
     content: msg.content + delta.content,
     reasoning: msg.reasoning + delta.reasoning,
+    model: msg.model ?? model ?? undefined,
   };
 }
 
@@ -238,16 +346,34 @@ export function ChatPage() {
   // Public model catalog is session-scoped: models load without any API key,
   // so the picker never needs to mint a key just to be useful.
   const { models, loading: modelsLoading, error: modelsError } = useCatalogModels();
+  // Only server-published public IDs may ever appear as a response label or be
+  // persisted: a forged/unknown SSE `model` must never become user-facing.
+  const catalogModelIds = React.useMemo(() => new Set(models.map((m) => m.publicId)), [models]);
+  // Sends wait for the catalog query to settle successfully: the SSE response
+  // model is validated against catalog membership, so a pending catalog would
+  // silently drop the genuine public ID (never persisted, never re-supplied).
+  // On failure, sending stays disabled behind a visible bilingual error —
+  // never an infinite hidden wait.
+  const catalogReady = !modelsLoading && !modelsError;
   const [model, setModel] = React.useState("");
 
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [input, setInput] = React.useState("");
+  // Draft revision counter: increments on USER draft mutations only — typing,
+  // paste (both via onChange), prompt-chip pick, attachment pick/remove. The
+  // send flow's own programmatic pre-fetch clear must NOT bump it: the 413
+  // rollback reads its baseline AFTER that clear, so an untouched composer
+  // presents "unchanged" and the wholesale restore path stays reachable.
+  const draftRevisionRef = React.useRef(0);
+  const bumpDraftRevision = () => {
+    draftRevisionRef.current += 1;
+  };
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   // Per-message attachments (images as multimodal parts, text/code inlined).
   // Held in memory only; cleared when the message is sent or the view resets.
   const [attachments, setAttachments] = React.useState<ChatAttachment[]>([]);
   const attachmentsRef = React.useRef<ChatAttachment[]>([]);
-  const [attachError, setAttachError] = React.useState<string | null>(null);
+  const [attachError, setAttachError] = React.useState<AttachError | string | null>(null);
   // Session-only multimodal retention: conversation id -> user-turn index ->
   // the full request content captured when that turn was sent. Lets follow-ups
   // AND retries keep carrying this session's attachments (which persistence
@@ -272,6 +398,19 @@ export function ChatPage() {
   }
   const [streaming, setStreaming] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // Persistent gateway-413 recovery state: the pre-send draft snapshot (text
+  // + attachments captured BEFORE the programmatic clear) plus whether the
+  // user mutated the draft since (revision changed). Snapshot is held only
+  // while the 413 alert lives; dismissed/stale ⇒ dropped, never restored.
+  const [send413, setSend413] = React.useState<{
+    text: string;
+    attachments: ChatAttachment[];
+    revisionChanged: boolean;
+    /** Server-echoed UX purpose of the key that got the 413: chat-purpose
+     *  keys allow 16 MiB, so the copy must not push a needless new key. */
+    keyPurpose: ManagedKeyPurpose;
+  } | null>(null);
+  const [restoreConfirm, setRestoreConfirm] = React.useState(false);
   const [keyError, setKeyError] = React.useState<ManagedKeyError | null>(null);
   // Saved conversation identity. null = a new, unsaved chat: it is blank until
   // the first send, which creates the server conversation exactly once. The
@@ -279,6 +418,19 @@ export function ChatPage() {
   const [activeChatId, setActiveChatId] = React.useState<string | null>(null);
   const activeChatIdRef = React.useRef<string | null>(null);
   const [historyOpen, setHistoryOpen] = React.useState(false);
+  // Desktop conversation-list collapse: device UI pref, identity-independent.
+  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(readSidebarPref);
+  function toggleSidebar() {
+    setSidebarCollapsed((v) => {
+      const next = !v;
+      try {
+        globalThis.localStorage?.setItem(SIDEBAR_PREF_KEY, next ? "1" : "0");
+      } catch {
+        // Unavailable storage: the pref stays session-only.
+      }
+      return next;
+    });
+  }
   // 409 from an optimistic save: the server snapshot moved under us. We never
   // overwrite blindly — the local transcript stays visible but is clearly
   // marked unsaved until the user explicitly reloads the saved version.
@@ -292,7 +444,11 @@ export function ChatPage() {
   const loadSeqRef = React.useRef(0);
   // Streaming assistant partial for the current send, mirrored to a ref so the
   // terminal save can build the full transcript without re-reading state.
-  const assistantPartialRef = React.useRef({ content: "", reasoning: "" });
+  const assistantPartialRef = React.useRef<{
+    content: string;
+    reasoning: string;
+    model?: string;
+  }>({ content: "", reasoning: "" });
   const abortRef = React.useRef<AbortController | null>(null);
   // Sticky-bottom follow for the conversation log: ref to the scroll element
   // plus whether the user is near the bottom. While streaming, the log only
@@ -354,6 +510,8 @@ export function ChatPage() {
     setError(null);
     setKeyError(null);
     setAttachError(null);
+    setSend413(null); // identity switch: the snapshot never crosses identities
+    setRestoreConfirm(false);
     setLastTurnAttached(false);
     applyAttachments([]);
     multimodalRef.current.clear();
@@ -395,6 +553,7 @@ export function ChatPage() {
       return;
     }
     setAttachError(null);
+    bumpDraftRevision(); // user-initiated pick: counts as a draft mutation
     applyAttachments([...attachmentsRef.current, ...res.added]);
   }
 
@@ -421,6 +580,8 @@ export function ChatPage() {
     setSaveNotice(null);
     setLoadingChat(false);
     setAttachError(null);
+    setSend413(null);
+    setRestoreConfirm(false);
     setLastTurnAttached(false);
     applyAttachments([]);
     lastUserRef.current = null;
@@ -443,6 +604,30 @@ export function ChatPage() {
     setKeyError(null);
   }
 
+  /** Gateway-413 reconnect: clears ONLY the browser-side managed-key state
+   *  (memory cache + namespaced storage). NO API call, never a revoke or
+   *  disable of the old server-side key; the failed message is not retried —
+   *  the next explicit send mints a chat-purpose key via /chat-key. */
+  function reconnectKey() {
+    if (userId && workspaceId) clearManagedChatKey({ userId, workspaceId });
+  }
+
+  /** Manual dismissal of the 413 alert: drops the recoverable snapshot. */
+  function dismiss413() {
+    setSend413(null);
+    setRestoreConfirm(false);
+  }
+
+  /** Confirmed restore of the pre-send snapshot (revision-changed path only):
+   *  replaces the newer draft + attachments. Never fired automatically. */
+  function confirmRestore() {
+    if (!send413) return;
+    setInput(send413.text);
+    applyAttachments([...send413.attachments]);
+    setSend413(null);
+    setRestoreConfirm(false);
+  }
+
   /** Open a saved conversation: abort any in-flight generation first, then
    *  load the server snapshot. Stale loads (user kept clicking) are guarded
    *  by loadSeqRef and the identity ref; a response from another identity or
@@ -460,6 +645,8 @@ export function ChatPage() {
     setConflict(false);
     setSaveNotice(null);
     setAttachError(null);
+    setSend413(null);
+    setRestoreConfirm(false);
     setLastTurnAttached(false);
     applyAttachments([]);
     lastUserRef.current = null;
@@ -474,6 +661,7 @@ export function ChatPage() {
           role: m.role,
           content: m.content,
           reasoning: m.reasoning ?? "",
+          model: m.role === "assistant" ? m.model : undefined,
         })),
       );
       if (snap.model) setModel(snap.model);
@@ -555,7 +743,13 @@ export function ChatPage() {
   /** Resolve the key for one send/connect. After every await the generation
    *  and identity are re-checked: an identity switch or generation bump while
    *  a key is being created must never repopulate state. */
-  async function resolveKey(gen?: number, signal?: AbortSignal): Promise<string | null> {
+  async function resolveKey(
+    gen?: number,
+    signal?: AbortSignal,
+  ): Promise<{
+    plaintext: string;
+    purpose: ManagedKeyPurpose;
+  } | null> {
     if (!userId || !workspaceId) {
       setKeyError(new ManagedKeyError("unauthorized", t("signInToChat")));
       return null;
@@ -566,7 +760,7 @@ export function ChatPage() {
     try {
       const key = await ensureKey(signal);
       if (!isCurrent()) return null;
-      return key.plaintext;
+      return { plaintext: key.plaintext, purpose: key.purpose };
     } catch (e) {
       if (!isCurrent()) return null;
       setKeyError(
@@ -577,7 +771,10 @@ export function ChatPage() {
   }
 
   async function send(textOverride?: string, isRetry = false) {
-    if (busyRef.current || streaming || !model || conflict) return;
+    // Also block while a conversation snapshot is still loading: a send that
+    // starts before openChat's response lands would be wiped by the snapshot
+    // overwriting optimistic state when it resolves.
+    if (busyRef.current || streaming || !model || conflict || loadingChat || !catalogReady) return;
     // Retry regenerates the LAST assistant reply from the existing history:
     // the user turn is reused as-is, never appended a second time.
     const retryTurn = isRetry ? findRetryTurn(messages) : null;
@@ -650,13 +847,21 @@ export function ChatPage() {
     // Terminal save, AWAITED while busy: the next send cannot start until the
     // server version has been tracked, so a back-to-back send never saves on
     // a stale version and loses its turn to a 409.
-    const saveTurn = (partial: { content: string; reasoning: string }) => {
+    const saveTurn = (partial: { content: string; reasoning: string; model?: string }) => {
       if (!canPersist || !chatId || !ws) return Promise.resolve();
       return persistTurn(
         { seq, idAtSend, chatId, baseMessages, userText: text, isFirstTurn, model },
         partial,
       );
     };
+    // 413 recovery inputs: the pre-send draft snapshot is captured BEFORE the
+    // programmatic clear (never replaced by the empty post-clear values) and
+    // the revision baseline is read AFTER that clear — the clear itself is
+    // not a user mutation, so an untouched composer still restores wholesale.
+    let preSendText = "";
+    let snapshotAttachments: ChatAttachment[] = [];
+    let revisionBaseline = 0;
+    let rollback413: (() => void) | null = null;
     try {
       // Create the server conversation exactly once, on the first send of a
       // new chat — storage only, no key needed, never per token. If storage
@@ -677,14 +882,28 @@ export function ChatPage() {
       }
       const key = await resolveKey(seq, ac.signal);
       if (!key || !isCurrent()) return;
+      const keyPurpose = key.purpose;
       setError(null);
       // The request is now certain to go out: commit the draft reset, the
-      // retention entry and the retry disclosure together.
+      // retention entry and the retry disclosure together. The snapshot is
+      // taken before the clear; the baseline after it.
       if (!isRetry && textOverride === undefined) {
+        preSendText = input;
+        snapshotAttachments = [...turnAttachments];
+        const prevLastUser = lastUserRef.current;
+        const prevLastTurnAttached = lastTurnAttached;
         setInput("");
         applyAttachments([]);
         setAttachError(null);
         setLastTurnAttached(turnAttachments.length > 0);
+        revisionBaseline = draftRevisionRef.current;
+        rollback413 = () => {
+          setMessages(baseMessages);
+          assistantPartialRef.current = { content: "", reasoning: "" };
+          lastUserRef.current = prevLastUser;
+          setLastTurnAttached(prevLastTurnAttached);
+          if (chatId) multimodalRef.current.get(chatId)?.delete(turnIndex);
+        };
       }
       if (chatId && !isRetry) {
         let turns = multimodalRef.current.get(chatId);
@@ -712,14 +931,36 @@ export function ChatPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${key}`,
+          Authorization: `Bearer ${key.plaintext}`,
         },
         body: bodyJson,
         signal: ac.signal,
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        if (!isCurrent()) return;
+        if (!isCurrent()) return; // stale 413/4xx: discarded, nothing restored
+        if (res.status === 413 && rollback413) {
+          // Gateway body cap exceeded: NOT a completed turn. Roll back the
+          // optimistic bubbles, SKIP the terminal save (the failed request
+          // never enters history, so a resend cannot duplicate the user
+          // message), and surface the persistent reconnect alert.
+          rollback413();
+          const revisionChanged = draftRevisionRef.current !== revisionBaseline;
+          if (!revisionChanged) {
+            // Unchanged revision: wholesale automatic restore of the snapshot
+            // (attachments restore without re-reading files — session-only).
+            setInput(preSendText);
+            applyAttachments([...snapshotAttachments]);
+          }
+          setSend413({
+            text: preSendText,
+            attachments: snapshotAttachments,
+            revisionChanged,
+            keyPurpose,
+          });
+          setRestoreConfirm(false);
+          return;
+        }
         if (res.status === 401) {
           // Managed key revoked or session gone: offer explicit reconnect.
           setKeyError(new ManagedKeyError("unauthorized", t("keyReconnectFresh")));
@@ -742,7 +983,9 @@ export function ChatPage() {
         if (!isCurrent()) return; // superseded: no delta may repopulate state
         if (done) break;
         for (const delta of parser.push(decoder.decode(value, { stream: true }))) {
-          appendToLast(delta);
+          const streamModel =
+            parser.model && catalogModelIds.has(parser.model) ? parser.model : null;
+          appendToLast(delta, streamModel);
         }
         if (parser.done) break;
       }
@@ -766,15 +1009,17 @@ export function ChatPage() {
     }
   }
 
-  function appendToLast(delta: StreamDelta) {
+  function appendToLast(delta: StreamDelta, model: string | null) {
+    const partial = assistantPartialRef.current;
     assistantPartialRef.current = {
-      content: assistantPartialRef.current.content + delta.content,
-      reasoning: assistantPartialRef.current.reasoning + delta.reasoning,
+      content: partial.content + delta.content,
+      reasoning: partial.reasoning + delta.reasoning,
+      model: partial.model ?? model ?? undefined,
     };
     setMessages((prev) => {
       const last = prev[prev.length - 1];
       if (!last || last.role !== "assistant") return prev;
-      return [...prev.slice(0, -1), appendDelta(last, delta)];
+      return [...prev.slice(0, -1), appendDelta(last, delta, model)];
     });
   }
 
@@ -793,7 +1038,13 @@ export function ChatPage() {
 
   const autoEligible = Boolean(userId && workspaceId);
   const canSend = Boolean(
-    (input.trim() || attachments.length > 0) && model && !streaming && !conflict && autoEligible,
+    (input.trim() || attachments.length > 0) &&
+    model &&
+    catalogReady &&
+    !streaming &&
+    !conflict &&
+    !loadingChat &&
+    autoEligible,
   );
   const showRetry = !streaming && lastUserRef.current !== null;
 
@@ -825,8 +1076,14 @@ export function ChatPage() {
   );
 
   const keyErrorBlock = keyError && (
-    <div className="space-y-1">
-      <ErrorState message={keyError.message} />
+    <div className="mx-auto max-w-3xl space-y-1">
+      <Alert
+        variant="destructive"
+        onDismiss={() => setKeyError(null)}
+        dismissLabel={t("dismissAlert")}
+      >
+        {keyError.message}
+      </Alert>
       {keyError.kind === "forbidden" ? (
         <p className="text-xs text-muted-foreground">
           Members without owner or admin role cannot create a chat key in this workspace. Ask a
@@ -843,14 +1100,52 @@ export function ChatPage() {
   );
 
   return (
-    <div className="-m-4 flex h-[calc(100dvh-3rem)] min-h-0 min-w-0 flex-1 overflow-hidden sm:-m-6">
-      {/* Fixed viewport height below the 48px sticky app header, with the
-        router Page wrapper's p-4 sm:p-6 cancelled by the negative margins,
+    <div className="-m-4 flex min-h-0 min-w-0 flex-1 overflow-hidden sm:-m-6">
+      {/* Fills the bounded app-shell main (flex-1 of the Page wrapper), with
+        the router Page wrapper's p-4 sm:p-6 cancelled by the negative margins,
         so the log (flex-1 min-h-0 overflow-y-auto) is the only scroller and
-        the composer stays pinned; the page itself never scrolls. */}
-      {/* Desktop: conversation history lives inside the chat pane. */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-border px-2 py-2 lg:flex">
-        {historyList}
+        the composer stays pinned; the page itself never scrolls. Replaces the
+        old h-[calc(100dvh-3rem)] so the verification banner, when present,
+        shrinks the pane instead of overflowing main into a second scroll. */}
+      {/* Desktop: conversation history lives inside the chat pane. Collapse
+        is a device UI pref (localStorage), identity-independent. */}
+      <aside
+        id="chat-history-aside"
+        data-state={sidebarCollapsed ? "collapsed" : "expanded"}
+        className={`hidden ${sidebarCollapsed ? "w-14" : "w-64"} shrink-0 flex-col border-r border-border px-2 py-2 lg:flex`}
+      >
+        <div className={`flex items-center ${sidebarCollapsed ? "justify-center" : "justify-end"}`}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleSidebar}
+            aria-expanded={!sidebarCollapsed}
+            aria-controls="chat-history-aside"
+            aria-label={sidebarCollapsed ? t("expandSidebar") : t("collapseSidebar")}
+            title={sidebarCollapsed ? t("expandSidebar") : t("collapseSidebar")}
+          >
+            {sidebarCollapsed ? (
+              <PanelLeftOpen className="size-4" aria-hidden />
+            ) : (
+              <PanelLeftClose className="size-4" aria-hidden />
+            )}
+          </Button>
+        </div>
+        {sidebarCollapsed ? (
+          <div className="flex flex-1 flex-col items-center pt-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={newChat}
+              aria-label={t("newChat")}
+              title={t("newChat")}
+            >
+              <Plus className="size-4" aria-hidden />
+            </Button>
+          </div>
+        ) : (
+          historyList
+        )}
       </aside>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -926,7 +1221,11 @@ export function ChatPage() {
           </div>
         </div>
 
-        {modelsError && <ErrorState message={t("modelsPrefix", { error: modelsError })} />}
+        {modelsError && (
+          <ErrorState
+            message={`${t("catalogUnavailable")}${modelsError ? ` — ${modelsError}` : ""}`}
+          />
+        )}
 
         {conflict && (
           <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2">
@@ -956,6 +1255,7 @@ export function ChatPage() {
                   chip={chip}
                   onPick={(text) => {
                     setInput(text);
+                    bumpDraftRevision(); // chip pick replaces the draft
                     textareaRef.current?.focus();
                   }}
                 />
@@ -1001,6 +1301,12 @@ export function ChatPage() {
                           content={m.content}
                           streaming={streaming && i === messages.length - 1}
                         />
+                        {/* Muted ACTUAL-USED model label: the public ID from
+                          the SSE stream / saved history, not the picker's
+                          selection guess (the gateway rewrites to public IDs). */}
+                        {m.role === "assistant" && m.model && (
+                          <p className="text-xs text-muted-foreground">{m.model}</p>
+                        )}
                         <div className="flex justify-end">
                           <CopyButton value={m.content} label={t("copyReply")} />
                         </div>
@@ -1022,7 +1328,50 @@ export function ChatPage() {
         )}
 
         <div className="mx-auto w-full max-w-3xl px-4 pb-safe">
-          {error && <ErrorState message={error} />}
+          {error && (
+            <Alert
+              variant="destructive"
+              className="mx-auto max-w-3xl"
+              onDismiss={() => setError(null)}
+              dismissLabel={t("dismissAlert")}
+            >
+              {error}
+            </Alert>
+          )}
+          {send413 && (
+            <Alert
+              variant="destructive"
+              title={t(send413.keyPurpose === "chat" ? "keyTooLargeChatTitle" : "keyTooLargeTitle")}
+              className="mx-auto max-w-3xl"
+              onDismiss={dismiss413}
+              dismissLabel={t("dismissAlert")}
+            >
+              {t(send413.keyPurpose === "chat" ? "keyTooLargeChatBody" : "keyTooLargeBody")}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {send413.keyPurpose !== "chat" && (
+                  <Button variant="outline" size="sm" onClick={reconnectKey}>
+                    {t("keyTooLargeAction")}
+                  </Button>
+                )}
+                {send413.revisionChanged &&
+                  (restoreConfirm ? (
+                    <>
+                      <Button variant="destructive" size="sm" onClick={confirmRestore}>
+                        {t("restoreConfirmYes")}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setRestoreConfirm(false)}>
+                        {t("restoreConfirmNo")}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button variant="outline" size="sm" onClick={() => setRestoreConfirm(true)}>
+                      {t("restoreDraftAction")}
+                    </Button>
+                  ))}
+              </div>
+              {restoreConfirm && <p className="mt-1 text-xs">{t("restoreDraftConfirm")}</p>}
+            </Alert>
+          )}
           {keyErrorBlock}
           {showRetry && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1">
@@ -1054,6 +1403,7 @@ export function ChatPage() {
                         <button
                           type="button"
                           onClick={() => {
+                            bumpDraftRevision(); // user-initiated remove
                             applyAttachments(removeAttachment(attachmentsRef.current, a.id));
                             setAttachError(null);
                           }}
@@ -1068,11 +1418,21 @@ export function ChatPage() {
                   </ul>
                 )}
                 {attachError && (
-                  <p className="text-xs text-destructive" role="status">
-                    {attachError}
-                  </p>
+                  <Alert
+                    variant="destructive"
+                    autoDismissMs={6000}
+                    onDismiss={() => setAttachError(null)}
+                    dismissLabel={t("dismissAlert")}
+                  >
+                    {attachError instanceof AttachError
+                      ? t(
+                          ATTACH_ERROR_COPY[attachError.code],
+                          attachError.name2 ? { name: attachError.name2 } : undefined,
+                        )
+                      : attachError}
+                  </Alert>
                 )}
-                <p className="text-xs text-muted-foreground">{ATTACHMENT_HINT}</p>
+                <p className="text-xs text-muted-foreground">{t("attachHint")}</p>
                 <p className="text-xs text-muted-foreground">{ATTACHMENT_RETENTION_NOTICE}</p>
               </div>
             )}
@@ -1088,7 +1448,10 @@ export function ChatPage() {
                     : t("placeholderChooseModel")
               }
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                bumpDraftRevision(); // typing/paste: a USER draft mutation
+              }}
               onKeyDown={(e) => {
                 // IME composition: Enter confirms the candidate, not the message.
                 if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -1120,7 +1483,7 @@ export function ChatPage() {
                 onClick={() => fileInputRef.current?.click()}
                 disabled={streaming}
                 aria-label={t("attachFiles")}
-                title={t("attachFilesTitle", { hint: ATTACHMENT_HINT })}
+                title={t("attachFilesTitle", { hint: t("attachHint") })}
               >
                 <Paperclip className="size-4" aria-hidden />
               </Button>

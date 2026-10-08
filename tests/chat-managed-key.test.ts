@@ -93,6 +93,7 @@ function keyResponse(n: number, status = 201): Response {
       key_prefix: "sk-hbr-x",
       status: "enabled",
       plaintext: `sk-hbr-test-${n}`,
+      purpose: "chat",
     }),
     { status, headers: { "content-type": "application/json" } },
   );
@@ -136,7 +137,7 @@ test("parallel callers share one creation; later calls use the cache", async () 
   const [a, b] = await Promise.all([startManagedChatKey(opts), startManagedChatKey(opts)]);
   expect(a).toEqual(b);
   expect(a.plaintext).toMatch(/^sk-hbr-/);
-  expect(spy.urls).toEqual([`/api/v1/workspaces/${W1}/keys`]);
+  expect(spy.urls).toEqual([`/api/v1/workspaces/${W1}/chat-key`]);
   // Sequential follow-up: still cached, no second request.
   await startManagedChatKey(opts);
   expect(spy.urls).toHaveLength(1);
@@ -164,8 +165,65 @@ test("restores the tab key from sessionStorage without a request", async () => {
     JSON.stringify({ id: "stored-key", plaintext: "sk-hbr-stored" }),
   );
   const key = await startManagedChatKey({ userId: U1, workspaceId: W1, storage, fetch: spy.fetch });
-  expect(key).toEqual({ id: "stored-key", plaintext: "sk-hbr-stored" });
+  // Legacy persisted record (no purpose metadata) restores as generic.
+  expect(key).toEqual({ id: "stored-key", plaintext: "sk-hbr-stored", purpose: "generic" });
   expect(spy.urls).toHaveLength(0);
+});
+
+test("legacy stored key without purpose restores as generic; stored chat purpose is kept", async () => {
+  seq = 0;
+  const spy = okFetch();
+  const storage = new MapStorage();
+  storage.setItem(
+    `hbr-managed-key:${U1}:${W1}`,
+    JSON.stringify({ id: "legacy", plaintext: "sk-hbr-legacy" }),
+  );
+  storage.setItem(
+    `hbr-managed-key:${U1}:${W2}`,
+    JSON.stringify({ id: "chatkey", plaintext: "sk-hbr-chat", purpose: "chat" }),
+  );
+  const legacy = await startManagedChatKey({
+    userId: U1,
+    workspaceId: W1,
+    storage,
+    fetch: spy.fetch,
+  });
+  expect(legacy.purpose).toBe("generic");
+  clearManagedChatKey();
+  const chat = await startManagedChatKey({
+    userId: U1,
+    workspaceId: W2,
+    storage,
+    fetch: spy.fetch,
+  });
+  expect(chat.purpose).toBe("chat");
+  expect(spy.urls).toHaveLength(0); // neither restore mints
+});
+
+test("a /chat-key response without purpose:'chat' is never trusted (invalid)", async () => {
+  seq = 0;
+  for (const purpose of [undefined, "generic", "admin", 42]) {
+    const spy = fetchSpy(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: "k",
+            plaintext: "sk-hbr-x",
+            ...(purpose === undefined ? {} : { purpose }),
+          }),
+          { status: 200 },
+        ),
+    );
+    await expectKind(
+      startManagedChatKey({
+        userId: U1,
+        workspaceId: W1,
+        storage: new MapStorage(),
+        fetch: spy.fetch,
+      }),
+      "invalid",
+    );
+  }
 });
 
 test("plaintext never appears in storage key names; only the target store is written", async () => {

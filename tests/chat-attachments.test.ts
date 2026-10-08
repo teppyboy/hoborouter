@@ -12,8 +12,16 @@ import {
   truncateToUtf8Bytes,
   utf8ByteLength,
   withMultimodalContent,
+  AttachError,
   type ChatAttachment,
 } from "../apps/web/src/pages/chat/attachments";
+
+/** Narrow AddAttachmentsResult.error to the structured shape. */
+function attachErr(e: AttachError | string | null): AttachError {
+  if (typeof e === "string" || e === null)
+    throw new Error(`expected AttachError, got ${String(e)}`);
+  return e;
+}
 
 const png = (bytes: number): File =>
   new File([new Uint8Array(bytes)], "shot.png", { type: "image/png" });
@@ -42,23 +50,38 @@ test("accepts code files by extension even without a text/ MIME type", async () 
   expect(a.text).toBe("x=1");
 });
 
-test("rejects unsupported file types with a message naming the limits, not the bytes", async () => {
+test("rejects unsupported files with a structured code naming the offending file", async () => {
   const pdf = new File([new Uint8Array(10)], "doc.pdf", { type: "application/pdf" });
-  expect(() => createAttachment(pdf)).toThrow(
-    `"doc.pdf" is not a supported file type. Supported: PNG, JPEG, WebP, GIF images and plain text/code files.`,
-  );
+  let caught: unknown;
+  try {
+    await createAttachment(pdf);
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught).toBeInstanceOf(AttachError);
+  const err = caught as AttachError;
+  expect(err.code).toBe("unsupported");
+  expect(err.name2).toBe("doc.pdf");
+  // English detail preserved as the message fallback for unknown consumers.
+  expect(err.message).toContain("doc.pdf");
 });
 
-test("rejects an oversized image", async () => {
+test("rejects an oversized image with a structured code", async () => {
   const big = png(ATTACHMENT_LIMITS.maxImageBytes + 1);
-  expect(() => createAttachment(big)).toThrow(
-    `"shot.png" is too large (max ${Math.floor(ATTACHMENT_LIMITS.maxImageBytes / 1024)} KB per image).`,
-  );
+  let caught: unknown;
+  try {
+    await createAttachment(big);
+  } catch (e) {
+    caught = e;
+  }
+  expect(caught).toBeInstanceOf(AttachError);
+  expect((caught as AttachError).code).toBe("imageTooLarge");
+  expect((caught as AttachError).name2).toBe("shot.png");
 });
 
-test("rejects an oversized text file", async () => {
+test("rejects an oversized text file with a structured code", async () => {
   const big = textFile("a".repeat(ATTACHMENT_LIMITS.maxTextBytes + 1));
-  expect(() => createAttachment(big)).toThrow(`"notes.txt" is too large`);
+  expect(() => createAttachment(big)).toThrow(AttachError);
 });
 
 test("addAttachments is all-or-nothing: one bad file rejects the whole batch", async () => {
@@ -66,7 +89,8 @@ test("addAttachments is all-or-nothing: one bad file rejects the whole batch", a
   const bad = new File([new Uint8Array(4)], "doc.pdf", { type: "application/pdf" });
   const res = await addAttachments([], [good, bad]);
   expect(res.added).toHaveLength(0);
-  expect(res.error).toContain("doc.pdf");
+  expect(attachErr(res.error).code).toBe("unsupported");
+  expect(attachErr(res.error).name2).toBe("doc.pdf");
 });
 
 test("addAttachments enforces the per-message count limit", async () => {
@@ -74,13 +98,91 @@ test("addAttachments enforces the per-message count limit", async () => {
     textFile("x", `f${i}.txt`),
   );
   const res = await addAttachments([], files);
-  expect(res.error).toContain(`at most ${ATTACHMENT_LIMITS.maxCount}`);
+  expect(attachErr(res.error).code).toBe("tooMany");
 });
 
 test("addAttachments enforces the total-size budget across images", async () => {
   const half = Math.floor(ATTACHMENT_LIMITS.maxTotalBytes / 2) + 1;
   const res = await addAttachments([], [png(half), png(half)]);
-  expect(res.error).toContain("total attachment");
+  expect(attachErr(res.error).code).toBe("totalTooLarge");
+});
+
+test("10 MiB total is accepted; one byte over rejects before any read", async () => {
+  const reads: string[] = [];
+  const origAB = File.prototype.arrayBuffer;
+  const origText = File.prototype.text;
+  File.prototype.arrayBuffer = function () {
+    reads.push(`ab:${this.name}`);
+    return origAB.call(this);
+  };
+  File.prototype.text = function () {
+    reads.push(`text:${this.name}`);
+    return origText.call(this);
+  };
+  try {
+    const half = Math.floor(ATTACHMENT_LIMITS.maxTotalBytes / 2);
+    const ok = await addAttachments([], [png(half), png(ATTACHMENT_LIMITS.maxTotalBytes - half)]);
+    expect(ok.error).toBeNull();
+    expect(ok.added).toHaveLength(2);
+    const over = await addAttachments(
+      [],
+      [png(half), png(ATTACHMENT_LIMITS.maxTotalBytes - half + 1)],
+    );
+    expect(attachErr(over.error).code).toBe("totalTooLarge");
+    expect(over.added).toHaveLength(0);
+    expect(reads).toHaveLength(2); // only the accepted batch's two reads
+  } finally {
+    File.prototype.arrayBuffer = origAB;
+    File.prototype.text = origText;
+  }
+});
+
+test("four files aggregating 10 MiB are accepted; five are not", async () => {
+  const quarter = Math.floor(ATTACHMENT_LIMITS.maxTotalBytes / 4);
+  const four = await addAttachments(
+    [],
+    [png(quarter), png(quarter), png(quarter), png(ATTACHMENT_LIMITS.maxTotalBytes - 3 * quarter)],
+  );
+  expect(four.error).toBeNull();
+  expect(four.added).toHaveLength(4);
+  const five = await addAttachments(
+    [],
+    [...Array.from({ length: 5 }, (_, i) => textFile("x", `f${i}.txt`))],
+  );
+  expect(attachErr(five.error).code).toBe("tooMany");
+});
+
+test("whole-batch preflight: an invalid SECOND file rejects the batch before the FIRST is read", async () => {
+  const reads: string[] = [];
+  const origAB = File.prototype.arrayBuffer;
+  const origText = File.prototype.text;
+  File.prototype.arrayBuffer = function () {
+    reads.push(`ab:${this.name}`);
+    return origAB.call(this);
+  };
+  File.prototype.text = function () {
+    reads.push(`text:${this.name}`);
+    return origText.call(this);
+  };
+  try {
+    // Bad type on the second file.
+    const badType = new File([new Uint8Array(4)], "doc.pdf", { type: "application/pdf" });
+    let res = await addAttachments([], [textFile("fine", "good.txt"), badType]);
+    expect(res.added).toHaveLength(0);
+    expect(attachErr(res.error).code).toBe("unsupported");
+    expect(attachErr(res.error).name2).toBe("doc.pdf");
+    expect(reads).toHaveLength(0); // zero reads for any file in the batch
+    // Oversize on the second file.
+    const bigText = textFile("a".repeat(ATTACHMENT_LIMITS.maxTextBytes + 1), "big.txt");
+    res = await addAttachments([], [png(64), bigText]);
+    expect(res.added).toHaveLength(0);
+    expect(attachErr(res.error).code).toBe("textTooLarge");
+    expect(attachErr(res.error).name2).toBe("big.txt");
+    expect(reads).toHaveLength(0);
+  } finally {
+    File.prototype.arrayBuffer = origAB;
+    File.prototype.text = origText;
+  }
 });
 
 test("removeAttachment drops only the targeted attachment", async () => {

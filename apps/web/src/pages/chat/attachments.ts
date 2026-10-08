@@ -2,9 +2,11 @@
 // read as data URLs and sent as OpenAI `image_url` content parts (the gateway
 // forwards the JSON body unchanged and auto-resolve already classifies
 // image_url parts as vision); text/code files are read as strings and inlined
-// (capped) into the prompt text part. The gateway accepts bodies up to 1 MiB,
-// so per-file and total budgets keep the final request body far below that
-// cap — attachment bytes never reach logs or error messages, only filenames.
+// (capped) into the prompt text part. Chat-purpose keys accept bodies up to
+// 16 MiB (the approved attachment budget: 10 MiB raw total × 4/3 base64 plus
+// prompt/history headroom), so per-file and total budgets keep the final
+// request body below that cap — attachment bytes never reach logs or error
+// messages, only filenames.
 export interface ChatAttachment {
   id: string;
   kind: "image" | "text";
@@ -38,11 +40,12 @@ export function truncateToUtf8Bytes(text: string, maxBytes: number): string {
 
 export const ATTACHMENT_LIMITS = {
   maxCount: 4,
-  maxImageBytes: 384 * 1024,
+  maxImageBytes: 10 * 1024 * 1024,
   maxTextBytes: 64 * 1024,
-  /** Sum of raw attachment bytes per message — keeps the JSON body well
-   *  under the gateway's 1 MiB cap even at 4/3 base64 expansion. */
-  maxTotalBytes: 384 * 1024,
+  /** Sum of raw attachment bytes per message — the binding budget. With
+   *  4/3 base64 expansion a full 10 MiB batch becomes ~13.4 MiB of JSON,
+   *  inside the chat-purpose gateway's 16 MiB cap. */
+  maxTotalBytes: 10 * 1024 * 1024,
   /** Cap on how much of a text file is inlined into the prompt. */
   maxTextInlineBytes: 16 * 1024,
 } as const;
@@ -89,27 +92,72 @@ const isImageFile = (file: { type: string; name: string }): boolean => IMAGE_TYP
 const isTextFile = (file: { type: string; name: string }): boolean =>
   file.type.startsWith("text/") || TEXT_EXTENSIONS.has(extension(file.name));
 
+/** Machine-readable rejection reasons. The chat page localizes these via
+ *  chatCopy; the `message` strings here remain English fallbacks so unknown
+ *  consumers keep readable detail. */
+export type AttachErrorCode =
+  | "unsupported"
+  | "imageTooLarge"
+  | "textTooLarge"
+  | "tooMany"
+  | "totalTooLarge";
+
+export class AttachError extends Error {
+  readonly code: AttachErrorCode;
+  /** offending file name, when the rejection is about one specific file */
+  readonly name2: string | null;
+
+  constructor(code: AttachErrorCode, message: string, name?: string) {
+    super(message);
+    this.code = code;
+    this.name2 = name ?? null;
+  }
+}
+
 function unsupportedMessage(name: string): string {
   return `"${name}" is not a supported file type. Supported: PNG, JPEG, WebP, GIF images and plain text/code files.`;
 }
 
 function tooLargeMessage(name: string, maxBytes: number): string {
-  return `"${name}" is too large (max ${Math.floor(maxBytes / 1024)} KB per image).`;
+  return `"${name}" is too large (max ${Math.floor(maxBytes / (1024 * 1024))} MB per image).`;
 }
 
 function tooLargeTextMessage(name: string, maxBytes: number): string {
   return `"${name}" is too large (max ${Math.floor(maxBytes / 1024)} KB as text).`;
 }
 
-/** Read one supported File into a ChatAttachment; throws a user-facing
- *  message on unsupported types or oversized files. Attachment bytes are
- *  held only in memory, never logged. */
-export async function createAttachment(file: File): Promise<ChatAttachment> {
-  const { name, type, size } = file;
+/** Type and per-file size validation only — no reads. Thrown before any
+ *  arrayBuffer()/text() so a budget-busting file is never read. */
+function validateFile(file: File): void {
+  const { name, size } = file;
   if (isImageFile(file)) {
     if (size > ATTACHMENT_LIMITS.maxImageBytes) {
-      throw new Error(tooLargeMessage(name, ATTACHMENT_LIMITS.maxImageBytes));
+      throw new AttachError(
+        "imageTooLarge",
+        tooLargeMessage(name, ATTACHMENT_LIMITS.maxImageBytes),
+        name,
+      );
     }
+    return;
+  }
+  if (isTextFile(file)) {
+    if (size > ATTACHMENT_LIMITS.maxTextBytes) {
+      throw new AttachError(
+        "textTooLarge",
+        tooLargeTextMessage(name, ATTACHMENT_LIMITS.maxTextBytes),
+        name,
+      );
+    }
+    return;
+  }
+  throw new AttachError("unsupported", unsupportedMessage(name), name);
+}
+
+/** Read one pre-validated File into a ChatAttachment. Attachment bytes are
+ *  held only in memory, never logged. */
+async function readAttachment(file: File): Promise<ChatAttachment> {
+  const { name, type, size } = file;
+  if (isImageFile(file)) {
     const buf = await file.arrayBuffer();
     return {
       id: crypto.randomUUID(),
@@ -119,19 +167,20 @@ export async function createAttachment(file: File): Promise<ChatAttachment> {
       dataUrl: bytesToDataUrl(type, buf),
     };
   }
-  if (isTextFile(file)) {
-    if (size > ATTACHMENT_LIMITS.maxTextBytes) {
-      throw new Error(tooLargeTextMessage(name, ATTACHMENT_LIMITS.maxTextBytes));
-    }
-    return {
-      id: crypto.randomUUID(),
-      kind: "text",
-      name,
-      bytes: size,
-      text: await file.text(),
-    };
-  }
-  throw new Error(unsupportedMessage(name));
+  return {
+    id: crypto.randomUUID(),
+    kind: "text",
+    name,
+    bytes: size,
+    text: await file.text(),
+  };
+}
+
+/** Read one supported File into a ChatAttachment; throws a user-facing
+ *  message on unsupported types or oversized files. */
+export async function createAttachment(file: File): Promise<ChatAttachment> {
+  validateFile(file);
+  return readAttachment(file);
 }
 
 /** data URL without FileReader: identical shape the gateway forwards. */
@@ -148,8 +197,9 @@ function bytesToDataUrl(mime: string, buf: ArrayBuffer): string {
 export interface AddAttachmentsResult {
   /** All validated attachments, or [] when the batch was rejected. */
   added: ChatAttachment[];
-  /** First rejection reason, user-facing; null on success. */
-  error: string | null;
+  /** First rejection reason. Structured codes localize; a bare string is an
+   *  unexpected failure whose raw detail passes through. null on success. */
+  error: AttachError | string | null;
 }
 
 /** All-or-nothing batch add: one invalid file rejects the whole selection
@@ -163,7 +213,10 @@ export async function addAttachments(
   if (current.length + files.length > ATTACHMENT_LIMITS.maxCount) {
     return {
       added: [],
-      error: `You can attach at most ${ATTACHMENT_LIMITS.maxCount} files per message.`,
+      error: new AttachError(
+        "tooMany",
+        `You can attach at most ${ATTACHMENT_LIMITS.maxCount} files per message.`,
+      ),
     };
   }
   const totalAfter =
@@ -171,16 +224,25 @@ export async function addAttachments(
   if (totalAfter > ATTACHMENT_LIMITS.maxTotalBytes) {
     return {
       added: [],
-      error: `Attachments exceed the total attachment size limit (${Math.floor(ATTACHMENT_LIMITS.maxTotalBytes / 1024)} KB per message). Remove something and try again.`,
+      error: new AttachError(
+        "totalTooLarge",
+        `Attachments exceed the ${Math.floor(ATTACHMENT_LIMITS.maxTotalBytes / (1024 * 1024))} MB total limit. Remove something and try again.`,
+      ),
     };
   }
+  // Whole-batch preflight: EVERY file's type + size is validated before ANY
+  // read, so a batch with an invalid second file never reads the first.
   const added: ChatAttachment[] = [];
-  for (const file of files) {
-    try {
-      added.push(await createAttachment(file));
-    } catch (e) {
-      return { added: [], error: e instanceof Error ? e.message : "Could not read that file." };
-    }
+  try {
+    for (const file of files) validateFile(file);
+    for (const file of files) added.push(await readAttachment(file));
+  } catch (e) {
+    // Structured rejections localize; anything else surfaces its raw detail.
+    return {
+      added: [],
+      error:
+        e instanceof AttachError ? e : e instanceof Error ? e.message : "Could not read that file.",
+    };
   }
   return { added, error: null };
 }
@@ -220,9 +282,11 @@ export function buildUserContent(text: string, attachments: ChatAttachment[]): U
 }
 
 /** Human-readable limits for the attach UI (title/help text). */
-export const ATTACHMENT_HINT = `PNG, JPEG, WebP or GIF up to ${Math.floor(
-  ATTACHMENT_LIMITS.maxImageBytes / 1024,
-)} KB; text or code files up to ${Math.floor(ATTACHMENT_LIMITS.maxTextBytes / 1024)} KB; up to ${ATTACHMENT_LIMITS.maxCount} files, ${Math.floor(ATTACHMENT_LIMITS.maxTotalBytes / 1024)} KB total.`;
+export const ATTACHMENT_HINT = `PNG, JPEG, WebP or GIF images and text/code files up to ${Math.floor(
+  ATTACHMENT_LIMITS.maxTextBytes / 1024,
+)} KB; up to ${ATTACHMENT_LIMITS.maxCount} files, ${Math.floor(
+  ATTACHMENT_LIMITS.maxTotalBytes / (1024 * 1024),
+)} MB total per message.`;
 
 /** Session-only retention disclosure shown wherever attachments are visible. */
 export const ATTACHMENT_RETENTION_NOTICE =

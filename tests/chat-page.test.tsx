@@ -96,6 +96,9 @@ test("ChatPage SSR preserves E2E-facing labels and never leaks a key", () => {
 });
 
 test("ChatPage SSR keeps conversation history in the chat pane: desktop sidebar + phone sheet trigger", () => {
+  // The sidebar collapse pref is a device UI pref persisted in localStorage;
+  // this SSR contract is about the DEFAULT (expanded) rendering.
+  globalThis.localStorage?.removeItem?.("chat.sidebar.collapsed");
   const html = render();
   // Phone sheet trigger (History button) and the desktop list shell both
   // render; the list itself is empty server-side (no session), never fake.

@@ -8,6 +8,9 @@ export interface TurnMessage {
   role: "user" | "assistant";
   content: string;
   reasoning: string;
+  /** Assistant only: the public model ID actually used (SSE top-level
+   *  `model`). Optional so user messages and legacy history compile. */
+  model?: string;
 }
 
 export const isEmptyAssistant = (m: { role: string; content: string; reasoning: string }) =>
@@ -18,14 +21,21 @@ export const isEmptyAssistant = (m: { role: string; content: string; reasoning: 
 export function buildPersistMessages(
   baseMessages: TurnMessage[],
   userText: string,
-  partial: { content: string; reasoning: string },
-): Array<{ role: "user" | "assistant"; content: string; reasoning?: string }> {
-  const msgs: Array<{ role: "user" | "assistant"; content: string; reasoning?: string }> = [
-    ...baseMessages,
-    { role: "user", content: userText, reasoning: "" },
-  ];
+  partial: { content: string; reasoning: string; model?: string },
+): Array<{ role: "user" | "assistant"; content: string; reasoning?: string; model?: string }> {
+  const msgs: Array<{
+    role: "user" | "assistant";
+    content: string;
+    reasoning?: string;
+    model?: string;
+  }> = [...baseMessages, { role: "user", content: userText, reasoning: "" }];
   if (partial.content !== "" || partial.reasoning !== "") {
-    msgs.push({ role: "assistant", content: partial.content, reasoning: partial.reasoning });
+    msgs.push({
+      role: "assistant",
+      content: partial.content,
+      reasoning: partial.reasoning,
+      model: partial.model,
+    });
   }
   return msgs;
 }
