@@ -40,4 +40,31 @@ describe("zeroFillDaily", () => {
     );
     expect(s.map((p) => p.value)).toEqual([0, 0, 100]);
   });
+
+  test.each(["requests", "tokens", "cost", "errors"] as const)(
+    "metricSeries maps %s to its own field only",
+    (metric) => {
+      const today = new Date().toISOString().slice(0, 10);
+      const s = metricSeries(
+        [{ day: today, requests: 2, tokens: 20, spend_vnd: 200, errors: 1 }],
+        1,
+        metric,
+      );
+      const expected =
+        metric === "requests" ? 2 : metric === "tokens" ? 20 : metric === "cost" ? 200 : 1;
+      expect(s.at(-1)?.value).toBe(expected);
+    },
+  );
+
+  test("repeated zeroFillDaily over the same sparse input is deterministic (repeated UTC)", () => {
+    const daily = [
+      { day: "2025-01-02", requests: 1, tokens: 2, spend_vnd: 3, errors: 0 },
+      { day: "2025-01-01", requests: 4, tokens: 5, spend_vnd: 6, errors: 1 },
+    ];
+    const a = zeroFillDaily(daily, 5);
+    const b = zeroFillDaily(daily, 5);
+    expect(a).toEqual(b);
+    // Unsorted input still fills the same UTC window in ascending day order.
+    expect(a.map((d) => d.day)).toEqual([...a.map((d) => d.day)].sort());
+  });
 });

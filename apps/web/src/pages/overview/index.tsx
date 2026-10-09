@@ -5,6 +5,8 @@ import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { formatStatusLabel } from "../../lib/display";
 import { useUsageSummary } from "../logs/api";
+import { metricSeries } from "../usage/charthelper";
+import { BarSeries } from "../../components/chart/bar-series";
 import { useLocaleEntry } from "../../lib/i18n/t";
 
 // Overview chrome copy: inline LocaleEntry set (see lib/i18n/common.ts).
@@ -39,12 +41,13 @@ const overviewCopy = {
   noUsage: { en: "No requests with usage", vi: "Không có request nào có mức sử dụng" },
   retry: { en: "Retry", vi: "Thử lại" },
   loading: { en: "Loading overview…", vi: "Đang tải tổng quan…" },
-  // Visible only to screen readers: the per-bar tooltip is hover-only, so the
-  // chart needs an accessible name that names its content.
+  // Visible only to screen readers: the sr-only data table in BarSeries is the
+  // AT surface for the spend chart; this names its content.
   chartAria: {
     en: "Bar chart of daily spend over the last 30 days.",
     vi: "Biểu đồ cột chi tiêu mỗi ngày trong 30 ngày gần đây.",
   },
+  dayCol: { en: "Day", vi: "Ngày" },
   successRateHint: {
     en: "Share of successful requests among eligible requests (requests with a model and token usage) in the last 30 days — not limited to the 10 recent rows below.",
     vi: "Tỷ lệ request thành công trong số các request đủ điều kiện (có mô hình và mức sử dụng token) trong 30 ngày gần đây — không chỉ giới hạn ở 10 request gần đây bên dưới.",
@@ -62,52 +65,6 @@ function StatTile({ label, value, title }: { label: string; value: string; title
       <p className="mt-1 truncate font-mono text-lg tabular-nums sm:text-xl" title={value}>
         {value}
       </p>
-    </div>
-  );
-}
-
-/** Fill a fixed 30-day (UTC) window; missing days are real zero-spend days. */
-function fillDaily30(daily: { day: string; spend_vnd: number }[]) {
-  const byDay = new Map(daily.map((d) => [d.day, d.spend_vnd]));
-  const out: { label: string; value: number }[] = [];
-  const fmt = (t: number) => new Date(t).toISOString().slice(0, 10);
-  const now = Date.now();
-  for (let i = 29; i >= 0; i--) {
-    const day = fmt(now - i * 86400000);
-    out.push({ label: day, value: byDay.get(day) ?? 0 });
-  }
-  return out;
-}
-
-/** Simple inline CSS bar chart: one bar per day, height scaled to max. */
-function BarChart({ data, rate }: { data: { label: string; value: number }[]; rate?: number }) {
-  const chartAria = useLocaleEntry(overviewCopy.chartAria);
-  const max = Math.max(...data.map((d) => d.value), 1);
-  const maxValue = Math.max(...data.map((d) => d.value));
-  return (
-    <div>
-      {/* role=img + aria-label: the bars are decorative divs whose only data
-          surface (hover tooltip) is invisible to keyboards and touch. */}
-      <div role="img" aria-label={chartAria}>
-        <div className="flex h-32 items-end gap-1">
-          {data.map((d) => (
-            <div key={d.label} className="group relative flex h-full min-w-0 flex-1 items-end">
-              <div
-                className={`mx-auto w-full max-w-3 rounded-sm ${
-                  d.value > 0 ? "bg-foreground/70 group-hover:bg-foreground" : "bg-foreground/10"
-                }`}
-                style={{
-                  height: d.value > 0 ? `${Math.max((d.value / max) * 100, 2)}%` : "2px",
-                }}
-              />
-              <span className="pointer-events-none absolute -top-6 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs group-hover:block">
-                {d.label}: {formatUsdFromVnd(d.value, rate) ?? formatVnd(d.value)}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <ChartFooter data={data} maxValue={maxValue} rate={rate} />
     </div>
   );
 }
@@ -146,6 +103,8 @@ export default function OverviewPage() {
   const successRateLabel = useLocaleEntry(overviewCopy.successRate);
   const successRateHint = useLocaleEntry(overviewCopy.successRateHint);
   const loadingLabel = useLocaleEntry(overviewCopy.loading);
+  const chartAria = useLocaleEntry(overviewCopy.chartAria);
+  const dayLabel = useLocaleEntry(overviewCopy.dayCol);
 
   if (summary.isPending) {
     return (
@@ -189,6 +148,9 @@ export default function OverviewPage() {
         ? `${(((t.visible_requests - t.visible_errors) / t.visible_requests) * 100).toFixed(1)}%`
         : "—";
 
+  // Zero-filled 30-day UTC spend series (shared helper; no divergent fill).
+  const spendPoints = metricSeries(summary.data.daily, 30, "cost");
+
   return (
     <div className="space-y-4">
       <OverviewHeader />
@@ -206,8 +168,21 @@ export default function OverviewPage() {
         {summary.data.daily.length === 0 ? (
           <NoRequestsState />
         ) : (
-          <BarChart data={fillDaily30(summary.data.daily)} rate={rate} />
+          <BarSeries
+            points={spendPoints}
+            formatValue={(v) => formatUsdFromVnd(v, rate) ?? formatVnd(v)}
+            ariaLabel={chartAria}
+            srSummary={chartAria}
+            dateHeader={dayLabel}
+            valueHeader={spendLabel}
+            height={128}
+          />
         )}
+        <ChartFooter
+          data={spendPoints}
+          maxValue={Math.max(...spendPoints.map((p) => p.value))}
+          rate={rate}
+        />
       </div>
       <RecentRequests workspaceId={workspaceId} />
     </div>

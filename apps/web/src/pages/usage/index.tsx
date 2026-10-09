@@ -1,5 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PageHeader, EmptyState, ErrorState, ScrollPanel } from "../../components/page";
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type ColumnDef,
+  type SortingState,
+} from "@tanstack/react-table";
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -16,13 +25,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../components/ui/select";
-import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Card, CardContent, CardHeader } from "../../components/ui/card";
 import { Skeleton } from "../../components/ui/skeleton";
 import { formatTokens, formatVnd, formatUsdFromVnd, useUsdVndRate } from "../../lib/format";
 import { ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useUsageSummary, successRateLabel } from "../logs/api";
 import { metricSeries, type Metric } from "./charthelper";
+import { BarSeries } from "../../components/chart/bar-series";
 import { useT, useLocaleEntry, type LocaleEntry } from "../../lib/i18n/t";
 
 // Usage page copy: inline LocaleEntry set (see lib/i18n/common.ts). Money,
@@ -61,6 +71,14 @@ const usageCopy = {
     vi: "Tỷ lệ request thành công trong số các request đủ điều kiện (có mô hình và mức sử dụng token) trong kỳ đã chọn.",
   },
   chartMetric: { en: "Chart metric", vi: "Chỉ số biểu đồ" },
+  // Chart accessibility: sr-only summary + data-table headers (EN/VI).
+  chartAria: {
+    en: "Bar chart of daily usage for the selected metric, filter and period.",
+    vi: "Biểu đồ cột mức sử dụng mỗi ngày theo chỉ số, bộ lọc và kỳ đã chọn.",
+  },
+  dayCol: { en: "Day", vi: "Ngày" },
+  valueCol: { en: "Value", vi: "Giá trị" },
+  sortBy: { en: "Sort by {col}", vi: "Sắp xếp theo {col}" },
 } as const;
 
 const METRICS: { id: Metric; label: LocaleEntry }[] = [
@@ -88,84 +106,23 @@ function formatMetric(vnd: number, metric: Metric, rate?: number): string {
 }
 
 /**
- * Daily bar chart, 240px tall, zero-filled UTC days; hover/focus shows the
- * formatted value. Y axis shows zero/mid/max gridlines with formatted labels.
+ * KPI summary strip: one compact bordered row instead of four cards — the
+ * numbers are the content, no nested-card chrome around each value.
  */
-function DailyChart({
-  daily,
-  days,
-  metric,
-  rate,
-}: {
-  daily: { day: string; requests: number; tokens: number; spend_vnd: number; errors: number }[];
-  days: number;
-  metric: Metric;
-  rate?: number;
-}) {
-  const series = metricSeries(daily, days, metric);
-  const max = Math.max(...series.map((d) => d.value), 1);
-  const fmt = (v: number) => formatMetric(v, metric, rate);
+function SummaryStrip({ items }: { items: { label: string; value: string; caption?: string }[] }) {
   return (
-    <div className="flex gap-2">
-      <div
-        aria-hidden="true"
-        className="flex h-[240px] w-14 shrink-0 flex-col justify-between py-0 text-right font-mono text-[10px] text-muted-foreground"
-      >
-        <span>{fmt(max)}</span>
-        <span>{fmt(max / 2)}</span>
-        <span>{fmt(0)}</span>
-      </div>
-      <div
-        role="group"
-        aria-label={`Daily ${metric} over the last ${days} days`}
-        className="relative min-w-0 flex-1"
-      >
-        <div
-          aria-hidden="true"
-          className="absolute inset-0 flex h-[240px] flex-col justify-between"
-        >
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="h-px w-full bg-border" />
-          ))}
+    <div
+      role="group"
+      aria-label={items.map((i) => i.label).join(", ")}
+      className="grid grid-cols-2 divide-x divide-border rounded-md border border-border lg:grid-cols-4"
+    >
+      {items.map((i) => (
+        <div key={i.label} className="min-w-0 px-4 py-3" title={i.caption}>
+          <p className="truncate text-xs text-muted-foreground">{i.label}</p>
+          <p className="mt-0.5 truncate font-mono text-lg tabular-nums">{i.value}</p>
         </div>
-        <div className="flex h-[240px] items-end gap-1">
-          {series.map((d) => (
-            <button
-              key={d.label}
-              type="button"
-              tabIndex={0}
-              aria-label={`${d.label}: ${fmt(d.value)}`}
-              className="group relative flex h-full min-w-0 flex-1 cursor-default items-end rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <div
-                className={`mx-auto w-full max-w-3 rounded-sm ${
-                  d.value > 0 ? "bg-foreground/70 group-hover:bg-foreground" : "bg-foreground/10"
-                }`}
-                style={{ height: d.value > 0 ? `${Math.max((d.value / max) * 100, 2)}%` : "2px" }}
-              />
-              <span className="pointer-events-none absolute -top-6 left-1/2 z-10 hidden max-w-[90vw] -translate-x-1/2 truncate whitespace-nowrap rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs group-hover:block group-focus-visible:block">
-                {d.label}: {fmt(d.value)}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
+      ))}
     </div>
-  );
-}
-
-function KpiCard({ title, value, caption }: { title: string; value: string; caption?: string }) {
-  return (
-    <Card>
-      <CardHeader className="pb-1">
-        <CardTitle className="text-xs font-medium text-muted-foreground">{title}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="font-mono text-2xl" title={caption}>
-          {value}
-        </p>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -205,8 +162,10 @@ export function UsageDataTabs({
 }
 
 /**
- * Per-model usage table. Extracted for render tests; long model lists scroll
- * inside their panel instead of growing the page.
+ * Per-model usage table, sortable on every column (TanStack Table). The
+ * default order is the API's spend-desc order — sorting is client-side view
+ * state only, data is never recomputed. Long model lists scroll inside their
+ * panel instead of growing the page.
  */
 export function PerModelTable({
   byModel,
@@ -218,54 +177,106 @@ export function PerModelTable({
   rate?: number;
 }) {
   const t = useT(usageCopy);
+  const [sorting, setSorting] = useState<SortingState>([]);
+
+  const data = useMemo(
+    () =>
+      byModel.map((m) => ({
+        model: String(m.public_model),
+        requests: m.requests,
+        tokens: m.tokens,
+        share: totalTokens > 0 ? m.tokens / totalTokens : null,
+        spendVnd: m.spend_vnd,
+      })),
+    [byModel, totalTokens],
+  );
+
+  const columns = useMemo<ColumnDef<(typeof data)[number]>[]>(
+    () => [
+      { id: "model", accessorKey: "model", header: t("modelCol"), sortDescFirst: false },
+      { id: "requests", accessorKey: "requests", header: t("requestsCol"), sortDescFirst: true },
+      { id: "tokens", accessorKey: "tokens", header: t("tokensCol"), sortDescFirst: true },
+      {
+        id: "share",
+        accessorFn: (r) => r.share ?? -1,
+        header: t("tokenShare"),
+        sortDescFirst: true,
+      },
+      { id: "spend", accessorFn: (r) => r.spendVnd, header: t("spend"), sortDescFirst: true },
+    ],
+    [t],
+  );
+
+  const table = useReactTable({
+    data,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+
   if (byModel.length === 0) return <EmptyState title={t("noRequests")} />;
+
+  const cell = (id: string, row: (typeof data)[number]) => {
+    switch (id) {
+      case "requests":
+        return row.requests.toLocaleString("en-US");
+      case "tokens":
+        return formatTokens(row.tokens);
+      case "share":
+        return row.share == null ? "\u2014" : (row.share * 100).toFixed(1) + "%";
+      case "spend":
+        return formatUsdFromVnd(row.spendVnd, rate) ?? formatVnd(row.spendVnd);
+      default:
+        return row.model;
+    }
+  };
+
+  const sortIcon = (dir: false | "asc" | "desc") =>
+    dir === "asc" ? (
+      <ArrowUp className="size-3" aria-hidden />
+    ) : dir === "desc" ? (
+      <ArrowDown className="size-3" aria-hidden />
+    ) : (
+      <ArrowUpDown className="size-3 opacity-40" aria-hidden />
+    );
+
   return (
     <ScrollPanel label={t("perModelUsage")} stickyHeader fill>
       <Table>
         <TableHeader>
-          <TableRow>
-            <TableHead>{t("modelCol")}</TableHead>
-            <TableHead className="text-right">{t("requestsCol")}</TableHead>
-            <TableHead className="text-right">{t("tokensCol")}</TableHead>
-            <TableHead className="text-right">{t("tokenShare")}</TableHead>
-            <TableHead className="text-right">{t("spend")}</TableHead>
-          </TableRow>
+          {table.getHeaderGroups().map((hg) => (
+            <TableRow key={hg.id}>
+              {hg.headers.map((h) => (
+                <TableHead key={h.id} className={h.column.id === "model" ? "" : "text-right"}>
+                  <button
+                    type="button"
+                    onClick={h.column.getToggleSortingHandler()}
+                    aria-label={t("sortBy").replace("{col}", h.column.columnDef.header as string)}
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                  >
+                    {flexRender(h.column.columnDef.header, h.getContext())}
+                    {sortIcon(h.column.getIsSorted())}
+                  </button>
+                </TableHead>
+              ))}
+            </TableRow>
+          ))}
         </TableHeader>
         <TableBody>
-          {byModel.map((m) => {
-            const tokens = m.tokens;
-            const share = totalTokens > 0 ? ((tokens / totalTokens) * 100).toFixed(1) + "%" : "—";
-            return (
-              <TableRow key={String(m.public_model)}>
-                <TableCell className="font-mono text-xs">{String(m.public_model)}</TableCell>
-                <TableCell className="text-right font-mono text-xs">
-                  {m.requests.toLocaleString("en-US")}
+          {table.getRowModel().rows.map((row) => (
+            <TableRow key={row.id}>
+              {row.getVisibleCells().map((c) => (
+                <TableCell
+                  key={c.id}
+                  className={(c.column.id === "model" ? "" : "text-right ") + "font-mono text-xs"}
+                >
+                  {cell(c.column.id, row.original)}
                 </TableCell>
-                <TableCell className="text-right font-mono text-xs">
-                  {formatTokens(tokens)}
-                </TableCell>
-                <TableCell className="text-right font-mono text-xs">
-                  <div className="flex items-center justify-end gap-2">
-                    <div
-                      className="hidden h-1.5 w-16 overflow-hidden rounded-sm bg-muted sm:block"
-                      aria-hidden="true"
-                    >
-                      <div
-                        className="h-full bg-foreground/60"
-                        style={{
-                          width: `${totalTokens > 0 ? Math.min((tokens / totalTokens) * 100, 100) : 0}%`,
-                        }}
-                      />
-                    </div>
-                    {share}
-                  </div>
-                </TableCell>
-                <TableCell className="text-right font-mono text-xs">
-                  {formatUsdFromVnd(m.spend_vnd, rate) ?? formatVnd(m.spend_vnd)}
-                </TableCell>
-              </TableRow>
-            );
-          })}
+              ))}
+            </TableRow>
+          ))}
         </TableBody>
       </Table>
     </ScrollPanel>
@@ -370,15 +381,17 @@ export default function UsagePage() {
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       {header}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard title={t("requests")} value={totals.requests.toLocaleString("en-US")} />
-        <KpiCard title={t("tokens")} value={formatTokens(totalTokens)} />
-        <KpiCard
-          title={t("costUsd")}
-          value={formatUsdFromVnd(totals.spend_vnd, rate) ?? formatVnd(totals.spend_vnd)}
-        />
-        <KpiCard title={t("successRate")} value={successRate} caption={t("successRateCaption")} />
-      </div>
+      <SummaryStrip
+        items={[
+          { label: t("requests"), value: totals.requests.toLocaleString("en-US") },
+          { label: t("tokens"), value: formatTokens(totalTokens) },
+          {
+            label: t("costUsd"),
+            value: formatUsdFromVnd(totals.spend_vnd, rate) ?? formatVnd(totals.spend_vnd),
+          },
+          { label: t("successRate"), value: successRate, caption: t("successRateCaption") },
+        ]}
+      />
 
       <UsageDataTabs
         chart={
@@ -398,13 +411,15 @@ export default function UsagePage() {
               {daily.length === 0 ? (
                 <EmptyState title={t("noRequests")} />
               ) : (
-                <>
-                  <DailyChart daily={daily} days={days} metric={metric} rate={rate} />
-                  <div className="mt-2 flex justify-between pl-16 text-xs text-muted-foreground">
-                    <span>{metricSeries(daily, days, metric)[0]?.label}</span>
-                    <span>{metricSeries(daily, days, metric).at(-1)?.label}</span>
-                  </div>
-                </>
+                <BarSeries
+                  points={metricSeries(daily, days, metric)}
+                  formatValue={(v) => formatMetric(v, metric, rate)}
+                  ariaLabel={t("chartAria")}
+                  srSummary={t("chartAria")}
+                  dateHeader={t("dayCol")}
+                  valueHeader={t("valueCol")}
+                  height={240}
+                />
               )}
             </CardContent>
           </Card>
