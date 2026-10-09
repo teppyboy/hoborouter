@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { toast } from "sonner";
 import { checkPassword } from "@hoborouter/shared";
@@ -29,8 +29,9 @@ import { Input } from "../../components/ui/input";
 import { Switch } from "../../components/ui/switch";
 import { useSession } from "../../lib/auth";
 import { ApiError, api } from "../../lib/api";
-import { formatDate } from "../../lib/format";
-import { AdminGate, useAdminQuery } from "./shared";
+import { formatDate, formatVnd } from "../../lib/format";
+import { useWorkspaceStore } from "../../lib/workspace";
+import { AdminGate, useAdminQuery, type AdminModel } from "./shared";
 import { useT } from "../../lib/i18n/t";
 
 // Admin users copy: inline LocaleEntry set (see lib/i18n/common.ts). Names,
@@ -122,6 +123,96 @@ const usersCopy = {
   },
   removedToast: { en: "Removed {name}", vi: "Đã xóa {name}" },
   createdToast: { en: "User created", vi: "Đã tạo người dùng" },
+
+  // Wallet adjustment dialog (per user).
+  manageWallet: { en: "Adjust wallet", vi: "Điều chỉnh ví" },
+  walletAria: { en: "Adjust wallet for {email}", vi: "Điều chỉnh ví cho {email}" },
+  walletTitle: { en: "Adjust wallet", vi: "Điều chỉnh ví" },
+  walletDesc: {
+    en: "Adjust the TOPUP wallet balance of {name} ({email}). Pick the workspace explicitly; the change is recorded in that workspace's ledger.",
+    vi: "Điều chỉnh số dư ví TOPUP của {name} ({email}). Chọn workspace rõ ràng; thay đổi được ghi vào sổ của workspace đó.",
+  },
+  pickWorkspace: { en: "Workspace", vi: "Workspace" },
+  pickPlaceholder: { en: "Select a workspace…", vi: "Chọn một workspace…" },
+  balanceLabel: { en: "Balance", vi: "Số dư" },
+  reservedLabel: { en: "Reserved", vi: "Đang giữ" },
+  noTopupWallet: {
+    en: "This workspace has no TOPUP wallet.",
+    vi: "Workspace này không có ví TOPUP.",
+  },
+  credit: { en: "Credit", vi: "Cộng" },
+  debit: { en: "Debit", vi: "Trừ" },
+  amountLabel: { en: "Amount (VND)", vi: "Số tiền (VND)" },
+  amountRule: {
+    en: "Enter a positive whole number of VND",
+    vi: "Nhập số VND nguyên dương",
+  },
+  reasonLabel: { en: "Reason", vi: "Lý do" },
+  review: { en: "Review", vi: "Xem lại" },
+  estimateLabel: { en: "Balance will change", vi: "Số dư sẽ thay đổi" },
+  apply: { en: "Apply adjustment", vi: "Áp dụng điều chỉnh" },
+  applying: { en: "Applying…", vi: "Đang áp dụng…" },
+  back: { en: "Back", vi: "Quay lại" },
+  receiptTitle: { en: "Adjustment recorded", vi: "Đã ghi nhận điều chỉnh" },
+  replayedNotice: {
+    en: "This adjustment was already applied (idempotent replay); no funds moved again.",
+    vi: "Điều chỉnh này đã được áp dụng trước đó (phát lại idempotent); không trừ/cộng thêm lần nữa.",
+  },
+  viewLedger: { en: "Open workspace ledger", vi: "Mở sổ của workspace" },
+  insufficient: {
+    en: "Insufficient balance: the wallet would drop below its reserved amount.",
+    vi: "Số dư không đủ: ví sẽ xuống dưới mức đang giữ.",
+  },
+  overflow: {
+    en: "The resulting balance would overflow the allowed maximum.",
+    vi: "Số dư kết quả sẽ vượt quá giới hạn cho phép.",
+  },
+  idempotencyMismatch: {
+    en: "This idempotency key was already used with different parameters. Start a new adjustment.",
+    vi: "Khóa idempotency đã được dùng với tham số khác. Hãy tạo điều chỉnh mới.",
+  },
+
+  // Key management dialog (per user).
+  manageKeys: { en: "Manage keys", vi: "Quản lý key" },
+  keysAria: { en: "Manage keys for {email}", vi: "Quản lý key cho {email}" },
+  keysTitle: { en: "API keys", vi: "API key" },
+  keysDesc: {
+    en: "Generic API keys of {name}'s ({email}) workspaces. Plaintext is shown only once, at grant.",
+    vi: "API key chung của các workspace của {name} ({email}). Bản rõ chỉ hiển thị một lần khi tạo.",
+  },
+  createKey: { en: "Create key", vi: "Tạo key" },
+  keyName: { en: "Key name", vi: "Tên key" },
+  modelAllowlist: { en: "Model allowlist", vi: "Danh sách mô hình" },
+  modelAllowlistDesc: {
+    en: "Leave empty for unrestricted access to all models.",
+    vi: "Để trống để cho phép truy cập mọi mô hình.",
+  },
+  allModels: { en: "All models", vi: "Mọi mô hình" },
+  unrestrictedWarning: {
+    en: "No models selected: this key will have unrestricted access to ALL models.",
+    vi: "Chưa chọn mô hình nào: key này sẽ được truy cập MỌI mô hình.",
+  },
+  shownOnceWarning: {
+    en: "This key is shown once and cannot be recovered. Copy it now.",
+    vi: "Key này chỉ hiển thị một lần và không thể khôi phục. Hãy sao chép ngay.",
+  },
+  confirmCreate: { en: "Create key", vi: "Tạo key" },
+  keyCreated: { en: "Key created — copy it now", vi: "Đã tạo key — hãy sao chép ngay" },
+  copyKeyLabel: { en: "Copy key", vi: "Sao chép key" },
+  done: { en: "Done", vi: "Xong" },
+  noKeys: { en: "No keys in this workspace", vi: "Không có key trong workspace này" },
+  statusLabel: { en: "Status", vi: "Trạng thái" },
+  createdLabel: { en: "Created", vi: "Ngày tạo" },
+  lastUsed: { en: "Last used", vi: "Dùng lần cuối" },
+  modelsLabel: { en: "Models", vi: "Mô hình" },
+  revoke: { en: "Revoke", vi: "Thu hồi" },
+  revokeTitle: { en: "Revoke key {prefix}?", vi: "Thu hồi key {prefix}?" },
+  revokeReasonLabel: { en: "Reason", vi: "Lý do" },
+  confirmRevoke: { en: "Revoke key", vi: "Thu hồi key" },
+  revoking: { en: "Revoking…", vi: "Đang thu hồi…" },
+  revokedToast: { en: "Key revoked", vi: "Đã thu hồi key" },
+  keyNameRequired: { en: "Key name is required", vi: "Cần tên key" },
+  revokeReasonRequired: { en: "Reason is required", vi: "Cần lý do" },
 } as const;
 
 type UsersT = (key: keyof typeof usersCopy, vars?: Record<string, string | number>) => string;
@@ -246,6 +337,8 @@ export function UsersTable({
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [toEdit, setToEdit] = useState<AdminUser | null>(null);
   const [toReset, setToReset] = useState<AdminUser | null>(null);
+  const [toWallet, setToWallet] = useState<AdminUser | null>(null);
+  const [toKeys, setToKeys] = useState<AdminUser | null>(null);
 
   const columns: ColumnDef<AdminUser, unknown>[] = [
     { accessorKey: "email", header: t("email") },
@@ -319,6 +412,22 @@ export function UsersTable({
             >
               {t("resetPassword")}
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label={t("walletAria", { email: user.email })}
+              onClick={() => setToWallet(user)}
+            >
+              {t("manageWallet")}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label={t("keysAria", { email: user.email })}
+              onClick={() => setToKeys(user)}
+            >
+              {t("manageKeys")}
+            </Button>
             {user.id !== currentUserId && (
               <Button
                 variant="destructive"
@@ -386,6 +495,8 @@ export function UsersTable({
         />
       )}
       {toReset && <ResetPasswordDialog user={toReset} onClose={() => setToReset(null)} />}
+      {toWallet && <ManageWalletDialog user={toWallet} onClose={() => setToWallet(null)} />}
+      {toKeys && <ManageKeysDialog user={toKeys} onClose={() => setToKeys(null)} />}
     </>
   );
 }
@@ -737,6 +848,769 @@ function CreateUserDialog({
             </DialogFooter>
           </form>
         </Form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// --- Per-user wallet adjustment + key management (frozen admin contracts) ---
+
+export interface UserWorkspaceMembership {
+  workspaceId: string;
+  workspaceName: string;
+  role: string;
+}
+
+export interface UserTopupWallet {
+  workspaceId: string;
+  kind: "topup";
+  balance: number;
+  reserved: number;
+}
+
+export interface AdminUserContext {
+  memberships: UserWorkspaceMembership[];
+  wallets: UserTopupWallet[];
+}
+
+export interface AdjustReceipt {
+  ledgerEntryId: string;
+  balanceBefore: number;
+  balanceAfter: number;
+  reserved: number;
+  workspaceId: string;
+  replayed: boolean;
+}
+
+export interface AdminWorkspaceKey {
+  id: string;
+  name: string;
+  key_prefix: string;
+  status: "enabled" | "disabled" | "revoked";
+  created_at: number;
+  last_used_at: number | null;
+  modelIds: string[];
+}
+
+/** Frozen C-contract: memberships + per-workspace TOPUP wallet balances. */
+function useUserContext(userId: string) {
+  return useQuery<AdminUserContext>({
+    queryKey: ["admin", "users", userId, "context"],
+    queryFn: () => api<AdminUserContext>(`/api/v1/admin/users/${userId}/context`),
+    retry: false,
+  });
+}
+
+function walletErrorMessage(err: unknown, t: UsersT): string {
+  if (err instanceof ApiError) {
+    if (err.code === "INSUFFICIENT") return t("insufficient");
+    if (err.code === "OVERFLOW") return t("overflow");
+    if (err.code === "IDEMPOTENCY_MISMATCH") return t("idempotencyMismatch");
+  }
+  return err instanceof Error ? err.message : t("requestFailed");
+}
+
+interface WalletAttempt {
+  workspaceId: string;
+  delta: number;
+  reason: string;
+  idempotencyKey: string;
+  gen: number;
+}
+
+function ManageWalletDialog({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const t = useT(usersCopy);
+  const contextQuery = useUserContext(user.id);
+  const [workspaceId, setWorkspaceId] = useState("");
+  const [mode, setMode] = useState<"credit" | "debit">("credit");
+  const [amountText, setAmountText] = useState("");
+  const [reason, setReason] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [step, setStep] = useState<"form" | "confirm" | "receipt">("form");
+  const [receipt, setReceipt] = useState<AdjustReceipt | null>(null);
+  // Submit attempt: the idempotency key is minted once per confirmed attempt
+  // and REUSED on retry so a lost response replays instead of double-charging.
+  const [attempt, setAttempt] = useState<WalletAttempt | null>(null);
+  const genRef = useRef(0);
+  // gen of the attempt currently being dispatched (per-attempt, not shared:
+  // a second, different attempt may start while the first is in flight).
+  const [pendingGen, setPendingGen] = useState<number | null>(null);
+  const pendingGenRef = useRef<number | null>(null);
+
+  const memberships = contextQuery.data?.memberships ?? [];
+  const wallets = contextQuery.data?.wallets ?? [];
+  const selectedWallet = wallets.find((w) => w.workspaceId === workspaceId && w.kind === "topup");
+  const selectedMembership = memberships.find((m) => m.workspaceId === workspaceId);
+
+  const amount = /^\d+$/.test(amountText.trim()) ? Number(amountText.trim()) : 0;
+  const amountValid = Number.isSafeInteger(amount) && amount > 0;
+  const reasonValid = reason.trim().length > 0;
+  const targetValid = workspaceId !== "" && selectedWallet !== undefined;
+
+  const adjust = useMutation({
+    mutationFn: async (v: WalletAttempt) => {
+      const res = await api<AdjustReceipt>(
+        `/api/v1/admin/workspaces/${v.workspaceId}/wallet/adjust`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            delta: v.delta,
+            reason: v.reason,
+            idempotencyKey: v.idempotencyKey,
+          }),
+        },
+      );
+      return { res, v };
+    },
+    onSuccess: ({ res, v }) => {
+      // The dispatch landed regardless of where the admin is now: the captured
+      // context cache must refresh even when the UI result is dropped.
+      void queryClient.invalidateQueries({ queryKey: ["admin", "users", user.id, "context"] });
+      // Stale completion: a newer attempt owns the dialog; drop silently
+      // (the financial dispatch itself is never cancelled).
+      if (v.gen !== genRef.current) return;
+      if (pendingGenRef.current === v.gen) {
+        pendingGenRef.current = null;
+        setPendingGen(null);
+      }
+      setReceipt(res);
+      setStep("receipt");
+    },
+    onError: (err, v) => {
+      if (v.gen !== genRef.current) return;
+      if (pendingGenRef.current === v.gen) {
+        pendingGenRef.current = null;
+        setPendingGen(null);
+      }
+      setFormError(walletErrorMessage(err, t));
+    },
+  });
+
+  const switchWorkspace = (id: string) => {
+    // Context switch drops pending UX state; an in-flight dispatch keeps
+    // running. Bumping the generation retires every result still in flight —
+    // otherwise a late completion would re-open its receipt inside the NEW
+    // workspace's panel. The retired attempt's pending claim is released too.
+    genRef.current++;
+    if (pendingGenRef.current !== null) {
+      pendingGenRef.current = null;
+      setPendingGen(null);
+    }
+    setWorkspaceId(id);
+    setStep("form");
+    setFormError(null);
+    setReceipt(null);
+    setMode("credit");
+    setAmountText("");
+    setReason("");
+  };
+
+  const apply = () => {
+    if (!targetValid || !amountValid || !reasonValid) return;
+    const delta = mode === "credit" ? amount : -amount;
+    let useAttempt = attempt;
+    if (
+      !useAttempt ||
+      useAttempt.workspaceId !== workspaceId ||
+      useAttempt.delta !== delta ||
+      useAttempt.reason !== reason.trim()
+    ) {
+      useAttempt = {
+        workspaceId,
+        delta,
+        reason: reason.trim(),
+        idempotencyKey: crypto.randomUUID(),
+        gen: ++genRef.current,
+      };
+      setAttempt(useAttempt);
+    }
+    pendingGenRef.current = useAttempt.gen;
+    setPendingGen(useAttempt.gen);
+    adjust.mutate(useAttempt);
+  };
+
+  const estimate =
+    targetValid && amountValid
+      ? selectedWallet.balance + (mode === "credit" ? amount : -amount)
+      : null;
+  // "Applying…" only while THIS exact attempt is in flight; a changed
+  // payload is a new attempt and must stay applicable.
+  const pendingThisAttempt =
+    pendingGen !== null &&
+    attempt !== null &&
+    attempt.workspaceId === workspaceId &&
+    attempt.delta === (mode === "credit" ? amount : -amount) &&
+    attempt.reason === reason.trim();
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) {
+          // Closing retires in-flight completions the same way a switch does:
+          // after unmount their state writes would be no-ops anyway, but the
+          // retirement makes the drop explicit and covers any pre-unmount tick.
+          genRef.current++;
+          if (pendingGenRef.current !== null) {
+            pendingGenRef.current = null;
+            setPendingGen(null);
+          }
+        }
+        onClose();
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("walletTitle")}</DialogTitle>
+          <DialogDescription>
+            {t("walletDesc", { name: user.name, email: user.email })}
+          </DialogDescription>
+        </DialogHeader>
+
+        {step === "form" && (
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <label htmlFor="wallet-ws-select" className="text-sm font-medium">
+                {t("pickWorkspace")}
+              </label>
+              <select
+                id="wallet-ws-select"
+                aria-label={t("pickWorkspace")}
+                value={workspaceId}
+                onChange={(e) => switchWorkspace(e.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+              >
+                <option value="">{t("pickPlaceholder")}</option>
+                {memberships.map((m) => (
+                  <option key={m.workspaceId} value={m.workspaceId}>
+                    {m.workspaceName}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {workspaceId !== "" && selectedWallet === undefined && (
+              <p className="text-destructive text-sm">{t("noTopupWallet")}</p>
+            )}
+            {selectedWallet && (
+              <div className="rounded-md border p-3 text-sm">
+                <p className="font-medium">{selectedMembership?.workspaceName}</p>
+                <p>
+                  {t("balanceLabel")}: {formatVnd(selectedWallet.balance)}
+                </p>
+                <p>
+                  {t("reservedLabel")}: {formatVnd(selectedWallet.reserved)}
+                </p>
+              </div>
+            )}
+            {targetValid && (
+              <>
+                <div className="flex gap-2" role="group" aria-label={t("walletTitle")}>
+                  <Button
+                    type="button"
+                    variant={mode === "credit" ? "default" : "outline"}
+                    size="sm"
+                    aria-pressed={mode === "credit"}
+                    onClick={() => setMode("credit")}
+                  >
+                    {t("credit")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={mode === "debit" ? "default" : "outline"}
+                    size="sm"
+                    aria-pressed={mode === "debit"}
+                    onClick={() => setMode("debit")}
+                  >
+                    {t("debit")}
+                  </Button>
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="wallet-amount" className="text-sm font-medium">
+                    {t("amountLabel")}
+                  </label>
+                  <Input
+                    id="wallet-amount"
+                    aria-label={t("amountLabel")}
+                    inputMode="numeric"
+                    value={amountText}
+                    onChange={(e) => setAmountText(e.target.value)}
+                    placeholder="50000"
+                  />
+                  <p className="text-muted-foreground text-xs">{t("amountRule")}</p>
+                </div>
+                <div className="space-y-1">
+                  <label htmlFor="wallet-reason" className="text-sm font-medium">
+                    {t("reasonLabel")}
+                  </label>
+                  <Input
+                    id="wallet-reason"
+                    aria-label={t("reasonLabel")}
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+            {formError && <p className="text-destructive text-sm">{formError}</p>}
+          </div>
+        )}
+
+        {step === "confirm" && targetValid && amountValid && reasonValid && (
+          <div className="space-y-3 text-sm" aria-live="polite">
+            <p className="font-medium">{selectedMembership?.workspaceName}</p>
+            <p>{formatVnd(mode === "credit" ? amount : -amount)}</p>
+            <p>{reason.trim()}</p>
+            <p>
+              {t("estimateLabel")}: {formatVnd(selectedWallet.balance)} →{" "}
+              {formatVnd(estimate ?? selectedWallet.balance)}
+            </p>
+            {formError && <p className="text-destructive text-sm">{formError}</p>}
+          </div>
+        )}
+
+        {step === "receipt" && receipt && (
+          <div className="space-y-2 text-sm" role="status" aria-live="polite">
+            <p className="font-medium">{t("receiptTitle")}</p>
+            <p>
+              {t("balanceLabel")}: {formatVnd(receipt.balanceBefore)} →{" "}
+              {formatVnd(receipt.balanceAfter)}
+            </p>
+            <p>
+              {t("reservedLabel")}: {formatVnd(receipt.reserved)}
+            </p>
+            {receipt.replayed && (
+              <p className="text-muted-foreground text-xs">{t("replayedNotice")}</p>
+            )}
+            {/* Workspace context travels with the link so the admin never
+                lands in the wrong workspace's ledger. */}
+            <a
+              href="/billing/credits"
+              data-workspace-id={receipt.workspaceId}
+              onClick={() => {
+                useWorkspaceStore.getState().setWorkspaceId(receipt.workspaceId);
+              }}
+              className="text-sm underline underline-offset-4"
+            >
+              {t("viewLedger")}
+            </a>
+          </div>
+        )}
+
+        <DialogFooter>
+          {step === "form" && (
+            <Button type="button" variant="outline" onClick={onClose}>
+              {t("cancel")}
+            </Button>
+          )}
+          {step === "form" && targetValid && (
+            <Button
+              type="button"
+              disabled={!amountValid || !reasonValid}
+              onClick={() => {
+                setFormError(null);
+                setStep("confirm");
+              }}
+            >
+              {t("review")}
+            </Button>
+          )}
+          {step === "confirm" && (
+            <Button type="button" variant="outline" onClick={() => setStep("form")}>
+              {t("back")}
+            </Button>
+          )}
+          {step === "confirm" && (
+            <Button type="button" disabled={pendingThisAttempt} onClick={apply}>
+              {pendingThisAttempt ? t("applying") : t("apply")}
+            </Button>
+          )}
+          {step === "receipt" && (
+            <Button type="button" onClick={onClose}>
+              {t("done")}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+interface GrantResponse {
+  id: string;
+  name: string;
+  plaintext: string;
+  modelIds: string[];
+}
+
+function ManageKeysDialog({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const t = useT(usersCopy);
+  const contextQuery = useUserContext(user.id);
+  const [workspaceId, setWorkspaceId] = useState("");
+  const [grantStep, setGrantStep] = useState<"idle" | "confirm" | "plaintext">("idle");
+  const [keyName, setKeyName] = useState("");
+  const [selectedModels, setSelectedModels] = useState<string[]>([]);
+  // Plaintext lives ONLY in this dialog's state: cleared when leaving the
+  // step, on workspace switch, and on unmount. Never persisted or logged.
+  const [plaintext, setPlaintext] = useState<string | null>(null);
+  const [panelError, setPanelError] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<AdminWorkspaceKey | null>(null);
+  const [revokeReason, setRevokeReason] = useState("");
+  const genRef = useRef(0);
+
+  const memberships = contextQuery.data?.memberships ?? [];
+
+  // Real backend (apps/api/src/routes/admin-keys.ts) returns a bare array.
+  const keysQuery = useQuery<AdminWorkspaceKey[]>({
+    queryKey: ["admin", "user-keys", user.id, workspaceId],
+    queryFn: () => api<AdminWorkspaceKey[]>(`/api/v1/admin/workspaces/${workspaceId}/keys`),
+    enabled: workspaceId !== "",
+    retry: false,
+  });
+
+  // Real backend (apps/api/src/routes/admin-catalog.ts) returns a bare array;
+  // the allowlist carries DB model ids, which is what the grant endpoint
+  // validates (public ids are display-only).
+  const modelsQuery = useQuery<AdminModel[]>({
+    queryKey: ["admin", "catalog", "models"],
+    queryFn: () => api<AdminModel[]>("/api/v1/admin/catalog/models"),
+    enabled: workspaceId !== "",
+    retry: false,
+  });
+  const modelLabels = new Map(
+    (modelsQuery.data ?? []).map((m) => [m.id, m.display_name || m.public_id || m.id]),
+  );
+
+  const grant = useMutation({
+    mutationFn: async (v: {
+      name: string;
+      modelIds: string[];
+      gen: number;
+      workspaceId: string;
+    }) => {
+      const res = await api<GrantResponse>(`/api/v1/admin/workspaces/${v.workspaceId}/keys`, {
+        method: "POST",
+        body: JSON.stringify({ name: v.name, modelIds: v.modelIds }),
+      });
+      return { res, v };
+    },
+    onSuccess: ({ res, v }) => {
+      // The dispatch landed for v.workspaceId regardless of where the admin
+      // is now: refresh that cache even when the UI result is dropped.
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "user-keys", user.id, v.workspaceId],
+      });
+      if (v.gen !== genRef.current) return;
+      setPlaintext(res.plaintext);
+      setGrantStep("plaintext");
+    },
+    onError: (err, v) => {
+      if (v.gen !== genRef.current) return;
+      setPanelError(err instanceof Error ? err.message : t("requestFailed"));
+      setGrantStep("idle");
+    },
+  });
+
+  const revoke = useMutation({
+    mutationFn: async (v: { keyId: string; reason: string; gen: number; workspaceId: string }) => {
+      const res = await api<{ status: string }>(
+        `/api/v1/admin/workspaces/${v.workspaceId}/keys/${v.keyId}/revoke`,
+        { method: "POST", body: JSON.stringify({ reason: v.reason }) },
+      );
+      return { res, v };
+    },
+    onSuccess: (_data, v) => {
+      void queryClient.invalidateQueries({
+        queryKey: ["admin", "user-keys", user.id, v.workspaceId],
+      });
+      if (v.gen !== genRef.current) return;
+      toast.success(t("revokedToast"));
+      setRevokeTarget(null);
+      setRevokeReason("");
+    },
+    onError: (err, v) => {
+      if (v.gen !== genRef.current) return;
+      setPanelError(err instanceof Error ? err.message : t("requestFailed"));
+    },
+  });
+
+  const switchWorkspace = (id: string) => {
+    // Pending grant/revoke UX is dropped on context switch; in-flight
+    // dispatches keep running. Bumping the generation retires every result
+    // still in flight — otherwise a late grant would surface its plaintext
+    // inside the NEW workspace's panel.
+    genRef.current++;
+    setWorkspaceId(id);
+    setGrantStep("idle");
+    setKeyName("");
+    setSelectedModels([]);
+    setPlaintext(null);
+    setPanelError(null);
+    setRevokeTarget(null);
+    setRevokeReason("");
+  };
+
+  const submitGrant = () => {
+    if (!keyName.trim()) {
+      setPanelError(t("keyNameRequired"));
+      return;
+    }
+    grant.mutate({
+      name: keyName.trim(),
+      modelIds: selectedModels,
+      gen: ++genRef.current,
+      workspaceId,
+    });
+  };
+
+  const submitRevoke = () => {
+    if (!revokeTarget || !revokeReason.trim()) return;
+    revoke.mutate({
+      keyId: revokeTarget.id,
+      reason: revokeReason.trim(),
+      gen: ++genRef.current,
+      workspaceId,
+    });
+  };
+
+  const keys = keysQuery.data ?? [];
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{t("keysTitle")}</DialogTitle>
+          <DialogDescription>
+            {t("keysDesc", { name: user.name, email: user.email })}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-1">
+          <label htmlFor="keys-ws-select" className="text-sm font-medium">
+            {t("pickWorkspace")}
+          </label>
+          <select
+            id="keys-ws-select"
+            aria-label={t("pickWorkspace")}
+            value={workspaceId}
+            onChange={(e) => switchWorkspace(e.target.value)}
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+          >
+            <option value="">{t("pickPlaceholder")}</option>
+            {memberships.map((m) => (
+              <option key={m.workspaceId} value={m.workspaceId}>
+                {m.workspaceName}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {workspaceId !== "" && keysQuery.isError && (
+          <p className="text-destructive text-sm">
+            {keysQuery.error instanceof Error ? keysQuery.error.message : t("requestFailed")}
+          </p>
+        )}
+
+        {workspaceId !== "" && !keysQuery.isError && (
+          <>
+            {keysQuery.isPending ? (
+              <p className="text-muted-foreground text-sm">…</p>
+            ) : keys.length === 0 ? (
+              <p className="text-muted-foreground text-sm">{t("noKeys")}</p>
+            ) : (
+              <ul className="space-y-2">
+                {keys.map((k) => (
+                  <li key={k.id} className="rounded-md border p-3 text-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">{k.name}</span>
+                      <Badge variant={k.status === "revoked" ? "outline" : "default"}>
+                        {k.status}
+                      </Badge>
+                    </div>
+                    <p className="font-mono text-xs">{k.key_prefix}…</p>
+                    <p className="text-muted-foreground text-xs">
+                      {t("createdLabel")}: {formatDate(new Date(k.created_at))}
+                      {" · "}
+                      {t("lastUsed")}: {k.last_used_at ? formatDate(new Date(k.last_used_at)) : "—"}
+                    </p>
+                    <p className="text-muted-foreground text-xs">
+                      {t("modelsLabel")}:{" "}
+                      {k.modelIds.length === 0
+                        ? t("allModels")
+                        : k.modelIds.map((id) => modelLabels.get(id) ?? id).join(", ")}
+                    </p>
+                    {k.status !== "revoked" && (
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        className="mt-2"
+                        onClick={() => {
+                          setRevokeTarget(k);
+                          setRevokeReason("");
+                          setPanelError(null);
+                        }}
+                      >
+                        {t("revoke")}
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {revokeTarget && (
+              <div className="space-y-2 rounded-md border p-3">
+                <p className="text-sm font-medium">
+                  {t("revokeTitle", { prefix: revokeTarget.key_prefix })}
+                </p>
+                <label htmlFor="revoke-reason" className="text-sm font-medium">
+                  {t("revokeReasonLabel")}
+                </label>
+                <Input
+                  id="revoke-reason"
+                  aria-label={t("revokeReasonLabel")}
+                  value={revokeReason}
+                  onChange={(e) => setRevokeReason(e.target.value)}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setRevokeTarget(null)}
+                  >
+                    {t("cancel")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    disabled={revoke.isPending || !revokeReason.trim()}
+                    onClick={submitRevoke}
+                  >
+                    {revoke.isPending ? t("revoking") : t("confirmRevoke")}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {grantStep === "idle" && (
+              <div className="space-y-3 rounded-md border p-3">
+                <p className="text-sm font-medium">{t("createKey")}</p>
+                <div className="space-y-1">
+                  <label htmlFor="grant-name" className="text-sm font-medium">
+                    {t("keyName")}
+                  </label>
+                  <Input
+                    id="grant-name"
+                    aria-label={t("keyName")}
+                    value={keyName}
+                    onChange={(e) => setKeyName(e.target.value)}
+                  />
+                </div>
+                <fieldset className="space-y-1">
+                  <legend className="text-sm font-medium">{t("modelAllowlist")}</legend>
+                  <p className="text-muted-foreground text-xs">{t("modelAllowlistDesc")}</p>
+                  {(modelsQuery.data ?? []).map((m) => (
+                    <label
+                      key={m.id}
+                      className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-sm hover:bg-muted/50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedModels.includes(m.id)}
+                        onChange={() =>
+                          setSelectedModels((prev) =>
+                            prev.includes(m.id) ? prev.filter((x) => x !== m.id) : [...prev, m.id],
+                          )
+                        }
+                        className="size-4 accent-current"
+                      />
+                      <span>{m.display_name || m.public_id}</span>
+                      <span className="font-mono text-xs text-muted-foreground">{m.public_id}</span>
+                    </label>
+                  ))}
+                </fieldset>
+                {panelError && <p className="text-destructive text-sm">{panelError}</p>}
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!keyName.trim()}
+                  onClick={() => {
+                    setPanelError(null);
+                    setGrantStep("confirm");
+                  }}
+                >
+                  {t("createKey")}
+                </Button>
+              </div>
+            )}
+
+            {grantStep === "confirm" && (
+              <div className="space-y-2 rounded-md border p-3 text-sm" aria-live="polite">
+                <p className="font-medium">{keyName.trim()}</p>
+                <p>
+                  {t("modelsLabel")}:{" "}
+                  {selectedModels.length === 0
+                    ? t("allModels")
+                    : selectedModels.map((id) => modelLabels.get(id) ?? id).join(", ")}
+                </p>
+                {selectedModels.length === 0 && (
+                  <p className="text-destructive text-sm">{t("unrestrictedWarning")}</p>
+                )}
+                <p className="text-destructive text-sm">{t("shownOnceWarning")}</p>
+                {panelError && <p className="text-destructive text-sm">{panelError}</p>}
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setGrantStep("idle")}
+                  >
+                    {t("back")}
+                  </Button>
+                  <Button type="button" size="sm" disabled={grant.isPending} onClick={submitGrant}>
+                    {grant.isPending ? t("applying") : t("confirmCreate")}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {grantStep === "plaintext" && plaintext && (
+              <div className="space-y-2 rounded-md border p-3" role="status" aria-live="polite">
+                <p className="text-sm font-medium">{t("keyCreated")}</p>
+                <p className="text-destructive text-sm">{t("shownOnceWarning")}</p>
+                <div className="flex items-center gap-2">
+                  <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-xs">
+                    {plaintext}
+                  </code>
+                  <CopyButton value={plaintext} label={t("copyKeyLabel")} />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    // Leaving the step destroys the plaintext for good.
+                    setPlaintext(null);
+                    setGrantStep("idle");
+                    setKeyName("");
+                    setSelectedModels([]);
+                  }}
+                >
+                  {t("done")}
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>
+            {t("cancel")}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

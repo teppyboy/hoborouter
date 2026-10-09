@@ -3,14 +3,23 @@
 // - Role badge and Joined date columns are untouched by the new actions.
 // - Dialogs are a11y-titled ("Edit user" / "Reset password") — asserted via
 //   open-dialog render so screen-reader context is actually verified.
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "../apps/web/src/components/ui/tooltip";
 
 // lib/auth runs createAuthClient (window.location.origin) at module load;
-// stub a minimal window so the SSR render test can import the page.
-(globalThis as { window?: unknown }).window ??= { location: { origin: "http://localhost" } };
+// stub a minimal window so the SSR render test can import the page. The
+// previous globalThis descriptor is restored in afterAll: leaving this stub
+// installed would leak a matchMedia-less window into later SSR files sharing
+// the bun worker.
+const g = globalThis as { window?: unknown };
+const previousWindow = Object.getOwnPropertyDescriptor(g, "window");
+g.window ??= { location: { origin: "http://localhost" } };
+afterAll(() => {
+  if (previousWindow) Object.defineProperty(g, "window", previousWindow);
+  else delete g.window;
+});
 const { UsersTable } = await import("../apps/web/src/pages/admin/users");
 type AdminUser = import("../apps/web/src/pages/admin/users").AdminUser;
 

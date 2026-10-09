@@ -5,7 +5,7 @@
 import { Elysia } from "elysia";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, requireInstanceAdmin, isInstanceAdmin } from "../authz";
-import { and, desc, eq, inArray, like, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, like, ne, notLike, sql, type SQL } from "drizzle-orm";
 import { type Db, users, workspaces, apiKeys, payments, models, auditLog } from "@hoborouter/db";
 
 interface AuditRow {
@@ -178,23 +178,28 @@ export const auditRoutes = (db: Db, auth: BetterAuthInstance) =>
     const before = q.get("before");
     const action = q.get("action");
     const filters: SQL[] = [];
-    if (before) filters.push(sql`${auditLog.created_at} < ${Number(before) || 0}`);
-    if (action) filters.push(like(auditLog.action, `${action}%`));
-    if (wsId) filters.push(eq(auditLog.workspace_id, wsId));
-    const where = filters.length ? and(...filters) : undefined;
-
-    let rows: AuditRow[];
     if (wsId) {
       // Instance admin may read any scope; otherwise admin/owner of that ws.
       if (!(await isInstanceAdmin(db, userId))) {
         const denied = await requireWsRole(db, wsId, userId, "admin");
         if (denied) return denied;
+        // Privacy (spec 2026-10-08 §6): privileged support events are excluded
+        // by an SQL predicate FIRST — before the before/action cursor filters,
+        // limit, and enrichment — so private reason/delta/actor are
+        // unobtainable via any query variant (incl. action= prefix filters and
+        // pagination cursors). Instance admins keep the full record.
+        filters.push(ne(auditLog.action, "admin.wallet.adjust"));
+        filters.push(notLike(auditLog.action, "admin.key.%"));
       }
     } else {
       const denied = await requireInstanceAdmin(db, userId);
       if (denied) return denied;
     }
-    rows = await db
+    if (before) filters.push(sql`${auditLog.created_at} < ${Number(before) || 0}`);
+    if (action) filters.push(like(auditLog.action, `${action}%`));
+    if (wsId) filters.push(eq(auditLog.workspace_id, wsId));
+    const where = filters.length ? and(...filters) : undefined;
+    const rows: AuditRow[] = await db
       .select({
         id: auditLog.id,
         actor_user_id: auditLog.actor_user_id,

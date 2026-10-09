@@ -22,6 +22,8 @@ import { bundlesRoutes } from "./routes/bundles";
 import { throughputRoutes } from "./routes/throughput";
 import { adminThroughputRoutes } from "./routes/admin-throughput";
 import { adminBundlesRoutes } from "./routes/admin-bundles";
+import { adminKeysRoutes } from "./routes/admin-keys";
+import { adminWalletAdjustRoutes } from "./routes/admin-wallet-adjust";
 import { mockWebhookRoutes } from "./routes/webhooks-mock";
 import { payosWebhookRoutes } from "./routes/webhooks-payos";
 import { dashboardRoutes } from "./routes/dashboard";
@@ -145,6 +147,8 @@ export const buildApp = async (deps: AppDeps = {}) => {
     adminSettingsRoutes(db, auth),
     adminCpaMutationRoutes(db, auth),
     adminBundlesRoutes(db, auth),
+    adminKeysRoutes(db, auth),
+    adminWalletAdjustRoutes(db, auth),
     throughputRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch),
     adminThroughputRoutes(db, auth),
     adminRequestsRoutes(db, auth),
