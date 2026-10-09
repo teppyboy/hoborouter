@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { api } from "../lib/api";
 import { authClient, useSession } from "../lib/auth";
+import { SESSION_QUERY_KEY } from "../lib/session";
 import { applyTheme, useThemeStore, type Theme } from "../lib/theme";
 import { useSidebarStore } from "../lib/sidebar";
 import { useWorkspaceStore } from "../lib/workspace";
@@ -356,9 +357,13 @@ function UserMenu() {
             // refetch fires against an invalidated cookie (401 noise).
             useWorkspaceStore.setState({ workspaceId: null });
             void queryClient.cancelQueries();
-            authClient.signOut().then(() => {
-              // Session is gone: drop every cached query so the login screen
-              // cannot fire workspace-scoped refetches against a dead cookie.
+            authClient.signOut().then(async () => {
+              // Session is gone: invalidate the routing-gate session query so
+              // the active shell observer refetches (401 -> null) instead of
+              // TanStack Query replaying the pre-logout session snapshot, then
+              // drop every cached query so the login screen cannot fire
+              // workspace-scoped refetches against a dead cookie.
+              await queryClient.invalidateQueries({ queryKey: SESSION_QUERY_KEY });
               queryClient.clear();
               window.location.assign("/login");
             });

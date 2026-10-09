@@ -4,6 +4,10 @@
 // auth pages later.
 import type { PublicSupportLinks } from "../lib/public-queries";
 
+/** Project contact used only when the instance has no usable email configured
+ * (missing/empty/unusable). A valid DB-configured support email always wins. */
+export const DEFAULT_SUPPORT_EMAIL = "contact@hoborouter.tretrauit.me";
+
 export interface SupportLink {
   label: string;
   href: string;
@@ -53,15 +57,23 @@ export function normalizeSupportLink(
   }
 }
 
-/** All configured links in a stable order; empty when nothing is set. */
+/** All configured links in a stable order; email falls back to the project
+ * contact when the instance has none — including while the instance query is
+ * loading/errored (support stays reachable instead of rendering empty). */
 export function supportLinks(support: PublicSupportLinks | null | undefined): SupportLink[] {
-  if (!support) return [];
-  return [
-    normalizeSupportLink("email", support.email),
-    normalizeSupportLink("telegram", support.telegram),
-    normalizeSupportLink("facebook", support.facebook),
-    normalizeSupportLink("threads", support.threads),
-  ].filter((l): l is SupportLink => l !== null);
+  const configured = support
+    ? [
+        normalizeSupportLink("email", support.email),
+        normalizeSupportLink("telegram", support.telegram),
+        normalizeSupportLink("facebook", support.facebook),
+        normalizeSupportLink("threads", support.threads),
+      ].filter((l): l is SupportLink => l !== null)
+    : [];
+  if (configured.some((l) => l.label === "Email")) return configured;
+  // Unusable/absent configured email: keep support reachable. Empty (trim) is
+  // treated as missing; a valid configured email can never be overridden here.
+  const fallback = normalizeSupportLink("email", DEFAULT_SUPPORT_EMAIL);
+  return fallback ? [fallback, ...configured] : configured;
 }
 
 export function SupportLinks({ support }: { support: PublicSupportLinks | null | undefined }) {

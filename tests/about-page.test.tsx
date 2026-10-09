@@ -48,15 +48,16 @@ test("about shows version, revision, contact link and nav entry to /about", () =
   expect(html).toContain('aria-labelledby="about-contact-heading"');
 });
 
-test("about falls back honestly: placeholder brand, no version or revision literal, no invented contacts", () => {
+test("about falls back honestly: placeholder brand, no version or revision literal, project contact fallback", () => {
   const html = renderToStaticMarkup(<About instance={null} version={null} revision={null} />);
   expect(html).toContain("Hoborouter"); // PublicLayout brand fallback
   expect(html).toContain("Version: —");
   expect(html).toContain("Revision: —");
   expect(html).not.toMatch(/Version:\s*\d/);
   expect(html).not.toContain(SHA);
-  expect(html).toContain("No contact channels are configured");
-  expect(html).not.toContain("mailto:");
+  // No usable configured contact: the project fallback email stays reachable.
+  expect(html).toContain("mailto:contact@hoborouter.tretrauit.me");
+  expect(html).not.toContain("No contact channels are configured");
 });
 
 test("gitRevision is null outside a Vite build (no injected build constant)", async () => {

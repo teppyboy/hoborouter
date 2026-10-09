@@ -143,6 +143,47 @@ describe("POST /api/v1/support/integration", () => {
     }
   });
 
+  test("control-char boundary is EXACTLY the old regex range: NUL/DEL/VT rejected, tab/LF/CR allowed in message, valid Unicode untouched", async () => {
+    const { app } = await made();
+    // Multiline message keeps its tab/LF/CR carve-out; other C0 + DEL rejected.
+    const okMsg = await send(app, POST, {
+      method: "POST",
+      body: lead({ message: "line1\nline2\ttabbed\rcarriage" }),
+    });
+    expect(okMsg.status).toBe(201);
+    resetLeadRateLimits();
+    for (const bad of [
+      lead({ message: "nul\u0000byte" }),
+      lead({ message: "del\u007fbyte" }),
+      lead({ message: "vertical\u000btab" }),
+      lead({ message: "form\u000cfeed" }),
+      lead({ contact_email: "del\u007f@example.com" }),
+    ]) {
+      resetLeadRateLimits();
+      const res = await send(app, POST, { method: "POST", body: bad });
+      expect(res.status).toBe(400);
+    }
+    // Valid Unicode (astral emoji, CJK, accents, U+2028 line separator — all
+    // OUTSIDE the original control range) must stay accepted: no widened
+    // rejection. Single-line channel: \u2028 is not C0/DEL, so it passes;
+    // a raw LF in the channel stays rejected.
+    resetLeadRateLimits();
+    const okUnicode = await send(app, POST, {
+      method: "POST",
+      body: lead({
+        contact_channel: "Telegram ✅ 中文 Zoë \u2028 handle",
+        message: "請幫我整合 🌍 campus chatbot — Zörbot",
+      }),
+    });
+    expect(okUnicode.status).toBe(201);
+    resetLeadRateLimits();
+    const lfChannel = await send(app, POST, {
+      method: "POST",
+      body: lead({ contact_channel: "bad\nchannel" }),
+    });
+    expect(lfChannel.status).toBe(400);
+  });
+
   test("body over 16KB -> 413", async () => {
     const { app } = await made();
     const res = await send(app, POST, {

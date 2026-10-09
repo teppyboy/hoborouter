@@ -7,7 +7,6 @@ import {
   Outlet,
   redirect,
 } from "@tanstack/react-router";
-import { authClient } from "./lib/auth";
 import { AppShell } from "./components/app-shell";
 import { Button } from "./components/ui/button";
 import {
@@ -29,6 +28,7 @@ import {
   lazyRoute,
 } from "./lib/prefetch";
 import { queryClient } from "./lib/query-client";
+import { fetchSession, SESSION_QUERY_KEY, SESSION_STALE_MS, useShellSession } from "./lib/session";
 
 const AdminAudit = lazy(() => import("./pages/admin/audit"));
 const AdminCpa = lazy(() => import("./pages/admin/cpa"));
@@ -74,37 +74,51 @@ const rootRoute = createRootRoute({
  * Cached session check: one network round-trip per staleTime window instead
  * of one per navigation. Cleared on sign-out via queryClient.clear() in the
  * app shell, and queryClient.clear() on sign-in transitions keeps it honest.
+ * Fetcher/key live in lib/session.ts so help pages read the same cache.
  */
-const SESSION_STALE_MS = 5 * 60_000;
 
 // --- Protected layout: owns the AppShell so the shell stays mounted (no
 // sidebar/header flash) while lazy page chunks load inside <Outlet>.
+// Context-adaptive for the shared help pages: anonymous visitors keep public
+// access to /about and /docs/quickstart (no redirect, no shell, no protected
+// resource calls); signed-in users get the shell and it persists across
+// navigation into these pages because they are children of this layout.
+const HELP_PUBLIC_PATHS = new Set(["/about", "/docs/quickstart"]);
+
 const protectedLayout = createRoute({
   getParentRoute: () => rootRoute,
   id: "protected",
-  beforeLoad: async () => {
-    try {
-      await queryClient.ensureQueryData({
-        queryKey: ["session"],
-        staleTime: SESSION_STALE_MS,
-        queryFn: async () => {
-          const { data } = await authClient.getSession();
-          if (!data) throw new Error("unauthenticated");
-          return data;
-        },
-      });
-    } catch {
+  beforeLoad: async ({ location }) => {
+    // fetchSession resolves null when unauthenticated (never throws), so a
+    // failed refetch updates the gate instead of TanStack Query replaying the
+    // previous session snapshot on error.
+    const session = await queryClient.ensureQueryData({
+      queryKey: SESSION_QUERY_KEY,
+      staleTime: SESSION_STALE_MS,
+      queryFn: fetchSession,
+    });
+    // Only the shared help pages are public; everything else requires a
+    // session (same gate as before — no protected route is widened).
+    if (!session && !HELP_PUBLIC_PATHS.has(location.pathname)) {
       throw redirect({ to: "/login" });
     }
   },
-  component: () => (
-    <AppShell>
-      <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
-        <Outlet />
-      </Suspense>
-    </AppShell>
-  ),
+  component: ProtectedOutlet,
 });
+
+/** AppShell when signed in; bare outlet for the anonymous public help pages. */
+function ProtectedOutlet() {
+  const { data: session } = useShellSession();
+  const content = (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
+      <Outlet />
+    </Suspense>
+  );
+  // session is synchronously cached by beforeLoad for signed-in visitors;
+  // anonymous visitors only ever reach the help pages here.
+  if (!session) return content;
+  return <AppShell>{content}</AppShell>;
+}
 
 /** Protected page route (chunk loaded from lib/prefetch). */
 // `<const P>` keeps the call-site path literal so typed `Link to=` targets
@@ -118,6 +132,20 @@ function protectedRoute<const P extends string>(path: P, PageComponent: React.Co
         <PageComponent />
       </Page>
     ),
+  });
+}
+
+/** Shared help page route: Page padding only inside the shell (embedded);
+ * anonymous visitors get the page component with its own PublicLayout. */
+function helpRoute<const P extends string>(path: P, PageComponent: React.ComponentType) {
+  return createRoute({
+    getParentRoute: () => protectedLayout,
+    path,
+    component: function HelpPage() {
+      const { data: session } = useShellSession();
+      const page = <PageComponent />;
+      return session ? <Page>{page}</Page> : page;
+    },
   });
 }
 
@@ -179,16 +207,6 @@ const publicRoutes = [
     path: "/pricing",
     component: () => <Pricing />,
   }),
-  createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/docs/quickstart",
-    component: () => <Quickstart />,
-  }),
-  createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/about",
-    component: () => <About />,
-  }),
 ];
 
 const protectedRoutes = [
@@ -219,6 +237,11 @@ const protectedRoutes = [
   protectedRoute("/admin/request-log", AdminRequestLog),
   protectedRoute("/admin/cpa", AdminCpa),
   protectedRoute("/admin/audit", AdminAudit),
+  // Shared help pages: ONE public URL each, context-adaptive layout (see
+  // protectedLayout). Signed-in: inside the persistent AppShell. Anonymous:
+  // the same page components render their own PublicLayout.
+  helpRoute("/docs/quickstart", Quickstart),
+  helpRoute("/about", About),
 ];
 
 export const routeTree = rootRoute.addChildren([

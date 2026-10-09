@@ -28,7 +28,20 @@ export const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-
 // RFC 5321 upper bound for a full email address.
 export const EMAIL_MAX = 254;
 
-export const hasControlChars = (s: string) => /[\u0000-\u001f\u007f]/.test(s);
+// Control-character gate without a control-character regex class (Biome's
+// eslint(no-control-regex) rejects \u0000-\u001f patterns): explicit code-unit
+// comparison keeps the EXACT original range — C0 controls (0x00–0x1f) and DEL
+// (0x7f). No Unicode-classification widening: astral/surrogate code units are
+// all > 0x7f and fall through untouched. `allowMessaging` preserves the
+// multiline message carve-out (tab, LF, CR only).
+export const hasControlChars = (s: string, allowMessaging = false): boolean => {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (allowMessaging && (c === 0x09 || c === 0x0a || c === 0x0d)) continue;
+    if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
+};
 
 export function validateEmail(raw: string): string | null {
   const v = raw.trim();

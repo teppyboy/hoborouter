@@ -333,17 +333,54 @@ test("support links render only configured, valid channels", () => {
   expect(html).toContain('href="https://t.me/hoborouter_support"');
   expect(html).toContain('href="https://facebook.com/hoborouter"');
   expect(html).not.toContain("Threads"); // null -> not fabricated
+  // A valid configured email wins: no fallback link beside it.
+  expect((html.match(/mailto:/g) ?? []).length).toBe(1);
 });
 
-test("support links reject invalid values instead of rendering them", () => {
+test("support email falls back to the project contact only when no usable email is configured", () => {
+  const fallback = { label: "Email", href: "mailto:contact@hoborouter.tretrauit.me" };
+  // Missing entirely (also the loading/error state where support is absent).
+  expect(supportLinks(null)[0]).toEqual(fallback);
+  expect(supportLinks(undefined)[0]).toEqual(fallback);
+  expect(supportLinks({ email: null, telegram: null, facebook: null, threads: null })[0]).toEqual(
+    fallback,
+  );
+  // Empty/whitespace is treated as missing.
+  expect(
+    supportLinks({ email: "   ", telegram: "@ok_handle", facebook: null, threads: null })[0],
+  ).toEqual(fallback);
+  // Other channels stay even when the email falls back.
+  expect(
+    supportLinks({ email: "   ", telegram: "@ok_handle", facebook: null, threads: null })[1],
+  ).toEqual({ label: "Telegram", href: "https://t.me/ok_handle" });
+  // A valid configured DB email always wins (never overridden).
+  expect(supportLinks(instance.support)[0]).toEqual({
+    label: "Email",
+    href: "mailto:support@example.com",
+  });
+  // Exactly one email link with the fallback in place.
+  const withFallback = supportLinks({
+    email: "   ",
+    telegram: null,
+    facebook: null,
+    threads: null,
+  });
+  expect(withFallback.filter((l) => l.label === "Email")).toHaveLength(1);
+});
+
+test("support links reject invalid values and fall back on the email channel", () => {
   const links = supportLinks({
     email: "not-an-email",
     telegram: "javascript:alert(1)",
     facebook: "http://facebook.com/hoborouter", // http, not https
     threads: "https://evil.example/threads",
   });
-  expect(links).toEqual([]);
-  expect(renderToStaticMarkup(<SupportLinks support={null} />)).toBe("");
+  // Invalid channels render nothing; the email channel falls back to the
+  // project contact so support stays reachable.
+  expect(links).toEqual([{ label: "Email", href: "mailto:contact@hoborouter.tretrauit.me" }]);
+  expect(renderToStaticMarkup(<SupportLinks support={null} />)).toContain(
+    "mailto:contact@hoborouter.tretrauit.me",
+  );
 });
 
 test("public layout shows support section and brand from instance", () => {

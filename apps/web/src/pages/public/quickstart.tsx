@@ -9,6 +9,7 @@ import { PublicLayout } from "../../components/public-layout";
 import { Card, CardContent } from "../../components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { usePublicCatalog, usePublicInstance, type PublicInstance } from "../../lib/public-queries";
+import { useShellSession } from "../../lib/session";
 import { useT } from "../../lib/i18n/t";
 
 // Quickstart copy: inline LocaleEntry set (see lib/i18n/common.ts). Code
@@ -305,10 +306,14 @@ function AgentDocsLinks({ target }: { target: "codex" | "opencode" | "pi" }) {
 export function Quickstart({
   instance,
   exampleModelId,
+  embedded,
 }: {
   instance?: PublicInstance | null;
   /** A published public model id from the catalog; falls back to a placeholder. */
   exampleModelId?: string | null;
+  /** Rendered inside the app shell (signed-in help navigation): skips
+   * PublicLayout — one content source, context-adaptive wrapper only. */
+  embedded?: boolean;
 }) {
   const t = useT(quickstartCopy);
   // Trusted admin config; placeholder until it loads so SSR/tests never
@@ -326,105 +331,104 @@ export function Quickstart({
     model
   );
 
-  return (
-    <PublicLayout instance={instance}>
-      <div className="space-y-6 py-6">
-        <PageHeader title={t("title")} description={t("description")} />
+  const body = (
+    <div className="space-y-6 py-6">
+      <PageHeader title={t("title")} description={t("description")} />
 
-        <section className="max-w-2xl">
-          <h2 className="text-lg font-semibold">{t("step1Title")}</h2>
-          <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
-            <li>
-              <a href="/signup" className="underline hover:text-foreground">
-                {t("signUp")}
-              </a>{" "}
-              {t("andSignIn")}
-            </li>
-            <li>{t("step1TopUp")}</li>
-            <li>{t("step1ApiKey")}</li>
-            <li>
-              {t("step1Model")} {modelDisplay}.
-            </li>
-          </ol>
-        </section>
+      <section className="max-w-2xl">
+        <h2 className="text-lg font-semibold">{t("step1Title")}</h2>
+        <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
+          <li>
+            <a href="/signup" className="underline hover:text-foreground">
+              {t("signUp")}
+            </a>{" "}
+            {t("andSignIn")}
+          </li>
+          <li>{t("step1TopUp")}</li>
+          <li>{t("step1ApiKey")}</li>
+          <li>
+            {t("step1Model")} {modelDisplay}.
+          </li>
+        </ol>
+      </section>
 
-        <section className="max-w-3xl space-y-3">
-          <h2 className="text-lg font-semibold">{t("step2Title")}</h2>
-          <p className="text-sm text-muted-foreground">
-            {t("step2SdkLead")}{" "}
-            <code className="font-mono text-xs">{normalizeBase(baseUrl)}/v1</code>{" "}
-            {t("step2SdkTail")}
-          </p>
-          <Card>
-            <CardContent className="pt-6">
-              <Tabs defaultValue="curl">
-                <TabsList aria-label={t("sdkTabsAria")}>
-                  <TabsTrigger value="curl">curl</TabsTrigger>
-                  <TabsTrigger value="python">Python</TabsTrigger>
-                  <TabsTrigger value="js">JavaScript</TabsTrigger>
-                </TabsList>
-                <TabsContent value="curl">
-                  <Snippet code={curl} lang="curl" />
-                </TabsContent>
-                <TabsContent value="python">
-                  <Snippet code={python} lang="Python" />
-                </TabsContent>
-                <TabsContent value="js">
-                  <Snippet code={js} lang="JavaScript" />
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
-          <p className="text-sm text-muted-foreground">
-            {t("streamingLead")} <code className="font-mono text-xs">"stream": true</code>
-            {t("streamingTail")}
-          </p>
-        </section>
+      <section className="max-w-3xl space-y-3">
+        <h2 className="text-lg font-semibold">{t("step2Title")}</h2>
+        <p className="text-sm text-muted-foreground">
+          {t("step2SdkLead")} <code className="font-mono text-xs">{normalizeBase(baseUrl)}/v1</code>{" "}
+          {t("step2SdkTail")}
+        </p>
+        <Card>
+          <CardContent className="pt-6">
+            <Tabs defaultValue="curl">
+              <TabsList aria-label={t("sdkTabsAria")}>
+                <TabsTrigger value="curl">curl</TabsTrigger>
+                <TabsTrigger value="python">Python</TabsTrigger>
+                <TabsTrigger value="js">JavaScript</TabsTrigger>
+              </TabsList>
+              <TabsContent value="curl">
+                <Snippet code={curl} lang="curl" />
+              </TabsContent>
+              <TabsContent value="python">
+                <Snippet code={python} lang="Python" />
+              </TabsContent>
+              <TabsContent value="js">
+                <Snippet code={js} lang="JavaScript" />
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+        <p className="text-sm text-muted-foreground">
+          {t("streamingLead")} <code className="font-mono text-xs">"stream": true</code>
+          {t("streamingTail")}
+        </p>
+      </section>
 
-        <section className="max-w-3xl space-y-3">
-          <h2 className="text-lg font-semibold">{t("agentTitle")}</h2>
-          <p className="text-sm text-muted-foreground">{t("agentNote")}</p>
-          <Card>
-            <CardContent className="space-y-3 pt-6">
-              <Tabs defaultValue="codex">
-                <TabsList aria-label={t("agentTabsAria")}>
-                  <TabsTrigger value="codex">Codex</TabsTrigger>
-                  <TabsTrigger value="opencode">OpenCode</TabsTrigger>
-                  <TabsTrigger value="pi">pi</TabsTrigger>
-                  <TabsTrigger value="claude">Claude Code</TabsTrigger>
-                </TabsList>
-                <TabsContent value="codex" className="space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    {t("agentCodexLead")} <AgentDocsLinks target="codex" />.
-                  </p>
-                  <AgentSnippet code={codex} lang="Codex" />
-                </TabsContent>
-                <TabsContent value="opencode" className="space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    {t("agentOpencodeLead")} <AgentDocsLinks target="opencode" />.
-                  </p>
-                  <AgentSnippet code={opencode} lang="OpenCode" />
-                </TabsContent>
-                <TabsContent value="pi" className="space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    {t("agentPiLead")} <AgentDocsLinks target="pi" />.
-                  </p>
-                  <AgentSnippet code={pi} lang="pi" />
-                </TabsContent>
-                {/* Honest notice only: the gateway serves no /v1/messages
+      <section className="max-w-3xl space-y-3">
+        <h2 className="text-lg font-semibold">{t("agentTitle")}</h2>
+        <p className="text-sm text-muted-foreground">{t("agentNote")}</p>
+        <Card>
+          <CardContent className="space-y-3 pt-6">
+            <Tabs defaultValue="codex">
+              <TabsList aria-label={t("agentTabsAria")}>
+                <TabsTrigger value="codex">Codex</TabsTrigger>
+                <TabsTrigger value="opencode">OpenCode</TabsTrigger>
+                <TabsTrigger value="pi">pi</TabsTrigger>
+                <TabsTrigger value="claude">Claude Code</TabsTrigger>
+              </TabsList>
+              <TabsContent value="codex" className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  {t("agentCodexLead")} <AgentDocsLinks target="codex" />.
+                </p>
+                <AgentSnippet code={codex} lang="Codex" />
+              </TabsContent>
+              <TabsContent value="opencode" className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  {t("agentOpencodeLead")} <AgentDocsLinks target="opencode" />.
+                </p>
+                <AgentSnippet code={opencode} lang="OpenCode" />
+              </TabsContent>
+              <TabsContent value="pi" className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  {t("agentPiLead")} <AgentDocsLinks target="pi" />.
+                </p>
+                <AgentSnippet code={pi} lang="pi" />
+              </TabsContent>
+              {/* Honest notice only: the gateway serves no /v1/messages
                   route, so any config snippet here would fake support. */}
-                <TabsContent value="claude">
-                  <p className="text-sm text-muted-foreground" role="note">
-                    {t("agentClaudeLead")}
-                  </p>
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
-        </section>
-      </div>
-    </PublicLayout>
+              <TabsContent value="claude">
+                <p className="text-sm text-muted-foreground" role="note">
+                  {t("agentClaudeLead")}
+                </p>
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+      </section>
+    </div>
   );
+  if (embedded) return body;
+  return <PublicLayout instance={instance}>{body}</PublicLayout>;
 }
 
 export default function QuickstartPage() {
@@ -433,5 +437,15 @@ export default function QuickstartPage() {
   // First published model as the concrete example; never an upstream id —
   // the catalog route only returns published public ids.
   const exampleModelId = catalog.data?.data[0]?.public_id ?? null;
-  return <Quickstart instance={instance.data ?? null} exampleModelId={exampleModelId} />;
+  // Same cached session query the router layout used for its shell decision:
+  // signed-in users get the embedded page (inside the AppShell), anonymous
+  // visitors the public chrome.
+  const { data: session } = useShellSession();
+  return (
+    <Quickstart
+      instance={instance.data ?? null}
+      exampleModelId={exampleModelId}
+      embedded={!!session}
+    />
+  );
 }

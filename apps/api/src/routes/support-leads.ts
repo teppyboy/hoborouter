@@ -132,7 +132,7 @@ function boundedText(raw: unknown, max: number, multiline = false): string | nul
   const v = raw.trim();
   if (!v || v.length > max) return null;
   const ok = multiline
-    ? !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v)
+    ? !hasControlChars(v, true) // tab/LF/CR stay legal in message bodies
     : !hasControlChars(v);
   return ok ? v : null;
 }
