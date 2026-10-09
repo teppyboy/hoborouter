@@ -109,6 +109,32 @@ export const promotionsDict = {
   updated: { en: "Updated", vi: "Đã cập nhật" },
   empty: { en: "No promo codes yet", vi: "Chưa có mã khuyến mãi" },
   requestFailed: { en: "Request failed", vi: "Yêu cầu thất bại" },
+  customCode: { en: "Custom code (optional)", vi: "Mã tuỳ chọn" },
+  customCodeHint: {
+    en: "Leave blank to auto-generate. 1–64 characters — letters, numbers, spaces and symbols.",
+    vi: "Để trống để tự tạo mã. 1–64 ký tự — chữ cái, chữ số, khoảng trắng và ký hiệu.",
+  },
+  replace: { en: "Replace", vi: "Thay thế" },
+  replaceA: { en: "Replace {name}", vi: "Thay thế {name}" },
+  replaceTitle: { en: "Replace promo", vi: "Thay thế mã khuyến mãi" },
+  replaceKindNote: {
+    en: "Kind is kept from the original: {kind}. To change kind, create a new code instead.",
+    vi: "Loại giữ nguyên từ bản gốc: {kind}. Muốn đổi loại, hãy tạo mã mới.",
+  },
+  replaceNote: {
+    en: "Creates a NEW promo with the terms below and a required new plaintext code, revealed once. The original keeps its uses and history and is deactivated once the new code exists. The new code starts at 0 uses.",
+    vi: "Tạo mã khuyến mãi MỚI với các điều kiện bên dưới và mã mới bắt buộc, chỉ hiển thị một lần. Bản gốc giữ nguyên lượt dùng và lịch sử, và bị vô hiệu hoá sau khi mã mới được tạo. Mã mới bắt đầu từ 0 lượt dùng.",
+  },
+  newCode: { en: "New code (required)", vi: "Mã mới (bắt buộc)" },
+  newCodeHint: {
+    en: "Required — must be a brand-new code; reusing any existing code is rejected. Shown only once.",
+    vi: "Bắt buộc — phải là mã hoàn toàn mới; mã trùng với mã hiện có sẽ bị từ chối. Chỉ hiển thị một lần.",
+  },
+  replaceConfirm: { en: "Create replacement", vi: "Tạo mã thay thế" },
+  deactivateFailed: {
+    en: "Replacement created, but the original {name} could not be deactivated — both codes are active. Deactivate the original with its Deactivate control; do not create another replacement.",
+    vi: "Đã tạo mã thay thế nhưng không thể vô hiệu hoá bản gốc {name} — cả hai mã đều đang hoạt động. Hãy vô hiệu hoá bản gốc bằng nút Vô hiệu hoá; không tạo lại mã thay thế.",
+  },
 } as const satisfies Record<string, LocaleEntry>;
 
 /** Safe promo row: the API never returns code_hash or plaintext codes here. */
@@ -133,6 +159,8 @@ export type CreatePromoBody =
       amount_vnd: number;
       max_uses: number;
       expires_at: number | null;
+      /** Optional custom code; absent = server generates the legacy 32-hex code. */
+      code?: string;
     }
   | {
       name: string;
@@ -141,6 +169,8 @@ export type CreatePromoBody =
       max_discount_vnd: number;
       max_uses: number;
       expires_at: number | null;
+      /** Optional custom code; absent = server generates the legacy 32-hex code. */
+      code?: string;
     };
 
 export interface PromoFormInput {
@@ -154,6 +184,12 @@ export interface PromoFormInput {
   maxDiscount: string;
   maxUses: string;
   expiresDate: string;
+  /**
+   * Optional custom code, sent verbatim (outer-trimmed): the server is the
+   * only validator (normalization, Unicode, bounds, collisions). The client
+   * imposes no character or case rules and never hashes.
+   */
+  customCode: string;
 }
 
 export interface PromoFormState {
@@ -204,6 +240,13 @@ export function formatPercentBp(bp: number): string {
   return `${Number((bp / 100).toFixed(2))}%`;
 }
 
+/** Local-calendar YYYY-MM-DD of an epoch-ms timestamp (expiry prefill). */
+function dateInputValue(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 /** Pure create-form state shared by the form and its validation tests. */
 export function promoFormState(input: PromoFormInput, now: number): PromoFormState {
   const name = input.name.trim();
@@ -212,6 +255,9 @@ export function promoFormState(input: PromoFormInput, now: number): PromoFormSta
   const nameInvalid = name.length === 0;
   const maxUsesInvalid = maxUsesN === null || maxUsesN < 1;
   const expiresInvalid = expiry === "invalid";
+  // The custom code is sent outer-trimmed with interior characters (spaces,
+  // punctuation, Unicode) preserved; normalization is entirely server-side.
+  const customCode = input.customCode.trim();
   let amountInvalid = false;
   let percentInvalid = false;
   let maxDiscountInvalid = false;
@@ -227,6 +273,7 @@ export function promoFormState(input: PromoFormInput, now: number): PromoFormSta
         amount_vnd: amountN as number,
         max_uses: maxUsesN as number,
         expires_at: expiry === null ? null : (expiry as number),
+        ...(customCode ? { code: customCode } : {}),
       };
     }
   } else {
@@ -242,6 +289,7 @@ export function promoFormState(input: PromoFormInput, now: number): PromoFormSta
         max_discount_vnd: capN as number,
         max_uses: maxUsesN as number,
         expires_at: expiry === null ? null : (expiry as number),
+        ...(customCode ? { code: customCode } : {}),
       };
     }
   }
@@ -357,8 +405,246 @@ function RenameDialog({
   );
 }
 
+/**
+ * Financial replacement (approved flow): a NEW promo row is created through the
+ * existing POST endpoint with a REQUIRED new plaintext code (never a variant of
+ * any existing code — the server rejects collisions), prefilled with the
+ * original's terms; on create success the original row is deactivated with the
+ * name/active-only PATCH, keeping its uses and redemption history intact.
+ * Kind is locked to the original; kind changes go through the create form.
+ */
+function ReplaceDialog({
+  row,
+  onClose,
+  onSubmit,
+  pending,
+  serverError,
+}: {
+  row: AdminPromo;
+  onClose: () => void;
+  onSubmit: (body: CreatePromoBody) => void;
+  pending: boolean;
+  serverError: string | null;
+}) {
+  const t = useT(promotionsDict);
+  const [name, setName] = useState(row.name);
+  const [amount, setAmount] = useState(row.amount_vnd != null ? String(row.amount_vnd) : "");
+  const [percent, setPercent] = useState(
+    row.percent_bp != null ? formatPercentBp(row.percent_bp) : "",
+  );
+  const [maxDiscount, setMaxDiscount] = useState(
+    row.max_discount_vnd != null ? String(row.max_discount_vnd) : "",
+  );
+  const [maxUses, setMaxUses] = useState(String(row.max_uses));
+  // Only a still-future expiry is prefilled; a past expiry must be cleared or
+  // replaced by the admin (the server rejects past timestamps).
+  const [expiresDate, setExpiresDate] = useState(
+    row.expires_at != null && row.expires_at > Date.now() ? dateInputValue(row.expires_at) : "",
+  );
+  // The replacement code is REQUIRED: absent means "server generates", which
+  // would silently keep the same shape without the admin-chosen new code.
+  const [newCode, setNewCode] = useState("");
+  const form = promoFormState(
+    {
+      kind: row.kind,
+      name,
+      amount,
+      percent,
+      maxDiscount,
+      maxUses,
+      expiresDate,
+      customCode: newCode,
+    },
+    Date.now(),
+  );
+  const codeMissing = newCode.trim().length === 0;
+  const kindLabel = row.kind === "fixed" ? t("kindFixed") : t("kindPercent");
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("replaceTitle")}</DialogTitle>
+          <DialogDescription>{t("replaceNote")}</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3">
+          <p className="text-xs text-muted-foreground">
+            {t("replaceKindNote", { kind: kindLabel })}
+          </p>
+          <Field
+            id="promo-replace-name"
+            label={t("name")}
+            error={t("errName")}
+            errorId="promo-replace-name-error"
+            invalid={form.nameInvalid}
+          >
+            <Input
+              id="promo-replace-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              aria-invalid={form.nameInvalid}
+              aria-describedby={form.nameInvalid ? "promo-replace-name-error" : undefined}
+              className={form.nameInvalid ? "border-destructive" : undefined}
+            />
+          </Field>
+          <div className="grid gap-1">
+            <Label htmlFor="promo-replace-code">{t("newCode")}</Label>
+            <Input
+              id="promo-replace-code"
+              value={newCode}
+              onChange={(e) => setNewCode(e.target.value)}
+              // A promo code is a secret-ish bearer token: no autofill, no save.
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={64}
+              className={`font-mono ${serverError ? "border-destructive" : undefined}`}
+              aria-invalid={serverError !== null}
+              aria-describedby={
+                serverError ? "promo-replace-code-error" : "promo-replace-code-hint"
+              }
+            />
+            <p id="promo-replace-code-hint" className="text-xs text-muted-foreground">
+              {t("newCodeHint")}
+            </p>
+            {serverError ? (
+              <p id="promo-replace-code-error" role="alert" className="text-xs text-destructive">
+                {serverError}
+              </p>
+            ) : null}
+          </div>
+          {row.kind === "fixed" ? (
+            <Field
+              id="promo-replace-amount"
+              label={t("amount")}
+              error={t("errAmount")}
+              errorId="promo-replace-amount-error"
+              invalid={form.amountInvalid}
+            >
+              <Input
+                id="promo-replace-amount"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                inputMode="numeric"
+                aria-invalid={form.amountInvalid}
+                aria-describedby={form.amountInvalid ? "promo-replace-amount-error" : undefined}
+                className={form.amountInvalid ? "border-destructive" : undefined}
+              />
+            </Field>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field
+                id="promo-replace-percent"
+                label={t("percent")}
+                error={t("errPercent")}
+                errorId="promo-replace-percent-error"
+                invalid={form.percentInvalid}
+              >
+                <Input
+                  id="promo-replace-percent"
+                  value={percent}
+                  onChange={(e) => setPercent(e.target.value)}
+                  inputMode="decimal"
+                  aria-invalid={form.percentInvalid}
+                  aria-describedby={form.percentInvalid ? "promo-replace-percent-error" : undefined}
+                  className={form.percentInvalid ? "border-destructive" : undefined}
+                />
+              </Field>
+              <Field
+                id="promo-replace-max-discount"
+                label={t("maxDiscount")}
+                error={t("errMaxDiscount")}
+                errorId="promo-replace-max-discount-error"
+                invalid={form.maxDiscountInvalid}
+              >
+                <Input
+                  id="promo-replace-max-discount"
+                  value={maxDiscount}
+                  onChange={(e) => setMaxDiscount(e.target.value)}
+                  inputMode="numeric"
+                  aria-invalid={form.maxDiscountInvalid}
+                  aria-describedby={
+                    form.maxDiscountInvalid ? "promo-replace-max-discount-error" : undefined
+                  }
+                  className={form.maxDiscountInvalid ? "border-destructive" : undefined}
+                />
+              </Field>
+            </div>
+          )}
+          <Field
+            id="promo-replace-max-uses"
+            label={t("maxUses")}
+            error={t("errMaxUses")}
+            errorId="promo-replace-max-uses-error"
+            invalid={form.maxUsesInvalid}
+          >
+            <Input
+              id="promo-replace-max-uses"
+              value={maxUses}
+              onChange={(e) => setMaxUses(e.target.value)}
+              inputMode="numeric"
+              aria-invalid={form.maxUsesInvalid}
+              aria-describedby={form.maxUsesInvalid ? "promo-replace-max-uses-error" : undefined}
+              className={form.maxUsesInvalid ? "border-destructive" : undefined}
+            />
+          </Field>
+          <Field
+            id="promo-replace-expires"
+            label={t("expires")}
+            error={t("errExpires")}
+            errorId="promo-replace-expires-error"
+            invalid={form.expiresInvalid}
+          >
+            <Input
+              id="promo-replace-expires"
+              type="date"
+              value={expiresDate}
+              onChange={(e) => setExpiresDate(e.target.value)}
+              aria-invalid={form.expiresInvalid}
+              aria-describedby={form.expiresInvalid ? "promo-replace-expires-error" : undefined}
+              className={form.expiresInvalid ? "border-destructive" : undefined}
+            />
+          </Field>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            className="pointer-coarse:h-11"
+            onClick={() => {
+              onClose();
+            }}
+          >
+            {t("cancel")}
+          </Button>
+          <Button
+            className="pointer-coarse:h-11"
+            disabled={!form.valid || codeMissing || pending}
+            onClick={() => {
+              if (form.body) onSubmit(form.body);
+            }}
+          >
+            {pending ? t("creating") : t("replaceConfirm")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** One-time plaintext reveal. Kept in component state (memory) only. */
-function CodeDialog({ code, onClose }: { code: string | null; onClose: () => void }) {
+function CodeDialog({
+  code,
+  onClose,
+  warning,
+}: {
+  code: string | null;
+  onClose: () => void;
+  /** Persisted partial-failure warning shown alongside the retained reveal. */
+  warning?: string | null;
+}) {
   const t = useT(promotionsDict);
   return (
     <Dialog
@@ -379,6 +665,11 @@ function CodeDialog({ code, onClose }: { code: string | null; onClose: () => voi
           </code>
           <CopyButton value={code ?? ""} label={t("copyA")} />
         </div>
+        {warning ? (
+          <p role="alert" className="text-sm text-destructive">
+            {warning}
+          </p>
+        ) : null}
         <DialogFooter>
           <Button className="pointer-coarse:h-11" onClick={onClose}>
             {t("done")}
@@ -399,12 +690,33 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
   const [maxDiscount, setMaxDiscount] = useState("");
   const [maxUses, setMaxUses] = useState("");
   const [expiresDate, setExpiresDate] = useState("");
+  // Optional custom code: sent verbatim, validated only by the server. Server
+  // INVALID_CODE/CODE_EXISTS errors render inline (never as a toast), and the
+  // typed text stays so the admin can correct it.
+  const [customCode, setCustomCode] = useState("");
+  const [codeError, setCodeError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<AdminPromo | null>(null);
+  // Financial replacement: the row being replaced (null = dialog closed).
+  const [replacing, setReplacing] = useState<AdminPromo | null>(null);
+  const [replaceCodeError, setReplaceCodeError] = useState<string | null>(null);
+  // Saved partial-failure state: the replacement row exists but the original
+  // could not be deactivated. Persisted (survives the reveal dialog) until a
+  // successful manual deactivation of that exact row; never auto-retried and
+  // the POST is never re-issued (a retry would 400 CODE_EXISTS on the new code).
+  const [deactivateFailedFor, setDeactivateFailedFor] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   // Plaintext code lives here and nowhere else; null whenever no dialog is open.
   const [revealedCode, setRevealedCode] = useState<string | null>(null);
 
-  const onError = (e: unknown) =>
+  const onError = (e: unknown) => {
+    if (e instanceof ApiError && (e.code === "INVALID_CODE" || e.code === "CODE_EXISTS")) {
+      setCodeError(e.message);
+      return;
+    }
     toast.error(e instanceof ApiError ? e.message : t("requestFailed"));
+  };
 
   const create = useMutation({
     mutationFn: (body: CreatePromoBody) =>
@@ -420,6 +732,8 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
       setMaxDiscount("");
       setMaxUses("");
       setExpiresDate("");
+      setCustomCode("");
+      setCodeError(null);
       toast.success(t("codeTitle"));
       void qc.invalidateQueries({ queryKey: ["admin", "promotions"] });
     },
@@ -432,15 +746,63 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
-    onSuccess: () => {
+    onSuccess: (_res, variables) => {
       toast.success(t("updated"));
       void qc.invalidateQueries({ queryKey: ["admin", "promotions"] });
+      // A confirmed manual deactivation of the exact failed row is the cleanup
+      // path: only a server-verified success clears the both-active warning.
+      if (variables.body.active === false && deactivateFailedFor?.id === variables.id)
+        setDeactivateFailedFor(null);
     },
     onError,
   });
 
+  // Per-replacement deactivation of the original row. A failure here is NOT a
+  // create failure: the replacement already exists, so nothing is re-POSTed —
+  // the saved warning names both active rows until manual cleanup succeeds.
+  const deactivateOld = useMutation({
+    mutationFn: ({ id }: { id: string; name: string }) =>
+      api<AdminPromo>(`/api/v1/admin/promotions/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ active: false }),
+      }),
+    onSuccess: () => {
+      toast.success(t("updated"));
+      void qc.invalidateQueries({ queryKey: ["admin", "promotions"] });
+    },
+    onError: (_e, variables) => {
+      setDeactivateFailedFor({ id: variables.id, name: variables.name });
+      void qc.invalidateQueries({ queryKey: ["admin", "promotions"] });
+    },
+  });
+  const replaceCreate = useMutation({
+    mutationFn: ({ body, oldId }: { body: CreatePromoBody; oldId: string }) =>
+      api<{ promo: AdminPromo; code: string }>("/api/v1/admin/promotions", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }).then((res) => ({ res, oldId })),
+    onSuccess: ({ res: { code }, oldId }) => {
+      setRevealedCode(code);
+      setReplacing(null);
+      setReplaceCodeError(null);
+      toast.success(t("codeTitle"));
+      deactivateOld.mutate({ id: oldId, name: replacing?.name ?? "" });
+      void qc.invalidateQueries({ queryKey: ["admin", "promotions"] });
+    },
+    onError: (e: unknown) => {
+      // Inline server errors keep the dialog and every field intact so the
+      // admin can correct only the code (e.g. a collision with any existing
+      // code, including the original — never alias/reuse).
+      if (e instanceof ApiError && (e.code === "INVALID_CODE" || e.code === "CODE_EXISTS")) {
+        setReplaceCodeError(e.message);
+        return;
+      }
+      toast.error(e instanceof ApiError ? e.message : t("requestFailed"));
+    },
+  });
+
   const form = promoFormState(
-    { kind, name, amount, percent, maxDiscount, maxUses, expiresDate },
+    { kind, name, amount, percent, maxDiscount, maxUses, expiresDate, customCode },
     Date.now(),
   );
 
@@ -524,6 +886,18 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
               size="sm"
               variant="outline"
               className="pointer-coarse:h-11"
+              aria-label={t("replaceA", { name: row.name })}
+              onClick={() => {
+                setReplaceCodeError(null);
+                setReplacing(row);
+              }}
+            >
+              {t("replace")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="pointer-coarse:h-11"
               aria-label={
                 row.active
                   ? t("deactivateA", { name: row.name })
@@ -548,10 +922,19 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
         <CardTitle className="text-sm font-medium">{t("title")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {deactivateFailedFor !== null && (
+          <div
+            role="alert"
+            className="rounded-md border border-destructive bg-destructive/10 p-3 text-sm"
+          >
+            {t("deactivateFailed", { name: deactivateFailedFor.name })}
+          </div>
+        )}
         <form
-          className={`grid gap-3 sm:items-start ${kind === "percent" ? "sm:grid-cols-6" : "sm:grid-cols-5"}`}
+          className={`grid gap-3 sm:items-start ${kind === "percent" ? "sm:grid-cols-2 lg:grid-cols-3" : "sm:grid-cols-2 lg:grid-cols-3"}`}
           onSubmit={(e) => {
             e.preventDefault();
+            setCodeError(null);
             if (form.body && !create.isPending) create.mutate(form.body);
           }}
         >
@@ -588,6 +971,32 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
               className={form.nameInvalid ? "border-destructive" : undefined}
             />
           </Field>
+          <div className="grid gap-1">
+            <Label htmlFor="promo-custom-code">{t("customCode")}</Label>
+            <Input
+              id="promo-custom-code"
+              value={customCode}
+              onChange={(e) => {
+                setCustomCode(e.target.value);
+                setCodeError(null);
+              }}
+              // A promo code is a secret-ish bearer token: no autofill, no save.
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={64}
+              className={`font-mono ${codeError ? "border-destructive" : undefined}`}
+              aria-invalid={codeError !== null}
+              aria-describedby={codeError ? "promo-custom-code-error" : "promo-custom-code-hint"}
+            />
+            <p id="promo-custom-code-hint" className="text-xs text-muted-foreground">
+              {t("customCodeHint")}
+            </p>
+            {codeError ? (
+              <p id="promo-custom-code-error" role="alert" className="text-xs text-destructive">
+                {codeError}
+              </p>
+            ) : null}
+          </div>
           {kind === "fixed" ? (
             <Field
               id="promo-amount"
@@ -708,7 +1117,30 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
         onSubmit={(id, n) => update.mutate({ id, body: { name: n } })}
         pending={update.isPending}
       />
-      <CodeDialog code={revealedCode} onClose={() => setRevealedCode(null)} />
+      {replacing !== null && (
+        <ReplaceDialog
+          key={replacing.id}
+          row={replacing}
+          onClose={() => {
+            setReplacing(null);
+            setReplaceCodeError(null);
+          }}
+          onSubmit={(body) => {
+            if (!replaceCreate.isPending) replaceCreate.mutate({ body, oldId: replacing.id });
+          }}
+          pending={replaceCreate.isPending}
+          serverError={replaceCodeError}
+        />
+      )}
+      <CodeDialog
+        code={revealedCode}
+        onClose={() => setRevealedCode(null)}
+        warning={
+          deactivateFailedFor !== null
+            ? t("deactivateFailed", { name: deactivateFailedFor.name })
+            : null
+        }
+      />
     </Card>
   );
 }

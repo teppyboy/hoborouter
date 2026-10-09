@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -13,7 +13,7 @@ import { formatLedgerKindLabel, formatLedgerMemoLabel } from "../../lib/display"
 import { partitionLedger, signedLedgerAmount, formatLedgerSourceLabel } from "./ledger-display";
 import type { LedgerSections } from "./ledger-display";
 import { PageHeader, EmptyState, ErrorState, DataTable, ScrollPanel } from "../../components/page";
-import RedeemPromo from "../../components/redeem-promo";
+import PromoCodePanel from "../../components/redeem-promo";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
@@ -95,12 +95,6 @@ const creditsCopy = {
     vi: "Đã tạo thanh toán — đang chờ quản trị viên xác nhận",
   },
   topUpFailed: { en: "Top-up failed", vi: "Nạp tín dụng thất bại" },
-  promoCode: { en: "Promo code (optional)", vi: "Mã khuyến mãi (tuỳ chọn)" },
-  promoPlaceholder: { en: "32-character code", vi: "Mã gồm 32 ký tự" },
-  errPromoFormat: {
-    en: "Codes are 32 letters or numbers — check for typos",
-    vi: "Mã gồm 32 chữ cái hoặc chữ số — bạn kiểm tra lại giúp mình",
-  },
   errPromoReplay: {
     en: "This code was already used by this workspace",
     vi: "Mã này đã được workspace này sử dụng",
@@ -221,10 +215,6 @@ interface TopUpResponse {
   discount_vnd?: number;
   promo_code_id?: string;
 }
-
-// Backend contract: promo codes are 32 hex characters, normalized
-// trim().toUpperCase() server-side (see apps/api routes/admin-promotions).
-const PROMO_CODE_PATTERN = /^[0-9a-f]{32}$/i;
 
 /**
  * Total promo-apply error mapping: known server failure codes become one
@@ -443,16 +433,13 @@ export default function BillingCreditsPage() {
           </CardHeader>
           <CardContent>
             {workspaceId ? (
-              <>
-                <TopUpForm
-                  workspaceId={workspaceId}
-                  payosAvailable={payosAvailable}
-                  rate={rate}
-                  paymentConfig={paymentConfig.data ?? null}
-                  onNavigate={(href) => void navigate({ href })}
-                />
-                <RedeemPromo workspaceId={workspaceId} />
-              </>
+              <PromoTopUpSection
+                workspaceId={workspaceId}
+                payosAvailable={payosAvailable}
+                rate={rate}
+                paymentConfig={paymentConfig.data ?? null}
+                onNavigate={(href) => void navigate({ href })}
+              />
             ) : null}
           </CardContent>
         </Card>
@@ -462,10 +449,13 @@ export default function BillingCreditsPage() {
 }
 
 /**
- * Top-up form. Extracted for render tests; all API access goes through the
- * mutation, so static rendering fires nothing.
+ * Top-up card section: the top-up form plus the ONE shared promo panel.
+ * Owns the attached-code state: the panel attaches a percent code after a
+ * server preview; the code rides the next top-up body verbatim and is
+ * detached on success (voucher consumed) or when the input/workspace changes
+ * (stale). Promo-apply failures render near the panel, not the amount field.
  */
-export function TopUpForm({
+export function PromoTopUpSection({
   workspaceId,
   payosAvailable,
   rate,
@@ -475,9 +465,81 @@ export function TopUpForm({
   workspaceId: string;
   payosAvailable: boolean;
   rate: number | undefined;
+  paymentConfig?: PaymentConfig | null;
+  onNavigate: (href: string) => void;
+}) {
+  const [attachedCode, setAttachedCode] = useState<string | null>(null);
+  const [promoError, setPromoError] = useState<string | null>(null);
+  const [amountVnd, setAmountVnd] = useState<number | null>(null);
+  return (
+    <>
+      <TopUpForm
+        workspaceId={workspaceId}
+        payosAvailable={payosAvailable}
+        rate={rate}
+        paymentConfig={paymentConfig}
+        onNavigate={onNavigate}
+        promoCode={attachedCode}
+        onPromoApplied={() => setAttachedCode(null)}
+        onPromoError={setPromoError}
+        onAmountVndChange={setAmountVnd}
+      />
+      {promoError ? (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {promoError}
+        </p>
+      ) : null}
+      <PromoCodePanel
+        workspaceId={workspaceId}
+        amountVnd={amountVnd}
+        attachedCode={attachedCode}
+        onAttach={(code) => {
+          setAttachedCode(code);
+          setPromoError(null);
+        }}
+        onDetach={() => {
+          setAttachedCode(null);
+          setPromoError(null);
+        }}
+      />
+    </>
+  );
+}
+
+/**
+ * Top-up form. Extracted for render tests; all API access goes through the
+ * mutation, so static rendering fires nothing.
+ *
+ * The form has NO promo input of its own: the attached code arrives via the
+ * `promoCode` prop (set by PromoTopUpSection after a server preview) and rides
+ * the payment-creation body verbatim — no client normalization, no format gate
+ * (server truth). Success always detaches the consumed code.
+ */
+export function TopUpForm({
+  workspaceId,
+  payosAvailable,
+  rate,
+  paymentConfig,
+  onNavigate,
+  promoCode = null,
+  onPromoApplied,
+  onPromoError,
+  onAmountVndChange,
+}: {
+  workspaceId: string;
+  payosAvailable: boolean;
+  rate: number | undefined;
   /** Display-safe payment limits (null while loading / on load error). */
   paymentConfig?: PaymentConfig | null;
   onNavigate: (href: string) => void;
+  /** Code attached to this top-up by the promo panel (null = none). */
+  promoCode?: string | null;
+  /** Called on every successful top-up with an attached code: it is consumed. */
+  onPromoApplied?: () => void;
+  /** Promo-apply failures surface here so they render near the promo panel. */
+  onPromoError?: (message: string | null) => void;
+  /** Effective top-up amount in VND (null for USD input or an invalid amount). */
+  onAmountVndChange?: (vnd: number | null) => void;
 }) {
   const t = useT(creditsCopy);
   const queryClient = useQueryClient();
@@ -497,6 +559,14 @@ export function TopUpForm({
   const [usdError, setUsdError] = useState<string | null>(null);
   const usdProblem = validateUsdInput(usdText, t);
 
+  // The promo panel previews the discount against this amount; USD amounts
+  // resolve server-side, so they report null (the client never converts).
+  const vndAmount =
+    currency === "VND" && amount > 0 && Number.isSafeInteger(amount) ? amount : null;
+  useEffect(() => {
+    onAmountVndChange?.(vndAmount);
+  }, [vndAmount, onAmountVndChange]);
+
   // Approximate VND readback for the USD input, using ONLY the configured
   // rate; display-only, never sent — the server computes the exact credit.
   const configRate = paymentConfig?.usd_vnd_rate;
@@ -510,11 +580,12 @@ export function TopUpForm({
   const [providerChoice, setProviderChoice] = useState<"manual" | "payos">("manual");
   const provider = payosAvailable && providerChoice === "payos" ? "payos" : "manual";
 
-  // Optional percent-voucher code: controlled state only (same handling as the
-  // redeem form — never persisted, never logged). Empty means no promo_code is
-  // sent at all, so bodies without it stay byte-identical to the old shape.
-  const [promoText, setPromoText] = useState("");
-  const [promoError, setPromoError] = useState<string | null>(null);
+  // Optional percent-voucher code: attached via the promo panel's server
+  // preview (parent-owned state, passed in as a prop). Empty means no
+  // promo_code is sent at all, so bodies without it stay byte-identical to the
+  // old shape. A voucher is consumed at payment creation, so success always
+  // detaches it via onPromoApplied.
+  const attachedPromo = promoCode?.trim() ?? "";
   // Voucher snapshot display: set only from the authoritative response echo,
   // never from client math; cleared on the next submit attempt.
   const [voucherNote, setVoucherNote] = useState<{
@@ -522,8 +593,6 @@ export function TopUpForm({
     discount: number;
     due: number;
   } | null>(null);
-  const promoCode = promoText.trim();
-  const promoFormatBad = promoCode !== "" && !PROMO_CODE_PATTERN.test(promoCode);
 
   const topUp = useMutation({
     // provider is sent only for PayOS, so the manual bodies keep their
@@ -545,19 +614,19 @@ export function TopUpForm({
         body: JSON.stringify(body),
       });
     },
-    onSuccess: async (payment) => {
+    onSuccess: async (payment, payload) => {
       void queryClient.invalidateQueries({ queryKey: ["payments", workspaceId] });
       // The voucher snapshot echo is authoritative: original credit, snapshot
       // discount and final due come from the server response — never recomputed
       // client-side, and absent entirely when no promo was applied.
       if (payment.original_amount_vnd != null && payment.discount_vnd != null) {
-        setPromoText("");
         setVoucherNote({
           original: payment.original_amount_vnd,
           discount: payment.discount_vnd,
           due: payment.amount,
         });
       }
+      if (payload.promoCode) onPromoApplied?.();
       // PayOS hands back an absolute provider checkout URL: the only correct
       // action is a full browser redirect — no fake success, status is later
       // shown by the Payments page polling the backend. A relative path (the
@@ -572,11 +641,11 @@ export function TopUpForm({
       onNavigate(`/billing/payments?payment=${payment.id}`);
     },
     onError: (err, payload) => {
-      // Promo-apply failures surface next to the promo field; everything else
+      // Promo-apply failures surface next to the promo panel; everything else
       // keeps its existing input routing.
       if (payload.promoCode) {
         const key = promoApplyErrorKey(err);
-        setPromoError(key ? t(key) : err instanceof ApiError ? err.message : t("errPromoGeneric"));
+        onPromoError?.(key ? t(key) : err instanceof ApiError ? err.message : t("errPromoGeneric"));
         return;
       }
       const message = err instanceof ApiError ? err.message : t("topUpFailed");
@@ -588,16 +657,9 @@ export function TopUpForm({
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    // Promo format is validated before any POST (same 32-hex contract as the
-    // redeem endpoint); empty means no code is sent at all.
-    if (promoFormatBad) {
-      setPromoError(t("errPromoFormat"));
-      return;
-    }
-    setPromoError(null);
     setVoucherNote(null);
     const withPromo = <T extends object>(base: T) =>
-      promoCode === "" ? base : { ...base, promoCode };
+      attachedPromo === "" ? base : { ...base, promoCode: attachedPromo };
     if (currency === "USD") {
       const problem = validateUsdInput(usdText, t);
       if (problem !== null) {
@@ -709,26 +771,6 @@ export function TopUpForm({
             })}
           </p>
         )}
-        <FormItem>
-          <FormLabel htmlFor="topup_promo_code">{t("promoCode")}</FormLabel>
-          <FormControl>
-            <Input
-              id="topup_promo_code"
-              value={promoText}
-              onChange={(e) => {
-                setPromoText(e.target.value);
-                setPromoError(null);
-              }}
-              autoComplete="off"
-              // A promo code is a bearer secret: no autofill, no save.
-              spellCheck={false}
-              placeholder={t("promoPlaceholder")}
-              className="font-mono"
-              aria-invalid={promoError !== null || promoFormatBad}
-            />
-          </FormControl>
-          <FormMessage>{promoError ?? undefined}</FormMessage>
-        </FormItem>
         {voucherNote ? (
           <p role="status" className="text-sm font-medium">
             {t("voucherApplied", {

@@ -33,7 +33,7 @@ import {
 // specific status so clients can distinguish fixable input (400) from state
 // conflicts (409) and authorization (403).
 const PROMO_APPLY_STATUS: Record<string, { status: number; code: string; message: string }> = {
-  invalid_code: { status: 400, code: "INVALID", message: "promo_code must be 32 hex characters" },
+  invalid_code: { status: 400, code: "INVALID", message: "promo_code is invalid" },
   not_found: { status: 404, code: "NOT_FOUND", message: "Promo code not found" },
   workspace_suspended: {
     status: 403,

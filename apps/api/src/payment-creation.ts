@@ -163,8 +163,7 @@ export function snapshotForBundlePrice(priceVnd: number): PaymentSnapshot {
 // the caller inserts the payment (payment_id FK), via recordPercentRedemption.
 import { and, eq } from "drizzle-orm";
 import { promoCodes, promoRedemptions, workspaces } from "@hoborouter/db";
-import { hashPromoCode } from "./routes/admin-promotions";
-import { normalizePromoCode } from "./routes/promotions";
+import { hashPromoCode, normalizePromoCode } from "./promo-code";
 
 export type PromoApplyResult =
   | {

@@ -233,9 +233,17 @@ describe("checkout apply (manual provider)", () => {
       promo_code: generatePromoCode(),
     });
     expect(unknown.status).toBe(404);
-    // invalid format
-    const invalid = await createTopup(ws, memberCookie, { amount: 1000, promo_code: "nope" });
+    // invalid format (canonical normalization: empty/\p{C} only)
+    const invalid = await createTopup(ws, memberCookie, { amount: 1000, promo_code: "" });
     expect(invalid.status).toBe(400);
+    const invalidCtrl = await createTopup(ws, memberCookie, {
+      amount: 1000,
+      promo_code: "ab\u200Bcd",
+    });
+    expect(invalidCtrl.status).toBe(400);
+    // valid-format but unknown code answers 404, not 400
+    const unknownFmt = await createTopup(ws, memberCookie, { amount: 1000, promo_code: "nope" });
+    expect(unknownFmt.status).toBe(404);
     // inactive
     const inactiveCode = await seedPercentPromo("pc-vin", 250, 10000, { active: false });
     expect(

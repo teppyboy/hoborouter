@@ -275,6 +275,7 @@ const base = {
   maxDiscount: "",
   maxUses: "10",
   expiresDate: "",
+  customCode: "",
 };
 
 function form(overrides: Partial<typeof base>) {
@@ -775,4 +776,296 @@ test("non-admin 403 renders the admin-only gate with no create form", async () =
   expect(document.getElementById("promo-amount")).toBeNull();
   expect(buttonByText("Create code")).toBeUndefined();
   expect(postCalls().length).toBe(0);
+});
+
+// --- optional custom code (server truth) -----------------------------------
+
+test("custom code posts verbatim in the create body (outer-trimmed, interior spaces kept)", async () => {
+  await mountPage([]);
+  responder = async (call) => {
+    if (call.init?.method === "POST")
+      return jsonRes(201, { promo: promoRow(), code: "SUMMER SALE 2026" });
+    return jsonRes(200, { data: [] });
+  };
+  fillCreateForm("Custom promo", "100000", "5");
+  setInput(document.getElementById("promo-custom-code")!, " Summer Sale 2026 ");
+  click(buttonByText("Create code")!);
+  await waitFor(() => postCalls().length === 1, "post sent");
+  const body = JSON.parse(String(postCalls()[0]!.init?.body)) as Record<string, unknown>;
+  expect(body.code).toBe("Summer Sale 2026");
+  // The custom plaintext is revealed once in the dialog.
+  await waitFor(() => bodyText().includes("SUMMER SALE 2026"), "code revealed");
+});
+
+test("empty custom code omits the code key entirely (server generates)", async () => {
+  await mountPage([]);
+  responder = async (call) => {
+    if (call.init?.method === "POST")
+      return jsonRes(201, { promo: promoRow(), code: "GENGENGENGENGENGENGENGEN" });
+    return jsonRes(200, { data: [] });
+  };
+  fillCreateForm("Generated promo", "100000", "5");
+  click(buttonByText("Create code")!);
+  await waitFor(() => postCalls().length === 1, "post sent");
+  const body = JSON.parse(String(postCalls()[0]!.init?.body)) as Record<string, unknown>;
+  expect("code" in body).toBe(false);
+});
+
+test("server INVALID_CODE renders inline near the custom code field, no dialog", async () => {
+  await mountPage([]);
+  responder = async (call) => {
+    if (call.init?.method === "POST")
+      return jsonRes(400, {
+        error: {
+          code: "INVALID_CODE",
+          message: "Code must be 1-64 characters with no control characters",
+        },
+      });
+    return jsonRes(200, { data: [] });
+  };
+  fillCreateForm("Bad code promo", "100000", "5");
+  setInput(document.getElementById("promo-custom-code")!, "bad\u0000code");
+  click(buttonByText("Create code")!);
+  await waitFor(() => postCalls().length === 1, "post sent");
+  await waitFor(() => bodyText().includes("Code must be 1-64 characters"), "inline server error");
+  expect(getCodeInDom()).toBeNull();
+  // The error is an inline alert, not the one-time reveal dialog.
+  expect(bodyText()).not.toContain("shown only once");
+  // The invalid code stays in the input so the admin can fix it.
+  expect((document.getElementById("promo-custom-code") as HTMLInputElement).value).toBe(
+    "bad\u0000code",
+  );
+});
+
+test("server CODE_EXISTS renders inline and the form recovers on retry", async () => {
+  await mountPage([]);
+  let attempts = 0;
+  responder = async (call) => {
+    if (call.init?.method === "POST") {
+      attempts += 1;
+      if (attempts === 1)
+        return jsonRes(400, {
+          error: { code: "CODE_EXISTS", message: "This code already exists" },
+        });
+      return jsonRes(201, { promo: promoRow(), code: "NEWDUPENEWDUPENEWDUPENEWDUPEN" });
+    }
+    return jsonRes(200, { data: [] });
+  };
+  fillCreateForm("Duplicate promo", "100000", "5");
+  setInput(document.getElementById("promo-custom-code")!, "DUPLICATE");
+  click(buttonByText("Create code")!);
+  await waitFor(() => bodyText().includes("already exists"), "inline CODE_EXISTS error");
+  expect(getCodeInDom()).toBeNull();
+  // Retry with a corrected code succeeds and reveals the new plaintext once.
+  setInput(document.getElementById("promo-custom-code")!, "DUPLICATE2");
+  click(buttonByText("Create code")!);
+  await waitFor(() => bodyText().includes("NEWDUPENEWDUPENEWDUPENEWDUPEN"), "retry reveals code");
+});
+
+// --- financial replacement (approved flow: new row + REQUIRED new code, then
+// deactivate the old row via PATCH; the old row keeps its uses/history) ------
+
+const replaceRow = (partial: Partial<AdminPromo>): AdminPromo => ({ ...promoRow(), ...partial });
+
+async function openReplace(row: AdminPromo) {
+  await mountPage([row]);
+  click(buttonByLabel(`Replace ${row.name}`)!);
+  await waitFor(
+    () => document.getElementById("promo-replace-code") !== null,
+    "replace dialog open",
+  );
+}
+
+const replaceResponder = (
+  rows: AdminPromo[],
+  post: (attempt: number) => Response,
+  patch: () => Response,
+) => {
+  let attempts = 0;
+  return async (call: FetchCall) => {
+    if (call.init?.method === "POST") {
+      attempts += 1;
+      return post(attempts);
+    }
+    if (call.init?.method === "PATCH") return patch();
+    return jsonRes(200, { data: rows });
+  };
+};
+
+test("replace dialog opens prefilled; empty new code blocks submit (no POST, no PATCH)", async () => {
+  await openReplace(replaceRow({ expires_at: null }));
+  // Financial terms prefilled from the original row.
+  expect((document.getElementById("promo-replace-name") as HTMLInputElement).value).toBe(
+    "Summer promo",
+  );
+  expect((document.getElementById("promo-replace-amount") as HTMLInputElement).value).toBe(
+    "500000",
+  );
+  expect((document.getElementById("promo-replace-max-uses") as HTMLInputElement).value).toBe("10");
+  // The new plaintext code is REQUIRED: submit stays blocked and nothing is sent.
+  expect(buttonByText("Create replacement")!.disabled).toBe(true);
+  click(buttonByText("Create replacement")!);
+  await flush();
+  expect(postCalls().length).toBe(0);
+  expect(patchCalls().length).toBe(0);
+});
+
+test("replace posts a new row with the required code, PATCHes the old row active:false only (no financial rewrite), reveals the new code once", async () => {
+  await openReplace(replaceRow({ expires_at: null }));
+  responder = replaceResponder(
+    [replaceRow({ active: false })],
+    () =>
+      jsonRes(201, {
+        promo: { ...promoRow(), id: "promo_2", uses: 0 },
+        code: "NEWCODE1NEWCODE1NEWCODE1NEWCODE1",
+      }),
+    () => jsonRes(200, { ...promoRow(), active: false }),
+  );
+  setInput(document.getElementById("promo-replace-code")!, " newcode1 newcode1 newcode1 ");
+  click(buttonByText("Create replacement")!);
+  await waitFor(() => postCalls().length === 1, "create POST sent");
+  // Exact create body: prefilled terms + the required new code (outer-trimmed).
+  expect(JSON.parse(String(postCalls()[0]!.init?.body))).toEqual({
+    name: "Summer promo",
+    amount_vnd: 500000,
+    max_uses: 10,
+    expires_at: null,
+    code: "newcode1 newcode1 newcode1",
+  });
+  // Old row preserved: the only PATCH is active:false on the original id —
+  // no financial fields, no uses reset.
+  await waitFor(() => patchCalls().length === 1, "old row deactivated");
+  expect(patchCalls()[0]!.path).toBe("/api/v1/admin/promotions/promo_1");
+  expect(JSON.parse(String(patchCalls()[0]!.init?.body))).toEqual({ active: false });
+  // The new plaintext is revealed exactly once, then cleared everywhere.
+  await waitFor(() => bodyText().includes("NEWCODE1NEWCODE1NEWCODE1NEWCODE1"), "new code revealed");
+  expect(window.localStorage.length).toBe(0);
+  click(buttonByText("Done")!);
+  await waitFor(() => !bodyText().includes("NEWCODE1NEWCODE1NEWCODE1NEWCODE1"), "code cleared");
+  expect(window.localStorage.length).toBe(0);
+});
+
+test("server CODE_EXISTS in replace dialog renders inline, preserves all input, sends no deactivate; retry succeeds", async () => {
+  await openReplace(replaceRow({ expires_at: null }));
+  responder = replaceResponder(
+    [promoRow()],
+    (attempt) =>
+      attempt === 1
+        ? jsonRes(400, {
+            error: { code: "CODE_EXISTS", message: "A promo code with this code already exists" },
+          })
+        : jsonRes(201, {
+            promo: { ...promoRow(), id: "promo_2", uses: 0 },
+            code: "FRESHCODEFRESHCODEFRESHCODE01",
+          }),
+    () => jsonRes(200, { ...promoRow(), active: false }),
+  );
+  setInput(document.getElementById("promo-replace-code")!, "REUSEDCODE");
+  click(buttonByText("Create replacement")!);
+  await waitFor(() => bodyText().includes("already exists"), "inline CODE_EXISTS error");
+  expect(getCodeInDom()).toBeNull();
+  // No deactivation may happen when the replacement create failed.
+  expect(patchCalls().length).toBe(0);
+  // Every field is preserved so the admin can correct only the code.
+  expect((document.getElementById("promo-replace-code") as HTMLInputElement).value).toBe(
+    "REUSEDCODE",
+  );
+  expect((document.getElementById("promo-replace-amount") as HTMLInputElement).value).toBe(
+    "500000",
+  );
+  expect((document.getElementById("promo-replace-name") as HTMLInputElement).value).toBe(
+    "Summer promo",
+  );
+  // Retry with a corrected code succeeds end to end.
+  setInput(document.getElementById("promo-replace-code")!, "FRESHCODE");
+  click(buttonByText("Create replacement")!);
+  await waitFor(() => bodyText().includes("FRESHCODEFRESHCODEFRESHCODE01"), "retry reveals code");
+  await waitFor(() => patchCalls().length === 1, "old row deactivated after retry");
+  expect(JSON.parse(String(patchCalls()[0]!.init?.body))).toEqual({ active: false });
+});
+
+test("percent row replace posts the exact percent shape with the required code", async () => {
+  await openReplace(
+    replaceRow({
+      kind: "percent",
+      amount_vnd: null,
+      percent_bp: 300,
+      max_discount_vnd: 10000,
+      expires_at: null,
+    }),
+  );
+  expect((document.getElementById("promo-replace-percent") as HTMLInputElement).value).toBe("3%");
+  expect((document.getElementById("promo-replace-max-discount") as HTMLInputElement).value).toBe(
+    "10000",
+  );
+  responder = replaceResponder(
+    [],
+    () =>
+      jsonRes(201, {
+        promo: { ...promoRow(), id: "promo_2", uses: 0 },
+        code: "PCTREPLPCTREPLPCTREPLPCTRE01",
+      }),
+    () => jsonRes(200, { ...promoRow(), active: false }),
+  );
+  setInput(document.getElementById("promo-replace-code")!, "PCTREPL");
+  click(buttonByText("Create replacement")!);
+  await waitFor(() => postCalls().length === 1, "percent replace POST sent");
+  expect(JSON.parse(String(postCalls()[0]!.init?.body))).toEqual({
+    name: "Summer promo",
+    kind: "percent",
+    percent_bp: 300,
+    max_discount_vnd: 10000,
+    max_uses: 10,
+    expires_at: null,
+    code: "PCTREPL",
+  });
+});
+
+// --- partial failure: create succeeded, deactivate failed -------------------
+
+test("deactivation failure retains the reveal, warns both codes active with manual guidance, never re-issues the POST; manual deactivate clears it", async () => {
+  await openReplace(replaceRow({ expires_at: null }));
+  const post = deferred();
+  let patches = 0;
+  responder = async (call) => {
+    if (call.init?.method === "POST") return post.promise;
+    if (call.init?.method === "PATCH") {
+      patches += 1;
+      if (patches === 1)
+        return jsonRes(500, { error: { code: "INTERNAL", message: "db unavailable" } });
+      return jsonRes(200, { ...promoRow(), active: false });
+    }
+    return jsonRes(200, { data: [promoRow()] });
+  };
+  setInput(document.getElementById("promo-replace-code")!, "WARNCASEWARNCASEWARNCASEWARNCASE");
+  click(buttonByText("Create replacement")!);
+  await waitFor(() => postCalls().length === 1, "create POST sent");
+  post.resolve(
+    jsonRes(201, {
+      promo: { ...promoRow(), id: "promo_2", uses: 0 },
+      code: "WARNCODEWARNCODEWARNCODEWARNCA",
+    }),
+  );
+  await waitFor(() => bodyText().includes("WARNCODEWARNCODEWARNCODEWARNCA"), "code revealed");
+  // Explicit persistent warning: names the old row, states both are active,
+  // points at the existing manual Deactivate control, forbids re-creating.
+  await waitFor(() => bodyText().includes("could not be deactivated"), "warning shown");
+  expect(bodyText()).toContain("Summer promo");
+  expect(bodyText()).toContain("both codes are active");
+  expect(bodyText()).toContain("do not create another replacement");
+  // The plaintext reveal survives the deactivation failure.
+  expect(bodyText()).toContain("WARNCODEWARNCODEWARNCODEWARNCA");
+  // No silent atomic claim, no automatic retry: exactly one POST, one PATCH.
+  await flush();
+  await flush();
+  expect(postCalls().length).toBe(1);
+  expect(patchCalls().length).toBe(1);
+  // Done clears the plaintext once, but the warning persists for cleanup.
+  click(buttonByText("Done")!);
+  await waitFor(() => !bodyText().includes("WARNCODEWARNCODEWARNCODEWARNCA"), "code cleared");
+  expect(bodyText()).toContain("could not be deactivated");
+  // Manual deactivation via the existing row control succeeds and clears it.
+  click(buttonByLabel("Deactivate Summer promo")!);
+  await waitFor(() => patchCalls().length === 2, "manual deactivate PATCH sent");
+  await waitFor(() => !bodyText().includes("could not be deactivated"), "warning cleared");
 });

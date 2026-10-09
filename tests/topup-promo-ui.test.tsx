@@ -1,14 +1,19 @@
-// Top-up promo-code UI contract (jsdom, real React, mocked network only):
-// - Optional promo code field on the top-up form: empty means the request body
-//   stays byte-identical to the pre-promo shape (no promo_code key at all);
-// - A typed code rides the exact server contract (32 hex chars, same body
-//   otherwise) for both VND and USD top-ups, manual and payos providers;
-// - Client-side format validation blocks malformed codes before any POST;
-// - Server promo-apply failures (replay/expired/exhausted/inactive/suspended/
-//   not-percent/not-found) map to friendly messages next to the promo field;
+// Top-up promo attachment UI contract (jsdom, real React, mocked network only):
+// - The top-up form has NO promo input of its own: the attached code arrives as
+//   the `promoCode` prop (set by the credits page promo panel after a preview);
+//   with no attachment the POST body stays byte-identical to the pre-promo
+//   shape (no promo_code key at all);
+// - An attached code rides the exact server contract for both VND and USD
+//   top-ups, manual and payos providers — the raw code is sent verbatim
+//   (no client normalization or 32-hex gate; server truth);
+// - Server promo-apply failures map to friendly messages via onPromoError and
+//   never complete the flow; success always detaches the consumed code via
+//   onPromoApplied (a voucher is consumed at payment creation, per spec);
 // - On success the authoritative voucher snapshot from the response
 //   (original credit, discount, final due) is shown verbatim — never
-//   recomputed client-side — and the flow (toast/navigation) is preserved.
+//   recomputed client-side — and the flow (toast/navigation) is preserved;
+// - The form reports its effective VND amount via onAmountVndChange so the
+//   promo panel can request a server-side discount preview.
 import { test, expect, afterAll } from "bun:test";
 import { JSDOM } from "jsdom";
 import { act } from "react";
@@ -93,12 +98,15 @@ function jsonResponse(status: number, body: unknown): Response {
   } as unknown as Response;
 }
 
-function mount(opts: { payosAvailable?: boolean } = {}) {
+function mount(opts: { payosAvailable?: boolean; promoCode?: string | null } = {}) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const root = createRoot(container);
   let navigatedTo: string | null = null;
+  const applied: number[] = [];
+  const errors: (string | null)[] = [];
+  const amounts: (number | null)[] = [];
   const render = () =>
     act(() => {
       root.render(
@@ -111,6 +119,10 @@ function mount(opts: { payosAvailable?: boolean } = {}) {
             onNavigate={(href) => {
               navigatedTo = href;
             }}
+            promoCode={opts.promoCode ?? null}
+            onPromoApplied={() => applied.push(1)}
+            onPromoError={(message) => errors.push(message)}
+            onAmountVndChange={(vnd) => amounts.push(vnd)}
           />
         </QueryClientProvider>,
       );
@@ -133,7 +145,6 @@ function mount(opts: { payosAvailable?: boolean } = {}) {
     return handler(String(url), init);
   }) as typeof fetch;
 
-  const promoInput = () => container.querySelector<HTMLInputElement>("#topup_promo_code")!;
   const submitButton = () => container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
   const currencyButton = (label: string) =>
     [...container.querySelectorAll("button")].find((b) => b.textContent?.trim() === label)!;
@@ -144,11 +155,17 @@ function mount(opts: { payosAvailable?: boolean } = {}) {
     get navigatedTo() {
       return navigatedTo;
     },
+    get applied() {
+      return applied;
+    },
+    get errors() {
+      return errors;
+    },
+    get amounts() {
+      return amounts;
+    },
     setFetch: (h: FetchHandler) => {
       handler = h;
-    },
-    get promoInput() {
-      return promoInput();
     },
     get submitButton() {
       return submitButton();
@@ -161,19 +178,22 @@ function mount(opts: { payosAvailable?: boolean } = {}) {
         await new Promise((r) => setTimeout(r, 0));
       });
     },
+    async choosePayos() {
+      const radio = container.querySelector<HTMLInputElement>(
+        'input[type="radio"][value="payos"]',
+      )!;
+      await act(async () => {
+        radio.dispatchEvent(new W.Event("change", { bubbles: true }));
+        radio.click();
+        await new Promise((r) => setTimeout(r, 0));
+      });
+    },
     async typeUsd(value: string) {
       await act(async () => {
         const usdInput = () => container.querySelector<HTMLInputElement>("#topup_usd_amount")!;
         const setter = Object.getOwnPropertyDescriptor(W.HTMLInputElement.prototype, "value")!.set!;
         setter.call(usdInput(), value);
         usdInput().dispatchEvent(new W.Event("input", { bubbles: true }));
-      });
-    },
-    async typePromo(value: string) {
-      await act(async () => {
-        const setter = Object.getOwnPropertyDescriptor(W.HTMLInputElement.prototype, "value")!.set!;
-        setter.call(promoInput(), value);
-        promoInput().dispatchEvent(new W.Event("input", { bubbles: true }));
       });
     },
     async submit() {
@@ -192,7 +212,7 @@ function mount(opts: { payosAvailable?: boolean } = {}) {
   };
 }
 
-const VALID_CODE = "a".repeat(32);
+const ATTACHED = "SUMMER SALE 2026";
 
 const voucherResponse = (status = 201) =>
   jsonResponse(status, {
@@ -207,9 +227,9 @@ const voucherResponse = (status = 201) =>
     promo_code_id: "promo_1",
   });
 
-// --- body contract -------------------------------------------------------
+// --- body contract: attached code rides the payment creation --------------
 
-test("no promo typed: VND manual body stays exactly {amount} (no promo_code key)", async () => {
+test("no attached code: VND manual body stays exactly {amount} (no promo_code key)", async () => {
   const h = mount();
   try {
     await h.submit();
@@ -220,69 +240,72 @@ test("no promo typed: VND manual body stays exactly {amount} (no promo_code key)
   }
 });
 
-test("VND top-up with promo: body is {amount, promo_code} verbatim", async () => {
-  const h = mount();
+test("attached code: VND manual body is {amount, promo_code} verbatim (spaces preserved)", async () => {
+  const h = mount({ promoCode: ATTACHED });
   try {
-    await h.typePromo(` ${VALID_CODE} `);
     await h.submit();
     expect(h.fetchCalls.length).toBe(1);
-    expect(h.fetchCalls[0]!.body).toEqual({ amount: 100_000, promo_code: VALID_CODE });
+    expect(h.fetchCalls[0]!.body).toEqual({ amount: 100_000, promo_code: ATTACHED });
   } finally {
     h.cleanup();
   }
 });
 
-test("USD top-up with promo: body is {usd_amount, promo_code} verbatim (uppercase accepted)", async () => {
-  const h = mount();
+test("attached code: USD manual body is {usd_amount, promo_code} verbatim", async () => {
+  const h = mount({ promoCode: ATTACHED });
   try {
     await h.clickButton("USD");
     await h.typeUsd("5");
-    await h.typePromo(VALID_CODE.toUpperCase());
     await h.submit();
     expect(h.fetchCalls.length).toBe(1);
-    expect(h.fetchCalls[0]!.body).toEqual({
-      usd_amount: "5",
-      promo_code: VALID_CODE.toUpperCase(),
-    });
+    expect(h.fetchCalls[0]!.body).toEqual({ usd_amount: "5", promo_code: ATTACHED });
   } finally {
     h.cleanup();
   }
 });
 
-test("payos provider with promo: body is {amount, provider, promo_code}", async () => {
-  const h = mount({ payosAvailable: true });
+test("attached code: payos VND body is {amount, provider, promo_code}", async () => {
+  const h = mount({ payosAvailable: true, promoCode: ATTACHED });
   try {
-    await h.typePromo(VALID_CODE);
-    // Choose the payos radio.
-    const radio = h.container.querySelector<HTMLInputElement>(
-      'input[type="radio"][value="payos"]',
-    )!;
-    await act(async () => {
-      radio.dispatchEvent(new W.Event("change", { bubbles: true }));
-      radio.click();
-      await new Promise((r) => setTimeout(r, 0));
-    });
+    await h.choosePayos();
     await h.submit();
     expect(h.fetchCalls.length).toBe(1);
     expect(h.fetchCalls[0]!.body).toEqual({
       amount: 100_000,
       provider: "payos",
-      promo_code: VALID_CODE,
+      promo_code: ATTACHED,
     });
   } finally {
     h.cleanup();
   }
 });
 
-// --- client-side format validation ---------------------------------------
+test("attached code: payos USD body is {usd_amount, provider, promo_code}", async () => {
+  const h = mount({ payosAvailable: true, promoCode: ATTACHED });
+  try {
+    await h.clickButton("USD");
+    await h.typeUsd("5");
+    await h.choosePayos();
+    await h.submit();
+    expect(h.fetchCalls.length).toBe(1);
+    expect(h.fetchCalls[0]!.body).toEqual({
+      usd_amount: "5",
+      provider: "payos",
+      promo_code: ATTACHED,
+    });
+  } finally {
+    h.cleanup();
+  }
+});
 
-test("malformed promo code: friendly error next to the field, no POST", async () => {
+// --- effective VND amount reporting for the server preview ---------------
+
+test("onAmountVndChange reports the effective VND amount; USD reports null", async () => {
   const h = mount();
   try {
-    await h.typePromo("SUMMER-SALE");
-    await h.submit();
-    expect(h.fetchCalls.length).toBe(0);
-    expect(h.container.textContent).toContain("32");
+    expect(h.amounts.at(-1)).toBe(100_000);
+    await h.clickButton("USD");
+    expect(h.amounts.at(-1)).toBeNull();
   } finally {
     h.cleanup();
   }
@@ -290,53 +313,47 @@ test("malformed promo code: friendly error next to the field, no POST", async ()
 
 // --- friendly server error mapping ---------------------------------------
 
-test("replay (409 ALREADY_REDEEMED): friendly message near promo field, no navigation", async () => {
-  const h = mount();
+test("promo-apply failure (409 ALREADY_REDEEMED): friendly message via onPromoError, no detach, no navigation", async () => {
+  const h = mount({ promoCode: ATTACHED });
   try {
     h.setFetch(async () =>
       jsonResponse(409, {
         error: { code: "ALREADY_REDEEMED", message: "Promo code already used by this workspace" },
       }),
     );
-    await h.typePromo(VALID_CODE);
     await h.submit();
-    expect(h.container.textContent).toContain("already");
+    expect(h.errors.at(-1)).toContain("already");
+    expect(h.applied.length).toBe(0);
     expect(h.navigatedTo).toBeNull();
   } finally {
     h.cleanup();
   }
 });
 
-test("not-percent (409 PROMO_NOT_PERCENT): fixed-credit codes belong to the redeem form", async () => {
-  const h = mount();
+test("unmapped promo failure surfaces the server message via onPromoError", async () => {
+  const h = mount({ promoCode: ATTACHED });
   try {
     h.setFetch(async () =>
-      jsonResponse(409, {
-        error: {
-          code: "PROMO_NOT_PERCENT",
-          message: "Fixed-credit promo codes are redeemed via the redeem endpoint",
-        },
+      jsonResponse(400, {
+        error: { code: "INVALID", message: "promo_code is not valid for this payment" },
       }),
     );
-    await h.typePromo(VALID_CODE);
     await h.submit();
-    expect(h.container.textContent).toContain("redeem");
+    expect(h.errors.at(-1)).toContain("promo_code is not valid for this payment");
   } finally {
     h.cleanup();
   }
 });
 
-test("unmapped promo failure surfaces the server message, no success note", async () => {
-  const h = mount();
+test("non-promo failure does not route the error through onPromoError", async () => {
+  const h = mount({ promoCode: null });
   try {
     h.setFetch(async () =>
-      jsonResponse(400, {
-        error: { code: "INVALID", message: "promo_code must be 32 hex characters" },
-      }),
+      jsonResponse(400, { error: { code: "INVALID", message: "amount too small" } }),
     );
-    await h.typePromo(VALID_CODE);
     await h.submit();
-    expect(h.container.textContent).toContain("32 hex characters");
+    expect(h.errors.length).toBe(0);
+    expect(h.container.textContent).toContain("amount too small");
   } finally {
     h.cleanup();
   }
@@ -344,11 +361,10 @@ test("unmapped promo failure surfaces the server message, no success note", asyn
 
 // --- authoritative voucher snapshot display -------------------------------
 
-test("voucher success: original/discount/due shown from the response snapshot, flow preserved", async () => {
-  const h = mount();
+test("voucher success: original/discount/due shown from the response snapshot, code detached, flow preserved", async () => {
+  const h = mount({ promoCode: ATTACHED });
   try {
     h.setFetch(async () => voucherResponse());
-    await h.typePromo(VALID_CODE);
     await h.submit();
     const text = h.container.textContent ?? "";
     // Server truth only: original credit, snapshot discount, final due.
@@ -357,21 +373,20 @@ test("voucher success: original/discount/due shown from the response snapshot, f
     expect(text).toContain("97.000 ₫");
     // The pre-existing manual flow is preserved: navigate to the payment page.
     expect(h.navigatedTo).toBe("/billing/payments?payment=pay_1");
-    // The consumed code is cleared after success.
-    expect(h.promoInput.value).toBe("");
+    // The voucher is consumed at payment creation: always detached on success.
+    expect(h.applied.length).toBe(1);
   } finally {
     h.cleanup();
   }
 });
 
-test("plain success without voucher echo shows no voucher note", async () => {
-  const h = mount();
+test("plain success without voucher echo detaches the code but shows no voucher numbers", async () => {
+  const h = mount({ promoCode: ATTACHED });
   try {
-    await h.typePromo(VALID_CODE);
     await h.submit();
-    // No snapshot fields in the response → no numbers promised client-side.
     expect(h.container.textContent).not.toContain("97.000 ₫");
     expect(h.navigatedTo).toBe("/billing/payments?payment=pay_1");
+    expect(h.applied.length).toBe(1);
   } finally {
     h.cleanup();
   }

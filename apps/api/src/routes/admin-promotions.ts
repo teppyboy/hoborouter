@@ -11,6 +11,11 @@ import type { Db } from "@hoborouter/db";
 import { MAX_SAFE_INTEGER_MONEY, promoCodes } from "@hoborouter/db";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, writeAudit, jsonError } from "../authz";
+import { hashPromoCode, normalizePromoCodeWithReason } from "../promo-code";
+
+// Legacy import site for the hash helper (bmc/promo test suites import from
+// here); the single implementation lives in promo-code.ts.
+export { hashPromoCode };
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -61,9 +66,6 @@ export const generatePromoCode = (): string => {
     .join("")
     .toUpperCase();
 };
-
-export const hashPromoCode = (code: string): string =>
-  new Bun.CryptoHasher("sha256").update(code.trim().toUpperCase()).digest("hex");
 
 export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
   const guard = async (request: Request) => {
@@ -162,13 +164,35 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
         }
         if (!posInt(maxUses as number))
           return jsonError(400, "INVALID", "max_uses must be a positive integer");
+        // Optional custom code: absent -> CSPRNG 32-hex legacy path unchanged;
+        // present -> canonical normalization with an admin-visible reason.
+        // The stored value is the hash of the NORMALIZED code; the plaintext
+        // (normalized form) is revealed once in the create response.
+        let code: string;
+        if (b.code === undefined || b.code === null) {
+          code = generatePromoCode();
+        } else {
+          if (typeof b.code !== "string")
+            return jsonError(400, "INVALID_CODE", "code must be a string");
+          const n = normalizePromoCodeWithReason(b.code);
+          if ("reason" in n)
+            return jsonError(
+              400,
+              "INVALID_CODE",
+              n.reason === "empty"
+                ? "code must not be empty"
+                : n.reason === "invalid_characters"
+                  ? "code contains control or format characters"
+                  : "code exceeds 64 characters (128 bytes) after uppercasing",
+            );
+          code = n.code;
+        }
         const now = Date.now();
         if (
           expiresAt !== null &&
           (typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt) || expiresAt <= now)
         )
           return jsonError(400, "INVALID", "expires_at must be null or a future timestamp in ms");
-        const code = generatePromoCode();
         const row: typeof promoCodes.$inferInsert = {
           id: crypto.randomUUID(),
           code_hash: hashPromoCode(code),
@@ -183,7 +207,22 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
           active: true,
           created_at: now,
         };
+        let duplicate = false;
         await db.transaction(async (tx) => {
+          // Race-free uniqueness answer: the check runs under the same
+          // transaction as the insert, so a variant of an existing code (same
+          // normalized hash) answers 400 CODE_EXISTS instead of tripping the
+          // code_hash UNIQUE index as a 500. Generated codes are CSPRNG and
+          // effectively never collide, but they share the same gate.
+          const dup = await tx
+            .select({ id: promoCodes.id })
+            .from(promoCodes)
+            .where(eq(promoCodes.code_hash, row.code_hash))
+            .limit(1);
+          if (dup.length > 0) {
+            duplicate = true;
+            return;
+          }
           await tx.insert(promoCodes).values(row);
           // Audit detail carries only safe fields: no code_hash, no plaintext.
           await writeAudit(tx, {
@@ -202,6 +241,8 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
             },
           });
         });
+        if (duplicate)
+          return jsonError(400, "CODE_EXISTS", "A promo code with this code already exists");
         // The one and only reveal of the plaintext code.
         return json({ promo: safePromo(row), code }, 201);
       },

@@ -8,7 +8,8 @@ import { describe, test, expect, beforeAll } from "bun:test";
 import { createHash } from "node:crypto";
 import { q, makeApp, signUp, createWorkspace, userIdByEmail } from "./helpers";
 import { generatePromoCode, hashPromoCode } from "../src/routes/admin-promotions";
-import { normalizePromoCode, promotionsRoutes } from "../src/routes/promotions";
+import { promotionsRoutes } from "../src/routes/promotions";
+import { normalizePromoCode } from "../src/promo-code";
 import { workspacesRoutes } from "../src/routes/workspaces";
 
 let app: Awaited<ReturnType<typeof makeApp>>["app"];
@@ -101,18 +102,23 @@ describe("code contract", () => {
     expect(new Set(Array.from({ length: 50 }, generatePromoCode)).size).toBe(50);
   });
 
-  test("normalizePromoCode trims+uppercases then enforces /^[A-F0-9]{32}$/", () => {
+  test("normalizePromoCode is the canonical helper (trim+uppercase; 32-hex legacy compat)", () => {
     expect(normalizePromoCode(`  ${CODE.toLowerCase()}  `)).toBe(CODE);
-    expect(normalizePromoCode("abc")).toBeNull();
-    expect(normalizePromoCode("G" + CODE.slice(1))).toBeNull();
-    expect(normalizePromoCode(CODE + "A")).toBeNull();
+    // Canonical normalization (unified-promos spec §3): non-32-hex codes are
+    // now valid input; only empty/whitespace and \p{C} characters reject.
+    expect(normalizePromoCode("nope")).toBe("NOPE");
     expect(normalizePromoCode("")).toBeNull();
+    expect(normalizePromoCode("   ")).toBeNull();
+    expect(normalizePromoCode("ab\u200Bcd")).toBeNull();
   });
 
-  test("hashPromoCode is plain SHA-256 hex of the normalized code", () => {
-    expect(hashPromoCode(`  ${CODE.toLowerCase()} `)).toBe(
+  test("hashPromoCode hashes its argument verbatim (callers pass the normalized value)", () => {
+    // unified-promos spec §3: the hash never re-normalizes internally; the
+    // normalized value is hashed exactly once by the caller.
+    expect(hashPromoCode(normalizePromoCode(`  ${CODE.toLowerCase()} `)!)).toBe(
       createHash("sha256").update(CODE).digest("hex"),
     );
+    expect(hashPromoCode("  spaced ")).toBe(createHash("sha256").update("  spaced ").digest("hex"));
   });
 });
 
@@ -128,9 +134,15 @@ describe("gates (no writes)", () => {
   });
 
   test("invalid format 400; unknown code 404 — no writes either way", async () => {
-    for (const bad of ["nope", "", "Z".repeat(32), `${CODE.toLowerCase()}x`]) {
+    // Canonical normalization: only empty/whitespace or \p{C} input is
+    // invalid (400); everything else that finds no promo answers 404.
+    for (const bad of ["", "   ", "ab\u200Bcd"]) {
       const res = await redeem(ws, bad, memberCookie);
       expect(res.status).toBe(400);
+    }
+    for (const unknownCode of ["nope", "Z".repeat(32), `${CODE.toLowerCase()}x`]) {
+      const res = await redeem(ws, unknownCode, memberCookie);
+      expect(res.status).toBe(404);
     }
     const unknown = await redeem(ws, generatePromoCode(), memberCookie);
     expect(unknown.status).toBe(404);
