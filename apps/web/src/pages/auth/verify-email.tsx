@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { Link } from "@tanstack/react-router";
 import { useSession, type SessionUser } from "../../lib/auth";
 import { ResendVerificationButton } from "../../components/resend-verification";
+import { AuthLayout } from "../../components/auth-layout";
 import { Button } from "../../components/ui/button";
 import { useAuthT } from "./copy";
 
@@ -64,8 +65,9 @@ export default function VerifyEmailPage() {
     void refetch();
   }, [refetch]);
   return (
-    <div className="mx-auto max-w-md py-16">
+    // Same house auth frame as /login and /signup: one layout, three surfaces.
+    <AuthLayout>
       <VerifyEmailView user={session?.user ?? null} loading={isPending} />
-    </div>
+    </AuthLayout>
   );
 }

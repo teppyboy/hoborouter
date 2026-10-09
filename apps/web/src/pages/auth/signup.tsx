@@ -10,6 +10,8 @@ import { authClient } from "../../lib/auth";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { AuthLayout } from "../../components/auth-layout";
+import { SocialSignInButtons } from "../../components/shared/auth/social-buttons";
+import { socialProvidersFrom } from "../../lib/public-config";
 import { Turnstile, usePublicConfig } from "../../components/turnstile";
 import {
   Form,
@@ -84,6 +86,10 @@ export default function SignupPage() {
   const [token, setToken] = useState<string | null>(null);
   const [resetKey, setResetKey] = useState(0);
   const [scriptError, setScriptError] = useState(false);
+  // Social sign-in availability: only the server-flagged providers render a
+  // button. Availability flags never gate the email flow; captcha still does.
+  const providers = socialProvidersFrom(config);
+  const [oauthError, setOauthError] = useState(false);
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: { name: "", email: "", password: "", confirmPassword: "" },
@@ -125,6 +131,22 @@ export default function SignupPage() {
           {t("signIn")}
         </Link>
       </p>
+      {oauthError && (
+        <p role="alert" className="mt-4 text-sm text-destructive">
+          {t("oauthFailed")}
+        </p>
+      )}
+      <SocialSignInButtons
+        providers={providers}
+        disabled={form.formState.isSubmitting}
+        onAttempt={() => setOauthError(false)}
+        onError={() => setOauthError(true)}
+      />
+      {providers.length > 0 && (
+        <p aria-hidden="true" className="mt-6 text-center text-xs text-muted-foreground">
+          {t("orContinueWithEmail")}
+        </p>
+      )}
       <Form {...form}>
         <form onSubmit={form.handleSubmit(handleValid)} className="mt-6 grid gap-4">
           {fields.map((f, i) => (
