@@ -103,25 +103,22 @@ export const adminPaymentLateCreditRoutes = (db: Db, auth: BetterAuthInstance) =
             );
             return;
           }
-          try {
-            const result = await processMockPaymentEvent(tx, {
-              provider: p.provider,
-              orderCode: p.provider_order_code,
-              // Fixed reference derived from the payment id: the client can
-              // never choose it, and replays are idempotent.
-              providerReference: `admin-late-credit-${p.id}`,
-              // Amount ALWAYS comes from the locked payment row.
-              amount: p.amount,
-              rawPayload: JSON.stringify({ source: "admin-late-credit", paymentId: p.id }),
-              adminLateCredit: { actorUserId: userId },
-            });
-            resp = json({ success: true, outcome: result.outcome });
-          } catch (err) {
-            // Rethrow: the Postgres tx is aborted once an error surfaces, so
-            // it must roll back (no partial writes) and the handler maps the
-            // domain error below.
-            throw err;
-          }
+          // No inner try/catch here: a rethrow-only catch is a no-op. The
+          // Postgres tx is aborted once an error surfaces, so it rolls back
+          // (no partial writes) and the outer handler maps MockPaymentError
+          // to 409 below; anything else propagates unchanged.
+          const result = await processMockPaymentEvent(tx, {
+            provider: p.provider,
+            orderCode: p.provider_order_code,
+            // Fixed reference derived from the payment id: the client can
+            // never choose it, and replays are idempotent.
+            providerReference: `admin-late-credit-${p.id}`,
+            // Amount ALWAYS comes from the locked payment row.
+            amount: p.amount,
+            rawPayload: JSON.stringify({ source: "admin-late-credit", paymentId: p.id }),
+            adminLateCredit: { actorUserId: userId },
+          });
+          resp = json({ success: true, outcome: result.outcome });
         });
       } catch (err) {
         if (err instanceof MockPaymentError) {
