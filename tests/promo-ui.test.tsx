@@ -15,7 +15,7 @@
 //   workspace change resets input and detaches;
 // - Server failures (404 masking, expired, suspended, auth) render honest
 //   friendly messages and never auto-retry or auto-submit.
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 import { JSDOM } from "jsdom";
 import { act } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -59,6 +59,24 @@ for (const [k, v] of Object.entries({
   (globalThis as Record<string, unknown>)[k] = v;
 }
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// Restore every installed global after the run (bounded existing pattern, same
+// as oauth-ui/help-context): without this, this file's jsdom window/document
+// leak into later test files sharing the bun worker and break their SSR
+// renders. Scheduled react-dom work is drained inside act FIRST, while the
+// window still exists — scheduler callbacks read window.event at flush time.
+afterAll(async () => {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  for (const k of GLOBAL_KEYS) {
+    const d = originals[k];
+    if (d) Object.defineProperty(globalThis, k, d);
+    else delete (globalThis as Record<string, unknown>)[k];
+  }
+  W.close();
+});
 
 // @ts-expect-error relative specifier has no declaration file under tests tsconfig
 const { createRoot } = await import("../apps/web/node_modules/react-dom/client");
@@ -697,6 +715,62 @@ test("unexpected network failure maps to the generic message", async () => {
     expect(h.container.textContent).toContain("try again");
   } finally {
     h.cleanup();
+  }
+});
+
+// --- Seam 3: heading/label/benefit copy contract -------------------------
+
+const BENEFIT_EN = "Enter a promo code to save on your next top-up or receive bonus credit.";
+
+function visibleText(container: HTMLElement): string {
+  // sr-only content stays in textContent; exclude it by class.
+  const clone = container.cloneNode(true) as HTMLElement;
+  for (const el of clone.querySelectorAll(".sr-only")) el.remove();
+  return clone.textContent ?? "";
+}
+
+test("one visible 'Promo code' heading; label is sr-only with htmlFor preserved; benefit copy visible once", async () => {
+  const h = mount();
+  try {
+    const headings = [...h.container.querySelectorAll("h3")].filter(
+      (el) => el.textContent?.trim() === "Promo code",
+    );
+    expect(headings.length).toBe(1);
+
+    // Accessible label still names the input (screen-reader text), but is not
+    // shown twice next to the identical heading.
+    const label = h.container.querySelector<HTMLLabelElement>('label[for="promo-code-input"]');
+    expect(label).toBeTruthy();
+    expect(label!.className).toContain("sr-only");
+    expect(visibleText(h.container)).not.toContain("Mã khuyến mãi");
+
+    // Benefit copy: exactly one visible occurrence beneath the input.
+    expect(visibleText(h.container).split(BENEFIT_EN).length - 1).toBe(1);
+
+    // Input describes itself via the benefit paragraph (aria-describedby).
+    const input = h.container.querySelector<HTMLInputElement>("#promo-code-input")!;
+    const describedBy = input.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(h.container.querySelector(`[id="${describedBy!}"]`)?.textContent).toContain(BENEFIT_EN);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test("benefit copy renders in Vietnamese under the vi locale", async () => {
+  const { useLocaleStore } = await import("../apps/web/src/lib/i18n/locale");
+  const prev = useLocaleStore.getState().locale;
+  act(() => useLocaleStore.getState().setLocale("vi"));
+  const h = mount();
+  try {
+    expect(
+      visibleText(h.container).split(
+        "Nhập mã khuyến mãi để tiết kiệm cho lần nạp tiếp theo hoặc nhận thêm tín dụng thưởng.",
+      ).length - 1,
+    ).toBe(1);
+  } finally {
+    h.cleanup();
+    act(() => useLocaleStore.getState().setLocale(prev));
   }
 });
 

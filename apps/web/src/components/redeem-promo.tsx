@@ -18,7 +18,7 @@
  * The code is a secret-ish bearer token: controlled component state only,
  * never persisted or logged. `autocomplete=off` is kept.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../lib/api";
 import { useT, type LocaleEntry } from "../lib/i18n/t";
@@ -124,7 +124,13 @@ export function redeemErrorKey(err: unknown): PromoPanelErrorKey {
 
 const dict = {
   title: { en: "Promo code", vi: "Mã khuyến mãi" },
+  // Visually hidden: the heading above already says the same thing; the label
+  // exists for the accessible name of the input only.
   label: { en: "Promo code", vi: "Mã khuyến mãi" },
+  benefit: {
+    en: "Enter a promo code to save on your next top-up or receive bonus credit.",
+    vi: "Nhập mã khuyến mãi để tiết kiệm cho lần nạp tiếp theo hoặc nhận thêm tín dụng thưởng.",
+  },
   apply: { en: "Apply", vi: "Áp dụng" },
   errEmpty: { en: "Enter a promo code", vi: "Nhập mã khuyến mãi" },
   errFormat: {
@@ -226,6 +232,9 @@ export function PromoCodePanel({
   onDetach,
 }: PromoCodePanelProps) {
   const t = useT(dict);
+  // Unique per instance so multiple panels on one page never share a
+  // describedby target.
+  const benefitId = useId();
   const queryClient = useQueryClient();
   const [code, setCode] = useState("");
   const [validationError, setValidationError] = useState<PromoPanelErrorKey | null>(null);
@@ -397,33 +406,40 @@ export function PromoCodePanel({
   return (
     <div className="mt-6 border-t pt-4">
       <h3 className="text-sm font-semibold">{t("title")}</h3>
+      {/* The accessible label (sr-only) is rendered inside the form. */}
+      <p id={benefitId} className="mt-1 text-sm text-muted-foreground">
+        {t("benefit")}
+      </p>
       <form onSubmit={handleApply} className="mt-2 space-y-2" noValidate>
-        <label htmlFor="promo-code-input" className="block text-xs font-medium">
+        <label htmlFor="promo-code-input" className="sr-only">
           {t("label")}
         </label>
-        <Input
-          id="promo-code-input"
-          name="promo-code"
-          type="text"
-          autoComplete="off"
-          // Never offer to save a promo code as a credential or autofill it.
-          spellCheck={false}
-          className="font-mono"
-          value={code}
-          onChange={(e) => {
-            setCode(e.target.value);
-            setValidationError(null);
-            // The old preview and any attached top-up code belong to the old
-            // input; typing alone never fires a request (Apply is explicit).
-            setPreview(null);
-            activePercentCodeRef.current = null;
-            if (attachedRef.current) onDetachRef.current();
-          }}
-          disabled={pending}
-        />
-        <Button type="submit" className="w-full" aria-busy={pending}>
-          {t("apply")}
-        </Button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            id="promo-code-input"
+            name="promo-code"
+            type="text"
+            autoComplete="off"
+            // Never offer to save a promo code as a credential or autofill it.
+            spellCheck={false}
+            aria-describedby={benefitId}
+            className="font-mono sm:flex-1"
+            value={code}
+            onChange={(e) => {
+              setCode(e.target.value);
+              setValidationError(null);
+              // The old preview and any attached top-up code belong to the old
+              // input; typing alone never fires a request (Apply is explicit).
+              setPreview(null);
+              activePercentCodeRef.current = null;
+              if (attachedRef.current) onDetachRef.current();
+            }}
+            disabled={pending}
+          />
+          <Button type="submit" className="w-full sm:w-auto" aria-busy={pending}>
+            {t("apply")}
+          </Button>
+        </div>
         {previewError ? (
           <p role="alert" className="text-sm text-destructive">
             {previewError}
