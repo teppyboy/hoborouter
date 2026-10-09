@@ -19,10 +19,12 @@ Spec: `docs/superpowers/specs/2026-10-09-ui-redesign.md`. Mode: Operate (code-le
 5. **Cross-cutting pass** — loading/error/empty states, keyboard/touch, reduced motion, en/vi sweep across touched surfaces.
 
 ## Constraints per child
+
 - No `apps/api/*`, no `packages/*`, no deps, no `lib/format.ts` signature changes.
 - Conventional commits, explicit paths, narrow relevant tests before each commit.
 - After web UI changes: run `impeccable detect --json <changed targets>` once at concept-selection/verification time.
 - DESIGN.md authored only after implementation finishes (not premature).
 
 ## Verification gate
+
 - `PORT=3998 bun run test` (after `bun run db:test:up`), `bun run check`, web `tsc -b`.
