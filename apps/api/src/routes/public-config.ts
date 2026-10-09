@@ -6,6 +6,7 @@
 import { Elysia, t } from "elysia";
 import { jsonError } from "../authz";
 import { emailVerificationEnabled } from "../email";
+import { oauthProviderFlags } from "../oauth-config";
 
 export const publicConfigRoutes = () =>
   new Elysia({ name: "public-config" }).get(
@@ -16,6 +17,11 @@ export const publicConfigRoutes = () =>
         emailVerification: t.Object({
           enabled: t.Boolean(),
           required: t.Boolean(),
+        }),
+        socialProviders: t.Object({
+          google: t.Boolean(),
+          discord: t.Boolean(),
+          github: t.Boolean(),
         }),
       }),
       detail: {
@@ -48,6 +54,10 @@ export const publicConfigRoutes = () =>
         // signup/resend mails will actually be sent (SMTP configured). It is
         // NEVER a requirement flag — unverified users can sign in normally.
         emailVerification: { enabled: emailVerificationEnabled(), required: false },
+        // Server truth: a provider is advertised ONLY when both of its env
+        // credentials are configured (see oauth-config). Credentials and other
+        // secrets never appear here; the SPA renders provider buttons per flag.
+        socialProviders: oauthProviderFlags(process.env),
       };
     },
   );

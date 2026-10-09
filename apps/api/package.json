@@ -19,7 +19,8 @@
     "@hoborouter/wallet": "workspace:*",
     "better-auth": "1.7.6",
     "drizzle-orm": "0.45.3",
-    "elysia": "2.0.0-exp.64"
+    "elysia": "2.0.0-exp.64",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",

@@ -10,6 +10,7 @@ import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { checkPassword } from "@hoborouter/shared";
 import type { Db } from "@hoborouter/db";
 import { bootstrapFirstInstanceAdmin } from "./instance-admin";
+import { socialProvidersOption } from "./oauth-config";
 import {
   emailVerificationEnabled,
   sendVerificationEmail as smtpSendVerificationEmail,
@@ -83,10 +84,23 @@ export function createAuth(db: Db) {
       schema: { ...schema, user: schema.users },
     }),
     user: { modelName: "users" },
+    // OAuth sign-in (Google/Discord/GitHub) only when BOTH credentials for a
+    // provider are configured. Nothing here changes linking semantics: Better
+    // Auth's safe defaults apply (implicit linking requires a VERIFIED provider
+    // email AND a verified local user; allowDifferentEmails stays false), so an
+    // unverified OAuth identity can never silently take over an account.
+    // Admin bootstrap still flows through the email-matched user.create.after
+    // hook above — provider identity grants no privilege by itself.
+    socialProviders: socialProvidersOption(process.env),
     databaseHooks: {
       user: {
         create: {
-          after: async (user) => {
+          after: async (user, ctx) => {
+            // OAuth-created detection for BOTH admin-grant paths below: a
+            // Better Auth social callback creates the user at /callback/:provider
+            // (or /sign-in/social); password/email signup never hits these paths.
+            const path = typeof ctx?.path === "string" ? ctx.path : "";
+            const oauthCreated = path.startsWith("/callback/") || path === "/sign-in/social";
             // Production bootstrap: the configured email becomes instance admin
             // in ANY environment, but only while the instance has zero admins.
             const bootstrapEmail = process.env.HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL;
@@ -95,10 +109,27 @@ export function createAuth(db: Db) {
               typeof user.email === "string" &&
               user.email.toLowerCase() === bootstrapEmail.toLowerCase()
             ) {
-              await bootstrapFirstInstanceAdmin(db, user.email);
+              // Provider-aware gate: OAuth-created users may only bootstrap the
+              // instance admin from a VERIFIED provider email. An unverified
+              // email claim from any provider can never grant instance admin
+              // (no email-only takeover via a spoofed provider identity).
+              // Password signup keeps the plain email-match behavior: the
+              // bootstrap email is a deployment-only value known to the
+              // operator, who provisions it through the existing path.
+              if (oauthCreated && user.emailVerified !== true) {
+                console.warn(
+                  "[auth] OAuth signup matched the configured bootstrap email but the provider email is not verified; instance admin grant skipped",
+                );
+              } else {
+                await bootstrapFirstInstanceAdmin(db, user.email);
+              }
             }
             // Dev/test-only convenience: auto-grant instance admin to the
             // configured bootstrap email at signup. Production never lands here.
+            // Same provider-aware gate as the production bootstrap above: an
+            // unverified OAuth email claim can never grant instance admin,
+            // even in dev/test (same attack, same answer). Password signup
+            // keeps the plain email-match dev convenience.
             const adminEmail = process.env.HBR_DEV_ADMIN_EMAIL;
             const env = process.env.NODE_ENV;
             if (
@@ -107,10 +138,16 @@ export function createAuth(db: Db) {
               typeof user.email === "string" &&
               user.email.toLowerCase() === adminEmail.toLowerCase()
             ) {
-              await db
-                .insert(instanceAdmins)
-                .values({ user_id: user.id, created_at: Date.now(), added_by: null })
-                .onConflictDoNothing();
+              if (oauthCreated && user.emailVerified !== true) {
+                console.warn(
+                  "[auth] Dev/test OAuth signup matched HBR_DEV_ADMIN_EMAIL but the provider email is not verified; instance admin grant skipped",
+                );
+              } else {
+                await db
+                  .insert(instanceAdmins)
+                  .values({ user_id: user.id, created_at: Date.now(), added_by: null })
+                  .onConflictDoNothing();
+              }
             }
           },
         },

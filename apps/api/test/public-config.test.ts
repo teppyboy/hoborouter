@@ -7,7 +7,17 @@ import { makeApp, req } from "./helpers";
 
 // TURNSTILE_* env is process-global: pin a deterministic state before each
 // test and restore whatever the original values were after each test.
-const KEYS = ["TURNSTILE_SECRET_KEY", "TURNSTILE_SITE_KEY", "VITE_TURNSTILE_SITE_KEY"] as const;
+const KEYS = [
+  "TURNSTILE_SECRET_KEY",
+  "TURNSTILE_SITE_KEY",
+  "VITE_TURNSTILE_SITE_KEY",
+  "HBR_OAUTH_GOOGLE_CLIENT_ID",
+  "HBR_OAUTH_GOOGLE_CLIENT_SECRET",
+  "HBR_OAUTH_DISCORD_CLIENT_ID",
+  "HBR_OAUTH_DISCORD_CLIENT_SECRET",
+  "HBR_OAUTH_GITHUB_CLIENT_ID",
+  "HBR_OAUTH_GITHUB_CLIENT_SECRET",
+] as const;
 const saved = new Map<string, string | undefined>();
 
 afterEach(() => {
@@ -38,6 +48,7 @@ describe("public-config", () => {
     expect(body).toEqual({
       turnstileSiteKey: null,
       emailVerification: { enabled: false, required: false },
+      socialProviders: { google: false, discord: false, github: false },
     });
   });
 
@@ -53,6 +64,7 @@ describe("public-config", () => {
     expect(await res.json()).toEqual({
       turnstileSiteKey: null,
       emailVerification: { enabled: false, required: false },
+      socialProviders: { google: false, discord: false, github: false },
     });
   });
 
@@ -94,5 +106,46 @@ describe("public-config", () => {
     const { app } = await makeApp();
     const res = await req(app, "/api/v1/public-config");
     expect(res.status).toBe(503);
+  });
+
+  test("no OAuth env: all social provider flags false", async () => {
+    pinEnv({});
+    const { app } = await makeApp();
+    const res = await req(app, "/api/v1/public-config");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.socialProviders).toEqual({ google: false, discord: false, github: false });
+  });
+
+  test("complete provider pair: only that provider advertised", async () => {
+    pinEnv({
+      HBR_OAUTH_GITHUB_CLIENT_ID: "gh-id",
+      HBR_OAUTH_GITHUB_CLIENT_SECRET: "gh-secret-value",
+    });
+    const { app } = await makeApp();
+    const res = await req(app, "/api/v1/public-config");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.socialProviders).toEqual({ google: false, discord: false, github: true });
+  });
+
+  test("partial provider config (id only): flag stays false", async () => {
+    pinEnv({ HBR_OAUTH_GOOGLE_CLIENT_ID: "g-id" });
+    const { app } = await makeApp();
+    const res = await req(app, "/api/v1/public-config");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.socialProviders).toEqual({ google: false, discord: false, github: false });
+  });
+
+  test("OAuth secrets never appear in the public-config response", async () => {
+    pinEnv({
+      HBR_OAUTH_GITHUB_CLIENT_ID: "gh-id",
+      HBR_OAUTH_GITHUB_CLIENT_SECRET: "gh-secret-value",
+    });
+    const { app } = await makeApp();
+    const res = await req(app, "/api/v1/public-config");
+    expect(res.status).toBe(200);
+    expect(await res.text()).not.toContain("gh-secret-value");
   });
 });
