@@ -99,6 +99,20 @@
       "when": 1791900000000,
       "tag": "0013_api_keys_purpose",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792000000000,
+      "tag": "0014_catalog_revision_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1792100000000,
+      "tag": "0015_admin_wallet_adjustments",
+      "breakpoints": true
     }
   ]
 }

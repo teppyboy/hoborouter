@@ -185,6 +185,55 @@ export const ledgerEntries = pgTable(
     ),
   ],
 );
+// --- admin wallet adjustment receipts ---
+// One immutable receipt per adjustment attempt. UNIQUE(actor_user_id,
+// idempotency_key) is the replay arbiter: different actors may reuse a client
+// key, so the key alone must not be unique. The receipt fields
+// (balance_before/balance_after/reserved/request_payload) are persisted so a
+// replay returns the ORIGINAL result without recomputation. ledger_entry_id is
+// set later in the SAME transaction, after the ledger row insert; the
+// "non-null at commit" guarantee is application-enforced (single transaction
+// sequence + rollback regression tests), not declaratively enforceable.
+export const adminWalletAdjustments = pgTable(
+  "admin_wallet_adjustments",
+  {
+    id: text("id").primaryKey(),
+    actor_user_id: text("actor_user_id")
+      .notNull()
+      .references(() => users.id),
+    idempotency_key: text("idempotency_key").notNull(),
+    wallet_id: text("wallet_id")
+      .notNull()
+      .references(() => wallets.id),
+    workspace_id: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    // Signed, non-zero, bounded money delta; ledger.amount is |delta|.
+    delta: big("delta").notNull(),
+    // ADMIN-PRIVATE: never surfaced to workspace members/admins.
+    reason: text("reason").notNull(),
+    balance_before: big("balance_before").notNull(),
+    balance_after: big("balance_after").notNull(),
+    reserved: big("reserved").notNull(),
+    ledger_entry_id: text("ledger_entry_id").references(() => ledgerEntries.id),
+    request_payload: jsonb("request_payload")
+      .$type<{ workspaceId: string; delta: number; reason: string }>()
+      .notNull(),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("admin_wallet_adjustments_actor_key_uq").on(t.actor_user_id, t.idempotency_key),
+    check(
+      "admin_wallet_adjustments_delta_type",
+      sql`${t.delta} != 0 AND ${t.delta} >= -${MAX_BOUND} AND ${t.delta} <= ${MAX_BOUND}`,
+    ),
+    check("admin_wallet_adjustments_balance_before_type", intBounded(t.balance_before)),
+    check("admin_wallet_adjustments_balance_after_type", intBounded(t.balance_after)),
+    check("admin_wallet_adjustments_reserved_type", intBounded(t.reserved)),
+    check("admin_wallet_adjustments_created_at", intBounded(t.created_at)),
+  ],
+);
+
 // --- payments ---
 export const payments = pgTable(
   "payments",
@@ -280,8 +329,18 @@ export const creditBundles = pgTable(
     credit_usd: text("credit_usd"),
     bonus_usd: text("bonus_usd"),
     creation_fx_rate_vnd_per_usd: big("creation_fx_rate_vnd_per_usd"),
+    // Financial revisions (migration 0014): revision_key exists ONLY on the
+    // successor row created by a revision and is arbitrated by the partial
+    // unique index below; successor_id exists ONLY on the superseded row and
+    // is set in the SAME transaction as the successor insert. Assigning the
+    // same revision_key to both rows would violate the index by construction.
+    revision_key: text("revision_key"),
+    successor_id: text("successor_id").references((): AnyPgColumn => creditBundles.id),
   },
   (t) => [
+    uniqueIndex("cb_revision_key_uq")
+      .on(t.revision_key)
+      .where(sql`revision_key IS NOT NULL`),
     check("cb_price_vnd", sql`${t.price_vnd} > 0 AND ${t.price_vnd} <= ${MAX_BOUND}`),
     check("cb_credit_vnd", intBounded(t.credit_vnd)),
     check("cb_bonus_vnd", intBounded(t.bonus_vnd)),
@@ -333,8 +392,15 @@ export const subscriptionPlans = pgTable(
     price_usd: text("price_usd"),
     credit_per_period_usd: text("credit_per_period_usd"),
     creation_fx_rate_vnd_per_usd: big("creation_fx_rate_vnd_per_usd"),
+    // Financial revision columns (migration 0014) — same successor/superseded
+    // split as credit_bundles above.
+    revision_key: text("revision_key"),
+    successor_id: text("successor_id").references((): AnyPgColumn => subscriptionPlans.id),
   },
   (t) => [
+    uniqueIndex("sp_revision_key_uq")
+      .on(t.revision_key)
+      .where(sql`revision_key IS NOT NULL`),
     check("sp_price_vnd", sql`${t.price_vnd} > 0 AND ${t.price_vnd} <= ${MAX_BOUND}`),
     check("sp_credit_per_period_vnd", intBounded(t.credit_per_period_vnd)),
     check("sp_period_days", sql`${t.period_days} >= 1`),
