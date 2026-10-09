@@ -4,21 +4,33 @@
 // chips, the managed-key reuse notice (device-named browser key), and the
 // collapsed Advanced manual-key section (native <details>, so its summary is
 // assertable without grepping CSS).
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // lib/auth runs createAuthClient (window.location.origin) at module load;
-// stub a minimal window so the SSR render can import the page.
-(globalThis as { window?: unknown }).window ??= { location: { origin: "http://localhost" } };
+// stub a minimal window so the SSR render can import the page. The previous
+// globalThis descriptors are restored in afterAll so this file never leaks a
+// stub window/localStorage into later files sharing the bun worker.
+const g = globalThis as { window?: unknown; localStorage?: unknown };
+const previousWindow = Object.getOwnPropertyDescriptor(g, "window");
+const previousLocalStorage = Object.getOwnPropertyDescriptor(g, "localStorage");
+g.window ??= { location: { origin: "http://localhost" } };
 // The chat page imports the persisted hbr-locale store at module load; stub
 // localStorage so the persist middleware has storage in this SSR-only file.
-(globalThis as { localStorage?: unknown }).localStorage ??= {
+g.localStorage ??= {
   getItem: () => null,
   setItem: () => {},
   removeItem: () => {},
 };
 const { ChatPage } = await import("../apps/web/src/pages/chat");
+
+afterAll(() => {
+  if (previousWindow) Object.defineProperty(g, "window", previousWindow);
+  else delete g.window;
+  if (previousLocalStorage) Object.defineProperty(g, "localStorage", previousLocalStorage);
+  else delete g.localStorage;
+});
 
 function render(): string {
   const qc = new QueryClient();

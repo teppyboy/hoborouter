@@ -10,8 +10,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // lib/auth runs createAuthClient (window.location.origin) at module load;
 // stub a minimal window so the SSR render test can import the page (same
 // pattern as billing-bundles-ui.test.tsx).
-const REAL_WINDOW = (globalThis as { window?: unknown }).window;
-(globalThis as { window?: unknown }).window ??= {
+const g = globalThis as { window?: unknown };
+const previousWindow = Object.getOwnPropertyDescriptor(g, "window");
+g.window ??= {
   location: { origin: "http://localhost" },
   matchMedia: () => ({
     matches: false,
@@ -31,8 +32,9 @@ import { afterAll } from "bun:test";
 import { installSsrDom } from "./helpers/ssr-dom";
 const restoreSsrDom = installSsrDom();
 afterAll(() => {
-  (globalThis as { window?: unknown }).window = REAL_WINDOW;
   restoreSsrDom();
+  if (previousWindow) Object.defineProperty(g, "window", previousWindow);
+  else delete g.window;
 });
 const { ThroughputProductCards, ThroughputAllowanceStatus, THROUGHPUT_ALLOWANCE_DISCLAIMER } =
   await import("../apps/web/src/pages/billing/bundles");

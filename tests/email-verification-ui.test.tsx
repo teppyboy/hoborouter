@@ -6,7 +6,7 @@
 //   actually enabled; no SMTP → no banner. Verified users never see it.
 // - Admin users table badges the email_verified flag honestly: true/false,
 //   and "Unavailable" when the payload omits it.
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, createRootRoute, createMemoryHistory } from "@tanstack/react-router";
@@ -16,8 +16,12 @@ import { createRouter, createRootRoute, createMemoryHistory } from "@tanstack/re
 import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js";
 
 // lib/auth reads window.location.origin at module load; signup's Turnstile
-// wiring reads matchMedia. Stub a minimal window for the SSR render.
-(globalThis as { window?: unknown }).window ??= {
+// wiring reads matchMedia. Stub a minimal window for the SSR render. The
+// previous globalThis descriptor is restored in afterAll so the stub never
+// leaks into later files sharing the bun worker.
+const g = globalThis as { window?: unknown };
+const previousWindow = Object.getOwnPropertyDescriptor(g, "window");
+g.window ??= {
   location: { origin: "http://localhost" },
   matchMedia: () => ({
     matches: false,
@@ -28,6 +32,10 @@ import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js"
     removeListener() {},
   }),
 };
+afterAll(() => {
+  if (previousWindow) Object.defineProperty(g, "window", previousWindow);
+  else delete g.window;
+});
 const { VerifyEmailView } = await import("../apps/web/src/pages/auth/verify-email");
 const { UnverifiedEmailBanner } = await import("../apps/web/src/components/app-shell");
 const { UsersTable } = await import("../apps/web/src/pages/admin/users");

@@ -4,13 +4,18 @@
 //   accessible title/description (Radix dialog semantics).
 // - Header keeps the account menu trigger reachable with only the avatar on
 //   the narrowest viewports (username hidden below sm).
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, createRootRoute, createMemoryHistory } from "@tanstack/react-router";
 import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js";
 
-(globalThis as { window?: unknown }).window ??= {
+// Minimal window stub for the SSR render; the previous globalThis descriptor
+// is restored in afterAll so the stub never leaks into later SSR files
+// sharing the bun worker.
+const g = globalThis as { window?: unknown };
+const previousWindow = Object.getOwnPropertyDescriptor(g, "window");
+g.window ??= {
   location: { origin: "http://localhost" },
   matchMedia: () => ({
     matches: false,
@@ -21,6 +26,10 @@ import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js"
     removeListener() {},
   }),
 };
+afterAll(() => {
+  if (previousWindow) Object.defineProperty(g, "window", previousWindow);
+  else delete g.window;
+});
 const { AppShell } = await import("../apps/web/src/components/app-shell");
 
 function renderShell(): string {

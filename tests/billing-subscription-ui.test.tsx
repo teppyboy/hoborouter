@@ -8,8 +8,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // lib/auth runs createAuthClient (window.location.origin) at module load;
-// stub a minimal window so the SSR render test can import the pages.
-(globalThis as { window?: unknown }).window ??= { location: { origin: "http://localhost" } };
+// stub a minimal window so the SSR render test can import the pages. The
+// previous globalThis descriptor is restored in afterAll: leaving this stub
+// installed would leak a matchMedia-less window into later SSR files sharing
+// the bun worker (e.g. about-page), which then crash on theme detection.
+const g = globalThis as { window?: unknown };
+const previousWindow = Object.getOwnPropertyDescriptor(g, "window");
+g.window ??= { location: { origin: "http://localhost" } };
 // Radix (pulled in by the billing page) captures document availability when
 // its modules first load; without any document the captured state breaks
 // Radix event wiring for later jsdom tests sharing this bun process
@@ -18,7 +23,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterAll } from "bun:test";
 import { installSsrDom } from "./helpers/ssr-dom";
 const restoreSsrDom = installSsrDom();
-afterAll(restoreSsrDom);
+afterAll(() => {
+  restoreSsrDom();
+  if (previousWindow) Object.defineProperty(g, "window", previousWindow);
+  else delete g.window;
+});
 const { PlanCards } = await import("../apps/web/src/pages/billing/bundles");
 const { SubscriptionCard } = await import("../apps/web/src/pages/billing/credits");
 const { formatLedgerMemoLabel } = await import("../apps/web/src/lib/display");

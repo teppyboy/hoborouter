@@ -4,7 +4,7 @@
 // - Config with a Turnstile site key requires a token (submit disabled until
 //   solved); config without one keeps the plain form working.
 // - Signup keeps the shared password checklist/confirm-password flow.
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -19,8 +19,12 @@ import {
 import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js";
 
 // lib/auth reads window.location.origin and theme reads matchMedia at module
-// load; SSR tests need minimal browser stubs.
-(globalThis as { window?: unknown }).window ??= {
+// load; SSR tests need minimal browser stubs. The previous globalThis
+// descriptor is restored in afterAll so the stub never leaks into later SSR
+// files sharing the bun worker.
+const g = globalThis as { window?: unknown };
+const previousWindow = Object.getOwnPropertyDescriptor(g, "window");
+g.window ??= {
   location: { origin: "http://localhost" },
   matchMedia: () => ({
     matches: false,
@@ -31,6 +35,10 @@ import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js"
     removeListener() {},
   }),
 };
+afterAll(() => {
+  if (previousWindow) Object.defineProperty(g, "window", previousWindow);
+  else delete g.window;
+});
 const { default: LoginPage } = await import("../apps/web/src/pages/auth/login");
 const { default: SignupPage } = await import("../apps/web/src/pages/auth/signup");
 

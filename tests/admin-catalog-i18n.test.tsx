@@ -90,9 +90,24 @@ beforeAll(async () => {
   ({ useLocaleStore } = await import("../apps/web/src/lib/i18n/locale"));
 });
 
-afterAll(() => {
+afterAll(async () => {
   useLocaleStore.getState().setLocale("en");
   if (realFetch) globalThis.fetch = realFetch;
+  // Drain React's scheduler queue (MessageChannel macrotasks) while the
+  // realm is installed: a pending NormalPriority callback reads
+  // `window.event` and crashes once these globals are deleted — only
+  // surfaces when another test file ran before this one.
+  for (let i = 0; i < 5; i++) {
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => {
+      const ch = new MessageChannel();
+      ch.port1.onmessage = () => {
+        ch.port1.close();
+        r();
+      };
+      ch.port2.postMessage(0);
+    });
+  }
   for (const k of GLOBAL_KEYS) {
     const d = originals[k];
     if (d) Object.defineProperty(globalThis, k, d);
@@ -164,9 +179,20 @@ function mountPage(node: React.ReactNode) {
     });
   };
   const bodyText = () => document.body.textContent ?? "";
-  const unmount = () => {
+  const unmount = async () => {
+    // Stop in-flight queries and unmount while the jsdom realm is installed;
+    // clearing the client after unmount prevents any scheduled React callback
+    // (its scheduler reads `window.event`) from firing after the globals are
+    // restored in afterAll.
+    await act(async () => {
+      await qc.cancelQueries();
+    });
     act(() => root.unmount());
+    qc.clear();
     container.remove();
+    await act(async () => {
+      for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 0));
+    });
   };
   return { container, settle, bodyText, unmount };
 }
@@ -214,7 +240,7 @@ test("capability input offers known suggestions (datalist) and stays freeform", 
     // No backend restriction: the form schema keeps capabilities optional.
     expect(page.bodyText()).not.toContain("Must be one of");
   } finally {
-    page.unmount();
+    await page.unmount();
   }
 });
 
@@ -241,7 +267,7 @@ test("edit sheet capability input offers the same known suggestions", async () =
     // Existing stored value loads verbatim (not rewritten to labels).
     expect(input!.value).toBe("chat");
   } finally {
-    page.unmount();
+    await page.unmount();
   }
 });
 
@@ -274,7 +300,7 @@ test("admin models page flips EN → VI and keeps model IDs untranslated", async
     expect(page.bodyText()).toContain("fake/test-model");
     expect(page.bodyText()).toContain("Fake Test");
   } finally {
-    page.unmount();
+    await page.unmount();
   }
 });
 
@@ -296,7 +322,7 @@ test("create-model dialog opens with translated labels in VI", async () => {
     // The example model ID placeholder stays untranslated.
     expect(page.bodyText()).not.toContain("Display name");
   } finally {
-    page.unmount();
+    await page.unmount();
   }
 });
 
@@ -332,7 +358,7 @@ test("admin bundles page flips EN → VI including amount validation errors", as
     expect(page.bodyText()).not.toContain("Enter a USD amount like 9.99");
     expect(page.bodyText()).not.toContain("Create bundle");
   } finally {
-    page.unmount();
+    await page.unmount();
   }
 });
 
@@ -359,6 +385,6 @@ test("plans scroll region label and credit/period column header flip EN → VI",
     expect(page.bodyText()).toContain("Chưa có tín dụng/kỳ nào");
     expect(page.bodyText()).not.toContain("Credit/period");
   } finally {
-    page.unmount();
+    await page.unmount();
   }
 });

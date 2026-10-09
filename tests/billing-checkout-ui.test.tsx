@@ -31,12 +31,17 @@ registerFaithfulApiMock();
 let activeWorkspace = "ws-test";
 const workspaceSubs = new Set<() => void>();
 mock.module("../apps/web/src/lib/workspace-queries", () => ({
+  // Third argument (getServerSnapshot) is required: mock.module is
+  // process-global and outlives this file, so SSR files sharing the worker
+  // render through this hook; without a server snapshot React's server
+  // renderer rejects with "Missing getServerSnapshot".
   useCurrentWorkspaceId: () =>
     useSyncExternalStore(
       (cb) => {
         workspaceSubs.add(cb);
         return () => workspaceSubs.delete(cb);
       },
+      () => activeWorkspace,
       () => activeWorkspace,
     ),
   useWorkspaces: () => ({ data: [], isSuccess: false }),
@@ -76,6 +81,9 @@ const GLOBAL_KEYS = [
   "SVGElement",
 ] as const;
 const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
+// act() reads this at call time; capture the previous value so afterAll can
+// restore exactly what this file installed, after unmount + drain.
+let previousActEnv: PropertyDescriptor | undefined;
 let jsdomWindow: { close: () => void } | null = null;
 
 let BillingBundlesPage: (typeof import("../apps/web/src/pages/billing/bundles"))["default"];
@@ -98,6 +106,7 @@ beforeAll(async () => {
   const raf = (cb: (t: number) => void) =>
     setTimeout(() => cb(Date.now()), 16) as unknown as number;
   for (const k of GLOBAL_KEYS) originals[k] = Object.getOwnPropertyDescriptor(globalThis, k);
+  previousActEnv = Object.getOwnPropertyDescriptor(globalThis, "IS_REACT_ACT_ENVIRONMENT");
   const values: Record<string, unknown> = {
     window: win,
     document: win.document,
@@ -150,9 +159,14 @@ afterAll(() => {
   }
   jsdomWindow?.close();
   jsdomWindow = null;
+  if (previousActEnv) Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", previousActEnv);
+  else delete (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT;
+  previousActEnv = undefined;
 });
 
-(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+beforeAll(() => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+});
 
 // --- harness ----------------------------------------------------------------
 

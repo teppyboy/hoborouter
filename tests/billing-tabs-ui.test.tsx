@@ -2,12 +2,21 @@
 // (role=tablist, aria-selected, labelled panels) and only the active tab's
 // rows render, so long histories scroll inside their panel instead of growing
 // the page. Static SSR render — no network, mirrors credits-payos-ui.test.tsx.
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 // lib/auth runs createAuthClient (window.location.origin) at module load;
-// stub a minimal window so the SSR render test can import the pages.
-(globalThis as { window?: unknown }).window ??= { location: { origin: "http://localhost" } };
+// stub a minimal window so the SSR render test can import the pages. The
+// previous globalThis descriptor is restored in afterAll: leaving this stub
+// installed would leak a matchMedia-less window into later SSR files sharing
+// the bun worker.
+const g = globalThis as { window?: unknown };
+const previousWindow = Object.getOwnPropertyDescriptor(g, "window");
+g.window ??= { location: { origin: "http://localhost" } };
+afterAll(() => {
+  if (previousWindow) Object.defineProperty(g, "window", previousWindow);
+  else delete g.window;
+});
 
 const credits = await import("../apps/web/src/pages/billing/credits");
 const { LedgerTabs } = credits;

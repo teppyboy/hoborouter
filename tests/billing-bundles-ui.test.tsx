@@ -11,8 +11,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 // includes matchMedia so a later test file in the same bun process (globalThis
 // leakage across files) that renders ThemeToggle under this window does not
 // crash; the previous value is restored after this file's tests.
-const REAL_WINDOW = (globalThis as { window?: unknown }).window;
-(globalThis as { window?: unknown }).window ??= {
+const g = globalThis as { window?: unknown };
+const previousWindow = Object.getOwnPropertyDescriptor(g, "window");
+g.window ??= {
   location: { origin: "http://localhost" },
   matchMedia: () => ({
     matches: false,
@@ -33,8 +34,9 @@ import { afterAll } from "bun:test";
 import { installSsrDom } from "./helpers/ssr-dom";
 const restoreSsrDom = installSsrDom();
 afterAll(() => {
-  (globalThis as { window?: unknown }).window = REAL_WINDOW;
   restoreSsrDom();
+  if (previousWindow) Object.defineProperty(g, "window", previousWindow);
+  else delete g.window;
 });
 const { BundleCards } = await import("../apps/web/src/pages/billing/bundles");
 const { formatLedgerMemoLabel } = await import("../apps/web/src/lib/display");

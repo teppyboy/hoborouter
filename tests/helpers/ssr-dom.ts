@@ -14,9 +14,10 @@ export function installSsrDom(): () => void {
     return () => {};
   }
   const win = new JSDOM("", { url: "http://localhost:5173" }).window;
-  const previous = g.document;
+  const previous = Object.getOwnPropertyDescriptor(g, "document");
   g.document = win.document;
   return () => {
-    g.document = previous;
+    if (previous) Object.defineProperty(g, "document", previous);
+    else delete g.document;
   };
 }
