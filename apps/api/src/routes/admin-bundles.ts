@@ -15,6 +15,29 @@ import { readPaymentLimits } from "../payment-creation";
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 
+// Replay key for a financial revision: sha256 over resource kind + acting
+// admin + target row + the canonical resolved request. Deterministic, so an
+// identical resubmission maps to the SAME successor row (the partial unique
+// index on revision_key arbitrates); any different payload or actor yields a
+// different key and is rejected as a conflict on an already-superseded row.
+const revisionKeyFor = (
+  resource: "bundle" | "plan",
+  actorUserId: string,
+  targetId: string,
+  canonical: unknown,
+): string =>
+  new Bun.CryptoHasher("sha256")
+    .update(`${resource}\u0000${actorUserId}\u0000${targetId}\u0000${JSON.stringify(canonical)}`)
+    .digest("hex");
+
+// No-op equivalence for one money field: a USD-authored field matches when
+// the canonical USD text is identical (same authored terms — the stored VND
+// stays the frozen conversion, so FX drift must not turn a resubmission into
+// a revision); a VND-authored field matches only a legacy VND-authored old
+// field with the same integer. Mixed authoring-form changes always revise.
+const moneyEquivalent = (field: FieldAmount, oldVnd: number, oldUsd: string | null): boolean =>
+  field.usd !== null ? oldUsd === field.usd : oldUsd === null && oldVnd === field.vnd;
+
 const posInt = (v: number | undefined): v is number =>
   typeof v === "number" && Number.isSafeInteger(v) && v > 0;
 const nonNegInt = (v: number | undefined): v is number =>
@@ -339,6 +362,144 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
         }
       },
     )
+    .post(
+      "/api/v1/admin/bundles/:id/revise",
+      {
+        params: t.Object({ id: t.String() }),
+        // Full create-validated financial body: the successor is a brand-new
+        // catalog row, not a mutation of the old one.
+        body: t.Object({
+          name: t.String({ minLength: 1 }),
+          price_vnd: t.Optional(t.Integer()),
+          credit_vnd: t.Optional(t.Integer()),
+          bonus_vnd: t.Optional(t.Integer()),
+          price_usd: t.Optional(t.String()),
+          credit_usd: t.Optional(t.String()),
+          bonus_usd: t.Optional(t.String()),
+        }),
+        detail: {
+          tags: ["Admin"],
+          summary: "Revise bundle financial terms (supersedes with a successor)",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params, body }) => {
+        const g = await guard(request);
+        if ("error" in g) return g.error;
+        const usdError = bundleFieldError(body);
+        if (usdError) return jsonError(400, "INVALID", usdError);
+        if (body.price_vnd !== undefined && !posInt(body.price_vnd))
+          return jsonError(400, "INVALID", "price_vnd must be a positive integer VND amount");
+        if (body.credit_vnd !== undefined && !nonNegInt(body.credit_vnd))
+          return jsonError(400, "INVALID", "credit_vnd must be a non-negative integer");
+        if (body.bonus_vnd !== undefined && !nonNegInt(body.bonus_vnd))
+          return jsonError(400, "INVALID", "bonus_vnd must be a non-negative integer");
+        const id = crypto.randomUUID();
+        // ONE transaction owns the old-row lock, FX read, successor insert,
+        // old-row link, and audit. The FOR UPDATE lock serializes concurrent
+        // revises of the same row, so the replay/conflict check and the
+        // revision_key unique index cannot race; any failure rolls back
+        // everything (no partial successor/link/audit).
+        const result = await db.transaction(async (tx) => {
+          const oldRows = await tx
+            .select()
+            .from(creditBundles)
+            .where(eq(creditBundles.id, params.id))
+            .limit(1)
+            .for("update");
+          const old = oldRows[0];
+          if (!old) return { kind: "missing" } as const;
+          const resolved = await resolveMixedBundleAmounts(tx, body);
+          if (!resolved.ok) return { kind: "invalid", message: resolved.message } as const;
+          // Replay key over the AUTHORED body (canonical USD text / authored
+          // VND integers), never the FX-resolved VND: an identical USD
+          // resubmission after an FX change must still find the original
+          // successor instead of surfacing as a conflict.
+          const revisionKey = revisionKeyFor("bundle", g.userId, params.id, {
+            name: body.name,
+            price:
+              body.price_usd !== undefined
+                ? { usd: canonicalUsd(body.price_usd) }
+                : { vnd: body.price_vnd },
+            credit:
+              body.credit_usd !== undefined
+                ? { usd: canonicalUsd(body.credit_usd) }
+                : { vnd: body.credit_vnd },
+            bonus:
+              body.bonus_usd !== undefined
+                ? { usd: canonicalUsd(body.bonus_usd) }
+                : { vnd: body.bonus_vnd ?? 0 },
+          });
+          // Superseded check BEFORE the no-op branch: once a successor exists,
+          // the old row is closed for business — a same-terms body is still a
+          // replay hit (same key) or a 409, never a 200 of the inactive row.
+          if (old.successor_id !== null) {
+            const succ = await tx
+              .select()
+              .from(creditBundles)
+              .where(eq(creditBundles.revision_key, revisionKey))
+              .limit(1);
+            if (succ[0]) return { kind: "replay", row: succ[0] } as const;
+            return { kind: "conflict" } as const;
+          }
+          if (
+            moneyEquivalent(resolved.price, old.price_vnd, old.price_usd) &&
+            moneyEquivalent(resolved.credit, old.credit_vnd, old.credit_usd) &&
+            moneyEquivalent(resolved.bonus, old.bonus_vnd, old.bonus_usd)
+          ) {
+            // No-op: equivalent terms, old row returned unchanged, no
+            // successor, no audit revision.
+            return { kind: "noop", row: old } as const;
+          }
+          const row: Record<string, unknown> = {
+            id,
+            name: body.name,
+            price_vnd: resolved.price.vnd,
+            credit_vnd: resolved.credit.vnd,
+            bonus_vnd: resolved.bonus.vnd,
+            active: true,
+            created_at: Date.now(),
+            price_usd: resolved.price.usd,
+            credit_usd: resolved.credit.usd,
+            bonus_usd: resolved.bonus.usd,
+            creation_fx_rate_vnd_per_usd:
+              resolved.price.usd !== null ||
+              resolved.credit.usd !== null ||
+              resolved.bonus.usd !== null
+                ? resolved.fxRateVndPerUsd
+                : null,
+            revision_key: revisionKey,
+            // Never superseded at creation: the link lives on the OLD row.
+            successor_id: null,
+          };
+          await tx.insert(creditBundles).values(row as typeof creditBundles.$inferInsert);
+          // Same-transaction link makes the old row the single superseded
+          // predecessor; its money values are never touched.
+          await tx
+            .update(creditBundles)
+            .set({ active: false, successor_id: id })
+            .where(eq(creditBundles.id, params.id));
+          await writeAudit(tx, {
+            actorUserId: g.userId,
+            workspaceId: null,
+            action: "bundle.revise",
+            target: params.id,
+            detail: { before: old, successor: row },
+          });
+          return { kind: "created", row } as const;
+        });
+        if (result.kind === "missing") return jsonError(404, "NOT_FOUND", "Bundle not found");
+        if (result.kind === "invalid") return jsonError(400, "INVALID", result.message);
+        if (result.kind === "conflict")
+          return jsonError(
+            409,
+            "RESOURCE_SUPERSEDED",
+            "Bundle already superseded by a different revision",
+          );
+        if (result.kind === "created") return json({ data: result.row }, 201);
+        return json({ data: result.row });
+      },
+    )
     .patch(
       "/api/v1/admin/bundles/:id",
       {
@@ -529,6 +690,156 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
           });
           return json(row, 201);
         }
+      },
+    )
+    .post(
+      "/api/v1/admin/subscription-plans/:id/revise",
+      {
+        params: t.Object({ id: t.String() }),
+        // Financial fields only — rate_limit_per_minute is NOT revisable here
+        // (additionalProperties:false rejects it); live RPM stays managed by
+        // the PATCH endpoint and is never retroactively changed by a revision.
+        body: t.Object(
+          {
+            name: t.String({ minLength: 1 }),
+            price_vnd: t.Optional(t.Integer()),
+            credit_per_period_vnd: t.Optional(t.Integer()),
+            price_usd: t.Optional(t.String()),
+            credit_per_period_usd: t.Optional(t.String()),
+            period_days: t.Optional(t.Integer()),
+          },
+          { additionalProperties: false },
+        ),
+        detail: {
+          tags: ["Admin"],
+          summary: "Revise plan financial terms (supersedes with a successor)",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params, body }) => {
+        const g = await guard(request);
+        if ("error" in g) return g.error;
+        if (body.price_vnd !== undefined && body.price_usd !== undefined)
+          return jsonError(400, "INVALID", "cannot set both price_vnd and price_usd for one field");
+        if (body.credit_per_period_vnd !== undefined && body.credit_per_period_usd !== undefined)
+          return jsonError(
+            400,
+            "INVALID",
+            "cannot set both credit_per_period_vnd and credit_per_period_usd for one field",
+          );
+        if (body.price_vnd === undefined && body.price_usd === undefined)
+          return jsonError(400, "INVALID", "plan requires price_vnd or price_usd");
+        if (body.credit_per_period_vnd === undefined && body.credit_per_period_usd === undefined)
+          return jsonError(
+            400,
+            "INVALID",
+            "plan requires credit_per_period_vnd or credit_per_period_usd",
+          );
+        if (body.period_days !== undefined && !(body.period_days >= 1))
+          return jsonError(400, "INVALID", "period_days must be >= 1");
+        if (body.price_vnd !== undefined && !posInt(body.price_vnd))
+          return jsonError(400, "INVALID", "price_vnd must be a positive integer VND amount");
+        if (body.credit_per_period_vnd !== undefined && !nonNegInt(body.credit_per_period_vnd))
+          return jsonError(400, "INVALID", "credit_per_period_vnd must be a non-negative integer");
+        const id = crypto.randomUUID();
+        // Same one-transaction contract as the bundle revise above.
+        const result = await db.transaction(async (tx) => {
+          const oldRows = await tx
+            .select()
+            .from(subscriptionPlans)
+            .where(eq(subscriptionPlans.id, params.id))
+            .limit(1)
+            .for("update");
+          const old = oldRows[0];
+          if (!old) return { kind: "missing" } as const;
+          const resolved = await resolveMixedPlanAmounts(tx, body);
+          if (!resolved.ok) return { kind: "invalid", message: resolved.message } as const;
+          const periodDays = body.period_days ?? 30;
+          // Replay key over the AUTHORED body (canonical USD text / authored
+          // VND integers + period), never the FX-resolved VND — same contract
+          // as the bundle revise above.
+          const revisionKey = revisionKeyFor("plan", g.userId, params.id, {
+            name: body.name,
+            price:
+              body.price_usd !== undefined
+                ? { usd: canonicalUsd(body.price_usd) }
+                : { vnd: body.price_vnd },
+            credit:
+              body.credit_per_period_usd !== undefined
+                ? { usd: canonicalUsd(body.credit_per_period_usd) }
+                : { vnd: body.credit_per_period_vnd },
+            period_days: periodDays,
+          });
+          // Superseded check BEFORE the no-op branch (same ordering as the
+          // bundle revise): a closed row is never returned as a no-op 200.
+          if (old.successor_id !== null) {
+            const succ = await tx
+              .select()
+              .from(subscriptionPlans)
+              .where(eq(subscriptionPlans.revision_key, revisionKey))
+              .limit(1);
+            if (succ[0]) return { kind: "replay", row: succ[0] } as const;
+            return { kind: "conflict" } as const;
+          }
+          if (
+            moneyEquivalent(resolved.price, old.price_vnd, old.price_usd) &&
+            moneyEquivalent(
+              resolved.credit,
+              old.credit_per_period_vnd,
+              old.credit_per_period_usd,
+            ) &&
+            periodDays === old.period_days
+          ) {
+            // No-op: equivalent financial terms (price, credit, period), old
+            // row returned unchanged, no successor, no audit revision.
+            return { kind: "noop", row: old } as const;
+          }
+          const row: Record<string, unknown> = {
+            id,
+            name: body.name,
+            price_vnd: resolved.price.vnd,
+            credit_per_period_vnd: resolved.credit.vnd,
+            period_days: periodDays,
+            // Carry the live RPM: rate_limit_per_minute stays PATCH-editable
+            // (never a frozen revision term), so the successor must keep the
+            // current value instead of resetting new purchases to default.
+            rate_limit_per_minute: old.rate_limit_per_minute,
+            active: true,
+            created_at: Date.now(),
+            price_usd: resolved.price.usd,
+            credit_per_period_usd: resolved.credit.usd,
+            creation_fx_rate_vnd_per_usd:
+              resolved.price.usd !== null || resolved.credit.usd !== null
+                ? resolved.fxRateVndPerUsd
+                : null,
+            revision_key: revisionKey,
+            // Never superseded at creation: the link lives on the OLD row.
+            successor_id: null,
+          };
+          await tx.insert(subscriptionPlans).values(row as typeof subscriptionPlans.$inferInsert);
+          await tx
+            .update(subscriptionPlans)
+            .set({ active: false, successor_id: id })
+            .where(eq(subscriptionPlans.id, params.id));
+          await writeAudit(tx, {
+            actorUserId: g.userId,
+            workspaceId: null,
+            action: "plan.revise",
+            target: params.id,
+            detail: { before: old, successor: row },
+          });
+          return { kind: "created", row } as const;
+        });
+        if (result.kind === "missing") return jsonError(404, "NOT_FOUND", "Plan not found");
+        if (result.kind === "invalid") return jsonError(400, "INVALID", result.message);
+        if (result.kind === "conflict")
+          return jsonError(
+            409,
+            "RESOURCE_SUPERSEDED",
+            "Plan already superseded by a different revision",
+          );
+        if (result.kind === "created") return json({ data: result.row }, 201);
+        return json({ data: result.row });
       },
     )
     .patch(

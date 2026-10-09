@@ -399,7 +399,6 @@ export async function processMockPaymentEvent(
         .select({
           credit_per_period_vnd: subscriptionPlans.credit_per_period_vnd,
           period_days: subscriptionPlans.period_days,
-          active: subscriptionPlans.active,
         })
         .from(subscriptionPlans)
         .where(eq(subscriptionPlans.id, payment.subscription_plan_id));
@@ -410,9 +409,11 @@ export async function processMockPaymentEvent(
           `missing subscription plan ${payment.subscription_plan_id}`,
         );
       }
-      if (!plan.active) {
-        throw new MockPaymentError("invalid", `plan ${payment.subscription_plan_id} is inactive`);
-      }
+      // No active check: deactivation (including financial supersession via
+      // the revise endpoint) stops SALES only. A pending payment already
+      // references the exact plan row it paid for through the payments FK,
+      // and that row's money/period values are immutable, so settlement uses
+      // the paid terms — deactivation must never strand a paid payment.
       const now = Date.now();
       const subWallet = await ensureSubscriptionWallet(tx, payment.workspace_id, now);
       await applySubscriptionExpiry(tx, payment.workspace_id, now);

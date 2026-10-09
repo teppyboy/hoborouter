@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -33,14 +33,26 @@ export const adminBundlesCopy = {
   // Shared chrome.
   createdToast: { en: "Created", vi: "Đã tạo" },
   requestFailed: { en: "Request failed", vi: "Yêu cầu thất bại" },
-  renameDialogTitle: { en: "Rename", vi: "Đổi tên" },
-  renameDialogDescription: {
-    en: "Amounts cannot be changed after creation.",
-    vi: "Không thể đổi số tiền sau khi tạo.",
-  },
-  newNameLabel: { en: "New name", vi: "Tên mới" },
   cancel: { en: "Cancel", vi: "Huỷ" },
   save: { en: "Save", vi: "Lưu" },
+
+  // Edit dialog: metadata edits PATCH in place; financial edits revise.
+  edit: { en: "Edit", vi: "Sửa" },
+  editDialogTitle: { en: "Edit catalog item", vi: "Sửa mục danh mục" },
+  editDialogDescription: {
+    en: "Name and rate limit save in place. Changing amounts creates a replacement item for future purchases.",
+    vi: "Tên và giới hạn lưu trực tiếp. Đổi số tiền sẽ tạo mục thay thế cho các lần mua sau.",
+  },
+  termsFutureOnly: {
+    en: "New terms apply to future purchases only. Pending payments settle on the old terms; history is retained and nothing is credited retroactively.",
+    vi: "Điều khoản mới chỉ áp dụng cho các lần mua sau. Thanh toán đang chờ vẫn tất toán theo điều khoản cũ; lịch sử được giữ nguyên và không hoàn tín dụng hồi tố.",
+  },
+  reviseTerms: { en: "Revise terms", vi: "Sửa điều khoản" },
+  revisedToast: { en: "Terms revised", vi: "Đã sửa điều khoản" },
+  superseded: {
+    en: "This item was already superseded by another revision. Reload to see the current item.",
+    vi: "Mục này đã được thay thế bởi một lần sửa khác. Hãy tải lại để xem mục hiện tại.",
+  },
 
   // Catalog table columns / row actions.
   colName: { en: "Name", vi: "Tên" },
@@ -49,7 +61,6 @@ export const adminBundlesCopy = {
   colCreated: { en: "Created", vi: "Đã tạo" },
   active: { en: "Active", vi: "Đang bán" },
   inactive: { en: "Inactive", vi: "Đang ẩn" },
-  rename: { en: "Rename", vi: "Đổi tên" },
   deactivate: { en: "Deactivate", vi: "Ngừng bán" },
   reactivate: { en: "Reactivate", vi: "Bán lại" },
   noRowsYet: { en: "No {thing} yet", vi: "Chưa có {thing} nào" },
@@ -210,7 +221,21 @@ function useCatalogMutation(path: string, key: readonly unknown[], t: BundlesT) 
     onSuccess: () => void qc.invalidateQueries({ queryKey: key }),
     onError,
   });
-  return { create, update };
+  const revise = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: Record<string, number | string> }) =>
+      api<unknown>(`${path}/${id}/revise`, { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => {
+      toast(t("revisedToast"));
+      void qc.invalidateQueries({ queryKey: key });
+    },
+    onError: (e) => {
+      onError(e);
+      // Superseded guidance needs fresh rows: refresh so the next edit opens
+      // on the authoritative row instead of the captured stale one.
+      if (e instanceof ApiError && e.status === 409) void qc.invalidateQueries({ queryKey: key });
+    },
+  });
+  return { create, update, revise };
 }
 
 /** Currency mode toggle; USD is the default authoring currency, VND is legacy. */
@@ -353,68 +378,290 @@ function CreateField({
   );
 }
 
-function RenameDialog({
-  row,
-  onRename,
+/** A row captured at dialog-open time; the dialog edits this snapshot, not live query data. */
+type EditTarget = { kind: "bundle"; row: Bundle } | { kind: "plan"; row: Plan };
+
+/** Prefill: USD rows keep their exact authored text; legacy rows prefill VND. */
+const amountFrom = (usd: string | null | undefined, vnd: number): AmountInput =>
+  usd != null && usd !== ""
+    ? { currency: "USD", usd, vnd: String(vnd) }
+    : { currency: "VND", usd: "", vnd: String(vnd) };
+
+/** Successor/old row id from a revise response (`{data: row}` per contract; bare row tolerated). */
+const revisedRowId = (res: unknown): string | null => {
+  const d =
+    res !== null && typeof res === "object" ? ((res as { data?: unknown }).data ?? res) : null;
+  if (d !== null && typeof d === "object" && typeof (d as { id?: unknown }).id === "string")
+    return (d as { id: string }).id;
+  return null;
+};
+
+const rateLimitInvalid = (v: number | null) => v === null || v < 1 || v > 600;
+
+/**
+ * One edit dialog per catalog row. Metadata fields (name, plan rate limit)
+ * go through the existing PATCH; any financial-terms change submits the full
+ * create-shape body to POST .../revise (no rate limit — RPM stays a live
+ * PATCH field on the authoritative row). An unchanged or invalid dialog
+ * submits nothing.
+ */
+function EditDialog({
+  target,
+  onPatch,
+  onRevise,
   onClose,
-  extra,
 }: {
-  row: CatalogRow | null;
-  onRename: (id: string, name: string) => void;
+  target: EditTarget;
+  onPatch: (
+    id: string,
+    body: { name?: string; rate_limit_per_minute?: number },
+  ) => Promise<unknown>;
+  onRevise: (id: string, body: Record<string, number | string>) => Promise<unknown>;
   onClose: () => void;
-  /** Optional second editable field (plans: rate limit). */
-  extra?: { label: string; value: string; onChange: (v: string) => void; invalid: boolean };
 }) {
-  const [name, setName] = useState<string | null>(null);
   const t = useT(adminBundlesCopy);
-  const value = name ?? row?.name ?? "";
+  const row = target.row;
+  const isPlan = target.kind === "plan";
+  const [name, setName] = useState(row.name);
+  // Initializers run once per mount (the dialog remounts with a row key), so
+  // they can read the captured row directly.
+  const [rate, setRate] = useState(
+    target.kind === "plan" ? String(target.row.rate_limit_per_minute) : "",
+  );
+  const [period, setPeriod] = useState(
+    target.kind === "plan" ? String(target.row.period_days) : "",
+  );
+  const [price, setPrice] = useState<AmountInput>(() => amountFrom(row.price_usd, row.price_vnd));
+  const [credit, setCredit] = useState<AmountInput>(() =>
+    target.kind === "bundle"
+      ? amountFrom(target.row.credit_usd, target.row.credit_vnd)
+      : amountFrom(target.row.credit_per_period_usd, target.row.credit_per_period_vnd),
+  );
+  const [bonus, setBonus] = useState<AmountInput>(() =>
+    target.kind === "bundle"
+      ? amountFrom(target.row.bonus_usd, target.row.bonus_vnd)
+      : zeroAmount(),
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Synchronous submit guard: state updates lag a click, a ref does not.
+  const inFlight = useRef(false);
+
+  const priceN = parseIntVnd(price.vnd);
+  const creditN = parseIntVnd(credit.vnd);
+  const bonusN = parseIntVnd(bonus.vnd);
+  const priceUsdT = parseUsdAmount(price.usd);
+  const creditUsdT = parseUsdAmount(credit.usd);
+  const bonusUsdT = parseUsdAmount(bonus.usd);
+  const periodN = parseIntVnd(period);
+  const rateN = parseIntVnd(rate);
+
+  const priceError =
+    price.currency === "USD"
+      ? price.usd !== "" && priceUsdT === null
+        ? t("usdInvalid", { example: "9.99" })
+        : null
+      : price.vnd !== "" && (priceN === null || priceN <= 0)
+        ? t("vndPositive")
+        : null;
+  const creditError =
+    credit.currency === "USD"
+      ? credit.usd !== "" && creditUsdT === null
+        ? t("usdInvalid", { example: "12" })
+        : null
+      : credit.vnd !== "" && (creditN === null || creditN < 0)
+        ? t("vndNonNegative")
+        : null;
+  const bonusError =
+    bonus.currency === "USD"
+      ? bonus.usd !== "" && bonusUsdT === null
+        ? t("usdInvalid", { example: "2.50" })
+        : null
+      : bonus.vnd !== "" && (bonusN === null || bonusN < 0)
+        ? t("vndNonNegative")
+        : null;
+  const periodError =
+    period !== "" && (periodN === null || periodN < 1) ? t("periodInvalid") : null;
+  const rateError = rate !== "" && rateLimitInvalid(rateN) ? t("rateInvalid") : null;
+
+  const nameValid = name.trim().length > 0;
+  const moneyValid =
+    (price.currency === "USD"
+      ? priceUsdT !== null && Number(priceUsdT) > 0
+      : priceN !== null && priceN > 0) &&
+    (credit.currency === "USD" ? creditUsdT !== null : creditN !== null && creditN >= 0) &&
+    (isPlan
+      ? period === "" || (periodN !== null && periodN >= 1)
+      : bonus.currency === "USD"
+        ? bonusUsdT !== null || bonus.usd.trim() === ""
+        : (bonusN !== null && bonusN >= 0) || bonus.vnd.trim() === "");
+
+  const nameChanged = name.trim() !== row.name;
+  const rateChanged =
+    target.kind === "plan" && rateN !== null && rateN !== target.row.rate_limit_per_minute;
+  // Money change compares the would-submit value against the row's own
+  // authored metadata, per field and currency — never a recomputed amount.
+  const moneyChanged = (() => {
+    if (target.kind === "bundle") {
+      const b = target.row;
+      return (
+        (price.currency === "USD" ? b.price_usd !== priceUsdT : b.price_vnd !== priceN) ||
+        (credit.currency === "USD" ? b.credit_usd !== creditUsdT : b.credit_vnd !== creditN) ||
+        (bonus.currency === "USD"
+          ? b.bonus_usd !== (bonusUsdT ?? "0")
+          : b.bonus_vnd !== (bonusN ?? 0))
+      );
+    }
+    const p = target.row;
+    return (
+      (price.currency === "USD" ? p.price_usd !== priceUsdT : p.price_vnd !== priceN) ||
+      (credit.currency === "USD"
+        ? p.credit_per_period_usd !== creditUsdT
+        : p.credit_per_period_vnd !== creditN) ||
+      (periodN !== null && periodN !== p.period_days)
+    );
+  })();
+  const changed = nameChanged || rateChanged || moneyChanged;
+
+  const submit = async () => {
+    if (inFlight.current || busy) return;
+    const nameT = name.trim();
+    if (!nameValid || !moneyValid || !changed) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      let patchId = row.id;
+      if (moneyChanged) {
+        // Full create-shape body: the successor is a brand-new purchasable
+        // row. Rate limit is deliberately absent — it is not frozen terms.
+        const body: Record<string, number | string> = { name: nameT };
+        if (price.currency === "USD") body.price_usd = priceUsdT!;
+        else body.price_vnd = priceN!;
+        if (target.kind === "bundle") {
+          if (credit.currency === "USD") body.credit_usd = creditUsdT!;
+          else body.credit_vnd = creditN!;
+          if (bonus.currency === "USD") body.bonus_usd = bonusUsdT ?? "0";
+          else body.bonus_vnd = bonusN ?? 0;
+        } else {
+          if (credit.currency === "USD") body.credit_per_period_usd = creditUsdT!;
+          else body.credit_per_period_vnd = creditN!;
+          if (periodN !== null) body.period_days = periodN!;
+        }
+        const res = await onRevise(row.id, body);
+        const successorId = revisedRowId(res);
+        if (successorId !== null) patchId = successorId;
+      }
+      const patchBody: { name?: string; rate_limit_per_minute?: number } = {};
+      if (!moneyChanged && nameChanged) patchBody.name = nameT;
+      if (rateChanged) patchBody.rate_limit_per_minute = rateN!;
+      if (Object.keys(patchBody).length > 0) await onPatch(patchId, patchBody);
+      onClose();
+    } catch (e) {
+      setError(
+        e instanceof ApiError && e.code === "RESOURCE_SUPERSEDED"
+          ? t("superseded")
+          : e instanceof ApiError
+            ? e.message
+            : t("requestFailed"),
+      );
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  };
+
   return (
     <Dialog
-      open={row !== null}
+      open
       onOpenChange={(open) => {
-        if (!open) {
-          setName(null);
-          onClose();
-        }
+        if (!open) onClose();
       }}
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t("renameDialogTitle")}</DialogTitle>
-          <DialogDescription>{t("renameDialogDescription")}</DialogDescription>
+          <DialogTitle>{t("editDialogTitle")}</DialogTitle>
+          <DialogDescription>{t("editDialogDescription")}</DialogDescription>
         </DialogHeader>
-        <Input
-          id="rename-name"
-          value={value}
-          onChange={(e) => setName(e.target.value)}
-          aria-label={t("newNameLabel")}
-          autoFocus
-        />
-        {extra && (
+        <div className="grid gap-3">
           <div className="grid gap-1">
-            <Label htmlFor="rename-extra">{extra.label}</Label>
+            <Label htmlFor="edit-name">{t("nameLabel")}</Label>
             <Input
-              id="rename-extra"
-              value={extra.value}
-              onChange={(e) => extra.onChange(e.target.value)}
-              inputMode="numeric"
-              aria-invalid={extra.invalid}
-              className={extra.invalid ? "border-destructive" : undefined}
+              id="edit-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              aria-invalid={!nameValid}
+              autoFocus
             />
           </div>
+          <AmountField
+            idPrefix="edit-price"
+            label={t("priceLabel")}
+            groupLabel={isPlan ? t("planPriceCurrency") : t("priceCurrency")}
+            field={price}
+            onChange={setPrice}
+            usdPlaceholder="9.99"
+            vndPlaceholder="500000"
+            error={priceError}
+          />
+          <AmountField
+            idPrefix="edit-credit"
+            label={isPlan ? t("creditPerPeriodLabel") : t("creditLabel")}
+            groupLabel={isPlan ? t("creditPerPeriodCurrency") : t("creditCurrency")}
+            field={credit}
+            onChange={setCredit}
+            usdPlaceholder="12"
+            vndPlaceholder="500000"
+            error={creditError}
+          />
+          {isPlan ? (
+            <div className="grid grid-cols-2 gap-3">
+              <CreateField
+                id="edit-period"
+                label={t("periodDaysLabel")}
+                value={period}
+                onChange={setPeriod}
+                placeholder="30"
+                error={periodError}
+              />
+              <CreateField
+                id="edit-rate"
+                label={t("rateLimitLabel")}
+                value={rate}
+                onChange={setRate}
+                placeholder="15"
+                error={rateError}
+              />
+            </div>
+          ) : (
+            <AmountField
+              idPrefix="edit-bonus"
+              label={t("bonusLabel")}
+              groupLabel={t("bonusCurrency")}
+              field={bonus}
+              onChange={setBonus}
+              usdPlaceholder="0"
+              vndPlaceholder="0"
+              error={bonusError}
+            />
+          )}
+        </div>
+        {moneyChanged && (
+          <p className="text-xs text-amber-600" role="note">
+            {t("termsFutureOnly")}
+          </p>
+        )}
+        {error !== null && (
+          <p className="text-xs text-destructive" role="alert">
+            {error}
+          </p>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             {t("cancel")}
           </Button>
-          <Button
-            disabled={value.trim().length === 0 || (extra?.invalid ?? false)}
-            onClick={() => {
-              if (row) onRename(row.id, value.trim());
-              setName(null);
-            }}
-          >
-            {t("save")}
+          <Button disabled={busy || !nameValid || !moneyValid || !changed} onClick={submit}>
+            {moneyChanged ? t("reviseTerms") : t("save")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -426,23 +673,28 @@ function CatalogTable<T extends CatalogRow>({
   data,
   detailLabel,
   detail,
-  onRename,
+  onEdit,
   onSetActive,
-  renaming,
-  setRenaming,
-  renameExtra,
+  editTarget,
+  setEditTarget,
+  onPatch,
+  onRevise,
   tableLabel,
 }: {
   data: T[];
   tableLabel: string;
   detailLabel: string;
   detail: (row: T) => string;
-  onRename: (id: string, name: string) => void;
+  /** Open the edit dialog for a row; the row object is captured at open time. */
+  onEdit: (row: T) => void;
   onSetActive: (row: T, active: boolean) => void;
-  renaming: CatalogRow | null;
-  setRenaming: (row: CatalogRow | null) => void;
-  /** Optional second editable field in the rename dialog (plans: rate limit). */
-  renameExtra?: { label: string; value: string; onChange: (v: string) => void; invalid: boolean };
+  editTarget: EditTarget | null;
+  setEditTarget: (target: EditTarget | null) => void;
+  onPatch: (
+    id: string,
+    body: { name?: string; rate_limit_per_minute?: number },
+  ) => Promise<unknown>;
+  onRevise: (id: string, body: Record<string, number | string>) => Promise<unknown>;
 }) {
   const t = useT(adminBundlesCopy);
   const columns: ColumnDef<T, unknown>[] = [
@@ -495,8 +747,8 @@ function CatalogTable<T extends CatalogRow>({
         const row = c.row.original;
         return (
           <span className="flex flex-wrap items-center gap-1">
-            <Button size="sm" variant="outline" onClick={() => setRenaming(row)}>
-              {t("rename")}
+            <Button size="sm" variant="outline" onClick={() => onEdit(row)}>
+              {t("edit")}
             </Button>
             <Button size="sm" variant="outline" onClick={() => onSetActive(row, !row.active)}>
               {row.active ? t("deactivate") : t("reactivate")}
@@ -517,12 +769,17 @@ function CatalogTable<T extends CatalogRow>({
           globalFilter=""
         />
       </ScrollPanel>
-      <RenameDialog
-        row={renaming}
-        onRename={onRename}
-        onClose={() => setRenaming(null)}
-        extra={renameExtra}
-      />
+      {/* Remounts per captured row: prefilled state always reflects the row
+          that was current when Edit was clicked. */}
+      {editTarget && (
+        <EditDialog
+          key={`${editTarget.kind}:${editTarget.row.id}`}
+          target={editTarget}
+          onPatch={onPatch}
+          onRevise={onRevise}
+          onClose={() => setEditTarget(null)}
+        />
+      )}
     </>
   );
 }
@@ -532,12 +789,20 @@ const zeroAmount = (): AmountInput => ({ currency: "USD", usd: "0", vnd: "0" });
 
 function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
   const t = useT(adminBundlesCopy);
-  const { create, update } = useCatalogMutation("/api/v1/admin/bundles", ["admin", "bundles"], t);
+  const { create, update, revise } = useCatalogMutation(
+    "/api/v1/admin/bundles",
+    ["admin", "bundles"],
+    t,
+  );
   const [name, setName] = useState("");
   const [price, setPrice] = useState<AmountInput>(emptyAmount);
   const [credit, setCredit] = useState<AmountInput>(emptyAmount);
   const [bonus, setBonus] = useState<AmountInput>(zeroAmount);
-  const [renaming, setRenaming] = useState<CatalogRow | null>(null);
+  const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
+  const patchAsync = (id: string, body: { name?: string; rate_limit_per_minute?: number }) =>
+    update.mutateAsync({ id, body });
+  const reviseAsync = (id: string, body: Record<string, number | string>) =>
+    revise.mutateAsync({ id, body });
 
   const priceN = parseIntVnd(price.vnd);
   const creditN = parseIntVnd(credit.vnd);
@@ -681,10 +946,12 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
             }
             return formatVnd(b.credit_vnd) + bonusPart;
           }}
-          onRename={(id, n) => update.mutate({ id, body: { name: n } })}
+          onEdit={(row) => setEditTarget({ kind: "bundle", row })}
           onSetActive={(row, active) => update.mutate({ id: row.id, body: { active } })}
-          renaming={renaming}
-          setRenaming={setRenaming}
+          editTarget={editTarget}
+          setEditTarget={setEditTarget}
+          onPatch={patchAsync}
+          onRevise={reviseAsync}
         />
       </CardContent>
     </Card>
@@ -693,7 +960,7 @@ function BundlesCard({ query }: { query: { data?: { data: Bundle[] } } }) {
 
 function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
   const t = useT(adminBundlesCopy);
-  const { create, update } = useCatalogMutation(
+  const { create, update, revise } = useCatalogMutation(
     "/api/v1/admin/subscription-plans",
     ["admin", "subscription-plans"],
     t,
@@ -703,8 +970,11 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
   const [credit, setCredit] = useState<AmountInput>(emptyAmount);
   const [period, setPeriod] = useState("30");
   const [rateLimit, setRateLimit] = useState("15");
-  const [renameLimit, setRenameLimit] = useState("");
-  const [renaming, setRenaming] = useState<CatalogRow | null>(null);
+  const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
+  const patchAsync = (id: string, body: { name?: string; rate_limit_per_minute?: number }) =>
+    update.mutateAsync({ id, body });
+  const reviseAsync = (id: string, body: Record<string, number | string>) =>
+    revise.mutateAsync({ id, body });
 
   const priceN = parseIntVnd(price.vnd);
   const creditN = parseIntVnd(credit.vnd);
@@ -842,24 +1112,12 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
               rate: p.rate_limit_per_minute,
             })}`;
           }}
-          onRename={(id, n) =>
-            update.mutate({
-              id,
-              body: { name: n, rate_limit_per_minute: parseIntVnd(renameLimit) ?? undefined },
-            })
-          }
+          onEdit={(row) => setEditTarget({ kind: "plan", row })}
           onSetActive={(row, active) => update.mutate({ id: row.id, body: { active } })}
-          renaming={renaming}
-          setRenaming={(row) => {
-            setRenaming(row);
-            setRenameLimit(row ? String((row as Plan).rate_limit_per_minute) : "");
-          }}
-          renameExtra={{
-            label: t("rateLimitLabel"),
-            value: renameLimit,
-            onChange: setRenameLimit,
-            invalid: rateInvalid(parseIntVnd(renameLimit)),
-          }}
+          editTarget={editTarget}
+          setEditTarget={setEditTarget}
+          onPatch={patchAsync}
+          onRevise={reviseAsync}
         />
       </CardContent>
     </Card>

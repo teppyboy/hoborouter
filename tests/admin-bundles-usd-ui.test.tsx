@@ -238,6 +238,19 @@ function mount() {
         await new Promise((r) => setTimeout(r, 0));
       });
     },
+    /** Click the Edit button inside the table row containing the given text. */
+    async clickRowEdit(rowName: string) {
+      const tr = [...document.querySelectorAll("tbody tr")].find((r) =>
+        r.textContent?.includes(rowName),
+      );
+      if (!tr) throw new Error(`row not found: ${rowName}`);
+      const btn = [...tr.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Edit");
+      if (!btn) throw new Error(`edit button not found in row: ${rowName}`);
+      await act(async () => {
+        btn.dispatchEvent(new W.MouseEvent("click", { bubbles: true, cancelable: true }));
+        await new Promise((r) => setTimeout(r, 0));
+      });
+    },
     /** Click USD/VND inside one field's own toggle group (unique aria-label). */
     async clickCurrency(groupLabel: string, currency: "USD" | "VND") {
       const group = h.container.querySelector(`div[role="group"][aria-label="${groupLabel}"]`);
@@ -306,6 +319,11 @@ async function flushPendingRealmEvents() {
 
 afterAll(async () => {
   await flushPendingRealmEvents();
+  // Drain React's MessageChannel-scheduled callbacks while the realm is
+  // installed: a pending NormalPriority callback reads `window.event` and
+  // would crash after the globals are restored (only surfaces when a later
+  // test file yields the event loop first).
+  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
   for (const k of GLOBAL_KEYS) {
     const d = originals[k];
     if (d) Object.defineProperty(globalThis, k, d);
@@ -343,7 +361,7 @@ test("USD is the default currency; USD bundle POST body is exact", async () => {
       bonus_usd: "0",
     });
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
@@ -365,7 +383,7 @@ test("invalid USD decimals blocked before any POST", async () => {
       expect(h.postsTo("/api/v1/admin/bundles").length).toBe(0);
     }
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
@@ -396,7 +414,7 @@ test("USD plan POST body is exact and preserves period/rate controls", async () 
       rate_limit_per_minute: 15,
     });
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
@@ -424,7 +442,7 @@ test("explicit legacy VND mode posts the unchanged integer body", async () => {
       bonus_vnd: 10_000,
     });
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
@@ -452,7 +470,7 @@ test("toggling one field's currency leaves the other fields in USD", async () =>
     const el = h.container.querySelector<HTMLInputElement>("#bundle-price-vnd");
     expect(el?.value).toBe("500000");
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
@@ -477,7 +495,7 @@ test("mixed bundle body: USD price, VND credit, USD bonus, no fabricated USD met
     // The USD text is sent verbatim; no float-derived value anywhere.
     expect(JSON.stringify(posts[0]!.body)).toContain('"price_usd":"9.99"');
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
@@ -523,7 +541,7 @@ test("invalid VND text is blocked before any POST, per field", async () => {
     await h.submit("Create bundle");
     expect(h.postsTo("/api/v1/admin/bundles").length).toBe(0);
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
@@ -541,7 +559,7 @@ test("table shows authored USD price and creation-frozen VND grant", async () =>
     const legacyCell = h.container.querySelector('[data-testid="row-b_vnd-price"]');
     if (legacyCell) expect(legacyCell.textContent).not.toContain("$");
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
@@ -558,18 +576,18 @@ test("mixed rows render each credit field with its own USD metadata", async () =
     expect(text).toContain("+ 26.000 ₫ bonus");
     expect(text).toContain("$9.99");
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
 // --- preserved behaviors ---------------------------------------------------
 
-test("rename and active toggles PATCH unchanged bodies", async () => {
+test("edit dialog name change and active toggles PATCH unchanged bodies", async () => {
   const h = mount();
   try {
     await h.waitForData();
-    await h.clickButton("Rename");
-    await h.typeInto("rename-name", "Renamed pack");
+    await h.clickRowEdit("Legacy pack");
+    await h.typeInto("edit-name", "Renamed pack");
     await h.clickButton("Save");
     await h.waitForData();
     const patches = h.patchesTo("/api/v1/admin/bundles");
@@ -580,7 +598,7 @@ test("rename and active toggles PATCH unchanged bodies", async () => {
     const patches2 = h.patchesTo("/api/v1/admin/bundles");
     expect(patches2.some((p) => p.body?.active === false)).toBe(true);
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
@@ -614,7 +632,7 @@ test("invalid amount text shows a visible, accessible error message", async () =
     expect(h.container.textContent).toContain("at least 1");
     expect(h.container.textContent).toContain("1 and 600");
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
@@ -637,7 +655,7 @@ test("a cleared bonus is treated as zero instead of silently disabling submit", 
       bonus_usd: "0",
     });
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
 
@@ -658,6 +676,6 @@ test("catalog tables scroll inside labelled regions", async () => {
     expect(plansRegion?.querySelector("table")).not.toBeNull();
     expect(plansRegion?.textContent).toContain("USD plan");
   } finally {
-    h.cleanup();
+    await h.cleanup();
   }
 });
