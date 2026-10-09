@@ -125,7 +125,20 @@ function hrefPolicy(
 ) {
   if (data.attrName !== "href") return;
   const value = String(data.attrValue ?? "");
-  if (/[\u0000-\u0020\u007F]/.test(value) || value.includes("\\")) {
+  // Explicit code-unit gate (no control-character regex class — Biome's
+  // eslint(no-control-regex)): EXACTLY the original /\u0000-\u0020\u007F/
+  // semantics — drop the href when ANY code unit is C0+space (0x00–0x20) or
+  // DEL (0x7F). No widened Unicode classification: astral code units are all
+  // > 0x7F and fall through untouched.
+  let hasForbiddenCodeUnit = false;
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (c <= 0x20 || c === 0x7f) {
+      hasForbiddenCodeUnit = true;
+      break;
+    }
+  }
+  if (hasForbiddenCodeUnit || value.includes("\\")) {
     data.keepAttr = false;
     return;
   }

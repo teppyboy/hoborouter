@@ -290,3 +290,21 @@ test("renderMarkdownHtml output is a string of sanitized HTML", () => {
   expect(typeof renderMarkdownHtml("**b**")).toBe("string");
   expect(renderMarkdownHtml("**b**")).toContain("<strong>b</strong>");
 });
+
+test("href policy control-char gate keeps exact original-range semantics end-to-end", () => {
+  // marked percent-encodes NUL (raw or angle-form) BEFORE the sanitizer, so
+  // the href policy receives "https://e%00xample.com" — no control code
+  // units, keep verdict identical under the original regex and the charcode
+  // gate. Nothing control-bearing reaches the policy raw through this
+  // pipeline; the tab case (kept literally by marked) is covered by the
+  // "control characters cannot smuggle" test above.
+  const encoded = html("[x](<https://e\u0000xample.com>)");
+  expect(encoded).toContain('href="https://e%00xample.com"');
+  expect(encoded).toContain("x");
+  // Valid Unicode (astral emoji, CJK, accents) is all OUTSIDE the original
+  // 0x00-0x20/0x7F range — the anchor survives untouched.
+  const ok = html("[x](https://example.com/héllo🌍中文)");
+  expect(ok).toContain("<a ");
+  expect(ok).toContain("h%C3%A9llo");
+  expect(ok).toContain("x");
+});
