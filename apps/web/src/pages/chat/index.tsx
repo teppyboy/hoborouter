@@ -434,6 +434,19 @@ export function ChatPage() {
       return next;
     });
   }
+  // Auto-uncollapse on explicit conversation intent (starting a new chat,
+  // opening a saved conversation): Open-WebUI-style expansion of the list for
+  // THIS view only. The sticky device pref is deliberately NOT rewritten —
+  // only toggleSidebar persists it, so a reload returns to the user's saved
+  // collapsed state.
+  function expandSidebarSession() {
+    setSidebarCollapsed(false);
+  }
+  /** New chat is explicit intent to see the conversation list again. */
+  function startNewChat() {
+    newChat();
+    expandSidebarSession();
+  }
   // 409 from an optimistic save: the server snapshot moved under us. We never
   // overwrite blindly — the local transcript stays visible but is clearly
   // marked unsaved until the user explicitly reloads the saved version.
@@ -1095,7 +1108,12 @@ export function ChatPage() {
       userId={userId ?? ""}
       workspaceId={workspaceId ?? ""}
       activeChatId={activeChatId}
-      onOpen={(chatId) => void openChat(chatId)}
+      onOpen={(chatId) => {
+        // Opening a conversation is explicit intent: expand the desktop list
+        // for this view (session-only; the pref stays untouched).
+        expandSidebarSession();
+        void openChat(chatId);
+      }}
       onClose={() => setHistoryOpen(false)}
       onRenamed={({ chatId, version }) => {
         // Rename saved through the same optimistic-version PUT: track the
@@ -1172,7 +1190,7 @@ export function ChatPage() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={newChat}
+              onClick={startNewChat}
               aria-label={t("newChat")}
               title={t("newChat")}
             >
@@ -1265,7 +1283,7 @@ export function ChatPage() {
               variant="outline"
               size="sm"
               className={toolbarTouch}
-              onClick={newChat}
+              onClick={startNewChat}
               disabled={messages.length === 0 && !streaming && activeChatId === null}
               aria-label={t("newChat")}
               title={t("newChat")}
