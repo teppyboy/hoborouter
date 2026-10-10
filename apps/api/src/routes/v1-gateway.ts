@@ -48,8 +48,12 @@ const openAiError = (status: number, message: string, code: string) =>
     headers: { "content-type": "application/json" },
   });
 
-const intEnv = (name: string, fallback: number) => {
-  const raw = process.env[name];
+const intEnv = (
+  name: string,
+  fallback: number,
+  env: Record<string, string | undefined> = process.env,
+) => {
+  const raw = env[name];
   const n = raw === undefined ? NaN : Number(raw);
   return Number.isSafeInteger(n) && n > 0 ? n : fallback;
 };
@@ -322,7 +326,12 @@ function sseModelRewriteStream(
   });
 }
 
-function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
+function gatewayHandler(
+  db: Db,
+  path: string,
+  protocol: "chat" | "responses",
+  env: Record<string, string | undefined> = process.env,
+) {
   // Timing uses the monotonic clock: ttft (streams: first real token event;
   // non-stream: not applicable) and total latency to settled completion.
   const monotonic = () => performance.now();
@@ -330,7 +339,7 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
   return async ({ request }: { request: Request }): Promise<Response> => {
     // 1. Disabled gate before any DB write (the body gates below keep the
     // preflight side-effect-free: no DB write before they pass).
-    if (process.env.HBR_GATEWAY_ENABLED === "0") {
+    if (env.HBR_GATEWAY_ENABLED === "0") {
       return jsonError(503, "gateway_disabled", "Paid gateway is disabled");
     }
 
@@ -397,7 +406,7 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
             apiKeyId: key.api_key_id,
             body,
             bodyBytes: Buffer.byteLength(raw),
-            fxRate: intEnv("HBR_USD_VND_RATE", 26000),
+            fxRate: intEnv("HBR_USD_VND_RATE", 26000, env),
           })) ?? (await resolveModel(db, body.model)))
         : await resolveModel(db, body.model);
     if (!resolved) return jsonError(404, "model_not_found", `Model '${body.model}' not found`);
@@ -424,12 +433,12 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
     }
     let maxOutput = requestedMax;
     if (maxOutput === undefined || maxOutput > contextWindow) {
-      maxOutput = Math.min(intEnv("HBR_DEFAULT_MAX_OUTPUT_TOKENS", 4096), contextWindow);
+      maxOutput = Math.min(intEnv("HBR_DEFAULT_MAX_OUTPUT_TOKENS", 4096, env), contextWindow);
     }
     // 1 token per byte is a safe upper bound for any tokenizer.
     const maxInput = Math.min(Math.ceil(Buffer.byteLength(raw)), contextWindow);
-    const fxRate = intEnv("HBR_USD_VND_RATE", 26000);
-    const accessKey = process.env.CPA_ACCESS_KEY;
+    const fxRate = intEnv("HBR_USD_VND_RATE", 26000, env);
+    const accessKey = env.CPA_ACCESS_KEY;
     if (!accessKey) return jsonError(503, "cpa_unconfigured", "CPA access key not configured");
     let capVnd: number;
     try {
@@ -614,7 +623,7 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
 
     const controller = new AbortController();
     const t0 = monotonic();
-    const base = (process.env.CPA_BASE_URL || "http://cpa:8317").replace(/\/$/, "");
+    const base = (env.CPA_BASE_URL || "http://cpa:8317").replace(/\/$/, "");
     const headers: Record<string, string> = {
       "content-type": "application/json",
       accept: stream ? "text/event-stream" : "application/json",
@@ -623,9 +632,11 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
     };
     let upstream: Response;
     // Timeout only for receiving upstream response HEADERS; not streaming.
+    // Resolved via the injected env record (env > YAML > default 120000); the
+    // intEnv fallback preserves the old non-positive fallback semantics.
     const headerTimeout = setTimeout(
       () => controller.abort(),
-      intEnv("HBR_UPSTREAM_HEADERS_TIMEOUT_MS", 120000),
+      intEnv("HBR_UPSTREAM_HEADERS_TIMEOUT_MS", 120000, env),
     );
     try {
       upstream = await fetch(base + path, {
@@ -798,15 +809,15 @@ function gatewayHandler(db: Db, path: string, protocol: "chat" | "responses") {
   };
 }
 
-export const gatewayRoutes = (db: Db) =>
+export const gatewayRoutes = (db: Db, env: Record<string, string | undefined> = process.env) =>
   new Elysia({ name: "v1-gateway" })
     .post(
       "/v1/chat/completions",
       { detail: { hide: true } },
-      gatewayHandler(db, "/v1/chat/completions", "chat"),
+      gatewayHandler(db, "/v1/chat/completions", "chat", env),
     ) // hidden: paid proxy stays out of /openapi.json
     .post(
       "/v1/responses",
       { detail: { hide: true } },
-      gatewayHandler(db, "/v1/responses", "responses"),
+      gatewayHandler(db, "/v1/responses", "responses", env),
     );

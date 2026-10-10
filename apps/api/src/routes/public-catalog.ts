@@ -60,17 +60,23 @@ export type PublicSubscriptionPlan = {
 };
 
 // Same FX source billing uses (v1-gateway): trusted env with the same
-// fallback/semantics, never request-supplied data.
-const intEnv = (name: string, fallback: number) => {
-  const raw = process.env[name];
+// fallback/semantics, never request-supplied data. `env` accepts the resolved
+// startup record (canonical aliases); omitted = process.env.
+const intEnv = (
+  name: string,
+  fallback: number,
+  env: Record<string, string | undefined> = process.env,
+) => {
+  const raw = env[name];
   const n = raw === undefined ? NaN : Number(raw);
   return Number.isSafeInteger(n) && n > 0 ? n : fallback;
 };
-const fxRate = () => BigInt(intEnv("HBR_USD_VND_RATE", 26000));
+const fxRate = (env: Record<string, string | undefined> = process.env) =>
+  BigInt(intEnv("HBR_USD_VND_RATE", 26000, env));
 
 // Trusted configured base (identical expression to auth.ts / payments.ts).
-const trustedBaseUrl = () =>
-  process.env.BETTER_AUTH_URL || process.env.HBR_BASE_URL || "http://localhost:3000";
+const trustedBaseUrl = (env: Record<string, string | undefined> = process.env) =>
+  env.BETTER_AUTH_URL || env.HBR_BASE_URL || "http://localhost:3000";
 
 type Category = "input" | "output" | "cached_input" | "reasoning";
 
@@ -166,7 +172,10 @@ export async function getPublicSettings(db: Db, keys: readonly string[]) {
   return out;
 }
 
-export const publicCatalogRoutes = (db: Db) =>
+export const publicCatalogRoutes = (
+  db: Db,
+  env: Record<string, string | undefined> = process.env,
+) =>
   new Elysia({ name: "public-catalog" })
     .get(
       "/api/v1/public/catalog",
@@ -179,7 +188,7 @@ export const publicCatalogRoutes = (db: Db) =>
         },
       },
       async () => {
-        const usdVndRate = fxRate();
+        const usdVndRate = fxRate(env);
         const rows = await listPublicModels(db);
         const data = await Promise.all(
           rows.map(async (m) => {
@@ -210,7 +219,7 @@ export const publicCatalogRoutes = (db: Db) =>
         ]);
         const body: PublicInstanceInfo = {
           name: s.display_name?.trim() || "Hoborouter",
-          api_base_url: trustedBaseUrl(),
+          api_base_url: trustedBaseUrl(env),
           support: {
             email: s.support_email ?? null,
             telegram: s.support_telegram ?? null,

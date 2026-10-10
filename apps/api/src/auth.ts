@@ -16,6 +16,7 @@ import {
   sendVerificationEmail as smtpSendVerificationEmail,
 } from "./email";
 import { schema, instanceAdmins } from "@hoborouter/db";
+import type { ResolvedConfig } from "./config/schema";
 
 /** Swap localhost<->127.0.0.1 host of an origin string; null if not one of them. */
 const swappedLoopback = (origin: string): string | null => {
@@ -46,17 +47,19 @@ const withVerifyEmailCallback = (url: string): string => {
   }
 };
 
-/** Build a Better Auth instance over an existing drizzle/pg Db. */
-export function createAuth(db: Db) {
-  const baseURL =
-    process.env.BETTER_AUTH_URL || process.env.HBR_BASE_URL || "http://localhost:3000";
-  if (
-    process.env.NODE_ENV === "production" &&
-    !(process.env.BETTER_AUTH_URL || process.env.HBR_BASE_URL)
-  ) {
+/** Build a Better Auth instance over an existing drizzle/pg Db. `cfg` (the
+ *  resolved startup config, apps/api/src/config/schema ResolvedConfig) is
+ *  optional: omitted = direct-test/env-only callers read process.env exactly
+ *  as before; present = every in-scope value comes from the merged record so
+ *  YAML-provided values flow without process.env access. NODE_ENV stays a
+ *  runtime env-only selector in both modes. */
+export function createAuth(db: Db, cfg?: ResolvedConfig) {
+  const env: Record<string, string | undefined> = cfg?.env ?? process.env;
+  const baseURL = env.BETTER_AUTH_URL || env.HBR_BASE_URL || "http://localhost:3000";
+  if (process.env.NODE_ENV === "production" && !(env.BETTER_AUTH_URL || env.HBR_BASE_URL)) {
     throw new Error("BETTER_AUTH_URL (or HBR_BASE_URL) is required when NODE_ENV=production");
   }
-  const secret = process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET;
+  const secret = env.BETTER_AUTH_SECRET || env.AUTH_SECRET;
   if (process.env.NODE_ENV === "production" && (!secret || secret.length < 32)) {
     throw new Error(
       "BETTER_AUTH_SECRET (or AUTH_SECRET) of at least 32 characters is required when NODE_ENV=production",
@@ -64,14 +67,14 @@ export function createAuth(db: Db) {
   }
   // Dev/test: browsers treat 127.0.0.1 and localhost as different origins, so
   // trust the loopback-swapped baseURL too; prod trusts only the baseURL origin.
-  const env = process.env.NODE_ENV;
+  const nodeEnv = process.env.NODE_ENV;
   const trustedOrigins: string[] =
-    env === "development" || env === "test"
+    nodeEnv === "development" || nodeEnv === "test"
       ? [swappedLoopback(baseURL)].filter((o): o is string => o !== null)
       : [];
-  if (process.env.HBR_TRUSTED_ORIGINS) {
+  if (env.HBR_TRUSTED_ORIGINS) {
     trustedOrigins.push(
-      ...process.env.HBR_TRUSTED_ORIGINS.split(",")
+      ...env.HBR_TRUSTED_ORIGINS.split(",")
         .map((s) => s.trim())
         .filter(Boolean),
     );
@@ -91,7 +94,7 @@ export function createAuth(db: Db) {
     // unverified OAuth identity can never silently take over an account.
     // Admin bootstrap still flows through the email-matched user.create.after
     // hook above — provider identity grants no privilege by itself.
-    socialProviders: socialProvidersOption(process.env),
+    socialProviders: socialProvidersOption(env),
     databaseHooks: {
       user: {
         create: {
@@ -103,7 +106,7 @@ export function createAuth(db: Db) {
             const oauthCreated = path.startsWith("/callback/") || path === "/sign-in/social";
             // Production bootstrap: the configured email becomes instance admin
             // in ANY environment, but only while the instance has zero admins.
-            const bootstrapEmail = process.env.HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL;
+            const bootstrapEmail = env.HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL;
             if (
               bootstrapEmail &&
               typeof user.email === "string" &&
@@ -130,10 +133,10 @@ export function createAuth(db: Db) {
             // unverified OAuth email claim can never grant instance admin,
             // even in dev/test (same attack, same answer). Password signup
             // keeps the plain email-match dev convenience.
-            const adminEmail = process.env.HBR_DEV_ADMIN_EMAIL;
-            const env = process.env.NODE_ENV;
+            const adminEmail = env.HBR_DEV_ADMIN_EMAIL;
+            const nodeEnv = process.env.NODE_ENV;
             if (
-              (env === "development" || env === "test") &&
+              (nodeEnv === "development" || nodeEnv === "test") &&
               adminEmail &&
               typeof user.email === "string" &&
               user.email.toLowerCase() === adminEmail.toLowerCase()
@@ -212,11 +215,11 @@ export function createAuth(db: Db) {
     },
     // Turnstile protection for /sign-in/email + /sign-up/email: only when a
     // secret key is configured; reads the `x-captcha-response` request header.
-    plugins: process.env.TURNSTILE_SECRET_KEY
+    plugins: env.TURNSTILE_SECRET_KEY
       ? [
           captcha({
             provider: "cloudflare-turnstile",
-            secretKey: process.env.TURNSTILE_SECRET_KEY,
+            secretKey: env.TURNSTILE_SECRET_KEY,
           }),
         ]
       : [],

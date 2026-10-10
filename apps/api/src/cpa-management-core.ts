@@ -13,14 +13,18 @@ import { requireSession, requireInstanceAdmin, jsonError, writeAudit } from "./a
 // Env access
 // ---------------------------------------------------------------------------
 
-/** CPA base URL. Defaults to the compose-internal address, same as cpahealth. */
-export const cpaBaseUrl = () => process.env.CPA_BASE_URL || "http://cpa:8317";
+/** CPA base URL. Defaults to the compose-internal address, same as cpahealth.
+ *  `env` accepts the resolved startup record (canonical aliases) so YAML
+ *  values flow without process.env access; omitted = process.env. */
+export const cpaBaseUrl = (env: Record<string, string | undefined> = process.env) =>
+  env.CPA_BASE_URL || "http://cpa:8317";
 
 /**
  * Plaintext CPA_MANAGEMENT_KEY. Server-only: callers must never log, audit,
  * or serialize this value into a response.
  */
-export const cpaManagementKey = () => process.env.CPA_MANAGEMENT_KEY || "";
+export const cpaManagementKey = (env: Record<string, string | undefined> = process.env) =>
+  env.CPA_MANAGEMENT_KEY || "";
 
 export const CPA_TIMEOUT_MS = 3_000;
 
@@ -134,10 +138,11 @@ export interface CpaMgmtError {
 export function mapCpaManagementError(
   kind: "auth" | "unreachable" | "timeout" | "upstream_status" | "invalid_response",
   upstreamStatus?: number,
+  env: Record<string, string | undefined> = process.env,
 ): CpaMgmtError {
   let host = "invalid CPA host";
   try {
-    host = new URL(cpaBaseUrl()).host;
+    host = new URL(cpaBaseUrl(env)).host;
   } catch {
     // Safe error mapping must never throw on invalid deployment config.
   }
@@ -189,8 +194,11 @@ export async function fetchCpaManagement(opts: {
   method: CpaMgmtMethod;
   /** Path including any query string, e.g. "/v0/management/usage-queue?count=10". */
   pathWithQuery: string;
+  /** Resolved startup env record; omitted = process.env. */
+  env?: Record<string, string | undefined>;
 }): Promise<CpaMgmtResult> {
-  const key = cpaManagementKey();
+  const env = opts.env ?? process.env;
+  const key = cpaManagementKey(env);
   if (!key)
     return {
       ok: false,
@@ -201,26 +209,31 @@ export async function fetchCpaManagement(opts: {
       },
     };
   try {
-    const res = await fetch(`${cpaBaseUrl()}${opts.pathWithQuery}`, {
+    const res = await fetch(`${cpaBaseUrl(env)}${opts.pathWithQuery}`, {
       method: opts.method,
       headers: { authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(CPA_TIMEOUT_MS),
     });
     if (res.status === 401 || res.status === 403)
-      return { ok: false, error: mapCpaManagementError("auth", res.status) };
-    if (!res.ok) return { ok: false, error: mapCpaManagementError("upstream_status", res.status) };
+      return { ok: false, error: mapCpaManagementError("auth", res.status, env) };
+    if (!res.ok)
+      return { ok: false, error: mapCpaManagementError("upstream_status", res.status, env) };
     let payload: unknown;
     try {
       payload = await res.json();
     } catch {
-      return { ok: false, error: mapCpaManagementError("invalid_response", res.status) };
+      return { ok: false, error: mapCpaManagementError("invalid_response", res.status, env) };
     }
     return { ok: true, status: res.status, payload };
   } catch (err) {
     const name = err instanceof Error ? err.name : "";
     return {
       ok: false,
-      error: mapCpaManagementError(name === "TimeoutError" ? "timeout" : "unreachable"),
+      error: mapCpaManagementError(
+        name === "TimeoutError" ? "timeout" : "unreachable",
+        undefined,
+        env,
+      ),
     };
   }
 }
@@ -269,6 +282,7 @@ export async function handleCpaManagementProxy(
   db: Db,
   auth: BetterAuthInstance,
   request: Request,
+  env: Record<string, string | undefined> = process.env,
 ): Promise<Response> {
   const gate = await requireSession(auth, request);
   // `in`-narrowing alone leaves error as Response | undefined on this union;
@@ -304,6 +318,7 @@ export async function handleCpaManagementProxy(
   const result = await fetchCpaManagement({
     method: "GET",
     pathWithQuery: upstreamPath,
+    env,
   });
   const latencyMs = Math.round(performance.now() - started);
 
@@ -317,7 +332,7 @@ export async function handleCpaManagementProxy(
 
   if (!result.ok) return errorResponse(result.error);
 
-  const secrets = [cpaManagementKey(), process.env.CPA_ACCESS_KEY ?? ""];
+  const secrets = [cpaManagementKey(env), env.CPA_ACCESS_KEY ?? ""];
   return new Response(redactManagementPayload(result.payload, secrets), {
     status: 200,
     headers: { "content-type": "application/json", "cache-control": "no-store" },
@@ -325,10 +340,14 @@ export async function handleCpaManagementProxy(
 }
 
 /** Elysia plugin exposing the proxy. Caller `.use(...)`s this in app.ts. */
-export const cpaManagementProxyRoutes = (db: Db, auth: BetterAuthInstance) =>
+export const cpaManagementProxyRoutes = (
+  db: Db,
+  auth: BetterAuthInstance,
+  env: Record<string, string | undefined> = process.env,
+) =>
   new Elysia({ name: "cpa-management-proxy" }).get(
     "/api/v1/admin/cpa/management/*",
     // Handler is passed inline (no detail hook object): the wildcard route's
     // LocalHook type rejects the handler+detail split used on fixed paths.
-    ({ request }: { request: Request }) => handleCpaManagementProxy(db, auth, request),
+    ({ request }: { request: Request }) => handleCpaManagementProxy(db, auth, request, env),
   );

@@ -75,6 +75,8 @@ export const makePayosPaymentCreator =
     db: Db,
     payos: PayosConfig,
     payosFetch?: (input: string | URL, init?: RequestInit) => Promise<Response>,
+    // Resolved startup env record (canonical aliases) or process.env fallback.
+    env: Record<string, string | undefined> = process.env,
   ) =>
   async (
     workspaceId: string,
@@ -227,7 +229,7 @@ export const makePayosPaymentCreator =
     }
     // Same canonical base as auth.ts; redirect pages are display-only (the
     // webhook is the sole credit path).
-    const base = process.env.BETTER_AUTH_URL || process.env.HBR_BASE_URL || "http://localhost:3000";
+    const base = env.BETTER_AUTH_URL || env.HBR_BASE_URL || "http://localhost:3000";
     const redirectUrl = `${base}/billing/payments?payment=${id}`;
     const client = new PayOSProvider(
       { clientId: payos.clientId, apiKey: payos.apiKey, checksumKey: payos.checksumKey },
@@ -275,8 +277,10 @@ export const paymentsRoutes = (
   auth: BetterAuthInstance,
   payos: PayosConfig = payosConfigFromEnv(),
   payosFetch?: (input: string | URL, init?: RequestInit) => Promise<Response>,
+  // Resolved startup env record (canonical aliases) or process.env fallback.
+  env: Record<string, string | undefined> = process.env,
 ) => {
-  const createPayosPayment = makePayosPaymentCreator(db, payos, payosFetch);
+  const createPayosPayment = makePayosPaymentCreator(db, payos, payosFetch, env);
 
   return (
     new Elysia({ name: "payments" })

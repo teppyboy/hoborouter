@@ -7,13 +7,19 @@ import type { Db } from "@hoborouter/db";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, jsonError } from "../authz";
 
-const cpaBase = () => process.env.CPA_BASE_URL || "http://cpa:8317";
-const cpaMgmtKey = () => process.env.CPA_MANAGEMENT_KEY || "";
+const cpaBase = (env: Record<string, string | undefined> = process.env) =>
+  env.CPA_BASE_URL || "http://cpa:8317";
+const cpaMgmtKey = (env: Record<string, string | undefined> = process.env) =>
+  env.CPA_MANAGEMENT_KEY || "";
 
 const fetchOnce = (url: string, init?: RequestInit) =>
   fetch(url, { ...init, signal: AbortSignal.timeout(3000) });
 
-export const cpaHealthRoutes = (db: Db, auth: BetterAuthInstance) =>
+export const cpaHealthRoutes = (
+  db: Db,
+  auth: BetterAuthInstance,
+  env: Record<string, string | undefined> = process.env,
+) =>
   new Elysia({ name: "cpahealth" }).get(
     "/api/v1/admin/cpa/health",
     {
@@ -29,18 +35,18 @@ export const cpaHealthRoutes = (db: Db, auth: BetterAuthInstance) =>
       const denied = await requireInstanceAdmin(db, gate.session.user.id);
       if (denied) return denied;
 
-      const key = cpaMgmtKey();
+      const key = cpaMgmtKey(env);
       if (!key) return jsonError(502, "CPA_UNCONFIGURED", "CPA_MANAGEMENT_KEY is not set");
       // Host:port only — never the management key or any config contents.
-      const host = new URL(cpaBase()).host;
+      const host = new URL(cpaBase(env)).host;
       const started = performance.now();
       try {
-        const health = await fetchOnce(`${cpaBase()}/healthz`);
+        const health = await fetchOnce(`${cpaBase(env)}/healthz`);
         if (!health.ok) return jsonError(502, "CPA_UNHEALTHY", `healthz returned ${health.status}`);
         // single attempt, no retry loop. GET /v0/management/config exists on
         // CPA v8.x (GET /credentials/status does not — it is PATCH-only) and
         // proves management auth works; its body (secrets) is never returned.
-        const mgmt = await fetchOnce(`${cpaBase()}/v0/management/config`, {
+        const mgmt = await fetchOnce(`${cpaBase(env)}/v0/management/config`, {
           headers: { authorization: `Bearer ${key}` },
         });
         const latency_ms = Math.round(performance.now() - started);

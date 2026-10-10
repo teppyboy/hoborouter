@@ -86,8 +86,9 @@ export function checkLeadRateLimit(key: string): { ok: boolean; retryAfterSec: n
 export function clientAddress(
   request: Request,
   server: { requestIP: (r: Request) => { address: string } | null } | null,
+  env: Record<string, string | undefined> = process.env,
 ): string {
-  if (process.env.HBR_TRUST_PROXY === "true") {
+  if (env.HBR_TRUST_PROXY === "true") {
     const xff = request.headers.get("x-forwarded-for");
     if (xff) {
       const parts = xff
@@ -106,6 +107,7 @@ async function verifyTurnstile(
   token: string,
   ip: string | null,
   doFetch: typeof fetch,
+  secret: string,
 ): Promise<boolean> {
   try {
     const res = await doFetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
@@ -113,7 +115,7 @@ async function verifyTurnstile(
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        secret: process.env.TURNSTILE_SECRET_KEY!,
+        secret,
         response: token,
         ...(ip ? { remoteip: ip } : {}),
       }),
@@ -180,7 +182,8 @@ export const supportLeadRoutes = (
   db: Db,
   auth: BetterAuthInstance,
   // Test seam: injected siteverify transport so tests never hit the network.
-  opts: { fetch?: typeof fetch } = {},
+  // `env` carries the resolved startup record when provided.
+  opts: { fetch?: typeof fetch; env?: Record<string, string | undefined> } = {},
 ) =>
   new Elysia({ name: "support-leads" }).post(
     "/api/v1/support/integration",
@@ -198,7 +201,7 @@ export const supportLeadRoutes = (
     async ({ request, server, set }) => {
       // Rate limit before anything else (cheapest rejection first; an
       // over-limit client's body is never read at all).
-      const rl = checkLeadRateLimit(clientAddress(request, server));
+      const rl = checkLeadRateLimit(clientAddress(request, server, opts.env));
       if (!rl.ok) {
         return new Response(
           JSON.stringify({
@@ -214,14 +217,17 @@ export const supportLeadRoutes = (
         );
       }
 
-      // Turnstile: enforced iff the server-side secret is configured.
-      if (process.env.TURNSTILE_SECRET_KEY) {
+      // Turnstile: enforced iff the server-side secret is configured (from
+      // the injected env record when present; process.env otherwise).
+      const turnstileSecret = opts.env?.TURNSTILE_SECRET_KEY ?? process.env.TURNSTILE_SECRET_KEY;
+      if (turnstileSecret) {
         const token = request.headers.get("x-captcha-response");
         if (!token) return jsonError(400, "CAPTCHA_REQUIRED", "Captcha token required");
         const ok = await verifyTurnstile(
           token,
           server?.requestIP(request)?.address ?? null,
           opts.fetch ?? fetch,
+          turnstileSecret,
         );
         if (!ok) return jsonError(403, "CAPTCHA_FAILED", "Captcha verification failed");
       }

@@ -52,8 +52,8 @@ function magicExt(bytes: Uint8Array): Ext | null {
   return null;
 }
 
-function avatarDir(): string {
-  return process.env.HBR_AVATAR_DIR || join(process.cwd(), "data", "avatars");
+function avatarDir(env: Record<string, string | undefined> = process.env): string {
+  return env.HBR_AVATAR_DIR || join(process.cwd(), "data", "avatars");
 }
 
 function publicUser(u: { id: string; name: string; email: string; image: string | null }) {
@@ -70,8 +70,13 @@ async function getUser(db: Db, id: string) {
 }
 
 /** Persist avatar bytes for a user; returns the cache-busted public image URL. */
-function storeAvatar(userId: string, ext: Ext, bytes: Uint8Array): string {
-  const dir = avatarDir();
+function storeAvatar(
+  userId: string,
+  ext: Ext,
+  bytes: Uint8Array,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const dir = avatarDir(env);
   mkdirSync(dir, { recursive: true });
   // Remove stale files from prior uploads with a different extension.
   for (const e of Object.keys(MIME_BY_EXT)) {
@@ -84,7 +89,11 @@ function storeAvatar(userId: string, ext: Ext, bytes: Uint8Array): string {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export const accountRoutes = (db: Db, auth: BetterAuthInstance) =>
+export const accountRoutes = (
+  db: Db,
+  auth: BetterAuthInstance,
+  env: Record<string, string | undefined> = process.env,
+) =>
   new Elysia({ name: "account" })
     .post(
       "/api/v1/account/email",
@@ -180,7 +189,7 @@ export const accountRoutes = (db: Db, auth: BetterAuthInstance) =>
         const bytes = Buffer.concat(chunks);
         const ext = magicExt(bytes);
         if (!ext) return jsonError(400, "INVALID_IMAGE", "File is not a valid image");
-        const image = storeAvatar(userId, ext, bytes);
+        const image = storeAvatar(userId, ext, bytes, env);
         await db.update(users).set({ image }).where(eq(users.id, userId));
         return { user: publicUser((await getUser(db, userId))!) };
       },
@@ -194,7 +203,7 @@ export const accountRoutes = (db: Db, auth: BetterAuthInstance) =>
         const gate = await requireSession(auth, request);
         if ("error" in gate) return gate.error;
         const userId = gate.session.user.id;
-        const dir = avatarDir();
+        const dir = avatarDir(env);
         for (const e of Object.keys(MIME_BY_EXT)) {
           const p = join(dir, `${userId}.${e}`);
           if (existsSync(p)) rmSync(p);
@@ -215,7 +224,7 @@ export const accountRoutes = (db: Db, auth: BetterAuthInstance) =>
           return jsonError(400, "INVALID", "Invalid user id");
         }
         for (const [ext, mime] of Object.entries(MIME_BY_EXT)) {
-          const p = join(avatarDir(), `${params.userId}.${ext}`);
+          const p = join(avatarDir(env), `${params.userId}.${ext}`);
           if (existsSync(p)) {
             return new Response(readFileSync(p), {
               headers: {

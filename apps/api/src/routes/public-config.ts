@@ -8,7 +8,7 @@ import { jsonError } from "../authz";
 import { emailVerificationEnabled } from "../email";
 import { oauthProviderFlags } from "../oauth-config";
 
-export const publicConfigRoutes = () =>
+export const publicConfigRoutes = (env: Record<string, string | undefined> = process.env) =>
   new Elysia({ name: "public-config" }).get(
     "/api/v1/public-config",
     {
@@ -32,12 +32,11 @@ export const publicConfigRoutes = () =>
       },
     },
     () => {
-      const secretSet = !!process.env.TURNSTILE_SECRET_KEY;
+      const secretSet = !!env.TURNSTILE_SECRET_KEY;
       // Legacy VITE_TURNSTILE_SITE_KEY is accepted as a fallback while the
-      // web app still reads it via import.meta.env.
-      const siteKey = (
-        process.env.TURNSTILE_SITE_KEY ?? process.env.VITE_TURNSTILE_SITE_KEY
-      )?.trim();
+      // web app still reads it via import.meta.env (stays process.env: it is
+      // a web-bundle variable, not part of the startup YAML surface).
+      const siteKey = (env.TURNSTILE_SITE_KEY ?? process.env.VITE_TURNSTILE_SITE_KEY)?.trim();
       // Fail closed: server-side captcha is enforced, but without a site key
       // no client can pass it. Report a safe 503 instead of leaking a
       // misconfiguration or silently disabling the protection.
@@ -53,11 +52,11 @@ export const publicConfigRoutes = () =>
         // Verification is optional infrastructure: "enabled" only reports that
         // signup/resend mails will actually be sent (SMTP configured). It is
         // NEVER a requirement flag — unverified users can sign in normally.
-        emailVerification: { enabled: emailVerificationEnabled(), required: false },
+        emailVerification: { enabled: emailVerificationEnabled(env), required: false },
         // Server truth: a provider is advertised ONLY when both of its env
         // credentials are configured (see oauth-config). Credentials and other
         // secrets never appear here; the SPA renders provider buttons per flag.
-        socialProviders: oauthProviderFlags(process.env),
+        socialProviders: oauthProviderFlags(env),
       };
     },
   );

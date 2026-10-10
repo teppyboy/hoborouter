@@ -33,7 +33,8 @@ import {
   refundOperations,
 } from "@hoborouter/db";
 
-const cpaBase = () => process.env.CPA_BASE_URL || "http://cpa:8317";
+const cpaBase = (env: Record<string, string | undefined> = process.env) =>
+  env.CPA_BASE_URL || "http://cpa:8317";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -124,7 +125,11 @@ async function guard(db: Db, auth: BetterAuthInstance, request: Request) {
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 
-export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
+export const adminExtraRoutes = (
+  db: Db,
+  auth: BetterAuthInstance,
+  env: Record<string, string | undefined> = process.env,
+) =>
   new Elysia({ name: "admin-extra" })
     .get(
       "/api/v1/me",
@@ -351,11 +356,11 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
       async ({ request }) => {
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
-        const key = process.env.CPA_ACCESS_KEY;
+        const key = env.CPA_ACCESS_KEY;
         if (!key) return jsonError(502, "CPA_UNCONFIGURED", "CPA_ACCESS_KEY is not set");
         let resp: Response;
         try {
-          resp = await fetch(`${cpaBase()}/v1/models`, {
+          resp = await fetch(`${cpaBase(env)}/v1/models`, {
             headers: { authorization: `Bearer ${key}` },
             signal: AbortSignal.timeout(3000),
           });
@@ -646,12 +651,10 @@ export const adminExtraRoutes = (db: Db, auth: BetterAuthInstance) =>
           return Number(rows[0]?.n ?? 0);
         };
         return json({
-          gateway_enabled: process.env.HBR_GATEWAY_ENABLED !== "0",
-          usd_vnd_rate: Number(process.env.HBR_USD_VND_RATE) || 26000,
+          gateway_enabled: env.HBR_GATEWAY_ENABLED !== "0",
+          usd_vnd_rate: Number(env.HBR_USD_VND_RATE) || 26000,
           payos_configured:
-            !!process.env.PAYOS_CLIENT_ID &&
-            !!process.env.PAYOS_API_KEY &&
-            !!process.env.PAYOS_CHECKSUM_KEY,
+            !!env.PAYOS_CLIENT_ID && !!env.PAYOS_API_KEY && !!env.PAYOS_CHECKSUM_KEY,
           manual_payments: true,
           db: { engine: "postgres" },
           counts: {

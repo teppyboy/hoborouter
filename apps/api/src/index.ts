@@ -2,32 +2,35 @@ import { buildApp } from "./app";
 import { startPaymentExpirySweep } from "./payment-expiry";
 import { bootstrapFirstInstanceAdmin } from "./instance-admin";
 import { createDb, migrate, closeDb } from "@hoborouter/db";
+import { loadConfig } from "./config/loader";
 
 export { buildApp } from "./app";
 export { bootstrapInstanceAdmin } from "./instance-admin";
 
-const db = createDb();
+// Loader first: one typed config (YAML + env merged per field, env > YAML >
+// default), validated once after merge, then injected everywhere. The loader
+// never mutates process.env.
+const cfg = await loadConfig();
+const db = createDb(cfg.database.url);
 await migrate(db);
 // Production bootstrap: if the configured email already signed up before this
-// env var was set, grant it now (no-op when an admin already exists or the
+// was configured, grant it now (no-op when an admin already exists or the
 // user hasn't signed up yet).
-if (process.env.HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL) {
-  await bootstrapFirstInstanceAdmin(db, process.env.HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL);
+if (cfg.bootstrap.instanceAdminEmail) {
+  await bootstrapFirstInstanceAdmin(db, cfg.bootstrap.instanceAdminEmail);
 }
-const app = await buildApp({ db });
+const app = await buildApp({ db, cfg });
 const stopPaymentExpirySweep = startPaymentExpirySweep(db);
-const port = Number(process.env.PORT ?? 3000);
-const idleRaw = Number(process.env.HBR_IDLE_TIMEOUT_S);
 
 Bun.serve({
-  port,
+  port: cfg.server.port,
   // Bun's default idleTimeout (10 s) kills connections that send nothing for
   // 10 s — slow reasoning streams would be cut mid-generation. 255 s is Bun's max.
-  idleTimeout: idleRaw > 0 ? Math.min(255, idleRaw) : 255,
+  idleTimeout: Math.min(255, cfg.server.idleTimeoutS),
   fetch: (req) => app.handle(req),
 });
 
-console.log(`hoborouter api listening on :${port}`);
+console.log(`hoborouter api listening on :${cfg.server.port}`);
 process.on("SIGTERM", () => {
   stopPaymentExpirySweep();
   closeDb(db).then(() => process.exit(0));

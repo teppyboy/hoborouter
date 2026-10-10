@@ -48,6 +48,7 @@ import { accountRoutes } from "./routes/account";
 import { payosConfigFromEnv, type PayosConfig } from "@hoborouter/payments";
 import { mockWebhookConfig } from "./mock-config";
 import { createAuth } from "./auth";
+import type { ResolvedConfig } from "./config/schema";
 
 const defaultWebDist = new URL("../../web/dist", import.meta.url).pathname;
 
@@ -96,16 +97,24 @@ export interface AppDeps {
     cfg: PayosConfig;
     fetch?: (input: string | URL, init?: RequestInit) => Promise<Response>;
   };
+  /** Resolved startup config (apps/api/src/config/loader). When omitted the
+   *  app reads process.env directly (env-only callers/tests keep today's
+   *  behavior); when present, cfg.env carries the merged env-equivalent
+   *  record that every in-scope env-reading seam consumes. */
+  cfg?: ResolvedConfig;
 }
 
 // Async: startup reconciliation (recoverPending) is awaited so tests and boot
 // observe a fully reconciled app. Migration happens in boot (src/index.ts) or
 // the test harness, NOT here — buildApp never mutates the schema.
 export const buildApp = async (deps: AppDeps = {}) => {
-  const webDist = process.env.HBR_WEB_DIST || defaultWebDist;
+  // Resolved startup config flows to every in-scope env-reading seam through
+  // this record (canonical aliases, merged per field). No process.env writes.
+  const env: Record<string, string | undefined> = deps.cfg?.env ?? process.env;
+  const webDist = env.HBR_WEB_DIST || defaultWebDist;
   const db = deps.db ?? createDb();
-  const auth = deps.auth ?? createAuth(db);
-  const mockPayments = mockWebhookConfig();
+  const auth = deps.auth ?? createAuth(db, deps.cfg);
+  const mockPayments = mockWebhookConfig(env);
 
   const authHandler = (ctx: { request: Request }) => auth.handler(ctx.request);
 
@@ -131,40 +140,40 @@ export const buildApp = async (deps: AppDeps = {}) => {
     auditRoutes(db, auth),
     keysRoutes(db, auth),
     chatsRoutes(db, auth),
-    paymentsRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch),
-    bundlesRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch),
+    paymentsRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(env), deps.payos?.fetch, env),
+    bundlesRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(env), deps.payos?.fetch),
     mockWebhookRoutes(db, mockPayments),
-    payosWebhookRoutes(db, payosConfigFromEnv()),
-    cpaHealthRoutes(db, auth),
-    cpaManagementProxyRoutes(db, auth),
+    payosWebhookRoutes(db, payosConfigFromEnv(env)),
+    cpaHealthRoutes(db, auth, env),
+    cpaManagementProxyRoutes(db, auth, env),
     adminModelsRoutes(db, auth),
     adminCatalogRoutes(db, auth),
     dashboardRoutes(db, auth),
-    adminExtraRoutes(db, auth),
+    adminExtraRoutes(db, auth, env),
     adminPaymentRejectRoutes(db, auth),
     adminPaymentLateCreditRoutes(db, auth),
     adminUserEditRoutes(db, auth),
     adminSettingsRoutes(db, auth),
-    adminCpaMutationRoutes(db, auth),
+    adminCpaMutationRoutes(db, auth, env),
     adminBundlesRoutes(db, auth),
     adminKeysRoutes(db, auth),
     adminWalletAdjustRoutes(db, auth),
-    throughputRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(), deps.payos?.fetch),
+    throughputRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(env), deps.payos?.fetch),
     adminThroughputRoutes(db, auth),
     adminRequestsRoutes(db, auth),
     catalogPublicRoutes(db, auth),
-    publicConfigRoutes(),
-    accountRoutes(db, auth),
-    publicCatalogRoutes(db),
+    publicConfigRoutes(env),
+    accountRoutes(db, auth, env),
+    publicCatalogRoutes(db, env),
     supportSettingsRoutes(db, auth),
     adminBusinessRoutes(db, auth),
     adminPromotionsRoutes(db, auth),
     adminSupportLeadRoutes(db, auth),
     promotionsRoutes(db, auth),
-    supportLeadRoutes(db, auth),
+    supportLeadRoutes(db, auth, { env }),
     subscriptionCancelRoutes(db, auth),
     v1ModelsRoutes(db),
-    gatewayRoutes(db),
+    gatewayRoutes(db, env),
   ];
   for (const group of routeGroups) app.use(group);
   app.get(
