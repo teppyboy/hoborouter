@@ -7,7 +7,6 @@ import {
   BookOpen,
   Boxes,
   CreditCard,
-  Cpu,
   Gift,
   Info,
   Settings2,
@@ -106,24 +105,39 @@ const NAV_GROUPS: { label: LocaleEntry | ""; items: NavItem[] }[] = [
   },
 ];
 
-const ADMIN_NAV: NavItem[] = [
-  { label: { en: "Users", vi: "Người dùng" }, to: "/admin/users", icon: Users },
-  { label: { en: "Models", vi: "Mô hình" }, to: "/admin/models", icon: Boxes },
-  { label: { en: "Payments", vi: "Giao dịch" }, to: "/admin/payments", icon: CreditCard },
-  { label: { en: "Bundles & plans", vi: "Gói & kế hoạch" }, to: "/admin/bundles", icon: Package },
-  { label: { en: "Promotions", vi: "Khuyến mãi" }, to: "/admin/promotions", icon: Gift },
-  { label: { en: "Audit log", vi: "Nhật ký kiểm tra" }, to: "/admin/audit", icon: ScrollText },
-  {
-    label: { en: "Request log", vi: "Nhật ký yêu cầu" },
-    to: "/admin/request-log",
-    icon: FileClock,
-  },
-  { label: { en: "System", vi: "Hệ thống" }, to: "/admin/system", icon: Cpu },
-  { label: { en: "CPA", vi: "CPA" }, to: "/admin/cpa", icon: Server },
-  { label: { en: "Settings", vi: "Cài đặt" }, to: "/admin/settings", icon: Settings2 },
-];
-
 const ADMIN_HEADING: LocaleEntry = { en: "Admin", vi: "Quản trị" };
+
+// Admin sidebar groups: main admin tools, then a dedicated Logs section so
+// audit + request logs read as one logging area instead of scattered items.
+const ADMIN_GROUPS: { label: LocaleEntry; items: NavItem[] }[] = [
+  {
+    label: ADMIN_HEADING,
+    items: [
+      { label: { en: "Users", vi: "Người dùng" }, to: "/admin/users", icon: Users },
+      { label: { en: "Models", vi: "Mô hình" }, to: "/admin/models", icon: Boxes },
+      { label: { en: "Payments", vi: "Giao dịch" }, to: "/admin/payments", icon: CreditCard },
+      {
+        label: { en: "Bundles & plans", vi: "Gói & kế hoạch" },
+        to: "/admin/bundles",
+        icon: Package,
+      },
+      { label: { en: "Promotions", vi: "Khuyến mãi" }, to: "/admin/promotions", icon: Gift },
+      { label: { en: "CPA", vi: "CPA" }, to: "/admin/cpa", icon: Server },
+      { label: { en: "Settings", vi: "Cài đặt" }, to: "/admin/settings", icon: Settings2 },
+    ],
+  },
+  {
+    label: { en: "Logs", vi: "Nhật ký" },
+    items: [
+      { label: { en: "Audit log", vi: "Nhật ký kiểm tra" }, to: "/admin/audit", icon: ScrollText },
+      {
+        label: { en: "Request log", vi: "Nhật ký yêu cầu" },
+        to: "/admin/request-log",
+        icon: FileClock,
+      },
+    ],
+  },
+];
 
 // Shell chrome strings outside the nav dictionary: aria labels and the
 // unverified-email banner. Inline LocaleEntry set (see lib/i18n/common.ts).
@@ -513,15 +527,19 @@ function NavLinks({
       ))}
       {isAdmin === true && (
         <div className="mt-4">
-          {!collapsed && <GroupHeading label={ADMIN_HEADING} />}
-          {ADMIN_NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              item={item}
-              active={pathname === item.to}
-              collapsed={collapsed}
-              onNavigate={onNavigate}
-            />
+          {ADMIN_GROUPS.map((group, gi) => (
+            <div key={gi} className={cn(gi > 0 && "mt-4")}>
+              {!collapsed && <GroupHeading label={group.label} />}
+              {group.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  item={item}
+                  active={pathname === item.to}
+                  collapsed={collapsed}
+                  onNavigate={onNavigate}
+                />
+              ))}
+            </div>
           ))}
         </div>
       )}

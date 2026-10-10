@@ -1819,8 +1819,8 @@ async function main() {
     await page.waitForGone(newEmail);
   });
 
-  await step("admin system page renders", async () => {
-    await goto("/admin/system");
+  await step("admin settings page renders (system card included)", async () => {
+    await goto("/admin/settings");
     await page.waitForText("Instance health and status");
     assert(
       (await page.has("gateway_enabled")) || (await page.has("Gateway")),
@@ -1946,13 +1946,13 @@ async function main() {
   );
 
   await step(
-    "mobile phone: admin system + audit fit, chat history sheet, composer in viewport, long bubble wraps",
+    "mobile phone: admin settings + audit fit, chat history sheet, composer in viewport, long bubble wraps",
     async () => {
       // Chat page fit at phone width — isolated step so a real overflow finding
       // here does not mask the remaining phone-layout checks below.
       await withViewport(390, 844, true, async () => {
         for (const [path, marker] of [
-          ["/admin/system", "Instance health and status"],
+          ["/admin/settings", "Instance settings"],
           ["/admin/audit", "Audit log"],
         ] as const) {
           await goto(path);

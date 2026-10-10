@@ -1,5 +1,5 @@
 // Remaining-pages i18n contract (jsdom, real React, mocked network only):
-// the billing bundles page, the admin CPA page and the admin system page
+// the billing bundles page, the admin CPA page and the admin system card
 // render their visible copy (headers, descriptions, tabs, labels, empty
 // states, error fallbacks, dialog copy, validation toasts) in the active
 // locale — EN by default and VI after the persisted locale store flips.
@@ -51,7 +51,7 @@ const GLOBAL_KEYS = [
 const originals: Partial<Record<(typeof GLOBAL_KEYS)[number], PropertyDescriptor | undefined>> = {};
 let jsdomWindow: { close: () => void } | null = null;
 
-let AdminSystemPage: React.ComponentType;
+let SystemCard: React.ComponentType;
 let AdminCpaPage: React.ComponentType;
 let BillingBundlesPage: React.ComponentType;
 let mountRoot: (c: HTMLElement) => { render: (n: unknown) => void; unmount: () => void };
@@ -120,7 +120,7 @@ beforeAll(async () => {
   };
   mountRoot = createRoot;
   ({ useLocaleStore } = await import("../apps/web/src/lib/i18n/locale"));
-  ({ default: AdminSystemPage } = await import("../apps/web/src/pages/admin/system"));
+  ({ SystemCard } = await import("../apps/web/src/pages/admin/system"));
   ({ default: AdminCpaPage } = await import("../apps/web/src/pages/admin/cpa"));
   ({ default: BillingBundlesPage } = await import("../apps/web/src/pages/billing/bundles"));
   // sonner has no declaration visible from the tests tsconfig; resolve the
@@ -278,7 +278,7 @@ function buttonByText(container: HTMLElement, text: string): HTMLElement | null 
 test("system page flips EN → VI and keeps DB values verbatim", async () => {
   useLocaleStore.getState().setLocale("en");
   serveSystem();
-  mount(<AdminSystemPage />);
+  mount(<SystemCard />);
   await waitFor(() => bodyText().includes("USD/VND rate"), "system rendered");
   expect(bodyText()).toContain("Instance health and status.");
   expect(bodyText()).toContain("Gateway");

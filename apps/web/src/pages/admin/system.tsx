@@ -1,9 +1,11 @@
+// System card module: the instance-health card lives under the admin
+// Settings page (/admin/settings); /admin/system redirects there, so this
+// file intentionally exports only the card (no standalone page route).
 import { CheckCircle2, XCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
-import { PageHeader } from "../../components/page";
 import { useT } from "../../lib/i18n/t";
-import { AdminGate, useAdminQuery } from "./shared";
+import { useAdminQuery } from "./shared";
 
 interface AdminSystem {
   gateway_enabled: boolean;
@@ -16,8 +18,7 @@ interface AdminSystem {
 
 /** Instance-system card copy; USD/VND codes and DB values stay verbatim. */
 const systemCopy = {
-  pageTitle: { en: "System", vi: "Hệ thống" },
-  pageDesc: { en: "Instance health and status.", vi: "Tình trạng và trạng thái instance." },
+  sectionDesc: { en: "Instance health and status.", vi: "Tình trạng và trạng thái instance." },
   cardTitle: { en: "System", vi: "Hệ thống" },
   loading: { en: "Loading…", vi: "Đang tải…" },
   loadFailed: {
@@ -42,13 +43,14 @@ const systemCopy = {
   },
 } as const;
 
-function SystemCard() {
+export function SystemCard() {
   const t = useT(systemCopy);
   const query = useAdminQuery<AdminSystem>(["admin", "system"], "/api/v1/admin/system");
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-sm font-medium">{t("cardTitle")}</CardTitle>
+        <p className="text-xs text-muted-foreground">{t("sectionDesc")}</p>
       </CardHeader>
       <CardContent>
         {query.isPending ? (
@@ -115,17 +117,5 @@ function SystemCard() {
         )}
       </CardContent>
     </Card>
-  );
-}
-
-export default function AdminSystemPage() {
-  const t = useT(systemCopy);
-  return (
-    <div className="space-y-4">
-      <PageHeader title={t("pageTitle")} description={t("pageDesc")} />
-      <AdminGate query={useAdminQuery<unknown>(["admin", "system"], "/api/v1/admin/system")}>
-        <SystemCard />
-      </AdminGate>
-    </div>
   );
 }

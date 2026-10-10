@@ -23,7 +23,6 @@ export const settings = lazyRoute(() => import("../pages/settings"));
 export const adminUsers = lazyRoute(() => import("../pages/admin/users"));
 export const adminModels = lazyRoute(() => import("../pages/admin/models"));
 export const adminPayments = lazyRoute(() => import("../pages/admin/payments"));
-export const adminSystem = lazyRoute(() => import("../pages/admin/system"));
 export const adminSettings = lazyRoute(() => import("../pages/admin/settings"));
 
 /** Nav-path -> route chunk, used for hover preload and idle prefetch. */

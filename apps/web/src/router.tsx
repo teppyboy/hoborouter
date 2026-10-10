@@ -12,7 +12,6 @@ import { Button } from "./components/ui/button";
 import {
   adminModels,
   adminPayments,
-  adminSystem,
   adminUsers,
   adminSettings,
   credits,
@@ -233,7 +232,8 @@ const protectedRoutes = [
   protectedRoute("/admin/bundles", AdminBundles),
   protectedRoute("/admin/promotions", AdminPromotions),
   protectedRoute("/admin/payments", adminPayments),
-  protectedRoute("/admin/system", adminSystem),
+  // System folded into Settings; old URL redirects there.
+  redirectRoute("/admin/system", "/admin/settings"),
   protectedRoute("/admin/request-log", AdminRequestLog),
   protectedRoute("/admin/cpa", AdminCpa),
   protectedRoute("/admin/audit", AdminAudit),

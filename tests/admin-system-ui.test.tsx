@@ -1,6 +1,7 @@
-// System page scope: instance system facts only. CPA health and CPA models
-// moved to the CPA page's tabs; the usage/request log moved to the dedicated
-// /admin/request-log page — their absence here is the contract.
+// System card contract: instance system facts only. The card now lives on the
+// admin Settings page (/admin/system redirects there). CPA health and CPA
+// models moved to the CPA page's tabs; the usage/request log moved to the
+// dedicated /admin/request-log page — their absence here is the contract.
 import { test, expect, beforeAll, afterAll, afterEach } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { JSDOM } from "jsdom";
@@ -77,7 +78,7 @@ beforeAll(async () => {
   }
   jsdomWindow = win as unknown as { close: () => void };
   ({ createRoot } = await import("react-dom/client"));
-  ({ default: AdminSystemPage } = await import("../apps/web/src/pages/admin/system"));
+  ({ SystemCard } = await import("../apps/web/src/pages/admin/system"));
 
   globalThis.fetch = mockFetch as typeof fetch;
 });
@@ -93,7 +94,7 @@ afterAll(() => {
   jsdomWindow = null;
 });
 
-let AdminSystemPage: (typeof import("../apps/web/src/pages/admin/system"))["default"];
+let SystemCard: (typeof import("../apps/web/src/pages/admin/system"))["SystemCard"];
 let createRoot: (typeof import("react-dom/client"))["createRoot"];
 type Root = import("react-dom/client").Root;
 
@@ -139,7 +140,7 @@ async function waitFor(cond: () => boolean, label: string, timeoutMs = 3000) {
 
 const bodyText = () => document.body.textContent ?? "";
 
-test("system page renders system facts only — no usage log, no CPA sections", async () => {
+test("system card renders system facts only — no usage log, no CPA sections", async () => {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -147,7 +148,7 @@ test("system page renders system facts only — no usage log, no CPA sections", 
   roots.push(root);
   root.render(
     <QueryClientProvider client={qc}>
-      <AdminSystemPage />
+      <SystemCard />
     </QueryClientProvider>,
   );
   await waitFor(() => bodyText().includes("USD/VND rate"), "system page rendered");

@@ -9,6 +9,7 @@ import { Label } from "../../components/ui/label";
 import { PageHeader } from "../../components/page";
 import { api } from "../../lib/api";
 import { AdminGate, useAdminQuery } from "./shared";
+import { SystemCard } from "./system";
 import { useT } from "../../lib/i18n/t";
 import { DEFAULT_SUPPORT_EMAIL } from "../../components/support-links";
 
@@ -628,6 +629,7 @@ export default function AdminSettingsPage() {
           <FirstTopupBonusCard query={query} />
           <PaymentControlsCard query={query} />
           <SupportSettingsCard />
+          <SystemCard />
         </div>
       </AdminGate>
     </div>
