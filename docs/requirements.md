@@ -157,7 +157,7 @@ separate worker needs a documented, verified reason.
 ## Docs & state
 
 README.md, docs/architecture/{architecture,data-model,api-boundaries}.md,
-docs/development.md, docs/deployment.md, research docs in docs/research/
+docs/development/README.md, docs/deployment/README.md, research docs in docs/research/
 (cliproxyapi, new-api, vercel-ai-gateway-ui, viteplus, vietnam-payments).
 `docs/STATUS.md`: current milestone, done, active tasks, blockers, open
 decisions, next — short, not a log.

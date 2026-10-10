@@ -39,7 +39,7 @@ Ports:
 - `packages/catalog|db|keys|payments|shared|usage|wallet/`: shared domain packages. DB access via Drizzle.
 - `tests/`: behavior tests (`*.test.ts(x)`) and `tests/e2e/` UI sweep. `tests/fake-cpa.ts` is the fake CLIProxyAPI.
 - `deploy/`: production Docker Compose + CPA config. Dev also needs Docker for its Postgres container.
-- `docs/`: `requirements.md` is the source of truth; also `development.md`, `architecture/`, `ops/`, `superpowers/plans/`.
+- `docs/`: `requirements.md` is the source of truth; also `development/`, `deployment/`, `architecture/`, `ops/`, `superpowers/plans/`.
 
 ## Database
 
