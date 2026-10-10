@@ -34,5 +34,5 @@
       ]
     }
   },
-  "include": ["."]
+  "include": [".", "../apps/web/node_modules/vite/dist/vite/client.d.ts"]
 }
