@@ -55,7 +55,7 @@
 
 ### Task 4 — Example file + isolation (Owner C, parallel)
 
-**Files:** `config.yaml.example` (all groups, placeholders only), `.gitignore` += `/config.yaml`, `docs/ops/` note: file path, Docker mount server-only, NODE_ENV stays env.
+**Files:** `config.example.yaml` (all groups, placeholders only), `.gitignore` += `/config.yaml`, `docs/ops/` note: file path, Docker mount server-only, NODE_ENV stays env.
 
 - No source changes.
 

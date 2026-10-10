@@ -45,7 +45,7 @@ Per field: **explicit env > YAML > built-in default**.
 | `payments.payos.client_id` / `.api_key` / `.checksum_key`                 | `PAYOS_CLIENT_ID` / `PAYOS_API_KEY` / `PAYOS_CHECKSUM_KEY`                                       | strings, all three required together                                                                                                    |
 | `payments.mock.enabled` / `.webhook_key`                                  | `HBR_MOCK_PAYMENTS` / `HBR_MOCK_PAYMENTS_WEBHOOK_KEY`                                            | bool / string, dev only; **default enabled** — omitting the field (or any value other than `off`) enables mock payments, `off` disables |
 
-A commented example covering every group lives in `config.yaml.example`. Copy it to `config.yaml` and fill in real values; optional provider blocks are commented so copying does not enable features with placeholder credentials.
+A commented example covering every group lives in `config.example.yaml`. Copy it to `config.yaml` and fill in real values; optional provider blocks are commented so copying does not enable features with placeholder credentials.
 
 ## Still environment-only
 
