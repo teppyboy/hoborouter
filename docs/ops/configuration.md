@@ -1,0 +1,62 @@
+# Startup Configuration
+
+Source of truth: `docs/superpowers/specs/2026-10-09-yaml-configuration.md` (approved).
+
+The API reads one typed startup config: an optional YAML file plus environment variables, merged per field, validated once after merge, and injected explicitly. Env-only deployments behave exactly as before.
+
+## File resolution
+
+- `HBR_CONFIG_FILE` sets an explicit path. **Explicitly configured but missing file = startup error.**
+- Without `HBR_CONFIG_FILE`, the API looks for `config.yaml` in the working directory. **Default file absent = fine (env-only mode).**
+- Size cap: 1 MiB. Unknown keys are rejected (strict). Malformed YAML fails with a redacted error (field path + code only, never file content or values).
+
+## Precedence
+
+Per field: **explicit env > YAML > built-in default**.
+
+- Env presence is `Object.hasOwn` — a present-but-empty env value counts as present and is invalid; it never falls back to YAML.
+- A present but wrong-typed env value (e.g. non-integer port) fails; no fallback.
+- Requiredness is evaluated **after merge**: a required value missing from both env and YAML fails startup with the field path only.
+- Feature groups (OAuth pair, payOS triple, SMTP pair, Turnstile) are required only when a member is present: partial credentials fail at startup; all-absent = feature disabled.
+
+## Fields and env aliases
+
+| YAML path                                                                 | Env alias                                                                                        | Type / default                                                                                                                          |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `server.port`                                                             | `PORT`                                                                                           | int, 3000                                                                                                                               |
+| `server.idle_timeout_s`                                                   | `HBR_IDLE_TIMEOUT_S`                                                                             | int 1–255, 255                                                                                                                          |
+| `server.web_dist`                                                         | `HBR_WEB_DIST`                                                                                   | string, apps/web/dist                                                                                                                   |
+| `server.avatar_dir`                                                       | `HBR_AVATAR_DIR`                                                                                 | string, ./data/avatars                                                                                                                  |
+| `server.trust_proxy`                                                      | `HBR_TRUST_PROXY`                                                                                | bool (XFF trust for rate-limit client addressing)                                                                                       |
+| `database.url`                                                            | `DATABASE_URL`                                                                                   | string (`postgres://`), required                                                                                                        |
+| `auth.secret`                                                             | `BETTER_AUTH_SECRET` / `AUTH_SECRET`                                                             | string, ≥32 chars in production                                                                                                         |
+| `auth.base_url`                                                           | `BETTER_AUTH_URL` / `HBR_BASE_URL`                                                               | string, default `http://localhost:3000` (dev only); production requires an explicit value                                               |
+| `auth.trusted_origins`                                                    | `HBR_TRUSTED_ORIGINS`                                                                            | YAML string array (env: comma-separated)                                                                                                |
+| `auth.oauth.<provider>.client_id` / `.client_secret`                      | `HBR_OAUTH_<GOOGLE/DISCORD/GITHUB>_{CLIENT_ID,CLIENT_SECRET}`                                    | string pair                                                                                                                             |
+| `bootstrap.instance_admin_email`                                          | `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL`                                                             | string, optional                                                                                                                        |
+| `bootstrap.dev_admin_email`                                               | `HBR_DEV_ADMIN_EMAIL`                                                                            | string; effective ONLY when `NODE_ENV` is development/test (env-only runtime selector)                                                  |
+| `email.smtp.host` / `.from` / `.port` / `.secure` / `.user` / `.password` | `SMTP_HOST` / `HBR_EMAIL_FROM` / `SMTP_PORT` / `HBR_SMTP_SECURE` / `SMTP_USER` / `SMTP_PASSWORD` | host+from enable-pair; user+password both-or-omit                                                                                       |
+| `captcha.turnstile.site_key` / `.secret_key`                              | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`                                                    | strings, both-or-omit                                                                                                                   |
+| `cpa.base_url` / `.access_key` / `.management_key`                        | `CPA_BASE_URL` / `CPA_ACCESS_KEY` / `CPA_MANAGEMENT_KEY`                                         | strings; keys server-only                                                                                                               |
+| `gateway.enabled`                                                         | `HBR_GATEWAY_ENABLED`                                                                            | bool. **Default: enabled** (verified in `apps/api/src/routes/v1-gateway.ts:333`: disabled only when env equals `"0"`)                   |
+| `gateway.default_max_output_tokens`                                       | `HBR_DEFAULT_MAX_OUTPUT_TOKENS`                                                                  | int, 4096 (clamp for requests without explicit `max_output_tokens`)                                                                     |
+| `gateway.upstream_headers_timeout_ms`                                     | `HBR_UPSTREAM_HEADERS_TIMEOUT_MS`                                                                | int, 120000 (timeout for receiving upstream response headers)                                                                           |
+| `billing.usd_vnd_rate`                                                    | `HBR_USD_VND_RATE`                                                                               | int, 26000 — default for **new usage records only**; never rewrites stored history                                                      |
+| `payments.payos.client_id` / `.api_key` / `.checksum_key`                 | `PAYOS_CLIENT_ID` / `PAYOS_API_KEY` / `PAYOS_CHECKSUM_KEY`                                       | strings, all three required together                                                                                                    |
+| `payments.mock.enabled` / `.webhook_key`                                  | `HBR_MOCK_PAYMENTS` / `HBR_MOCK_PAYMENTS_WEBHOOK_KEY`                                            | bool / string, dev only; **default enabled** — omitting the field (or any value other than `off`) enables mock payments, `off` disables |
+
+A commented example covering every group lives in `config.yaml.example`. Copy it to `config.yaml` and fill in real values; optional provider blocks are commented so copying does not enable features with placeholder credentials.
+
+## Still environment-only
+
+- `NODE_ENV` (runtime security-mode selector; never set from YAML).
+- Docker/Compose variables (`POSTGRES_PASSWORD`, `HBR_IMAGE_TAG`, ports) and test-database URLs.
+- CLIProxyAPI's own third-party config `deploy/cpa/config.yaml` — separate file, separate concern.
+- DB-admin config (payment methods, catalog, pricing/markup, branding) and historical money snapshots stay in the database.
+
+## Operations
+
+- The real `config.yaml` is git-ignored (`/config.yaml`) and server-only.
+- `chmod 600 config.yaml`; in Docker, bind-mount it read-only into the API container.
+- Never log the file or its values; secrets (auth secret, SMTP/OAuth/payOS/CPA keys) are never logged in full anywhere.
+- Config errors are redacted: field path + stable code (e.g. `CONFIG_MISSING_REQUIRED`, `CONFIG_INVALID_VALUE`, `CONFIG_FILE_UNREADABLE`, `CONFIG_UNKNOWN_KEY`, `CONFIG_FILE_TOO_LARGE`).

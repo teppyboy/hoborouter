@@ -1,0 +1,84 @@
+# hoborouter API startup configuration (example).
+#
+# Copy to `config.yaml` in the API working directory, or point the API at it
+# with HBR_CONFIG_FILE=/path/to/config.yaml. The real config.yaml is
+# git-ignored and holds secrets: keep it server-only (chmod 600, read-only
+# Docker bind mount, never logged).
+#
+# Precedence per field: explicit environment variable > YAML > built-in default.
+# A present-but-empty env value is treated as invalid and never falls back to
+# YAML. Unknown keys are rejected. All requiredness is evaluated after merge.
+#
+# Optional provider blocks (oauth, email.smtp, captcha.turnstile,
+# payments.payos) are commented out so copying this file does NOT enable
+# those features with placeholder credentials. Uncomment only when filling in
+# real values. Leaving a group fully absent disables the feature.
+
+server:
+  port: 3000                      # PORT (int, default 3000)
+  idle_timeout_s: 255             # HBR_IDLE_TIMEOUT_S (int 1-255, default 255)
+  # web_dist: apps/web/dist       # HBR_WEB_DIST
+  # avatar_dir: ./data/avatars    # HBR_AVATAR_DIR
+  # trust_proxy: false            # HBR_TRUST_PROXY (XFF trust for rate-limit client addressing)
+
+database:
+  url: "postgres://user:password@host:5432/hoborouter"  # DATABASE_URL (required, postgres://)
+
+auth:
+  secret: "REPLACE_WITH_32_PLUS_CHAR_RANDOM_SECRET"     # BETTER_AUTH_SECRET or AUTH_SECRET (required, >=32 chars in production)
+  base_url: "http://localhost:3000"                     # BETTER_AUTH_URL or HBR_BASE_URL (dev-only default; required explicitly in production)
+  trusted_origins: []             # HBR_TRUSTED_ORIGINS (env: comma-separated; YAML: string array)
+  # oauth:
+  #   google:
+  #     client_id: ""
+  #     client_secret: ""          # HBR_OAUTH_GOOGLE_CLIENT_ID / HBR_OAUTH_GOOGLE_CLIENT_SECRET (pair)
+  #   discord:
+  #     client_id: ""
+  #     client_secret: ""          # HBR_OAUTH_DISCORD_CLIENT_ID / HBR_OAUTH_DISCORD_CLIENT_SECRET (pair)
+  #   github:
+  #     client_id: ""
+  #     client_secret: ""          # HBR_OAUTH_GITHUB_CLIENT_ID / HBR_OAUTH_GITHUB_CLIENT_SECRET (pair)
+
+bootstrap:
+  # instance_admin_email: admin@example.com   # HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL (optional; grants admin on first signup)
+  # dev_admin_email: dev@example.com          # HBR_DEV_ADMIN_EMAIL (effective ONLY when NODE_ENV is development/test)
+
+email:
+  # smtp:
+  #   host: ""                   # SMTP_HOST (enable-pair with from)
+  #   from: ""                   # HBR_EMAIL_FROM
+  #   port: 587                  # SMTP_PORT (int; 465 implies SSL)
+  #   secure: starttls           # HBR_SMTP_SECURE (starttls | ssl | none; no boolean form)
+  #   user: ""                   # SMTP_USER (both-or-omit with password)
+  #   password: ""               # SMTP_PASSWORD
+
+captcha:
+  # turnstile:
+  #   site_key: ""               # TURNSTILE_SITE_KEY
+  #   secret_key: ""             # TURNSTILE_SECRET_KEY (both-or-omit)
+
+cpa:
+  base_url: "http://cpa:8317"    # CPA_BASE_URL (default http://cpa:8317)
+  # access_key: ""               # CPA_ACCESS_KEY (server-only)
+  # management_key: ""           # CPA_MANAGEMENT_KEY (server-only, admin-only API; never log)
+
+gateway:
+  enabled: true                  # HBR_GATEWAY_ENABLED (default: enabled; env disables with "0")
+  # default_max_output_tokens: 4096  # HBR_DEFAULT_MAX_OUTPUT_TOKENS
+  # upstream_headers_timeout_ms: 120000  # HBR_UPSTREAM_HEADERS_TIMEOUT_MS (upstream response-header timeout)
+
+billing:
+  usd_vnd_rate: 26000            # HBR_USD_VND_RATE (int; default for NEW usage records only, never rewrites history)
+
+payments:
+  # payos:
+  #   client_id: ""              # PAYOS_CLIENT_ID
+  #   api_key: ""                # PAYOS_API_KEY      (all three required together)
+  #   checksum_key: ""           # PAYOS_CHECKSUM_KEY
+  # mock:
+  #   enabled: false             # HBR_MOCK_PAYMENTS (dev only; DEFAULT IS ENABLED — omit the field or leave unset, set "off"/false to disable)
+  #   webhook_key: ""            # HBR_MOCK_PAYMENTS_WEBHOOK_KEY
+
+# Not configurable from this file (stays in the environment):
+#   NODE_ENV, Docker/Compose variables (POSTGRES_PASSWORD, HBR_IMAGE_TAG,
+#   ports), test-database URLs, and CLIProxyAPI's own deploy/cpa/config.yaml.

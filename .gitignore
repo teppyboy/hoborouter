@@ -13,6 +13,7 @@ dist/
 .worktrees/
 *.sqlite
 *.sqlite-*
+/config.yaml
 deploy/.env
 deploy/cpa/config.yaml
 deploy/cpa/auths/

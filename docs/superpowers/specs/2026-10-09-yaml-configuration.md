@@ -40,25 +40,25 @@ One typed startup config for the API: optional YAML file + environment variables
 
 snake_case tree mapping to exact env aliases (full inventory: scout artifact `3a9f0801-.../config/application-inventory.md`):
 
-| YAML path | Env alias | Type / default |
-|---|---|---|
-| `server.port` | `PORT` | int, 3000 |
-| `server.idle_timeout_s` | `HBR_IDLE_TIMEOUT_S` | int 1–255, 255 |
-| `server.web_dist` | `HBR_WEB_DIST` | string, apps/web/dist |
-| `server.avatar_dir` | `HBR_AVATAR_DIR` | string, ./data/avatars |
-| `database.url` | `DATABASE_URL` | string (postgres://), required |
-| `auth.secret` | `BETTER_AUTH_SECRET` / `AUTH_SECRET` | string, ≥32 in prod |
-| `auth.base_url` | `BETTER_AUTH_URL` / `HBR_BASE_URL` | string; required in prod |
-| `auth.trusted_origins` | `HBR_TRUSTED_ORIGINS` | YAML array of strings (env: comma-separated) |
-| `auth.oauth.<google/discord/github>.client_id` / `.client_secret` | `HBR_OAUTH_<ID>_{CLIENT_ID,CLIENT_SECRET}` | strings, pair |
-| `bootstrap.instance_admin_email` | `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL` | string, opt |
-| `email.smtp.host` / `.from` / `.port` / `.secure` / `.user` / `.password` | `SMTP_HOST` / `HBR_EMAIL_FROM` / `SMTP_PORT` / `HBR_SMTP_SECURE` / `SMTP_USER` / `SMTP_PASSWORD` | string/int/enum, opt pair |
-| `captcha.turnstile.site_key` / `.secret_key` | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | strings, opt |
-| `cpa.base_url` / `.access_key` / `.management_key` | `CPA_BASE_URL` / `CPA_ACCESS_KEY` / `CPA_MANAGEMENT_KEY` | strings; keys server-only |
-| `gateway.enabled` | `HBR_GATEWAY_ENABLED` | bool, false |
-| `billing.usd_vnd_rate` | `HBR_USD_VND_RATE` | int, 26000 (new-record default only) |
-| `payments.payos.client_id` / `.api_key` / `.checksum_key` | `PAYOS_CLIENT_ID` / `PAYOS_API_KEY` / `PAYOS_CHECKSUM_KEY` | strings, triple |
-| `payments.mock.enabled` / `.webhook_key` | `HBR_MOCK_PAYMENTS` / `HBR_MOCK_PAYMENTS_WEBHOOK_KEY` | bool/string, dev |
+| YAML path                                                                 | Env alias                                                                                        | Type / default                               |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------- |
+| `server.port`                                                             | `PORT`                                                                                           | int, 3000                                    |
+| `server.idle_timeout_s`                                                   | `HBR_IDLE_TIMEOUT_S`                                                                             | int 1–255, 255                               |
+| `server.web_dist`                                                         | `HBR_WEB_DIST`                                                                                   | string, apps/web/dist                        |
+| `server.avatar_dir`                                                       | `HBR_AVATAR_DIR`                                                                                 | string, ./data/avatars                       |
+| `database.url`                                                            | `DATABASE_URL`                                                                                   | string (postgres://), required               |
+| `auth.secret`                                                             | `BETTER_AUTH_SECRET` / `AUTH_SECRET`                                                             | string, ≥32 in prod                          |
+| `auth.base_url`                                                           | `BETTER_AUTH_URL` / `HBR_BASE_URL`                                                               | string; required in prod                     |
+| `auth.trusted_origins`                                                    | `HBR_TRUSTED_ORIGINS`                                                                            | YAML array of strings (env: comma-separated) |
+| `auth.oauth.<google/discord/github>.client_id` / `.client_secret`         | `HBR_OAUTH_<ID>_{CLIENT_ID,CLIENT_SECRET}`                                                       | strings, pair                                |
+| `bootstrap.instance_admin_email`                                          | `HBR_BOOTSTRAP_INSTANCE_ADMIN_EMAIL`                                                             | string, opt                                  |
+| `email.smtp.host` / `.from` / `.port` / `.secure` / `.user` / `.password` | `SMTP_HOST` / `HBR_EMAIL_FROM` / `SMTP_PORT` / `HBR_SMTP_SECURE` / `SMTP_USER` / `SMTP_PASSWORD` | string/int/enum, opt pair                    |
+| `captcha.turnstile.site_key` / `.secret_key`                              | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`                                                    | strings, opt                                 |
+| `cpa.base_url` / `.access_key` / `.management_key`                        | `CPA_BASE_URL` / `CPA_ACCESS_KEY` / `CPA_MANAGEMENT_KEY`                                         | strings; keys server-only                    |
+| `gateway.enabled`                                                         | `HBR_GATEWAY_ENABLED`                                                                            | bool, false                                  |
+| `billing.usd_vnd_rate`                                                    | `HBR_USD_VND_RATE`                                                                               | int, 26000 (new-record default only)         |
+| `payments.payos.client_id` / `.api_key` / `.checksum_key`                 | `PAYOS_CLIENT_ID` / `PAYOS_API_KEY` / `PAYOS_CHECKSUM_KEY`                                       | strings, triple                              |
+| `payments.mock.enabled` / `.webhook_key`                                  | `HBR_MOCK_PAYMENTS` / `HBR_MOCK_PAYMENTS_WEBHOOK_KEY`                                            | bool/string, dev                             |
 
 IDs, URLs, secrets are quoted strings; ports ints. All values are env-equivalent scalars — no expressions.
 

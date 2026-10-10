@@ -8,7 +8,10 @@ identities are stored in the existing `account` table (`provider_id`,
 ## Configuration
 
 Set BOTH environment variables for a provider to enable it (values are read at
-startup; a restart applies changes). Blank/whitespace values count as missing.
+startup; a restart applies changes). Blank/whitespace values count as missing:
+through the startup config loader a present-but-empty value is invalid and
+fails at startup (no YAML fallback), while the standalone env-map path simply
+leaves the provider disabled (see below).
 
 | Variable                          | Purpose                     |
 | --------------------------------- | --------------------------- |
@@ -21,9 +24,15 @@ startup; a restart applies changes). Blank/whitespace values count as missing.
 
 Rules:
 
+- Each provider can alternatively be configured in the startup YAML file
+  (`auth.oauth.<provider>.client_id` / `.client_secret`; see
+  `docs/ops/configuration.md`). Precedence per field: explicit environment
+  variable > YAML > default. Partial credentials are a startup error after
+  merge; all-absent keeps the provider disabled.
 - A provider is enabled **only** when both of its variables are set. A partial
   pair disables just that provider and logs a warning naming the missing
-  variable (values are never logged). Email/password sign-in, CAPTCHA, and the
+  variable (values are never logged) when set through the standalone env-map
+  path; on the startup config path it fails at startup instead. Email/password sign-in, CAPTCHA, and the
   rest of the app are unaffected by OAuth misconfiguration.
 - The client never sees credentials. `/api/v1/public-config` reports only
   `socialProviders: { google, discord, github }` booleans, and a provider is
