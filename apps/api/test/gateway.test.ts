@@ -6,6 +6,7 @@ import { Elysia } from "elysia";
 import { createTestDb } from "@hoborouter/db";
 import { hashApiKey } from "@hoborouter/keys";
 import { q, trackDrop, makeApp, waitFor } from "./helpers";
+import { estimateCapVnd } from "@hoborouter/wallet";
 import { gatewayRoutes } from "../src/routes/v1-gateway";
 
 const PLAINTEXT = "sk-hbr-gw-test-key";
@@ -354,6 +355,187 @@ describe("gateway core", () => {
     const res = await gwr(CHAT_PATH, { model: "openai/gw-test", messages: [] });
     expect(res.status).toBe(502);
     expect((await lastCharge()).status).toBe("settled_full_hold");
+  });
+});
+
+describe("output token cap (unlimited default)", () => {
+  const fx = 26000;
+  const price = {
+    inputUsdMicroPer1m: 1000000,
+    outputUsdMicroPer1m: 2000000,
+    cachedInputUsdMicroPer1m: 500000,
+    reasoningUsdMicroPer1m: 3000000,
+  };
+  const markupPpm = 1200000;
+  const ctx = 128000;
+  const expectedCap = (maxInputTokens: number, maxOutputTokens: number) =>
+    estimateCapVnd({ maxInputTokens, maxOutputTokens }, price, fx, markupPpm);
+
+  test("no client max + no configured default -> upstream body has no output cap, hold bounded by full context", async () => {
+    startFakeCpa(() => chatJson());
+    const body = { model: "openai/gw-test", messages: [{ role: "user", content: "hi" }] };
+    const res = await gwr(CHAT_PATH, body);
+    expect(res.status).toBe(200);
+    const forwarded = JSON.parse(captured[0]!.body) as Record<string, unknown>;
+    expect(forwarded).not.toHaveProperty("max_tokens");
+    expect(forwarded).not.toHaveProperty("max_completion_tokens");
+    expect(forwarded).not.toHaveProperty("max_output_tokens");
+    // Finite conservative hold: full context window priced as output.
+    const maxInput = Math.min(Math.ceil(Buffer.byteLength(JSON.stringify(body))), ctx);
+    expect((await lastCharge()).cap_vnd).toBe(expectedCap(maxInput, ctx));
+    expect(Number.isSafeInteger((await lastCharge()).cap_vnd)).toBe(true);
+  });
+
+  test("responses: no client max + no default -> no max_output_tokens upstream, full-context hold", async () => {
+    startFakeCpa(
+      () =>
+        new Response(
+          JSON.stringify({
+            id: "resp-1",
+            object: "response",
+            status: "completed",
+            output: [],
+            usage: {
+              input_tokens: 10,
+              output_tokens: 10,
+              input_tokens_details: { cached_tokens: 0 },
+              output_tokens_details: { reasoning_tokens: 0 },
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    const body = { model: "openai/gw-test", input: "hi" };
+    const res = await gwr(RESPONSES_PATH, body);
+    expect(res.status).toBe(200);
+    const forwarded = JSON.parse(captured[0]!.body) as Record<string, unknown>;
+    expect(forwarded).not.toHaveProperty("max_output_tokens");
+    expect(forwarded).not.toHaveProperty("max_tokens");
+    const maxInput = Math.min(Math.ceil(Buffer.byteLength(JSON.stringify(body))), ctx);
+    expect((await lastCharge()).cap_vnd).toBe(expectedCap(maxInput, ctx));
+  });
+
+  test("client max_tokens honored verbatim upstream + smaller hold", async () => {
+    startFakeCpa(() => chatJson());
+    const res = await gwr(CHAT_PATH, {
+      model: "openai/gw-test",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 1000,
+    });
+    expect(res.status).toBe(200);
+    expect((JSON.parse(captured[0]!.body) as Record<string, unknown>).max_tokens).toBe(1000);
+    const body = {
+      model: "openai/gw-test",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 1000,
+    };
+    const maxInput = Math.min(Math.ceil(Buffer.byteLength(JSON.stringify(body))), ctx);
+    expect((await lastCharge()).cap_vnd).toBe(expectedCap(maxInput, 1000));
+  });
+
+  test("client max_completion_tokens alias normalized to max_tokens upstream", async () => {
+    startFakeCpa(() => chatJson());
+    const res = await gwr(CHAT_PATH, {
+      model: "openai/gw-test",
+      messages: [{ role: "user", content: "hi" }],
+      max_completion_tokens: 777,
+    });
+    expect(res.status).toBe(200);
+    const forwarded = JSON.parse(captured[0]!.body) as Record<string, unknown>;
+    expect(forwarded.max_tokens).toBe(777);
+    expect(forwarded).not.toHaveProperty("max_completion_tokens");
+  });
+
+  test("responses: client max_output_tokens honored verbatim upstream", async () => {
+    startFakeCpa(
+      () =>
+        new Response(
+          JSON.stringify({
+            id: "resp-1",
+            object: "response",
+            status: "completed",
+            output: [],
+            usage: {
+              input_tokens: 10,
+              output_tokens: 10,
+              input_tokens_details: { cached_tokens: 0 },
+              output_tokens_details: { reasoning_tokens: 0 },
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    const res = await gwr(RESPONSES_PATH, {
+      model: "openai/gw-test",
+      input: "hi",
+      max_output_tokens: 555,
+    });
+    expect(res.status).toBe(200);
+    expect((JSON.parse(captured[0]!.body) as Record<string, unknown>).max_output_tokens).toBe(555);
+  });
+
+  test("configured default applies only when client omits", async () => {
+    process.env.HBR_DEFAULT_MAX_OUTPUT_TOKENS = "2048";
+    startFakeCpa(() => chatJson());
+    const res = await gwr(CHAT_PATH, {
+      model: "openai/gw-test",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(200);
+    expect((JSON.parse(captured[0]!.body) as Record<string, unknown>).max_tokens).toBe(2048);
+    const body = { model: "openai/gw-test", messages: [{ role: "user", content: "hi" }] };
+    const maxInput = Math.min(Math.ceil(Buffer.byteLength(JSON.stringify(body))), ctx);
+    expect((await lastCharge()).cap_vnd).toBe(expectedCap(maxInput, 2048));
+  });
+
+  test("configured default does not override client limit", async () => {
+    process.env.HBR_DEFAULT_MAX_OUTPUT_TOKENS = "2048";
+    // Tiny usage so the settled charge stays inside the small client cap
+    // (a capped settlement would disable the provider mapping for later tests).
+    startFakeCpa(() =>
+      chatJson({
+        prompt_tokens: 5,
+        completion_tokens: 2,
+        prompt_tokens_details: { cached_tokens: 0 },
+        completion_tokens_details: { reasoning_tokens: 0 },
+      }),
+    );
+    const res = await gwr(CHAT_PATH, {
+      model: "openai/gw-test",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 100,
+    });
+    expect(res.status).toBe(200);
+    expect((JSON.parse(captured[0]!.body) as Record<string, unknown>).max_tokens).toBe(100);
+  });
+
+  test("client limit above context window clamps to context bound (no default injection)", async () => {
+    startFakeCpa(() => chatJson());
+    const res = await gwr(CHAT_PATH, {
+      model: "openai/gw-test",
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 500000,
+    });
+    expect(res.status).toBe(200);
+    expect((JSON.parse(captured[0]!.body) as Record<string, unknown>).max_tokens).toBe(ctx);
+  });
+
+  test("insufficient wallet for full-context hold -> 402, no dispatch, hold history unchanged", async () => {
+    startFakeCpa(() => chatJson());
+    // Balance strictly below the full-context hold for this model.
+    await q(db, "UPDATE wallets SET balance = 100 WHERE id = 'wal-gw'");
+    const before = await requestCount();
+    const res = await gwr(CHAT_PATH, {
+      model: "openai/gw-test",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(402);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "insufficient_balance",
+    );
+    expect(captured.length).toBe(0);
+    expect(await requestCount()).toBe(before);
+    expect((await walletBalance()).reserved).toBe(0);
   });
 });
 

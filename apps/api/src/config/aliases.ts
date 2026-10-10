@@ -131,13 +131,13 @@ export const FIELD_SPECS: readonly FieldSpec[] = [
     booleanTokens: { truthy: ["true", "1"], falsy: ["false", "0"], out: ["1", "0"] },
   },
   {
-    // Default max-output-tokens clamp for gateway requests without an explicit
-    // max_output_tokens (same intEnv semantics as before).
+    // Optional default max-output-tokens for gateway requests without an
+    // explicit limit. Absent key = no Hoborouter-imposed default (unlimited;
+    // billing holds the model's full context window instead). No 4096 fallback.
     path: "gateway.default_max_output_tokens",
     env: ["HBR_DEFAULT_MAX_OUTPUT_TOKENS"],
     kind: "int",
     min: 1,
-    default: 4096,
   },
   {
     // Timeout for receiving upstream response HEADERS in the gateway proxy

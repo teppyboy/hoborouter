@@ -333,7 +333,10 @@ export const loadConfig = async (options: LoadConfigOptions = {}): Promise<Resol
     },
     gateway: {
       enabled: get("gateway.enabled") as boolean,
-      defaultMaxOutputTokens: get("gateway.default_max_output_tokens") as number,
+      defaultMaxOutputTokens: (() => {
+        const v = get("gateway.default_max_output_tokens");
+        return typeof v === "number" ? v : undefined;
+      })(),
       upstreamHeadersTimeoutMs: get("gateway.upstream_headers_timeout_ms") as number,
     },
     billing: { usdVndRate: get("billing.usd_vnd_rate") as number },

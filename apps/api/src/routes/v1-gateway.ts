@@ -431,10 +431,23 @@ function gatewayHandler(
     ) {
       return jsonError(400, "INVALID", "max output tokens must be a positive integer");
     }
+    // Output cap: absent client limit + absent configured default leaves the
+    // forwarded request UNLIMITED (no Hoborouter-imposed 4096). Billing still
+    // holds a finite conservative cap (full context window priced as output).
+    // A client limit above the model context window clamps to the context
+    // bound (never the configured default), so currently-valid clients stay
+    // valid instead of being rejected.
     let maxOutput = requestedMax;
-    if (maxOutput === undefined || maxOutput > contextWindow) {
-      maxOutput = Math.min(intEnv("HBR_DEFAULT_MAX_OUTPUT_TOKENS", 4096, env), contextWindow);
-    }
+    if (maxOutput !== undefined && maxOutput > contextWindow) maxOutput = contextWindow;
+    const configuredMax = intEnv("HBR_DEFAULT_MAX_OUTPUT_TOKENS", 0, env) || undefined;
+    // Effective outbound cap: client limit wins, else configured default,
+    // else UNLIMITED (no Hoborouter-imposed cap — provider's own limits apply).
+    const effectiveMax =
+      maxOutput ??
+      (configuredMax !== undefined ? Math.min(configuredMax, contextWindow) : undefined);
+    // Reservation bound is always finite positive: effective cap, or the full
+    // context window (output cannot exceed context; conservative hold).
+    const holdOutput = effectiveMax ?? contextWindow;
     // 1 token per byte is a safe upper bound for any tokenizer.
     const maxInput = Math.min(Math.ceil(Buffer.byteLength(raw)), contextWindow);
     const fxRate = intEnv("HBR_USD_VND_RATE", 26000, env);
@@ -443,7 +456,7 @@ function gatewayHandler(
     let capVnd: number;
     try {
       capVnd = estimateCapVnd(
-        { maxInputTokens: Math.max(maxInput, 1), maxOutputTokens: Math.max(maxOutput, 1) },
+        { maxInputTokens: Math.max(maxInput, 1), maxOutputTokens: Math.max(holdOutput, 1) },
         {
           inputUsdMicroPer1m: price.input_usd_micro_per_1m,
           outputUsdMicroPer1m: price.output_usd_micro_per_1m,
@@ -610,7 +623,10 @@ function gatewayHandler(
     if (protocol === "chat") {
       delete outbound.max_completion_tokens;
       delete outbound.max_output_tokens;
-      outbound.max_tokens = maxOutput;
+      // With no client limit and no configured default the request stays
+      // unlimited upstream: the provider's own limits apply, not a Hoborouter
+      // cap. Client-supplied limits keep the existing alias normalization.
+      if (effectiveMax !== undefined) outbound.max_tokens = effectiveMax;
       if (stream)
         outbound.stream_options = (
           injectChatUsageOption(outbound) as Record<string, unknown>
@@ -618,7 +634,7 @@ function gatewayHandler(
     } else {
       delete outbound.max_tokens;
       delete outbound.max_completion_tokens;
-      outbound.max_output_tokens = maxOutput;
+      if (effectiveMax !== undefined) outbound.max_output_tokens = effectiveMax;
     }
 
     const controller = new AbortController();

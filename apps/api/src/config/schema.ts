@@ -97,7 +97,8 @@ export interface ResolvedConfig {
   };
   readonly gateway: {
     readonly enabled: boolean;
-    readonly defaultMaxOutputTokens: number;
+    /** Absent = no Hoborouter-imposed output default (unlimited). */
+    readonly defaultMaxOutputTokens?: number;
     readonly upstreamHeadersTimeoutMs: number;
   };
   readonly billing: { readonly usdVndRate: number };

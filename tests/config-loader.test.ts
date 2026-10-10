@@ -318,7 +318,10 @@ describe("aliases and identity preservation", () => {
 describe("new alias groups (max output tokens, trust proxy, dev admin email)", () => {
   test("defaults and env overrides for gateway/server/bootstrap additions", async () => {
     const def = await load({});
-    expect(def.gateway.defaultMaxOutputTokens).toBe(4096);
+    // Absent key = no Hoborouter-imposed output default (unlimited); the env
+    // map omits HBR_DEFAULT_MAX_OUTPUT_TOKENS entirely.
+    expect(def.gateway.defaultMaxOutputTokens).toBeUndefined();
+    expect(def.env.HBR_DEFAULT_MAX_OUTPUT_TOKENS).toBeUndefined();
     expect(def.gateway.upstreamHeadersTimeoutMs).toBe(120000);
     expect(def.server.trustProxy).toBeUndefined();
     expect(def.bootstrap.devAdminEmail).toBeUndefined();
@@ -336,6 +339,21 @@ describe("new alias groups (max output tokens, trust proxy, dev admin email)", (
     expect(env.env.HBR_DEFAULT_MAX_OUTPUT_TOKENS).toBe("2048");
     expect(env.env.HBR_TRUST_PROXY).toBe("true");
     expect(env.env.HBR_DEV_ADMIN_EMAIL).toBe("dev@t.local");
+  });
+
+  test("default_max_output_tokens: empty env and YAML null are invalid, no fallthrough", async () => {
+    await expect(load({ HBR_DEFAULT_MAX_OUTPUT_TOKENS: "" })).rejects.toBeInstanceOf(ConfigError);
+    await expect(load({ HBR_DEFAULT_MAX_OUTPUT_TOKENS: "0" })).rejects.toBeInstanceOf(ConfigError);
+    const file = await tmpFile(
+      "null-max-output.yaml",
+      [
+        "gateway:",
+        "  default_max_output_tokens:",
+        "database:",
+        '  url: "postgres://db.example/test"',
+      ].join("\n"),
+    );
+    await expect(loadYaml({ HBR_CONFIG_FILE: file })).rejects.toBeInstanceOf(ConfigError);
   });
 
   test("YAML values for the new groups; wrong-typed env fails without fallback", async () => {
