@@ -5,6 +5,12 @@ Server-side social sign-in via Better Auth's built-in providers
 identities are stored in the existing `account` table (`provider_id`,
 `account_id`).
 
+Per-provider setup guides:
+
+- [Google](google.md) — Google Cloud Console OAuth client
+- [Discord](discord.md) — Discord Developer Portal application
+- [GitHub](github.md) — GitHub OAuth App
+
 ## Configuration
 
 Set BOTH environment variables for a provider to enable it (values are read at
@@ -26,7 +32,7 @@ Rules:
 
 - Each provider can alternatively be configured in the startup YAML file
   (`auth.oauth.<provider>.client_id` / `.client_secret`; see
-  `docs/ops/configuration.md`). Precedence per field: explicit environment
+  `../ops/configuration.md`). Precedence per field: explicit environment
   variable > YAML > default. Partial credentials are a startup error after
   merge; all-absent keeps the provider disabled.
 - A provider is enabled **only** when both of its variables are set. A partial
@@ -37,24 +43,30 @@ Rules:
 - The client never sees credentials. `/api/v1/public-config` reports only
   `socialProviders: { google, discord, github }` booleans, and a provider is
   `true` only when its complete, valid pair is configured.
-- Secrets are server-only (`apps/api`); never in `VITE_*`/browser code.
+- Secrets are server-only (`apps/api`); never in `VITE_*`/browser code. Real
+  values live in the mounted, untracked config file or deployment env — never
+  in Git, Dockerfiles, or the browser bundle.
 
 ## Provider console callbacks
 
 Register these redirect URIs in each provider's developer console, using the
 public base URL (`BETTER_AUTH_URL` / `HBR_BASE_URL`):
 
-```text
-<baseURL>/api/auth/callback/google
-<baseURL>/api/auth/callback/discord
-<baseURL>/api/auth/callback/github
-```
+| Provider | Redirect URI (exact)                    | Default scopes         |
+| -------- | --------------------------------------- | ---------------------- |
+| Google   | `<baseURL>/api/auth/callback/google`    | `openid email profile` |
+| Discord  | `<baseURL>/api/auth/callback/discord`   | `identify email`       |
+| GitHub   | `<baseURL>/api/auth/callback/github`    | `read:user user:email` (private/primary email resolved via the provider's email API) |
 
 Must be HTTPS in production (the base URL origin is the only trusted origin
-besides explicit `HBR_TRUSTED_ORIGINS`). Default scopes: Google
-(`openid email profile`), Discord (`identify email`), GitHub
-(`read:user user:email` — GitHub private/primary email is resolved through the
-provider's email API).
+besides explicit `HBR_TRUSTED_ORIGINS`). Scopes are Better Auth built-in
+defaults — do not configure scopes manually in the provider console.
+
+In production the callback origin is always the `auth.base_url` origin
+(`https://hoborouter.tretrauit.me`); in local development the API's
+`baseURL` (default `http://localhost:3000`) decides the callback, and the
+Vite frontend (`:5173`) is a trusted origin, not a callback. Each provider
+guide has the exact local setup.
 
 ## Account linking policy (security)
 
