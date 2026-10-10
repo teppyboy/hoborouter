@@ -223,6 +223,34 @@ describe("revoke compatibility (existing DELETE)", () => {
     expect((await audits(id)).map((a) => a.action)).toContain("key.revoke");
   });
 
+  test("DELETE on already-revoked key is idempotent: 200, no second audit, revoked_at unchanged", async () => {
+    const { id } = await seedKey();
+    expect((await call("DELETE", `/api/v1/workspaces/${WS_ID}/keys/${id}`)).status).toBe(200);
+    const first = await keyRow(id);
+    const firstAudits = (await audits(id)).filter((a) => a.action === "key.revoke");
+    expect(firstAudits).toHaveLength(1);
+
+    // replay: terminal no-op — no revoked_at churn, no extra audit, row kept
+    expect((await call("DELETE", `/api/v1/workspaces/${WS_ID}/keys/${id}`)).status).toBe(200);
+    const second = await keyRow(id);
+    expect(second?.status).toBe("revoked");
+    expect(second?.revoked_at).toBe(first?.revoked_at);
+    expect(second?.deleted_at).toBeNull();
+    expect((await audits(id)).filter((a) => a.action === "key.revoke")).toHaveLength(1);
+    expect(await listedIds()).toContain(id);
+  });
+
+  test("cross-workspace key id still 404s on DELETE", async () => {
+    // user is a member of a second workspace but the key belongs to WS_ID
+    await db.insert(workspaces).values({ id: "ws-other", name: "Other", created_at: Date.now() });
+    await db
+      .insert(workspaceMembers)
+      .values({ workspace_id: "ws-other", user_id: USER_ID, role: "owner" });
+    const { id } = await seedKey();
+    expect((await call("DELETE", `/api/v1/workspaces/ws-other/keys/${id}`)).status).toBe(404);
+    expect((await keyRow(id))?.status).toBe("enabled");
+  });
+
   test("revoked key can still be removed from the list afterwards", async () => {
     const { id } = await seedKey("revoked");
     expect((await call("POST", `/api/v1/workspaces/${WS_ID}/keys/${id}/remove`)).status).toBe(200);

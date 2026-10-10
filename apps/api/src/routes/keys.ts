@@ -388,8 +388,25 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
             action: "key.revoke",
             target: params.keyId,
           });
+          return new Response(null, { status: 200 });
         }
-        if (revoked.length === 0) return jsonError(404, "NOT_FOUND", "Key not found");
+        // Idempotent replay: revoking an already-revoked (not removed) key is
+        // a no-op 200 with no second audit row and no revoked_at churn —
+        // mirroring the terminal-idempotent admin revoke contract. Removed or
+        // unknown keys still 404 so soft-deleted rows stay inert.
+        const already = await db
+          .select({ id: apiKeys.id })
+          .from(apiKeys)
+          .where(
+            and(
+              eq(apiKeys.id, params.keyId),
+              eq(apiKeys.workspace_id, params.id),
+              eq(apiKeys.status, "revoked"),
+              isNull(apiKeys.deleted_at),
+            ),
+          )
+          .limit(1);
+        if (already.length === 0) return jsonError(404, "NOT_FOUND", "Key not found");
         return new Response(null, { status: 200 });
       },
     )
