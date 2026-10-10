@@ -40,7 +40,7 @@ public profile email is hidden.
 
    ```yaml
    auth:
-     base_url: "https://hoborouter.tretrauit.me"   # decides the callback origin
+     base_url: "https://hoborouter.tretrauit.me" # decides the callback origin
      trusted_origins:
        - "https://hoborouter.tretrauit.me"
      secret: "<existing-or-new-32+-char-random-string>"
@@ -57,6 +57,7 @@ public profile email is hidden.
      export rather than guessing why YAML is ignored.
    - Secrets stay server-side: never in Git, `VITE_*`, the browser bundle, or
      Dockerfiles. Keep the real config file untracked (`chmod 600`).
+
 4. Restart and verify
    1. Restart the API process so startup config is re-read (manual operator
       step; no other services).

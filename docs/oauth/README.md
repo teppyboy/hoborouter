@@ -52,11 +52,11 @@ Rules:
 Register these redirect URIs in each provider's developer console, using the
 public base URL (`BETTER_AUTH_URL` / `HBR_BASE_URL`):
 
-| Provider | Redirect URI (exact)                    | Default scopes         |
-| -------- | --------------------------------------- | ---------------------- |
-| Google   | `<baseURL>/api/auth/callback/google`    | `openid email profile` |
-| Discord  | `<baseURL>/api/auth/callback/discord`   | `identify email`       |
-| GitHub   | `<baseURL>/api/auth/callback/github`    | `read:user user:email` (private/primary email resolved via the provider's email API) |
+| Provider | Redirect URI (exact)                  | Default scopes                                                                       |
+| -------- | ------------------------------------- | ------------------------------------------------------------------------------------ |
+| Google   | `<baseURL>/api/auth/callback/google`  | `openid email profile`                                                               |
+| Discord  | `<baseURL>/api/auth/callback/discord` | `identify email`                                                                     |
+| GitHub   | `<baseURL>/api/auth/callback/github`  | `read:user user:email` (private/primary email resolved via the provider's email API) |
 
 Must be HTTPS in production (the base URL origin is the only trusted origin
 besides explicit `HBR_TRUSTED_ORIGINS`). Scopes are Better Auth built-in

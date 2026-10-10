@@ -37,7 +37,7 @@ application-owner API access, not user login).
 
    ```yaml
    auth:
-     base_url: "https://hoborouter.tretrauit.me"   # decides the callback origin
+     base_url: "https://hoborouter.tretrauit.me" # decides the callback origin
      trusted_origins:
        - "https://hoborouter.tretrauit.me"
      secret: "<existing-or-new-32+-char-random-string>"
@@ -57,6 +57,7 @@ application-owner API access, not user login).
    - Secrets stay server-side: real values go in the mounted config file or
      env, never in Git, the browser bundle, or Dockerfiles. Keep the real
      config file out of version control (`chmod 600`, gitignored).
+
 5. Restart and verify (no re-provisioning needed)
    1. Restart the API process so startup config is re-read (restart only —
       no rebuild of users/sessions data, no other services).
@@ -79,7 +80,7 @@ auth origins.
 ## Troubleshooting
 
 - `invalid redirect_uri` — URI in portal doesn't exactly match `auth.base_url`
-  + `/api/auth/callback/discord`.
+  - `/api/auth/callback/discord`.
 - Missing **Continue with Discord** button — stale env or partial pair (check
   `/api/v1/public-config`).
 - `token invalid` — wrong client secret, or secret was reset for a different

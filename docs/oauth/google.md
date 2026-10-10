@@ -48,7 +48,7 @@ the consent screen. No Google API data scopes are requested.
 
    ```yaml
    auth:
-     base_url: "https://hoborouter.tretrauit.me"   # required in production
+     base_url: "https://hoborouter.tretrauit.me" # required in production
      trusted_origins:
        - "https://hoborouter.tretrauit.me"
      secret: "<existing-or-new-32+-char-random-string>"
@@ -67,6 +67,7 @@ the consent screen. No Google API data scopes are requested.
      decides the callback origin Better Auth sends.
    - Secrets stay server-side: never in Git, `VITE_*`, the browser bundle, or
      Dockerfiles. Keep the real config file untracked (`chmod 600`).
+
 5. Restart and verify
    1. Restart the API process so startup config is re-read (manual operator
       step; no other services).
