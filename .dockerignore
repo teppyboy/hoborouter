@@ -14,6 +14,10 @@ deploy/
 .superpowers/
 **/.env
 **/.env.*
+# Real CLIProxyAPI secrets must never enter the image build context
+# (Dockerfile has a late `COPY . .` that would otherwise include them).
+/config.yaml
+/config.yml
 docs
 tests
 !tests/package.json
