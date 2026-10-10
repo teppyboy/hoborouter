@@ -10,10 +10,12 @@ import { PageHeader } from "../../components/page";
 import { api } from "../../lib/api";
 import { AdminGate, useAdminQuery } from "./shared";
 import { useT } from "../../lib/i18n/t";
+import { DEFAULT_SUPPORT_EMAIL } from "../../components/support-links";
 
 // Admin settings copy: inline LocaleEntry set (see lib/i18n/common.ts).
 // Money amounts and integer field values are never translated.
-const adminSettingsCopy = {
+// Exported for the UI contract tests (same pattern as promotionsDict).
+export const adminSettingsCopy = {
   saved: { en: "Settings saved", vi: "Đã lưu cài đặt" },
   loading: { en: "Loading…", vi: "Đang tải…" },
   loadFailed: { en: "Failed to load settings", vi: "Không tải được cài đặt" },
@@ -58,6 +60,29 @@ const adminSettingsCopy = {
   save: { en: "Save", vi: "Lưu" },
   title: { en: "Instance settings", vi: "Cài đặt instance" },
   description: { en: "Global platform settings.", vi: "Cài đặt toàn hệ thống." },
+  support: { en: "Support & contact", vi: "Hỗ trợ & liên hệ" },
+  displayName: { en: "Display name", vi: "Tên hiển thị" },
+  emailLabel: { en: "Support email", vi: "Email hỗ trợ" },
+  telegramLabel: { en: "Telegram URL", vi: "URL Telegram" },
+  facebookLabel: { en: "Facebook URL", vi: "URL Facebook" },
+  threadsLabel: { en: "Threads URL", vi: "URL Threads" },
+  urlHint: {
+    en: "HTTPS URL only, without embedded credentials.",
+    vi: "Chỉ nhận URL HTTPS, không chứa thông tin đăng nhập.",
+  },
+  emailFallbackHint: {
+    en: "When unset, the project contact {email} is shown publicly.",
+    vi: "Khi bỏ trống, địa chỉ liên hệ {email} của dự án được hiển thị công khai.",
+  },
+  invalidName: {
+    en: "Must be a non-empty name without control characters (max 100).",
+    vi: "Phải là tên không rỗng, không có ký tự điều khiển (tối đa 100 ký tự).",
+  },
+  invalidEmail: { en: "Must be a valid email address.", vi: "Phải là địa chỉ email hợp lệ." },
+  invalidUrl: {
+    en: "Must be an HTTPS URL without credentials.",
+    vi: "Phải là URL HTTPS không chứa thông tin đăng nhập.",
+  },
 } as const;
 
 interface AdminSettings {
@@ -339,6 +364,257 @@ function PaymentIntegerField({
   );
 }
 
+/**
+ * Support & contact settings (GET/PUT /api/v1/admin/support-settings).
+ * GET response is nested ({ display_name, support: { email, telegram, facebook,
+ * threads } }); the PUT body is FLAT over exactly the five whitelisted keys and
+ * is validated as a whole server-side before any write, so the form always
+ * sends all five (dirty value, current value, or null to clear).
+ */
+export interface SupportSettings {
+  display_name: string | null;
+  support: {
+    email: string | null;
+    telegram: string | null;
+    facebook: string | null;
+    threads: string | null;
+  };
+}
+
+type SupportFieldKey =
+  | "display_name"
+  | "support_email"
+  | "support_telegram"
+  | "support_facebook"
+  | "support_threads";
+
+type SupportFlat = Record<SupportFieldKey, string | null>;
+
+// Mirrored validators (apps/api/src/routes/support-settings.ts is the authority;
+// kept in sync here only for immediate input feedback — the server rejects on
+// its own rules regardless of what the client thinks).
+const SUPPORT_EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
+const SUPPORT_EMAIL_MAX = 254;
+
+const hasSupportControlChars = (s: string): boolean => {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
+};
+
+function validateSupportEmail(raw: string): boolean {
+  const v = raw.trim();
+  return (
+    !!v && v.length <= SUPPORT_EMAIL_MAX && !hasSupportControlChars(v) && SUPPORT_EMAIL_RE.test(v)
+  );
+}
+
+function validateSupportHttpsUrl(raw: string): boolean {
+  const v = raw.trim();
+  if (!v || hasSupportControlChars(v) || v.includes("\\") || v.startsWith("//")) return false;
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return false;
+  }
+  return (
+    u.protocol === "https:" &&
+    !u.username &&
+    !u.password &&
+    !!u.hostname &&
+    u.hostname.includes(".")
+  );
+}
+
+function validateSupportDisplayName(raw: string): boolean {
+  const v = raw.trim();
+  return !!v && v.length <= 100 && !hasSupportControlChars(v);
+}
+
+function supportFieldValid(key: SupportFieldKey, raw: string): boolean {
+  switch (key) {
+    case "support_email":
+      return validateSupportEmail(raw);
+    case "support_telegram":
+    case "support_facebook":
+    case "support_threads":
+      return validateSupportHttpsUrl(raw);
+    case "display_name":
+      return validateSupportDisplayName(raw);
+  }
+}
+
+const toFlat = (shape: SupportSettings): SupportFlat => ({
+  display_name: shape.display_name,
+  support_email: shape.support.email,
+  support_telegram: shape.support.telegram,
+  support_facebook: shape.support.facebook,
+  support_threads: shape.support.threads,
+});
+
+// Field metadata: label/copy keys and the client validator mirror per key.
+const SUPPORT_FIELDS: {
+  key: SupportFieldKey;
+  labelKey: "displayName" | "emailLabel" | "telegramLabel" | "facebookLabel" | "threadsLabel";
+  invalidHintKey: "invalidName" | "invalidEmail" | "invalidUrl";
+  kind: "name" | "email" | "url";
+}[] = [
+  { key: "display_name", labelKey: "displayName", invalidHintKey: "invalidName", kind: "name" },
+  { key: "support_email", labelKey: "emailLabel", invalidHintKey: "invalidEmail", kind: "email" },
+  { key: "support_telegram", labelKey: "telegramLabel", invalidHintKey: "invalidUrl", kind: "url" },
+  { key: "support_facebook", labelKey: "facebookLabel", invalidHintKey: "invalidUrl", kind: "url" },
+  { key: "support_threads", labelKey: "threadsLabel", invalidHintKey: "invalidUrl", kind: "url" },
+];
+
+// Saved shape: a value is dirty when its input differs from the fetched one;
+// blank input clears (null). Saved values feed the flat PUT body verbatim.
+function buildSupportBody(
+  current: SupportFlat,
+  values: Partial<Record<SupportFieldKey, string>>,
+): SupportFlat {
+  const out = { ...current };
+  for (const key of Object.keys(current) as SupportFieldKey[]) {
+    const raw = values[key];
+    if (raw === undefined) continue;
+    const trimmed = raw.trim();
+    out[key] = trimmed === "" ? null : trimmed;
+  }
+  return out;
+}
+
+/** One support field: label + input + client-mirror feedback + channel hints. */
+function SupportFieldRow({
+  field,
+  value,
+  invalid,
+  emailUnset,
+  onChange,
+}: {
+  field: (typeof SUPPORT_FIELDS)[number];
+  value: string;
+  invalid: boolean;
+  emailUnset: boolean;
+  onChange: (value: string) => void;
+}) {
+  const t = useT(adminSettingsCopy);
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={field.key}>{t(field.labelKey)}</Label>
+      <Input
+        id={field.key}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-invalid={invalid}
+        className={invalid ? "border-destructive" : undefined}
+      />
+      {invalid && <p className="text-xs text-destructive">{t(field.invalidHintKey)}</p>}
+      {field.kind === "email" && emailUnset && (
+        <p className="text-xs text-muted-foreground">
+          {t("emailFallbackHint", { email: DEFAULT_SUPPORT_EMAIL })}
+        </p>
+      )}
+      {field.kind === "url" && <p className="text-xs text-muted-foreground">{t("urlHint")}</p>}
+    </div>
+  );
+}
+
+/** Edit form: per-field rows + save. Owns the PUT mutation and inline server error. */
+function SupportForm({
+  current,
+  values,
+  setValues,
+  emailUnset,
+}: {
+  current: SupportFlat;
+  values: Partial<Record<SupportFieldKey, string>> | null;
+  setValues: (values: Partial<Record<SupportFieldKey, string>> | null) => void;
+  emailUnset: boolean;
+}) {
+  const t = useT(adminSettingsCopy);
+  const qc = useQueryClient();
+  // Server rejections render inline (the toast is not testable/visible in every
+  // surface); cleared on the next successful save.
+  const [serverError, setServerError] = useState<string | null>(null);
+  const mutation = useMutation({
+    mutationFn: (body: SupportFlat) =>
+      api<SupportSettings>("/api/v1/admin/support-settings", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      toast(t("saved"));
+      setServerError(null);
+      setValues(null);
+      void qc.invalidateQueries({ queryKey: ["admin", "support-settings"] });
+    },
+    onError: (e: Error) => setServerError(e.message),
+  });
+  const dirty = values !== null;
+  return (
+    <div className="space-y-4">
+      {SUPPORT_FIELDS.map((field) => {
+        const edited = values?.[field.key];
+        const value = values?.[field.key] ?? current[field.key] ?? "";
+        return (
+          <SupportFieldRow
+            key={field.key}
+            field={field}
+            value={value}
+            invalid={edited !== undefined && !supportFieldValid(field.key, edited)}
+            emailUnset={emailUnset}
+            onChange={(v) => setValues({ ...values, [field.key]: v })}
+          />
+        );
+      })}
+      {serverError && <p className="text-sm text-destructive">{serverError}</p>}
+      <Button
+        variant="outline"
+        disabled={!dirty || mutation.isPending}
+        onClick={() => values && mutation.mutate(buildSupportBody(current, values))}
+      >
+        {mutation.isPending ? t("saving") : t("save")}
+      </Button>
+    </div>
+  );
+}
+
+export function SupportSettingsCard() {
+  const t = useT(adminSettingsCopy);
+  const query = useAdminQuery<SupportSettings>(
+    ["admin", "support-settings"],
+    "/api/v1/admin/support-settings",
+  );
+  // null = pristine (render fetched values); otherwise the touched edit strings
+  // only (untouched keys keep rendering the fetched value).
+  const [values, setValues] = useState<Partial<Record<SupportFieldKey, string>> | null>(null);
+
+  const current: SupportFlat | null = query.data ? toFlat(query.data) : null;
+  const emailUnset = (current?.support_email ?? "").trim() === "";
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium">{t("support")}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <AdminGate query={query}>
+          {current ? (
+            <SupportForm
+              current={current}
+              values={values}
+              setValues={setValues}
+              emailUnset={emailUnset}
+            />
+          ) : null}
+        </AdminGate>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function AdminSettingsPage() {
   const t = useT(adminSettingsCopy);
   const query = useAdminQuery<AdminSettings>(["admin", "settings"], "/api/v1/admin/settings");
@@ -351,6 +627,7 @@ export default function AdminSettingsPage() {
           <PromptCachingCard query={query} />
           <FirstTopupBonusCard query={query} />
           <PaymentControlsCard query={query} />
+          <SupportSettingsCard />
         </div>
       </AdminGate>
     </div>
