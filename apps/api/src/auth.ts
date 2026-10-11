@@ -53,6 +53,41 @@ const withVerifyEmailCallback = (url: string): string => {
  *  as before; present = every in-scope value comes from the merged record so
  *  YAML-provided values flow without process.env access. NODE_ENV stays a
  *  runtime env-only selector in both modes. */
+/**
+ * Same-origin relative paths ("/settings?tab=account") are always allowed.
+ * Protocol-relative ("//evil.example") and backslash forms that browsers
+ * normalize into cross-origin URLs are rejected even though they start with
+ * "/". Absolute URLs must match the baseURL or a configured trusted origin.
+ * Better Auth 1.7.6 does not validate the explicit /link-social callback URLs
+ * itself and would 302 the completed link to an attacker-controlled origin.
+ */
+function isTrustedCallbackURL(
+  callbackURL: string,
+  baseURL: string,
+  trustedOrigins: readonly string[],
+): boolean {
+  if (/[\\\u0000-\u001f]/.test(callbackURL)) return false;
+  if (!callbackURL.startsWith("/")) {
+    let origin: string;
+    try {
+      origin = new URL(callbackURL).origin;
+    } catch {
+      return false;
+    }
+    const allowed = new Set<string>([new URL(baseURL).origin]);
+    for (const o of trustedOrigins) {
+      try {
+        allowed.add(new URL(o).origin);
+      } catch {
+        allowed.add(o);
+      }
+    }
+    return allowed.has(origin);
+  }
+  // A single leading slash kept it same-origin; "//" would be protocol-relative.
+  return !callbackURL.startsWith("//");
+}
+
 export function createAuth(db: Db, cfg?: ResolvedConfig) {
   const env: Record<string, string | undefined> = cfg?.env ?? process.env;
   const baseURL = env.BETTER_AUTH_URL || env.HBR_BASE_URL || "http://localhost:3000";
@@ -201,6 +236,26 @@ export function createAuth(db: Db, cfg?: ResolvedConfig) {
     // Existing passwords are never re-checked: sign-in must keep working.
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
+        // Explicit social linking: Better Auth honors client-supplied
+        // callbackURL/errorCallbackURL verbatim after the provider round-trip,
+        // so both must be confined to trusted origins here (open redirect).
+        if (ctx.path === "/link-social") {
+          const body = (ctx.body ?? {}) as Record<string, unknown>;
+          const callbackURLs = [body.callbackURL, body.errorCallbackURL];
+          if (
+            callbackURLs.some(
+              (u) =>
+                typeof u === "string" &&
+                u.length > 0 &&
+                !isTrustedCallbackURL(u, baseURL, trustedOrigins),
+            )
+          ) {
+            return new Response(JSON.stringify({ error: { code: "INVALID_CALLBACK_URL" } }), {
+              status: 403,
+              headers: { "content-type": "application/json" },
+            });
+          }
+        }
         if (ctx.path !== "/sign-up/email" && ctx.path !== "/change-password") return;
         const body = (ctx.body ?? {}) as Record<string, unknown>;
         const password = ctx.path === "/sign-up/email" ? body.password : body.newPassword;

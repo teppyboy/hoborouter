@@ -24,6 +24,10 @@ import DangerZone from "./danger-zone";
 
 export default function SettingsPage() {
   const workspaceId = useCurrentWorkspaceId();
+  // Deep-linkable initial tab (`?tab=account`): OAuth account-linking callbacks
+  // return here so users land on the section that started the flow.
+  const tabParam = new URLSearchParams(window.location.search).get("tab");
+  const initialTab = tabParam === "members" || tabParam === "account" ? tabParam : "general";
 
   const { data: ws } = useQuery({
     queryKey: ["workspace", workspaceId],
@@ -43,7 +47,7 @@ export default function SettingsPage() {
       {!workspaceId ? (
         <p className="mt-6 text-sm text-muted-foreground">{unavailable}</p>
       ) : (
-        <Tabs defaultValue="general" className="mt-6 flex min-h-0 flex-1 flex-col">
+        <Tabs defaultValue={initialTab} className="mt-6 flex min-h-0 flex-1 flex-col">
           {/* Bounded flex column so the members tab's table panel can take the
               remaining height; other tabs keep their natural block layout. */}
           <TabsList>

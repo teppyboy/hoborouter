@@ -4,9 +4,11 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
 import { checkPassword } from "@hoborouter/shared";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSession } from "../../lib/auth";
 import { authClient } from "../../lib/auth";
+import { usePublicConfig } from "../../components/turnstile";
+import { socialProvidersFrom, type SocialProviderId } from "../../lib/public-config";
 import { ApiError, api } from "../../lib/api";
 import { compressAvatar, gravatarUrl, MAX_AVATAR_BYTES } from "../../lib/avatar";
 import { Button } from "../../components/ui/button";
@@ -31,7 +33,7 @@ async function refreshSession() {
 // Account-tab copy: inline LocaleEntry set (see lib/i18n/common.ts). The zod
 // schemas become factories so validation messages follow the locale (same
 // pattern as the auth pages' makeLoginSchema).
-const accountCopy = {
+export const accountCopy = {
   nameRequired: { en: "Name is required", vi: "Vui lòng nhập tên" },
   nameTooLong: { en: "At most 80 characters", vi: "Tối đa 80 ký tự" },
   emailInvalid: { en: "Enter a valid email", vi: "Nhập email hợp lệ" },
@@ -77,6 +79,31 @@ const accountCopy = {
   uploadAvatar: { en: "Upload avatar image", vi: "Tải ảnh đại diện lên" },
   profile: { en: "Profile", vi: "Hồ sơ" },
   password: { en: "Password", vi: "Mật khẩu" },
+  connectedAccounts: {
+    en: "Connected accounts",
+    vi: "Tài khoản liên kết",
+  },
+  connected: { en: "Connected", vi: "Đã liên kết" },
+  notConnected: { en: "Not connected", vi: "Chưa liên kết" },
+  connect: { en: "Connect", vi: "Liên kết" },
+  unlink: { en: "Unlink", vi: "Gỡ liên kết" },
+  unlinked: { en: "Account unlinked", vi: "Đã gỡ liên kết" },
+  connectFailed: {
+    en: "Could not start connecting. Try again.",
+    vi: "Không thể bắt đầu liên kết. Vui lòng thử lại.",
+  },
+  unlinkFailed: {
+    en: "Failed to unlink account",
+    vi: "Gỡ liên kết thất bại",
+  },
+  unlinkReauth: {
+    en: "Your session is too old — sign in again, then unlink.",
+    vi: "Phiên đăng nhập đã cũ — hãy đăng nhập lại rồi gỡ liên kết.",
+  },
+  unlinkLast: {
+    en: "You cannot unlink your only sign-in method.",
+    vi: "Không thể gỡ phương thức đăng nhập duy nhất của bạn.",
+  },
 } as const;
 
 type AccountT = (key: keyof typeof accountCopy, vars?: Record<string, string | number>) => string;
@@ -423,6 +450,134 @@ function AvatarSection({ user }: { user: SessionUser }) {
   );
 }
 
+/**
+ * Post-link/unlink return target. The settings page reads `?tab=` for its
+ * initial tab, so the provider round-trip lands back on this section.
+ */
+const LINK_CALLBACK_PATH = "/settings?tab=account";
+
+/** Display names are proper nouns: shown verbatim in every locale. */
+const PROVIDER_NAMES: Record<SocialProviderId, string> = {
+  google: "Google",
+  discord: "Discord",
+  github: "GitHub",
+};
+
+/**
+ * Explicit social account linking (Better Auth /link-social, /list-accounts,
+ * /unlink-account). Availability comes from the server's public-config flags —
+ * the same safe defaults as sign-in apply server-side: linking needs a
+ * VERIFIED provider email matching the local user's email, state/PKCE are
+ * minted per request, and unlinking the last remaining sign-in method is
+ * rejected (a fresh session is required, older sessions must re-sign-in).
+ */
+function ConnectedAccountsSection() {
+  const t = useT(accountCopy);
+  const queryClient = useQueryClient();
+  const { data: config } = usePublicConfig();
+  const providers = socialProvidersFrom(config);
+  const accountsQuery = useQuery({
+    queryKey: ["linked-accounts"],
+    queryFn: async () => {
+      const { data, error } = await authClient.listAccounts();
+      if (error) throw new Error(error.message ?? "list-accounts failed");
+      return data ?? [];
+    },
+  });
+  const [connecting, setConnecting] = useState<SocialProviderId | null>(null);
+  const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
+
+  // Email-only deployments render exactly as before: no section at all.
+  if (providers.length === 0) return null;
+
+  // The password login lives in its own row of the `account` table
+  // (providerId "credential"); it is managed by the password section above.
+  const socialAccounts = (accountsQuery.data ?? []).filter((a) => a.providerId !== "credential");
+  const linkedProviders = new Set(socialAccounts.map((a) => a.providerId));
+
+  const connect = async (provider: SocialProviderId) => {
+    setConnecting(provider);
+    const { error } = await authClient.linkSocial({
+      provider,
+      callbackURL: window.location.origin + LINK_CALLBACK_PATH,
+      errorCallbackURL: window.location.origin + LINK_CALLBACK_PATH + "&linking=error",
+    });
+    if (error) {
+      setConnecting(null);
+      // Initiation failure only; the provider round-trip itself reports
+      // through errorCallbackURL. Message stays generic (never upstream text).
+      toast.error(t("connectFailed"));
+    }
+    // Success: the Better Auth client redirect hook navigates to the provider.
+  };
+
+  const unlink = async (accountId: string) => {
+    setUnlinkingId(accountId);
+    const { error } = await authClient.unlinkAccount({ accountId });
+    setUnlinkingId(null);
+    if (error) {
+      const code = error.code ?? "";
+      if (error.status === 403 || code === "SESSION_NOT_FRESH") {
+        toast.error(t("unlinkReauth"));
+      } else if (error.status === 400 || code === "FAILED_TO_UNLINK_LAST_ACCOUNT") {
+        toast.error(t("unlinkLast"));
+      } else {
+        toast.error(t("unlinkFailed"));
+      }
+      return;
+    }
+    await queryClient.invalidateQueries({ queryKey: ["linked-accounts"] });
+    toast.success(t("unlinked"));
+  };
+
+  return (
+    <section className="grid gap-3">
+      <h3 className="text-sm font-medium">{t("connectedAccounts")}</h3>
+      <div className="grid gap-2">
+        {providers.map((provider) => {
+          const linked = linkedProviders.has(provider);
+          const providerName = PROVIDER_NAMES[provider];
+          const account = socialAccounts.find((a) => a.providerId === provider);
+          return (
+            <div
+              key={provider}
+              className="flex items-center justify-between gap-4 border-b border-border pb-2"
+            >
+              <div>
+                <span className="text-sm">{providerName}</span>
+                <span className="ml-2 text-xs text-muted-foreground">
+                  {linked ? t("connected") : t("notConnected")}
+                </span>
+              </div>
+              {linked ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={unlinkingId !== null}
+                  onClick={() => account && void unlink(account.id)}
+                >
+                  {t("unlink")}
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={connecting !== null || accountsQuery.isPending}
+                  onClick={() => void connect(provider)}
+                >
+                  {t("connect")}
+                </Button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export default function AccountTab() {
   const t = useT(accountCopy);
   const { data: session, isPending } = useSession();
@@ -445,6 +600,7 @@ export default function AccountTab() {
         <h3 className="text-sm font-medium">{t("password")}</h3>
         <PasswordSection />
       </section>
+      <ConnectedAccountsSection />
       <div>
         <dl className="grid gap-3 text-sm">
           <div className="flex items-center justify-between border-b border-border pb-2">
