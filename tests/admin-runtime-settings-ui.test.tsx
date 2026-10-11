@@ -155,6 +155,16 @@ const ADMIN_SETTINGS = {
   payment_usd_vnd_rate: 26_000,
 };
 
+// /api/v1/admin/system payload (AdminSystem contract) for page-level mounts.
+const ADMIN_SYSTEM = {
+  gateway_enabled: true,
+  usd_vnd_rate: 26300,
+  payos_configured: false,
+  manual_payments: true,
+  db: { wal: "wal" },
+  counts: { users: 3, workspaces: 2, models: 5, requests: 42 },
+};
+
 function jsonResponse(status: number, body: unknown): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -428,6 +438,7 @@ test("admin settings page keeps the six existing fields next to the support card
   serve((call) => {
     if (call.url.includes("/admin/support-settings")) return jsonResponse(200, SUPPORTED);
     if (call.url.endsWith("/api/v1/admin/settings")) return jsonResponse(200, ADMIN_SETTINGS);
+    if (call.url.includes("/admin/system")) return jsonResponse(200, ADMIN_SYSTEM);
     return jsonResponse(200, {});
   });
   const page = mountPage(<AdminSettingsPage />);

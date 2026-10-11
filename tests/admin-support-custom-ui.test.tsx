@@ -188,10 +188,10 @@ function mountPage(node: React.ReactNode) {
       el.dispatchEvent(new W.Event("input", { bubbles: true }));
     });
   };
-  const clickButton = (label: string) => {
-    const button = Array.from(container.querySelectorAll("button")).find(
+  const clickButton = (label: string, index = 0) => {
+    const button = Array.from(container.querySelectorAll("button")).filter(
       (b) => (b.textContent ?? "").trim() === label,
-    );
+    )[index];
     if (!button) throw new Error(`button "${label}" not found`);
     act(() => {
       button.dispatchEvent(new W.MouseEvent("click", { bubbles: true }));
@@ -241,13 +241,12 @@ test("configured custom links render with remove + add controls", async () => {
 
 // --- save: exact support_custom PUT key ------------------------------------
 
-test("added link lands in the PUT body; removing it sends an empty array", async () => {
+test("added links land in the PUT body; removing one sends the rest", async () => {
   useLocaleStore.getState().setLocale("en");
   const puts: Record<string, unknown>[] = [];
   serve((call) => {
     if (!call.url.includes("/admin/support-settings")) return jsonResponse(200, {});
     if (call.method === "PUT") {
-      console.log("PUT-BODY:", call.body);
       const body = JSON.parse(call.body!) as Record<string, unknown>;
       puts.push(body);
       return jsonResponse(200, {
@@ -258,28 +257,31 @@ test("added link lands in the PUT body; removing it sends an empty array", async
         },
       });
     }
+    // Before the first successful save the configured rows come from the
+    // fixture; afterwards the last saved payload (server is authority).
+    const custom =
+      puts.length === 0
+        ? SUPPORTED.support.custom
+        : (puts.at(-1)!.support_custom as { label: string; url: string }[]);
     return jsonResponse(200, {
       ...SUPPORTED,
-      support: { ...SUPPORTED.support, custom: puts.at(-1)?.support_custom as never },
+      support: { ...SUPPORTED.support, custom },
     });
   });
   const page = mountPage(<SupportSettingsCard />);
   await page.settle();
   try {
     page.clickButton("Add link");
+    page.setInput(page.input("custom_label_1")!, " Status ");
+    page.setInput(page.input("custom_url_1")!, "https://status.example.com");
     page.setInput(page.input("support_email")!, "probe@example.com");
     page.clickButton("Save");
     await page.settle();
-    console.log("PUTS1:", puts.length);
-    page.setInput(page.input("custom_label_1")!, " Status ");
-    page.setInput(page.input("custom_url_1")!, "https://status.example.com");
-    page.clickButton("Save");
-    await page.settle();
     expect(puts).toHaveLength(1);
-    // Labels/URLs are trimmed; the fixed five keys ride along untouched.
+    // Labels/URLs are trimmed; the fixed five keys ride along with the edit.
     expect(puts[0]).toEqual({
       display_name: "Hoborouter",
-      support_email: "support@example.com",
+      support_email: "probe@example.com",
       support_telegram: null,
       support_facebook: null,
       support_threads: null,
@@ -288,10 +290,11 @@ test("added link lands in the PUT body; removing it sends an empty array", async
         { label: "Status", url: "https://status.example.com" },
       ],
     });
-    // Save refetches and renders the new row.
+    // Save refetches the saved payload and renders the new row.
     expect(page.input("custom_label_1")!.value).toBe("Status");
 
-    page.clickButton("Remove");
+    // Removing the added row PUTs the remaining configured link.
+    page.clickButton("Remove", 1);
     page.clickButton("Save");
     await page.settle();
     expect(puts).toHaveLength(2);
@@ -320,14 +323,20 @@ test("fully-empty rows are dropped; half-filled rows are sent for the server to 
     page.clickButton("Add link");
     page.setInput(page.input("custom_label_0")!, "");
     page.clickButton("Add link");
-    page.setInput(page.input("custom_label_1")!, "Only label");
+    page.clickButton("Add link");
+    page.setInput(page.input("custom_label_2")!, "Only label");
     page.clickButton("Save");
     await page.settle();
     expect(puts).toHaveLength(1);
-    expect(puts[0]!.support_custom).toEqual([{ label: "Only label", url: "" }]);
+    // The fully-empty added row is dropped; the cleared-label Docs row (half
+    // filled: URL remains) and the label-only row are sent for the server.
+    expect(puts[0]!.support_custom).toEqual([
+      { label: "", url: "https://docs.example.com/" },
+      { label: "Only label", url: "" },
+    ]);
     // Server 400 displayed inline; edits preserved.
     expect(page.bodyText()).toContain("support_custom must be an array");
-    expect(page.input("custom_label_1")!.value).toBe("Only label");
+    expect(page.input("custom_label_2")!.value).toBe("Only label");
   } finally {
     await page.unmount();
   }

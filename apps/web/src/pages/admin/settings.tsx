@@ -86,7 +86,7 @@ export const adminSettingsCopy = {
   },
   customSection: { en: "Custom links", vi: "Liên kết tùy chỉnh" },
   customLabel: { en: "Label", vi: "Nhãn" },
-  customUrl: { en: "URL", vi: "URL" },
+  customUrl: { en: "URL", vi: "Đường dẫn" },
   customHint: {
     en: "Up to {max} extra HTTPS links shown publicly after the channels above.",
     vi: "Tối đa {max} liên kết HTTPS hiển thị công khai sau các kênh ở trên.",
