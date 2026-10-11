@@ -402,6 +402,11 @@ export const subscriptionPlans = pgTable(
     // and unexpired. 0 = no daily grant. Snapshot of the applied amount is
     // stored per grant in subscription_daily_grants.
     daily_grant_vnd: big("daily_grant_vnd").notNull().default(0),
+    // Exact authored USD daily-grant text (migration 0020); NULL when the
+    // grant was authored in VND. Converted ONCE to daily_grant_vnd at the
+    // shared creation_fx_rate_vnd_per_usd snapshot — the stored VND is frozen
+    // forever after and never recomputed.
+    daily_grant_usd: text("daily_grant_usd"),
     // Financial revision columns (migration 0014) — same successor/superseded
     // split as credit_bundles above.
     revision_key: text("revision_key"),
@@ -422,7 +427,7 @@ export const subscriptionPlans = pgTable(
     check("sp_created_at", intBounded(t.created_at)),
     check(
       "sp_usd_group_complete",
-      sql`(${t.creation_fx_rate_vnd_per_usd} IS NOT NULL) = (${t.price_usd} IS NOT NULL OR ${t.credit_per_period_usd} IS NOT NULL)`,
+      sql`(${t.creation_fx_rate_vnd_per_usd} IS NOT NULL) = (${t.price_usd} IS NOT NULL OR ${t.credit_per_period_usd} IS NOT NULL OR ${t.daily_grant_usd} IS NOT NULL)`,
     ),
     check(
       "sp_price_usd_format",
@@ -431,6 +436,10 @@ export const subscriptionPlans = pgTable(
     check(
       "sp_credit_per_period_usd_format",
       sql`${t.credit_per_period_usd} IS NULL OR (${t.credit_per_period_usd} ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND ${t.credit_per_period_usd}::numeric >= 0 AND ${t.credit_per_period_usd}::numeric <= ${MAX_BOUND})`,
+    ),
+    check(
+      "sp_daily_grant_usd_format",
+      sql`${t.daily_grant_usd} IS NULL OR (${t.daily_grant_usd} ~ '^[0-9]+(\\.[0-9]{1,2})?$' AND ${t.daily_grant_usd}::numeric >= 0 AND ${t.daily_grant_usd}::numeric <= ${MAX_BOUND})`,
     ),
     check(
       "sp_creation_fx_rate_vnd_per_usd",

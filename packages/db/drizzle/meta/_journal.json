@@ -141,6 +141,13 @@
       "when": 1792500000000,
       "tag": "0019_subscription_daily_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792600000000,
+      "tag": "0020_subscription_plan_daily_grant_usd",
+      "breakpoints": true
     }
   ]
 }

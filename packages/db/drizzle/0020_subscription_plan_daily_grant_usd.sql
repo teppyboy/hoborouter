@@ -1,0 +1,4 @@
+ALTER TABLE "subscription_plans" ADD COLUMN "daily_grant_usd" text;--> statement-breakpoint
+ALTER TABLE "subscription_plans" DROP CONSTRAINT "sp_usd_group_complete";--> statement-breakpoint
+ALTER TABLE "subscription_plans" ADD CONSTRAINT "sp_usd_group_complete" CHECK (("subscription_plans"."creation_fx_rate_vnd_per_usd" IS NOT NULL) = ("subscription_plans"."price_usd" IS NOT NULL OR "subscription_plans"."credit_per_period_usd" IS NOT NULL OR "subscription_plans"."daily_grant_usd" IS NOT NULL));--> statement-breakpoint
+ALTER TABLE "subscription_plans" ADD CONSTRAINT "sp_daily_grant_usd_format" CHECK ("subscription_plans"."daily_grant_usd" IS NULL OR ("subscription_plans"."daily_grant_usd" ~ '^[0-9]+(\.[0-9]{1,2})?$' AND "subscription_plans"."daily_grant_usd"::numeric >= 0 AND "subscription_plans"."daily_grant_usd"::numeric <= 9007199254740991));
