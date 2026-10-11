@@ -32,11 +32,16 @@ afterAll(() => {
 
 test("about shows version, revision, contact link and nav entry to /about", () => {
   const html = renderToStaticMarkup(<About instance={instance} version="0.0.0" revision={SHA} />);
-  // Version row carries the build-injected package version as verbatim text.
-  expect(html).toContain('<span class="font-mono text-foreground">0.0.0</span>');
+  // Version row carries the build-injected package version as verbatim text
+  // (break-all keeps long values wrapable in the wide content column).
+  expect(html).toContain('<span class="break-all font-mono text-foreground">0.0.0</span>');
   // Revision row shows the full commit SHA verbatim (nothing truncated).
   expect(html).toContain("Revision");
   expect(html).toContain(SHA);
+  // Contact: the configured, validated value is shown as selectable text
+  // (About opts into SupportLinks showValues), not just a label link.
+  expect(html).toContain(">support@example.com</span>");
+  expect(html).toContain("select-all");
   // Contact: only the configured, validated channel; nothing invented.
   expect(html).toContain('href="mailto:support@example.com"');
   expect(html).not.toContain("t.me");
@@ -55,8 +60,10 @@ test("about falls back honestly: placeholder brand, no version or revision liter
   expect(html).toContain("Revision: —");
   expect(html).not.toMatch(/Version:\s*\d/);
   expect(html).not.toContain(SHA);
-  // No usable configured contact: the project fallback email stays reachable.
+  // No usable configured contact: the project fallback email stays reachable
+  // and visible as text (showValues strips the mailto: prefix).
   expect(html).toContain("mailto:contact@hoborouter.tretrauit.me");
+  expect(html).toContain(">contact@hoborouter.tretrauit.me</span>");
   expect(html).not.toContain("No contact channels are configured");
 });
 

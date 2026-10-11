@@ -116,22 +116,47 @@ export function supportLinks(support: PublicSupportLinks | null | undefined): Su
   return fallback ? [fallback, ...configured] : configured;
 }
 
-export function SupportLinks({ support }: { support: PublicSupportLinks | null | undefined }) {
+export function SupportLinks({
+  support,
+  showValues = false,
+}: {
+  support: PublicSupportLinks | null | undefined;
+  /** Show the validated value itself (bare email address / normalized URL),
+   * selectable for copy, instead of the compact channel label. */
+  showValues?: boolean;
+}) {
   const links = supportLinks(support);
   if (links.length === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-      {links.map((l, i) => (
-        <a
-          key={`${i}-${l.label}`}
-          href={l.href}
-          target={l.href.startsWith("mailto:") ? undefined : "_blank"}
-          rel="noreferrer noopener"
-          className="text-muted-foreground hover:text-foreground"
-        >
-          {l.label}
-        </a>
-      ))}
+      {links.map((l, i) => {
+        // Email shows the bare address (no mailto: scheme); other channels
+        // show their normalized https URL — always the validated value.
+        const value = l.href.startsWith("mailto:") ? l.href.slice("mailto:".length) : l.href;
+        if (showValues)
+          return (
+            <a
+              key={`${i}-${l.label}`}
+              href={l.href}
+              target={l.href.startsWith("mailto:") ? undefined : "_blank"}
+              rel="noreferrer noopener"
+              className="break-all text-muted-foreground hover:text-foreground"
+            >
+              <span className="font-mono text-foreground select-all">{value}</span>
+            </a>
+          );
+        return (
+          <a
+            key={`${i}-${l.label}`}
+            href={l.href}
+            target={l.href.startsWith("mailto:") ? undefined : "_blank"}
+            rel="noreferrer noopener"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            {l.label}
+          </a>
+        );
+      })}
     </div>
   );
 }

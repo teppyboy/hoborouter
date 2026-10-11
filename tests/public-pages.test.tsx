@@ -9,7 +9,7 @@ const { PublicLayout } = await import("../apps/web/src/components/public-layout"
 const { SupportLinks, supportLinks } = await import("../apps/web/src/components/support-links");
 const { Landing } = await import("../apps/web/src/pages/public/landing");
 const { Pricing } = await import("../apps/web/src/pages/public/pricing");
-const { Quickstart, buildSnippets, buildAgentConfigSnippets } =
+const { Quickstart, buildSnippets, buildAgentConfigSnippets, buildClaudeSnippets } =
   await import("../apps/web/src/pages/public/quickstart");
 
 const instance = {
@@ -245,6 +245,45 @@ test("buildAgentConfigSnippets escapes hostile values: JSON parses, TOML values 
   }
 });
 
+test("buildClaudeSnippets: env + curl target the implemented Anthropic-compatible /v1/messages route", () => {
+  const s = buildClaudeSnippets("https://hoborouter.example", "openai/gpt-4o-mini");
+  // Claude Code appends /v1/messages to ANTHROPIC_BASE_URL, so the base is
+  // normalized WITHOUT a /v1 suffix (no /v1/v1 anywhere).
+  expect(s.env).toContain('export ANTHROPIC_BASE_URL="https://hoborouter.example"');
+  // Key only ever referenced via the HBR_API_KEY env var; model is the
+  // published public id.
+  expect(s.env).toContain('export ANTHROPIC_AUTH_TOKEN="$HBR_API_KEY"');
+  expect(s.env).toContain('export ANTHROPIC_MODEL="openai/gpt-4o-mini"');
+  // The curl example hits the gateway's real Anthropic Messages endpoint.
+  expect(s.curl).toContain('curl "https://hoborouter.example/v1/messages" \\');
+  expect(s.curl).toContain("x-api-key: YOUR_API_KEY");
+  expect(s.curl).toContain("anthropic-version: 2023-06-01");
+  expect(s.curl).toContain('"model": "openai/gpt-4o-mini"');
+  expect(s.curl).toContain('"max_tokens": 128');
+  // No real key material, and the base URL suffix is never doubled.
+  for (const snippet of [s.env, s.curl]) {
+    expect(snippet).not.toContain("sk-");
+    expect(snippet).not.toContain("/v1/v1");
+  }
+});
+
+test("buildClaudeSnippets: normalizes base url variants and escapes hostile values", () => {
+  for (const base of [
+    "https://hoborouter.example/",
+    "https://hoborouter.example/v1",
+    "https://hoborouter.example/v1/",
+  ]) {
+    const s = buildClaudeSnippets(base, "m");
+    expect(s.env).toContain('export ANTHROPIC_BASE_URL="https://hoborouter.example"');
+    expect(s.curl).toContain('curl "https://hoborouter.example/v1/messages" \\');
+  }
+  const hostile = buildClaudeSnippets('https://x"; rm -rf /', 'm"\\model\nNEXT');
+  // Quotes escaped inside the shell double-quoted strings; newlines stripped.
+  expect(hostile.env).toContain('export ANTHROPIC_BASE_URL="https://x\\"; rm -rf "');
+  expect(hostile.env).toContain('export ANTHROPIC_MODEL="m\\"\\\\model NEXT"');
+  expect(hostile.curl).toContain('curl "https://x\\"; rm -rf /v1/messages" \\');
+});
+
 test("base url is normalized so /v1 is appended exactly once (host, slash, /v1, /v1/)", () => {
   const variants = [
     "https://hoborouter.example",
@@ -335,6 +374,25 @@ test("support links render only configured, valid channels", () => {
   expect(html).not.toContain("Threads"); // null -> not fabricated
   // A valid configured email wins: no fallback link beside it.
   expect((html.match(/mailto:/g) ?? []).length).toBe(1);
+  // Compact default: channel labels only, the raw values stay hidden.
+  expect(html).toContain(">Email</a>");
+  expect(html).not.toContain(">support@example.com");
+});
+
+test("support links showValues renders the validated value itself (bare email, normalized URL)", () => {
+  const html = renderToStaticMarkup(<SupportLinks support={instance.support} showValues />);
+  // Email value shows WITHOUT the mailto: scheme; URLs show normalized.
+  expect(html).toContain(">support@example.com</span>");
+  expect(html).toContain(">https://t.me/hoborouter_support</span>");
+  expect(html).toContain(">https://facebook.com/hoborouter</span>");
+  // Selectable for copy; wrapping enabled for long values.
+  expect(html).toContain("select-all");
+  expect(html).toContain("break-all");
+  // The mailto link itself stays a real mail client link.
+  expect(html).toContain('href="mailto:support@example.com"');
+  // Fallback email is visible as text too when nothing is configured.
+  const fallbackHtml = renderToStaticMarkup(<SupportLinks support={null} showValues />);
+  expect(fallbackHtml).toContain(">contact@hoborouter.tretrauit.me</span>");
 });
 
 test("support email falls back to the project contact only when no usable email is configured", () => {
@@ -392,6 +450,10 @@ test("public layout shows support section and brand from instance", () => {
   expect(html).toContain('id="support"');
   expect(html).toContain("Hoborouter");
   expect(html).toContain("body");
+  // Footer keeps the compact label-only contract (values are an About-page
+  // opt-in via showValues, never the footer default).
+  expect(html).toContain(">Email</a>");
+  expect(html).not.toContain(">support@example.com");
 });
 
 test("public layout header mounts the language toggle beside the theme toggle", () => {

@@ -50,7 +50,7 @@ export function About({
   const shownRevision = revision ?? null;
   const hasContact = supportLinks(instance?.support).length > 0;
   const body = (
-    <div className="mx-auto w-full max-w-3xl space-y-8 py-6">
+    <div className="mx-auto w-full max-w-5xl space-y-8 py-6">
       <PageHeader title={title} description={description} />
 
       <section aria-labelledby="about-version-heading" className="space-y-2">
@@ -59,7 +59,8 @@ export function About({
         </h2>
         {shownVersion ? (
           <p className="text-sm text-muted-foreground">
-            {versionWord}: <span className="font-mono text-foreground">{shownVersion}</span>
+            {versionWord}:{" "}
+            <span className="break-all font-mono text-foreground">{shownVersion}</span>
           </p>
         ) : (
           <p className="text-sm text-muted-foreground">{versionWord}: —</p>
@@ -69,7 +70,7 @@ export function About({
         {shownRevision ? (
           <p className="text-sm text-muted-foreground">
             {revisionWord}:{" "}
-            <span className="font-mono text-foreground select-all">{shownRevision}</span>
+            <span className="break-all font-mono text-foreground select-all">{shownRevision}</span>
           </p>
         ) : (
           <p className="text-sm text-muted-foreground">{revisionWord}: —</p>
@@ -84,7 +85,7 @@ export function About({
               the usable ones; keep an explicit empty state rather than a
               silent blank block when the instance has no contact info. */}
         <div className="text-sm">
-          <SupportLinks support={instance?.support} />
+          <SupportLinks support={instance?.support} showValues />
           {!hasContact && <p className="text-muted-foreground">{noContactText}</p>}
         </div>
       </section>

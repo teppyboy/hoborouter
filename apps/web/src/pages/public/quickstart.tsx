@@ -75,8 +75,12 @@ const quickstartCopy = {
   agentOpencodeDocs: { en: "OpenCode providers docs", vi: "Tài liệu providers của OpenCode" },
   agentPiDocs: { en: "pi model catalog", vi: "Danh mục model của pi" },
   agentClaudeLead: {
-    en: "Claude Code is not yet supported: it requires the Anthropic Messages API (/v1/messages), which this gateway does not serve yet. Use Codex, OpenCode, or pi with the OpenAI-compatible endpoint above — watch this page for updates.",
-    vi: "Claude Code chưa được hỗ trợ: nó cần Anthropic Messages API (/v1/messages), mà cổng API này chưa phục vụ. Hãy dùng Codex, OpenCode hoặc pi với endpoint tương thích OpenAI ở trên — theo dõi trang này để cập nhật.",
+    en: "Claude Code uses the Anthropic Messages API, which this gateway serves natively at /v1/messages. Set these environment variables (with HBR_API_KEY exported as above) and start claude:",
+    vi: "Claude Code dùng Anthropic Messages API, mà cổng API này phục vụ trực tiếp tại /v1/messages. Đặt các biến môi trường sau (với HBR_API_KEY đã export như trên) rồi khởi động claude:",
+  },
+  agentClaudeCurlAria: {
+    en: "Anthropic curl example",
+    vi: "ví dụ curl Anthropic",
   },
   agentExampleAria: { en: "{lang} config example", vi: "ví dụ cấu hình {lang}" },
   agentCopyExample: { en: "Copy {lang} config", vi: "Copy cấu hình {lang}" },
@@ -250,6 +254,44 @@ export function buildAgentConfigSnippets(baseUrl: string, model: string) {
   return { codex, opencode, pi };
 }
 
+/**
+ * Claude Code setup snippets for a base URL + model id. Exported for tests:
+ * Radix Tabs renders only the active tab in SSR. Claude Code speaks the
+ * Anthropic Messages protocol and appends /v1/messages to ANTHROPIC_BASE_URL,
+ * so the base URL is normalized WITHOUT a /v1 suffix. Keys are only ever
+ * referenced via the HBR_API_KEY environment variable — never rendered.
+ */
+export function buildClaudeSnippets(baseUrl: string, model: string) {
+  const base = normalizeBase(baseUrl);
+  const safeModel = oneLine(model);
+
+  const env = [
+    `# shell profile (~/.bashrc, ~/.zshrc, ...), after HBR_API_KEY is exported`,
+    `export ANTHROPIC_BASE_URL="${escapeDq(base)}"`,
+    `export ANTHROPIC_AUTH_TOKEN="$HBR_API_KEY"`,
+    `export ANTHROPIC_MODEL="${escapeDq(safeModel)}"`,
+  ].join("\n");
+
+  const messagesBody = JSON.stringify(
+    { model: safeModel, max_tokens: 128, messages: [{ role: "user", content: "Hello!" }] },
+    null,
+    4,
+  )
+    .split("\n")
+    .map((l, i) => (i === 0 ? l : `  ${l}`))
+    .join("\n");
+
+  const curl = [
+    `curl "${escapeShellDq(`${base}/v1/messages`)}" \\`,
+    `  -H "x-api-key: YOUR_API_KEY" \\`,
+    `  -H "anthropic-version: 2023-06-01" \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d '${messagesBody}'`,
+  ].join("\n");
+
+  return { env, curl };
+}
+
 function Snippet({ code, lang }: { code: string; lang: string }) {
   const t = useT(quickstartCopy);
   return (
@@ -322,6 +364,7 @@ export function Quickstart({
   const model = exampleModelId ?? "YOUR_MODEL_ID";
   const { curl, python, js } = buildSnippets(baseUrl, model);
   const { codex, opencode, pi } = buildAgentConfigSnippets(baseUrl, model);
+  const claude = buildClaudeSnippets(baseUrl, model);
 
   const modelDisplay = exampleModelId ? (
     <a href="/pricing" className="underline hover:text-foreground">
@@ -332,7 +375,7 @@ export function Quickstart({
   );
 
   const body = (
-    <div className="mx-auto w-full max-w-3xl space-y-6 py-6">
+    <div className="mx-auto w-full max-w-5xl space-y-6 py-6">
       <PageHeader title={t("title")} description={t("description")} />
 
       <section>
@@ -414,12 +457,17 @@ export function Quickstart({
                 </p>
                 <AgentSnippet code={pi} lang="pi" />
               </TabsContent>
-              {/* Honest notice only: the gateway serves no /v1/messages
-                  route, so any config snippet here would fake support. */}
-              <TabsContent value="claude">
-                <p className="text-sm text-muted-foreground" role="note">
-                  {t("agentClaudeLead")}
-                </p>
+              {/* Claude Code: real setup — env vars + curl against the
+                  implemented Anthropic-compatible /v1/messages route. */}
+              <TabsContent value="claude" className="space-y-2">
+                <p className="text-sm text-muted-foreground">{t("agentClaudeLead")}</p>
+                <AgentSnippet code={claude.env} lang="Claude Code" />
+                <pre
+                  className="overflow-x-auto rounded-md border border-border bg-muted/40 p-4 text-xs leading-relaxed"
+                  aria-label={t("agentClaudeCurlAria")}
+                >
+                  <code>{claude.curl}</code>
+                </pre>
               </TabsContent>
             </Tabs>
           </CardContent>
