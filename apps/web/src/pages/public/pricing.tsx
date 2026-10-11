@@ -25,6 +25,7 @@ const vndEstimate: LocaleEntry = { en: "(VND estimate)", vi: "(ước tính VND)
 const creditWord: LocaleEntry = { en: "credit", vi: "tín dụng" };
 const daysWord: LocaleEntry = { en: "days", vi: "ngày" };
 const vndGrant: LocaleEntry = { en: "fixed at creation", vi: "cố định khi tạo" };
+const perDay: LocaleEntry = { en: "/ day", vi: "/ ngày" };
 const requestsPerMinute: LocaleEntry = { en: "requests per minute", vi: "request mỗi phút" };
 const modelsHeading: LocaleEntry = { en: "Models", vi: "Mô hình" };
 const plansHeading: LocaleEntry = { en: "Subscription plans", vi: "Gói đăng ký" };
@@ -113,6 +114,7 @@ function PlanCard({ plan }: { plan: PublicSubscriptionPlan }) {
   const creditText = useLocaleEntry(creditWord);
   const daysText = useLocaleEntry(daysWord);
   const vndGrantText = useLocaleEntry(vndGrant);
+  const perDayText = useLocaleEntry(perDay);
   const rateLimitText = useLocaleEntry(requestsPerMinute);
   // Each money field renders its OWN metadata: authored-USD price leads with
   // the exact text and keeps the VND quote as the server estimate; authored
@@ -148,6 +150,18 @@ function PlanCard({ plan }: { plan: PublicSubscriptionPlan }) {
             </span>
           )}
         </div>
+        {isUsdPriceText(plan.daily_grant_usd) ? (
+          <div className="text-muted-foreground">
+            + {formatUsdAmountText(plan.daily_grant_usd)} {perDayText}
+            <span className="block">
+              VND grant {formatVnd(plan.daily_grant_vnd ?? 0)} {vndGrantText}
+            </span>
+          </div>
+        ) : (plan.daily_grant_vnd ?? 0) > 0 ? (
+          <div className="text-muted-foreground">
+            + {formatVnd(plan.daily_grant_vnd ?? 0)} {perDayText}
+          </div>
+        ) : null}
         {plan.rate_limit_per_minute != null && (
           <div className="text-muted-foreground">
             {plan.rate_limit_per_minute} {rateLimitText}
