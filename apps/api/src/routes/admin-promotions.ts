@@ -3,10 +3,11 @@
 // stored (only its SHA-256, normalized trim().toUpperCase()). No logging of
 // the code anywhere. GET/PATCH responses and audit rows never carry
 // code_hash or plaintext: the hash is a credential-equivalent secret.
-// No DELETE: promo codes are deactivated (active=false) so redemption history
-// keeps its FK and the code's usage trail stays intact.
+// No hard DELETE: the DELETE endpoint soft-removes (deleted_at + active=false)
+// so redemption/payment/ledger history keeps its FK; deleted codes are
+// invisible to list/redeem/preview but their rows remain.
 import { Elysia, t } from "elysia";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Db } from "@hoborouter/db";
 import { MAX_SAFE_INTEGER_MONEY, promoCodes } from "@hoborouter/db";
 import type { BetterAuthInstance } from "../auth-types";
@@ -100,6 +101,7 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
             created_at: promoCodes.created_at,
           })
           .from(promoCodes)
+          .where(isNull(promoCodes.deleted_at))
           .orderBy(desc(promoCodes.created_at));
         return json({ data: rows.map(safePromo) });
       },
@@ -272,7 +274,7 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
           const rows = await tx
             .select()
             .from(promoCodes)
-            .where(eq(promoCodes.id, params.id))
+            .where(and(eq(promoCodes.id, params.id), isNull(promoCodes.deleted_at)))
             .limit(1)
             .for("update");
           const row = rows[0];
@@ -313,6 +315,53 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
             detail: { before: { name: row.name, active: row.active }, after: set },
           });
           resp = json(safePromo(updated[0]!));
+        });
+        return resp!;
+      },
+    )
+    .delete(
+      "/api/v1/admin/promotions/:id",
+      {
+        params: t.Object({ id: t.String() }),
+        detail: {
+          tags: ["Admin"],
+          summary: "Soft-remove a promo code",
+          description:
+            "Soft-removes the promo code (deleted_at + active=false). Redemption, payment, and ledger history are never touched. Deleted codes are excluded from list/redeem/preview and their code hash cannot be reused (unique index on the retained row).",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params }) => {
+        const g = await guard(request);
+        if ("error" in g) return g.error;
+        let resp: Response | undefined;
+        await db.transaction(async (tx) => {
+          const rows = await tx
+            .select()
+            .from(promoCodes)
+            .where(and(eq(promoCodes.id, params.id), isNull(promoCodes.deleted_at)))
+            .limit(1)
+            .for("update");
+          const row = rows[0];
+          if (!row) {
+            resp = jsonError(404, "NOT_FOUND", "Promo code not found");
+            return;
+          }
+          const now = Date.now();
+          await tx
+            .update(promoCodes)
+            .set({ deleted_at: now, active: false })
+            .where(eq(promoCodes.id, params.id));
+          // Audit detail carries no code_hash and no plaintext (credential-
+          // equivalent secrets, same rule as create/update).
+          await writeAudit(tx, {
+            actorUserId: g.userId,
+            workspaceId: null,
+            action: "promo.delete",
+            target: params.id,
+            detail: { name: row.name, deleted_at: now },
+          });
+          resp = json({ ok: true });
         });
         return resp!;
       },

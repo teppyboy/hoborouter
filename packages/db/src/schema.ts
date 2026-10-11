@@ -538,6 +538,10 @@ export const promoCodes = pgTable(
     expires_at: big("expires_at"),
     active: boolean("active").notNull().default(true),
     created_at: big("created_at").notNull(),
+    // Soft removal: set by the admin DELETE endpoint. Never a hard delete —
+    // promo_redemptions/promo_payments keep their FKs and redemption history
+    // stays intact. The row (and its code_hash) remains for FK integrity.
+    deleted_at: big("deleted_at"),
   },
   (t) => [
     uniqueIndex("promo_codes_code_hash").on(t.code_hash),

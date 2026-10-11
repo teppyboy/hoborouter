@@ -29,7 +29,7 @@
 // routes revalidate every gate under FOR UPDATE, so a stale preview is
 // advisory only.
 import { Elysia, t } from "elysia";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@hoborouter/db";
 import { promoCodes, promoRedemptions, wallets, workspaces } from "@hoborouter/db";
 import { creditWallet } from "@hoborouter/wallet";
@@ -101,7 +101,9 @@ export const promotionsRoutes = (db: Db, auth: BetterAuthInstance) =>
           const promoRows = await tx
             .select()
             .from(promoCodes)
-            .where(eq(promoCodes.code_hash, codeHash))
+            // Soft-removed codes are invisible to redemption: they answer
+            // 404 NOT_FOUND like unknown codes instead of 409 gate errors.
+            .where(and(eq(promoCodes.code_hash, codeHash), isNull(promoCodes.deleted_at)))
             .for("update");
           const promo = promoRows[0];
           if (!promo) return jsonError(404, "NOT_FOUND", "Promo code not found");
@@ -245,7 +247,8 @@ export const promotionsRoutes = (db: Db, auth: BetterAuthInstance) =>
         const promoRows = await db
           .select()
           .from(promoCodes)
-          .where(eq(promoCodes.code_hash, codeHash))
+          // Same soft-delete invisibility as redeem: deleted = unknown (404).
+          .where(and(eq(promoCodes.code_hash, codeHash), isNull(promoCodes.deleted_at)))
           .limit(1);
         const promo = promoRows[0];
         if (!promo) return jsonError(404, "NOT_FOUND", "Promo code not found");

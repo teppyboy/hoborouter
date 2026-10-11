@@ -5,7 +5,14 @@
 // codes are rejected at checkout (409) without consuming anything; a
 // promo-attached payment can't be double-charged by retrying creation.
 import { describe, test, expect, beforeAll } from "bun:test";
-import { makeApp, q, signUp, createWorkspace, userIdByEmail } from "../apps/api/test/helpers";
+import {
+  makeApp,
+  q,
+  signUp,
+  createWorkspace,
+  userIdByEmail,
+  makeInstanceAdmin,
+} from "../apps/api/test/helpers";
 import { generatePromoCode } from "../apps/api/src/routes/admin-promotions";
 import { hashPromoCode } from "../apps/api/src/promo-code";
 import type { Db } from "../packages/db/src/index";
@@ -95,10 +102,34 @@ const balanceOf = (walletId: string) =>
     (r) => r[0]!.balance,
   );
 
+const adminDelete = (promoId: string) =>
+  app.handle(
+    new Request(`http://localhost/api/v1/admin/promotions/${promoId}`, {
+      method: "DELETE",
+      headers: { cookie: memberCookie },
+    }),
+  );
+
+const preview = (workspaceId: string, code: string) =>
+  app.handle(
+    new Request(`http://localhost/api/v1/workspaces/${workspaceId}/promotions/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: memberCookie },
+      body: JSON.stringify({ code }),
+    }),
+  );
+
+const rowExists = (promoId: string) =>
+  q<{ n: number }>(db, "SELECT COUNT(*)::int AS n FROM promo_codes WHERE id = ?", promoId).then(
+    (r) => r[0]!.n,
+  );
+
 beforeAll(async () => {
   ({ db, app } = await makeApp());
   memberCookie = await signUp(app, memberEmail, "M");
   const uid = await userIdByEmail(db, memberEmail);
+  // Same session doubles as the instance admin for the soft-delete suite.
+  await makeInstanceAdmin(db, uid);
   ws = "ws-reg";
   ws2 = "ws-reg-2";
   await createWorkspace(db, ws, uid);
@@ -203,5 +234,59 @@ describe("percent voucher invariants", () => {
     expect(res.status).toBe(403);
     expect(await redemptionCount("pc-suspr")).toBe(0);
     expect(await promoUses("pc-suspr")).toBe(0);
+  });
+});
+
+describe("soft-deleted promo invisibility", () => {
+  test("admin DELETE keeps the row; redeem/preview/checkout all answer 404; history intact", async () => {
+    const code = generatePromoCode();
+    await seedPromo("pc-soft", code);
+    // Pre-existing redemption history must survive the soft delete untouched.
+    const first = await redeem(ws, code);
+    expect(first.status).toBe(200);
+    expect(await redemptionCount("pc-soft")).toBe(1);
+    expect(await ledgerCount("promo:pc-soft")).toBe(1);
+    const usesBeforeDelete = await promoUses("pc-soft");
+
+    expect((await adminDelete("pc-soft")).status).toBe(200);
+    // Never a hard delete: row + redemption + ledger stay.
+    expect(await rowExists("pc-soft")).toBe(1);
+    expect(await redemptionCount("pc-soft")).toBe(1);
+    expect(await ledgerCount("promo:pc-soft")).toBe(1);
+
+    // Invisible to redeem, preview, and checkout alike.
+    const rd = await redeem(ws2, code);
+    expect(rd.status).toBe(404);
+    expect(await errCode(rd)).toBe("NOT_FOUND");
+    const pv = await preview(ws, code);
+    expect(pv.status).toBe(404);
+    const ck = await createTopup(ws, { amount: 100000, promo_code: code });
+    expect(ck.status).toBe(404);
+
+    // No new consumption: uses unchanged, no second redemption/ledger row.
+    expect(await promoUses("pc-soft")).toBe(usesBeforeDelete);
+    expect(await redemptionCount("pc-soft")).toBe(1);
+    expect(await ledgerCount("promo:pc-soft")).toBe(1);
+  });
+
+  test("percent voucher soft delete: checkout no longer applies it, prior payment kept", async () => {
+    const code = generatePromoCode();
+    await seedPromo("pc-softpct", code, { kind: "percent" });
+    const pre = await createTopup(ws, { amount: 100000, promo_code: code });
+    expect(pre.status).toBe(201);
+    expect(await redemptionCount("pc-softpct")).toBe(1);
+
+    expect((await adminDelete("pc-softpct")).status).toBe(200);
+    const retry = await createTopup(ws, { amount: 100000, promo_code: code });
+    expect(retry.status).toBe(404);
+    expect(await errCode(retry)).toBe("NOT_FOUND");
+    // History preserved: one redemption, one discounted payment.
+    expect(await redemptionCount("pc-softpct")).toBe(1);
+    const payments = await q<{ n: number }>(
+      db,
+      "SELECT COUNT(*)::int AS n FROM payments WHERE workspace_id = ? AND promo_code_id = 'pc-softpct'",
+      ws,
+    );
+    expect(payments[0]!.n).toBe(1);
   });
 });

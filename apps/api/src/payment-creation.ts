@@ -161,7 +161,7 @@ export function snapshotForBundlePrice(priceVnd: number): PaymentSnapshot {
 // concurrent fixed-credit redemption. Fixed-credit promos are redeem-only and
 // rejected here (not_percent); the redemption row itself is written only AFTER
 // the caller inserts the payment (payment_id FK), via recordPercentRedemption.
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { promoCodes, promoRedemptions, workspaces } from "@hoborouter/db";
 import { hashPromoCode, normalizePromoCode } from "./promo-code";
 
@@ -211,7 +211,8 @@ export async function applyPromoToTopup(
   const promoRows = await tx
     .select()
     .from(promoCodes)
-    .where(eq(promoCodes.code_hash, hashPromoCode(code)))
+    // Soft-removed codes are invisible at checkout too: deleted = unknown.
+    .where(and(eq(promoCodes.code_hash, hashPromoCode(code)), isNull(promoCodes.deleted_at)))
     .for("update");
   const promo = promoRows[0];
   if (!promo) return { ok: false, reason: "not_found" };

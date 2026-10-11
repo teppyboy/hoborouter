@@ -51,6 +51,9 @@ const patch = (app: Parameters<typeof handle>[0], url: string, body: unknown) =>
     }),
   );
 
+const del = (app: Parameters<typeof handle>[0], url: string) =>
+  handle(app, new Request(`http://localhost${url}`, { method: "DELETE" }));
+
 beforeAll(
   async () => {
     const t = await createTestDb();
@@ -305,5 +308,73 @@ describe("admin promotions patch", () => {
     expect(
       (await patch(appAs(MEMBER), "/api/v1/admin/promotions/x", { active: true })).status,
     ).toBe(403);
+  });
+});
+
+describe("admin promotions soft delete", () => {
+  test("401 without session", async () => {
+    expect((await del(appAs(null), "/api/v1/admin/promotions/x")).status).toBe(401);
+  });
+
+  test("403 for non-admin session", async () => {
+    expect((await del(appAs(MEMBER), "/api/v1/admin/promotions/x")).status).toBe(403);
+  });
+
+  test("404 unknown id", async () => {
+    expect((await del(appAs(ADMIN), "/api/v1/admin/promotions/nope")).status).toBe(404);
+  });
+
+  test("soft-removes: row kept with deleted_at, active=false, one audit, no hash leak in response", async () => {
+    const created = await post(appAs(ADMIN), "/api/v1/admin/promotions", {
+      name: "doomed",
+      amount_vnd: 1000,
+      max_uses: 1,
+      expires_at: null,
+    });
+    const id = ((await created.json()) as { promo: { id: string } }).promo.id;
+
+    const res = await del(appAs(ADMIN), `/api/v1/admin/promotions/${id}`);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+
+    // Row survives (FK integrity for redemption/payment history) with the
+    // soft-delete markers; never a hard delete.
+    const r = await db.execute(sql`select deleted_at, active from promo_codes where id = ${id}`);
+    const row = r[0] as { deleted_at: number | null; active: boolean };
+    expect(row.deleted_at).not.toBeNull();
+    expect(row.active).toBe(false);
+    expect(await auditCount("promo.delete", id)).toBe(1);
+  });
+
+  test("repeat delete: 404 (already soft-removed), no second audit", async () => {
+    const created = await post(appAs(ADMIN), "/api/v1/admin/promotions", {
+      name: "once-only",
+      amount_vnd: 1000,
+      max_uses: 1,
+      expires_at: null,
+    });
+    const id = ((await created.json()) as { promo: { id: string } }).promo.id;
+    expect((await del(appAs(ADMIN), `/api/v1/admin/promotions/${id}`)).status).toBe(200);
+    expect((await del(appAs(ADMIN), `/api/v1/admin/promotions/${id}`)).status).toBe(404);
+    expect(await auditCount("promo.delete", id)).toBe(1);
+  });
+
+  test("deleted promo excluded from list; PATCH answers 404", async () => {
+    const created = await post(appAs(ADMIN), "/api/v1/admin/promotions", {
+      name: "hidden",
+      amount_vnd: 1000,
+      max_uses: 1,
+      expires_at: null,
+    });
+    const id = ((await created.json()) as { promo: { id: string } }).promo.id;
+    await del(appAs(ADMIN), `/api/v1/admin/promotions/${id}`);
+
+    const list = await get(appAs(ADMIN), "/api/v1/admin/promotions");
+    const ids = ((await list.json()) as { data: { id: string }[] }).data.map((p) => p.id);
+    expect(ids).not.toContain(id);
+
+    expect(
+      (await patch(appAs(ADMIN), `/api/v1/admin/promotions/${id}`, { active: true })).status,
+    ).toBe(404);
   });
 });
