@@ -400,12 +400,24 @@ describe("DELETE /api/v1/workspaces/:wsId/keys/:keyId", () => {
     expect(Number(row.revoked_at)).toBeGreaterThan(0);
     // immediately invalid
     expect(await verifyApiKey(db, body.plaintext)).toBeNull();
-    // double revoke → 404 (already revoked = gone for mutation purposes)
+    // double revoke → idempotent no-op 200 (terminal-idempotent contract):
+    // no revoked_at churn, no second key.revoke audit row
+    const before = Number(row.revoked_at);
     const again = await areq(`/api/v1/workspaces/${A}/keys/${body.id}`, {
       method: "DELETE",
       cookie: admin,
     });
-    expect([404, 409]).toContain(again.status);
+    expect(again.status).toBe(200);
+    const rerevoked = (
+      await q<{ revoked_at: string | number; audits: number }>(
+        db,
+        `SELECT revoked_at, (SELECT count(*) FROM audit_log WHERE action = 'key.revoke' AND target = ?) AS audits FROM api_keys WHERE id = ?`,
+        body.id,
+        body.id,
+      )
+    )[0]!;
+    expect(Number(rerevoked.revoked_at)).toBe(before);
+    expect(rerevoked.audits).toBe(1);
   });
 });
 
