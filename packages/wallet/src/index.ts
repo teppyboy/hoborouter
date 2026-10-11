@@ -30,12 +30,19 @@ export type {
 } from "./billing";
 export {
   applySubscriptionExpiry,
+  applySubscriptionDailyGrant,
   cancelSubscription,
   resumeSubscription,
   ensureSubscriptionWallet,
   extendOrCreateSubscription,
   getActiveUnexpiredSubscription,
   getSubscriptionWallet,
+  utcDay,
   MEMO_SUBSCRIPTION_EXPIRED,
 } from "./subscription";
-export type { SubscriptionRow, WalletRow, CanceledSubscription } from "./subscription";
+export type {
+  SubscriptionRow,
+  WalletRow,
+  CanceledSubscription,
+  DailyGrantResult,
+} from "./subscription";

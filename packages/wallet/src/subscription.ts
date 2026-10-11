@@ -7,7 +7,9 @@ import type { Tx } from "@hoborouter/db";
 import {
   auditLog,
   ledgerEntries,
+  subscriptionDailyGrants,
   subscriptionExpiries,
+  subscriptionPlans,
   subscriptions,
   wallets,
 } from "@hoborouter/db";
@@ -15,6 +17,11 @@ import { lockWallet, overflowCheckedAdd, WalletError } from "./wallet";
 
 export const MEMO_SUBSCRIPTION_EXPIRED = "subscription expired";
 const DAY_MS = 86_400_000;
+
+/** UTC calendar day of an epoch-ms instant, 'YYYY-MM-DD'. */
+export function utcDay(now: number): string {
+  return new Date(now).toISOString().slice(0, 10);
+}
 
 export type SubscriptionRow = {
   id: string;
@@ -119,6 +126,107 @@ export async function getActiveUnexpiredSubscription(
       ),
     );
   return rows[0] ?? null;
+}
+
+export type DailyGrantResult = { granted: number; day: string | null };
+
+/**
+ * Lazy once-per-UTC-day grant (migration 0019): while the workspace has an
+ * active unexpired subscription on a plan with daily_grant_vnd > 0, credit
+ * exactly that plan's authored amount to the subscription wallet once per
+ * current UTC day. Runs INSIDE the gateway funding transaction so the grant
+ * commits atomically with (or rolls back with) the reservation it enables.
+ *
+ * Deterministic policy choices, pinned here:
+ *  - NO CATCH-UP: only the CURRENT UTC day of the funding transaction is
+ *    granted. Days without a gateway funding transaction get nothing.
+ *  - The gate is the UNIQUE(workspace, subscription, grant_day) index on
+ *    subscription_daily_grants. The wallet is locked FOR UPDATE first, so
+ *    concurrent funding transactions on the same workspace serialize and the
+ *    loser re-reads the committed gate row and grants nothing — no double
+ *    credit, no unique-violation crash.
+ *  - TERMS SNAPSHOT: the grant row freezes the plan_id and the amount that
+ *    was applied; later plan revisions/renewals never re-shape past grants.
+ *  - EXPIRY/CANCEL: granted credit lands on the subscription wallet, so the
+ *    existing lazy expiry forfeits unused grant credit at period end; a
+ *    canceled subscription (decision b) keeps receiving grants and spending
+ *    its credit through current_period_end, then forfeits like any credit.
+ *  - Ledger: append-only 'subscription_daily_grant' credit; the gate row FK
+ *    forces credit-before-gate so a failed gate insert rolls the credit back.
+ * Returns the granted amount (0 when the day was already granted, the plan
+ * has no daily grant, or there is no active unexpired subscription).
+ */
+export async function applySubscriptionDailyGrant(
+  tx: Tx,
+  workspaceId: string,
+  now: number,
+): Promise<DailyGrantResult> {
+  const sub = await getActiveUnexpiredSubscription(tx, workspaceId, now);
+  if (!sub) return { granted: 0, day: null };
+  const planRows = await tx
+    .select({ daily_grant_vnd: subscriptionPlans.daily_grant_vnd })
+    .from(subscriptionPlans)
+    .where(eq(subscriptionPlans.id, sub.plan_id));
+  const plan = planRows[0];
+  if (!plan || plan.daily_grant_vnd <= 0) return { granted: 0, day: null };
+  const amount = plan.daily_grant_vnd;
+  // Lazy wallet create + lock: serializes concurrent same-day grants and
+  // makes the funding selection that follows read post-grant state.
+  const wallet = await ensureSubscriptionWallet(tx, workspaceId, now);
+  const day = utcDay(now);
+  const gate = await tx
+    .select({ x: subscriptionDailyGrants.subscription_id })
+    .from(subscriptionDailyGrants)
+    .where(
+      and(
+        eq(subscriptionDailyGrants.workspace_id, workspaceId),
+        eq(subscriptionDailyGrants.subscription_id, sub.id),
+        eq(subscriptionDailyGrants.grant_day, day),
+      ),
+    );
+  if (gate.length > 0) return { granted: 0, day };
+  const balanceAfter = overflowCheckedAdd("balance", wallet.balance, amount);
+  const cas = await tx
+    .update(wallets)
+    .set({ balance: balanceAfter, version: overflowCheckedAdd("version", wallet.version, 1) })
+    .where(
+      and(
+        eq(wallets.id, wallet.id),
+        eq(wallets.balance, wallet.balance),
+        eq(wallets.version, wallet.version),
+      ),
+    )
+    .returning({ id: wallets.id });
+  if (cas.length !== 1) {
+    throw new WalletError(
+      "conflict",
+      `wallet ${wallet.id} concurrent modification during subscription daily grant`,
+    );
+  }
+  const ledgerEntryId = crypto.randomUUID();
+  await tx.insert(ledgerEntries).values({
+    id: ledgerEntryId,
+    wallet_id: wallet.id,
+    direction: "credit",
+    amount,
+    kind: "subscription_daily_grant",
+    balance_after: balanceAfter,
+    memo: `daily grant ${day}`,
+    created_at: now,
+  });
+  // Gate LAST: its UNIQUE(workspace, subscription, day) is the replay
+  // arbiter and its ledger FK makes credit-before-gate rollback-safe.
+  await tx.insert(subscriptionDailyGrants).values({
+    id: crypto.randomUUID(),
+    workspace_id: workspaceId,
+    subscription_id: sub.id,
+    plan_id: sub.plan_id,
+    grant_day: day,
+    amount,
+    ledger_entry_id: ledgerEntryId,
+    created_at: now,
+  });
+  return { granted: amount, day };
 }
 
 export type CanceledSubscription = {

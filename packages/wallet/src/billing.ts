@@ -21,6 +21,7 @@ import {
 import { WalletError, lockWallet, requirePositiveSafeInteger, runInImmediate } from "./wallet";
 import { calculateCharge, maxStoredMoney, type PriceSnapshot, type UsageTokens } from "./money";
 import {
+  applySubscriptionDailyGrant,
   applySubscriptionExpiry,
   getActiveUnexpiredSubscription,
   getSubscriptionWallet,
@@ -152,16 +153,28 @@ export async function reserveRequest(
       // Funding source (O3): one request is funded by exactly one wallet.
       // Subscription only when under the per-minute limit AND an active
       // unexpired subscription's available covers the cap; else topup.
+      // Daily grant (migration 0019): the lazy once-per-UTC-day grant runs
+      // inside THIS funding transaction whenever the subscription is active
+      // and unexpired — regardless of which wallet ends up funding, the
+      // entitlement is the subscription's, not the request's. No catch-up:
+      // only the current UTC day is granted. Idempotent per day via the
+      // UNIQUE(workspace, subscription, grant_day) gate; the grant's wallet
+      // lock serializes concurrent funding transactions.
       let walletKind: "subscription" | "topup" = "topup";
       let wallet: { id: string } | undefined;
       if (args.funding) {
         await applySubscriptionExpiry(tx, args.workspaceId, args.now);
         const sub = await getActiveUnexpiredSubscription(tx, args.workspaceId, args.now);
-        if (args.funding.underLimit && sub) {
-          const subWallet = await getSubscriptionWallet(tx, args.workspaceId);
-          if (subWallet && subWallet.balance - subWallet.reserved >= capVnd) {
-            wallet = subWallet;
-            walletKind = "subscription";
+        if (sub) {
+          // Ensures the subscription wallet exists and locks it; a grant here
+          // may be what makes the cap affordable, so it precedes selection.
+          await applySubscriptionDailyGrant(tx, args.workspaceId, args.now);
+          if (args.funding.underLimit) {
+            const subWallet = await getSubscriptionWallet(tx, args.workspaceId);
+            if (subWallet && subWallet.balance - subWallet.reserved >= capVnd) {
+              wallet = subWallet;
+              walletKind = "subscription";
+            }
           }
         }
       }
