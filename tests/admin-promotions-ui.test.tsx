@@ -685,6 +685,39 @@ test("code copy uses clipboard; closing the dialog clears it from memory and sto
   expect(window.localStorage.length).toBe(0);
 });
 
+test("view-code action renders only for re-viewable rows, with an accessible label", () => {
+  const viewable = renderCard([promo({ code_available: true })]);
+  expect(viewable).toContain(">View code<");
+  expect(viewable).toContain('aria-label="View promo code for Summer promo"');
+  // Without an encrypted copy (legacy row / no server secret) there is no
+  // view action: the code cannot be recovered, only replaced.
+  const legacy = renderCard([promo()]);
+  expect(legacy).not.toContain(">View code<");
+});
+
+test("view-code fetches the encrypted code, reveals it, and close clears it", async () => {
+  await mountPage([{ ...promoRow(), code_available: true }]);
+  const code = "CAFEBABE0CAFEBABE0CAFEBABE0CAFEB";
+  responder = async (call) => {
+    if (call.path.endsWith("/promo_1/code")) {
+      expect(call.init?.method).toBe("GET");
+      return jsonRes(200, { code });
+    }
+    return jsonRes(200, { data: [{ ...promoRow(), code_available: true }] });
+  };
+  click(buttonByLabel("View promo code for Summer promo")!);
+  await waitFor(() => calls.some((c) => c.path.endsWith("/promo_1/code")), "reveal GET sent");
+  await waitFor(() => getCodeInDom() === code, "code revealed by view");
+  expect(bodyText()).toContain("each view is audited");
+  // Close clears the plaintext from the DOM/memory, like the create reveal.
+  click(buttonByText("Done")!);
+  await waitFor(() => getCodeInDom() === null, "viewed code cleared on close");
+  expect(bodyText()).not.toContain(code);
+  expect(window.localStorage.length).toBe(0);
+  // Exactly one reveal GET (no retry storm behind the mutation).
+  expect(calls.filter((c) => c.path.endsWith("/promo_1/code")).length).toBe(1);
+});
+
 test("percent create posts the exact server body and clears the percent fields", async () => {
   await mountPage([]);
   responder = async (call) => {

@@ -85,6 +85,13 @@ export const promotionsDict = {
   statusActive: { en: "Active", vi: "Đang hoạt động" },
   statusInactive: { en: "Inactive", vi: "Ngừng hoạt động" },
   rename: { en: "Rename", vi: "Đổi tên" },
+  view: { en: "View code", vi: "Xem mã" },
+  viewA: { en: "View promo code for {name}", vi: "Xem mã khuyến mãi {name}" },
+  viewTitle: { en: "Promo code", vi: "Mã khuyến mãi" },
+  viewNote: {
+    en: "Codes are encrypted at rest; each view is audited.",
+    vi: "Mã được mã hoá khi lưu; mỗi lần xem đều được ghi audit.",
+  },
   deactivate: { en: "Deactivate", vi: "Vô hiệu hoá" },
   reactivate: { en: "Reactivate", vi: "Kích hoạt lại" },
   renameA: { en: "Rename {name}", vi: "Đổi tên {name}" },
@@ -100,8 +107,8 @@ export const promotionsDict = {
   cancel: { en: "Cancel", vi: "Huỷ" },
   codeTitle: { en: "Promo code created", vi: "Đã tạo mã khuyến mãi" },
   codeOnce: {
-    en: "Copy this code now — it is shown only once and cannot be recovered.",
-    vi: "Sao chép mã ngay — mã chỉ hiển thị một lần và không thể khôi phục.",
+    en: "Copy this code now. Codes created with the server encryption key can be re-viewed later via View code.",
+    vi: "Sao chép mã ngay. Mã tạo khi có khoá mã hoá phía máy chủ có thể xem lại sau bằng nút Xem mã.",
   },
   codeLabel: { en: "Promo code", vi: "Mã khuyến mãi" },
   copyA: { en: "Copy promo code", vi: "Sao chép mã khuyến mãi" },
@@ -122,13 +129,13 @@ export const promotionsDict = {
     vi: "Loại giữ nguyên từ bản gốc: {kind}. Muốn đổi loại, hãy tạo mã mới.",
   },
   replaceNote: {
-    en: "Creates a NEW promo with the terms below and a required new plaintext code, revealed once. The original keeps its uses and history and is deactivated once the new code exists. The new code starts at 0 uses.",
-    vi: "Tạo mã khuyến mãi MỚI với các điều kiện bên dưới và mã mới bắt buộc, chỉ hiển thị một lần. Bản gốc giữ nguyên lượt dùng và lịch sử, và bị vô hiệu hoá sau khi mã mới được tạo. Mã mới bắt đầu từ 0 lượt dùng.",
+    en: "Creates a NEW promo with the terms below and a required new plaintext code. The original keeps its uses and history and is deactivated once the new code exists. The new code starts at 0 uses.",
+    vi: "Tạo mã khuyến mãi MỚI với các điều kiện bên dưới và mã mới bắt buộc. Bản gốc giữ nguyên lượt dùng và lịch sử, và bị vô hiệu hoá sau khi mã mới được tạo. Mã mới bắt đầu từ 0 lượt dùng.",
   },
   newCode: { en: "New code (required)", vi: "Mã mới (bắt buộc)" },
   newCodeHint: {
-    en: "Required — must be a brand-new code; reusing any existing code is rejected. Shown only once.",
-    vi: "Bắt buộc — phải là mã hoàn toàn mới; mã trùng với mã hiện có sẽ bị từ chối. Chỉ hiển thị một lần.",
+    en: "Required — must be a brand-new code; reusing any existing code is rejected. View it later via View code.",
+    vi: "Bắt buộc — phải là mã hoàn toàn mới; mã trùng với mã hiện có sẽ bị từ chối. Có thể xem lại bằng nút Xem mã.",
   },
   replaceConfirm: { en: "Create replacement", vi: "Tạo mã thay thế" },
   deactivateFailed: {
@@ -150,6 +157,8 @@ export interface AdminPromo {
   expires_at: number | null;
   active: boolean;
   created_at: number;
+  /** True when the server holds an encrypted copy (admin repeat view). */
+  code_available?: boolean;
 }
 
 /** Fixed = VND credit; percent = basis points + required VND cap (server shapes). */
@@ -634,16 +643,19 @@ function ReplaceDialog({
   );
 }
 
-/** One-time plaintext reveal. Kept in component state (memory) only. */
+/** Plaintext reveal (create-time or admin re-view). Component state only. */
 function CodeDialog({
   code,
   onClose,
   warning,
+  view = false,
 }: {
   code: string | null;
   onClose: () => void;
   /** Persisted partial-failure warning shown alongside the retained reveal. */
   warning?: string | null;
+  /** Re-view flow: different title/description than the create-time reveal. */
+  view?: boolean;
 }) {
   const t = useT(promotionsDict);
   return (
@@ -656,8 +668,8 @@ function CodeDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t("codeTitle")}</DialogTitle>
-          <DialogDescription>{t("codeOnce")}</DialogDescription>
+          <DialogTitle>{view ? t("viewTitle") : t("codeTitle")}</DialogTitle>
+          <DialogDescription>{view ? t("viewNote") : t("codeOnce")}</DialogDescription>
         </DialogHeader>
         <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
           <code className="min-w-0 flex-1 font-mono text-sm break-all" aria-label={t("codeLabel")}>
@@ -709,6 +721,9 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
   } | null>(null);
   // Plaintext code lives here and nowhere else; null whenever no dialog is open.
   const [revealedCode, setRevealedCode] = useState<string | null>(null);
+  // True while the open dialog came from the admin re-view flow (different
+  // title/description; the partial-deactivate warning is create-flow only).
+  const [viewing, setViewing] = useState(false);
 
   const onError = (e: unknown) => {
     if (e instanceof ApiError && (e.code === "INVALID_CODE" || e.code === "CODE_EXISTS")) {
@@ -726,6 +741,7 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
       }),
     onSuccess: ({ code }) => {
       setRevealedCode(code);
+      setViewing(false);
       setName("");
       setAmount("");
       setPercent("");
@@ -736,6 +752,16 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
       setCodeError(null);
       toast.success(t("codeTitle"));
       void qc.invalidateQueries({ queryKey: ["admin", "promotions"] });
+    },
+    onError,
+  });
+
+  const reveal = useMutation({
+    mutationFn: (id: string) =>
+      api<{ code: string }>(`/api/v1/admin/promotions/${id}/code`, { method: "GET" }),
+    onSuccess: ({ code }) => {
+      setRevealedCode(code);
+      setViewing(true);
     },
     onError,
   });
@@ -783,6 +809,7 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
       }).then((res) => ({ res, oldId })),
     onSuccess: ({ res: { code }, oldId }) => {
       setRevealedCode(code);
+      setViewing(false);
       setReplacing(null);
       setReplaceCodeError(null);
       toast.success(t("codeTitle"));
@@ -873,6 +900,20 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
         const row = c.row.original;
         return (
           <span className="flex flex-wrap items-center gap-1">
+            {row.code_available === true && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="pointer-coarse:h-11"
+                aria-label={t("viewA", { name: row.name })}
+                disabled={reveal.isPending}
+                onClick={() => {
+                  if (!reveal.isPending) reveal.mutate(row.id);
+                }}
+              >
+                {t("view")}
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"
@@ -1134,9 +1175,13 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
       )}
       <CodeDialog
         code={revealedCode}
-        onClose={() => setRevealedCode(null)}
+        view={viewing}
+        onClose={() => {
+          setRevealedCode(null);
+          setViewing(false);
+        }}
         warning={
-          deactivateFailedFor !== null
+          !viewing && deactivateFailedFor !== null
             ? t("deactivateFailed", { name: deactivateFailedFor.name })
             : null
         }
