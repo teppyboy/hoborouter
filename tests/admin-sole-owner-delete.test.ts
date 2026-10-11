@@ -25,9 +25,6 @@ import type { BetterAuthInstance } from "../apps/api/src/auth-types";
 
 const NOW = 1_700_000_000_000;
 const ADMIN = "u-admin";
-const SOLE = "u-sole";
-const FUNDED = "u-funded";
-const HIST = "u-hist";
 const TRANSFEREE = "u-transferee";
 const MEMBER = "u-member";
 
@@ -86,6 +83,34 @@ async function addWorkspace(wsId: string, ownerId: string, opts?: { balance?: nu
   );
 }
 
+// Deterministic per-test fixtures: unique user/workspace/wallet ids so test
+// order can never matter (no shared fixtures mutated by earlier tests).
+let seq = 0;
+async function seedSole(opts?: { balance?: number; ledger?: "funded" | "history" | "none" }) {
+  const n = ++seq;
+  const user = `u-s${n}`;
+  const ws = `ws-s${n}`;
+  const wallet = `w-${ws}`;
+  await addUser(user, `${user}@t.local`);
+  await addWorkspace(ws, user, { balance: opts?.balance ?? 0 });
+  if (opts?.ledger === "funded") {
+    await q(
+      `insert into ledger_entries (id, wallet_id, direction, amount, kind, balance_after, created_at)
+       values ($1, $2, 'credit', 50000, 'topup', 50000, $3)`,
+      [`led-${ws}`, wallet, NOW],
+    );
+  } else if (opts?.ledger === "history") {
+    await q(
+      `insert into ledger_entries (id, wallet_id, direction, amount, kind, balance_after, created_at)
+       values ($1, $2, 'credit', 100000, 'topup', 100000, $4),
+              ($3, $2, 'debit', 100000, 'settle', 0, $4)`,
+      [`led-${ws}-a`, wallet, `led-${ws}-b`, NOW],
+    );
+    await q(`update wallets set balance = 0 where id = $1`, [wallet]);
+  }
+  return { user, ws, wallet };
+}
+
 const errBody = async (res: Response) =>
   (await res.json()) as {
     error: {
@@ -108,29 +133,6 @@ beforeAll(async () => {
   await addUser("u-tf", "tf-owner@t.local");
   await addUser("u-ao", "ao@t.local");
   await addUser("u-af", "af@t.local");
-  await addUser("u-legacy", "legacy@t.local");
-  await addWorkspace("ws-legacy", "u-legacy");
-  // Sole owner of an empty, unfunded workspace.
-  await addUser(SOLE, "sole@t.local");
-  await addWorkspace("ws-sole", SOLE);
-  // Sole owner of a workspace with a funded wallet + real ledger history.
-  await addUser(FUNDED, "funded@t.local");
-  await addWorkspace("ws-funded", FUNDED, { balance: 50_000 });
-  await q(
-    `insert into ledger_entries (id, wallet_id, direction, amount, kind, balance_after, created_at)
-     values ('led-1', 'w-ws-funded', 'credit', 50000, 'topup', 50000, $1)`,
-    [NOW],
-  );
-  // Sole owner of a zero-balance workspace that still has ledger history.
-  await addUser(HIST, "hist@t.local");
-  await addWorkspace("ws-hist", HIST);
-  await q(
-    `insert into ledger_entries (id, wallet_id, direction, amount, kind, balance_after, created_at)
-     values ('led-h1', 'w-ws-hist', 'credit', 100000, 'topup', 100000, $1),
-            ('led-h2', 'w-ws-hist', 'debit', 100000, 'settle', 0, $1)`,
-    [NOW],
-  );
-  await q(`update wallets set balance = 0 where id = 'w-ws-hist'`);
   app = adminExtraRoutes(db, fakeAuth(ADMIN), {});
 });
 
@@ -140,81 +142,84 @@ afterAll(async () => {
 
 describe("auth", () => {
   test("non-admin gets 403", async () => {
+    const { user } = await seedSole();
     const nonAdmin = adminExtraRoutes(db, fakeAuth(MEMBER), {});
-    const res = await removeUser(SOLE, nonAdmin);
+    const res = await removeUser(user, nonAdmin);
     expect(res.status).toBe(403);
   });
 });
 
 describe("sole-owner guard", () => {
   test("unconfirmed remove returns 409 SOLE_OWNER naming the workspaces", async () => {
-    const res = await removeUser(SOLE);
+    const { user, ws } = await seedSole();
+    const res = await removeUser(user);
     expect(res.status).toBe(409);
     const body = await errBody(res);
     expect(body.error.code).toBe("SOLE_OWNER");
-    expect(body.error.workspaces?.map((w) => w.id)).toContain("ws-sole");
+    expect(body.error.workspaces?.map((w) => w.id)).toContain(ws);
   });
 
   test("confirm with remaining members returns 409 SOLE_OWNER needs_transfer", async () => {
+    const { user, ws } = await seedSole();
     await q(
-      `insert into workspace_members (workspace_id, user_id, role) values ('ws-sole', $1, 'member')`,
-      [MEMBER],
+      `insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'member')`,
+      [ws, MEMBER],
     );
-    const res = await removeUser(SOLE, app, { confirm: true });
+    const res = await removeUser(user, app, { confirm: true });
     expect(res.status).toBe(409);
     const body = await errBody(res);
     expect(body.error.code).toBe("SOLE_OWNER");
     expect(body.error.needs_transfer).toBe(true);
-    await q(`delete from workspace_members where workspace_id = 'ws-sole' and user_id = $1`, [
-      MEMBER,
-    ]);
   });
 });
 
 describe("funded wallet block", () => {
   test("confirm on a funded workspace returns 409 WORKSPACE_FUNDED and deletes no money", async () => {
-    const res = await removeUser(FUNDED, app, { confirm: true });
+    const { user, ws, wallet } = await seedSole({ balance: 50_000, ledger: "funded" });
+    const res = await removeUser(user, app, { confirm: true });
     expect(res.status).toBe(409);
     const body = await errBody(res);
     expect(body.error.code).toBe("WORKSPACE_FUNDED");
-    expect(body.error.workspaces?.map((w) => w.id)).toContain("ws-funded");
+    expect(body.error.workspaces?.map((w) => w.id)).toContain(ws);
     // Nothing touched: user, workspace, wallet, ledger all intact.
-    expect(await q(`select 1 from users where id = $1`, [FUNDED])).toHaveLength(1);
-    expect(await q(`select 1 from workspaces where id = 'ws-funded'`)).toHaveLength(1);
-    expect(await q(`select balance from wallets where id = 'w-ws-funded'`)).toEqual([
+    expect(await q(`select 1 from users where id = $1`, [user])).toHaveLength(1);
+    expect(await q(`select 1 from workspaces where id = $1`, [ws])).toHaveLength(1);
+    expect(await q(`select balance from wallets where id = $1`, [wallet])).toEqual([
       { balance: "50000" },
     ]);
-    expect(await q(`select 1 from ledger_entries where wallet_id = 'w-ws-funded'`)).toHaveLength(1);
+    expect(await q(`select 1 from ledger_entries where wallet_id = $1`, [wallet])).toHaveLength(1);
   });
 });
 
 describe("confirmed safe removal", () => {
-  test("empty sole workspace is physically deleted, user anonymized", async () => {
-    const res = await removeUser(SOLE, app, { confirm: true });
+  test("empty sole workspace is physically deleted, user hard-deleted (no history refs)", async () => {
+    const { user, ws } = await seedSole();
+    const res = await removeUser(user, app, { confirm: true });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { removed: boolean; deleted?: string[] };
     expect(body.removed).toBe(true);
-    expect(body.deleted).toContain("ws-sole");
-    expect(await q(`select 1 from workspaces where id = 'ws-sole'`)).toHaveLength(0);
-    expect(await q(`select 1 from wallets where workspace_id = 'ws-sole'`)).toHaveLength(0);
-    expect(await q(`select 1 from workspace_members where user_id = $1`, [SOLE])).toHaveLength(0);
+    expect(body.deleted).toContain(ws);
+    expect(await q(`select 1 from workspaces where id = $1`, [ws])).toHaveLength(0);
+    expect(await q(`select 1 from wallets where workspace_id = $1`, [ws])).toHaveLength(0);
+    expect(await q(`select 1 from workspace_members where user_id = $1`, [user])).toHaveLength(0);
     // No history rows reference this user (seeds wrote no audits), so the
     // removal path hard-deletes the user row; with history refs it would
-    // anonymize instead (covered by removeUserIdentity's existing behavior).
-    expect(await q(`select 1 from users where id = $1`, [SOLE])).toHaveLength(0);
+    // tombstone instead (covered by the chat-history test below).
+    expect(await q(`select 1 from users where id = $1`, [user])).toHaveLength(0);
   });
 
   test("zero-balance workspace with ledger history is archived, money rows retained", async () => {
-    const res = await removeUser(HIST, app, { confirm: true });
+    const { user, ws, wallet } = await seedSole({ ledger: "history" });
+    const res = await removeUser(user, app, { confirm: true });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { removed: boolean; archived?: string[] };
-    expect(body.archived).toContain("ws-hist");
-    expect(await q(`select status from workspaces where id = 'ws-hist'`)).toEqual([
+    expect(body.archived).toContain(ws);
+    expect(await q(`select status from workspaces where id = $1`, [ws])).toEqual([
       { status: "suspended" },
     ]);
-    expect(await q(`select balance from wallets where id = 'w-ws-hist'`)).toHaveLength(1);
-    expect(await q(`select 1 from ledger_entries where wallet_id = 'w-ws-hist'`)).toHaveLength(2);
-    expect(await q(`select 1 from workspace_members where user_id = $1`, [HIST])).toHaveLength(0);
+    expect(await q(`select 1 from wallets where id = $1`, [wallet])).toHaveLength(1);
+    expect(await q(`select 1 from ledger_entries where wallet_id = $1`, [wallet])).toHaveLength(2);
+    expect(await q(`select 1 from workspace_members where user_id = $1`, [user])).toHaveLength(0);
   });
 });
 
@@ -303,9 +308,10 @@ describe("all-or-nothing validation", () => {
   });
 
   test("strict body parsing: malformed JSON, wrong types, unknown keys are 400", async () => {
+    const { user } = await seedSole();
     const bad = async (raw: string) =>
       app.handle(
-        new Request(`http://t/api/v1/admin/users/u-legacy`, {
+        new Request(`http://t/api/v1/admin/users/${user}`, {
           method: "DELETE",
           headers: { "content-type": "application/json" },
           body: raw,
@@ -316,7 +322,7 @@ describe("all-or-nothing validation", () => {
     expect((await bad(JSON.stringify({ unknown: 1 }))).status).toBe(400);
     expect((await bad(JSON.stringify({ confirm: true, transfer_to: "" }))).status).toBe(400);
     // absent body stays legacy (409 SOLE_OWNER, not 400)
-    expect((await removeUser("u-legacy")).status).toBe(409);
+    expect((await removeUser(user)).status).toBe(409);
   });
 
   test("audit failure rolls back the entire removal", async () => {
