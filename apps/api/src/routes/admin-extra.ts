@@ -22,6 +22,7 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  wallets,
   payments,
   usageLogs,
   apiKeys,
@@ -44,7 +45,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * workspace (409 SOLE_OWNER).
  */
 async function soleOwnedWorkspaces(db: Db | Tx, userId: string) {
-  return db
+  const rows = await db
     .selectDistinct({ id: workspaces.id, name: workspaces.name })
     .from(workspaces)
     .innerJoin(
@@ -69,6 +70,18 @@ async function soleOwnedWorkspaces(db: Db | Tx, userId: string) {
           ),
       ),
     );
+  if (rows.length === 0) return rows;
+  // FOR UPDATE on workspaces: the exclusive row lock conflicts with the
+  // FOR KEY SHARE a concurrent workspace_members insert takes on the parent,
+  // so a member.add racing this transaction blocks until commit and then FK-
+  // fails instead of sneaking a second owner in after the sole-owner check.
+  // (PG forbids FOR UPDATE together with DISTINCT, hence the second pass.)
+  await db
+    .select({ id: workspaces.id })
+    .from(workspaces)
+    .where(inArray(workspaces.id, rows.map((r) => r.id)))
+    .for("update");
+  return rows;
 }
 
 /**
@@ -124,6 +137,13 @@ async function guard(db: Db, auth: BetterAuthInstance, request: Request) {
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
+
+/** Structured 409 bodies for the sole-owner removal flow (UI consumers read code + workspaces). */
+const conflict = (code: string, message: string, extra: Record<string, unknown> = {}) =>
+  new Response(JSON.stringify({ error: { code, message, ...extra } }), {
+    status: 409,
+    headers: { "content-type": "application/json" },
+  });
 
 export const adminExtraRoutes = (
   db: Db,
@@ -500,13 +520,32 @@ export const adminExtraRoutes = (
           .where(eq(users.id, params.id))
           .limit(1);
         if (!target[0]) return jsonError(404, "NOT_FOUND", "User not found");
+        // Optional body: { confirm?: boolean, transfer_to?: string }.
+        // - transfer_to: promote that member to owner of EVERY sole-owned
+        //   workspace, then remove the user (workspaces retained).
+        // - confirm: allow resolving sole-owned workspaces directly — empty
+        //   ones are physically deleted, ones with any financial/history FK
+        //   child are archived (retained, status 'suspended').
+        let confirm = false;
+        let transferTo: string | undefined;
+        try {
+          const raw = (await request.json()) as Record<string, unknown>;
+          if (raw?.confirm === true) confirm = true;
+          if (typeof raw?.transfer_to === "string" && raw.transfer_to) transferTo = raw.transfer_to;
+        } catch {
+          // no/invalid body: legacy unconfirmed remove
+        }
         // Guards re-read inside the same transaction as the removal:
         // check-then-act between separate statements could otherwise remove
         // the last admin or self after a concurrent change. LAST_ADMIN before
         // self: removing the final instance admin is blocked even when the
         // remover is that admin (add another admin first).
         let violation: Response | undefined;
+        let outcome: Record<string, unknown> = {};
         await db.transaction(async (tx) => {
+          // Lock the target user row first: a concurrent identity change
+          // (e.g. another admin editing) serializes behind this removal.
+          await tx.select({ id: users.id }).from(users).where(eq(users.id, params.id)).for("update");
           if (await isInstanceAdmin(tx, params.id)) {
             const adminCount = await tx.select({ n: sql<number>`count(*)` }).from(instanceAdmins);
             if (Number(adminCount[0]?.n ?? 0) <= 1) {
@@ -520,15 +559,150 @@ export const adminExtraRoutes = (
           }
           const sole = await soleOwnedWorkspaces(tx, params.id);
           if (sole.length > 0) {
-            violation = new Response(
-              JSON.stringify({
-                error: {
-                  code: "SOLE_OWNER",
-                  message: "User is the sole owner of workspaces",
-                  workspaces: sole,
+            // HARD MONEY GUARD — checked before any resolution path: a funded
+            // or reserved wallet means the workspace holds customer money, so
+            // nothing may be deleted or transferred around it.
+            const fundedWallets = await tx
+              .select({ workspace_id: wallets.workspace_id })
+              .from(wallets)
+              .where(
+                and(
+                  inArray(
+                    wallets.workspace_id,
+                    sole.map((w) => w.id),
+                  ),
+                  sql`(${wallets.balance} > 0 OR ${wallets.reserved} > 0)`,
+                ),
+              )
+              .for("update");
+            if (fundedWallets.length > 0) {
+              const funded = new Set(fundedWallets.map((w) => w.workspace_id));
+              violation = conflict(
+                "WORKSPACE_FUNDED",
+                "Workspace wallet holds funds or reservations; money history cannot be deleted",
+                {
+                  workspaces: sole.filter((w) => funded.has(w.id)),
                 },
-              }),
-              { status: 409, headers: { "content-type": "application/json" } },
+              );
+              return;
+            }
+            if (transferTo) {
+              if (transferTo === params.id) {
+                violation = conflict(
+                  "TRANSFER_TARGET_INVALID",
+                  "Transfer target must be another member of the workspace",
+                  { workspaces: sole },
+                );
+                return;
+              }
+              // Target must be an existing member of every sole-owned
+              // workspace (same-workspace requirement; no cross-workspace
+              // transfers). Non-owner members are promoted to owner.
+              for (const ws of sole) {
+                const membership = await tx
+                  .select({ role: workspaceMembers.role })
+                  .from(workspaceMembers)
+                  .where(
+                    and(
+                      eq(workspaceMembers.workspace_id, ws.id),
+                      eq(workspaceMembers.user_id, transferTo),
+                    ),
+                  )
+                  .limit(1);
+                if (!membership[0]) {
+                  violation = conflict(
+                    "TRANSFER_TARGET_INVALID",
+                    "Transfer target must be an existing member of the workspace",
+                    { workspaces: [ws] },
+                  );
+                  return;
+                }
+              }
+              outcome.transferred = [];
+              for (const ws of sole) {
+                await tx
+                  .update(workspaceMembers)
+                  .set({ role: "owner" })
+                  .where(
+                    and(
+                      eq(workspaceMembers.workspace_id, ws.id),
+                      eq(workspaceMembers.user_id, transferTo),
+                    ),
+                  );
+                await writeAudit(tx, {
+                  actorUserId: actorId,
+                  workspaceId: ws.id,
+                  action: "member.role_change",
+                  target: transferTo,
+                  detail: { to: "owner", source: "admin_sole_owner_transfer" },
+                });
+                (outcome.transferred as { workspace_id: string; to: string }[]).push({
+                  workspace_id: ws.id,
+                  to: transferTo,
+                });
+              }
+            } else if (confirm) {
+              outcome.deleted = [];
+              outcome.archived = [];
+              for (const ws of sole) {
+                const others = await tx
+                  .select({ n: count() })
+                  .from(workspaceMembers)
+                  .where(
+                    and(
+                      eq(workspaceMembers.workspace_id, ws.id),
+                      ne(workspaceMembers.user_id, params.id),
+                    ),
+                  );
+                if (Number(others[0]?.n ?? 0) > 0) {
+                  // Other members remain: never orphan them without an owner.
+                  violation = conflict(
+                    "SOLE_OWNER",
+                    "User is the sole owner of workspaces; transfer ownership first",
+                    { workspaces: [ws], needs_transfer: true },
+                  );
+                  return;
+                }
+                // Try physical delete inside a savepoint: any remaining FK
+                // child (api_keys, ledger history, payments, usage, requests,
+                // …) rolls the savepoint back and the workspace is archived
+                // instead (row retained, status 'suspended'). Money history is
+                // never deleted — a wallet with ledger rows always fails the
+                // wallet delete, which is exactly the archive trigger.
+                try {
+                  await tx.transaction(async (nested) => {
+                    await nested
+                      .update(auditLog)
+                      .set({ workspace_id: null })
+                      .where(eq(auditLog.workspace_id, ws.id));
+                    await nested.delete(wallets).where(eq(wallets.workspace_id, ws.id));
+                    await nested
+                      .delete(workspaceMembers)
+                      .where(eq(workspaceMembers.workspace_id, ws.id));
+                    await nested.delete(workspaces).where(eq(workspaces.id, ws.id));
+                  });
+                  (outcome.deleted as string[]).push(ws.id);
+                } catch {
+                  await tx
+                    .update(workspaces)
+                    .set({ status: "suspended" })
+                    .where(eq(workspaces.id, ws.id));
+                  (outcome.archived as string[]).push(ws.id);
+                }
+              }
+            } else {
+              violation = conflict(
+                "SOLE_OWNER",
+                "User is the sole owner of workspaces",
+                { workspaces: sole },
+              );
+              return;
+            }
+          } else if (transferTo) {
+            violation = jsonError(
+              400,
+              "INVALID",
+              "transfer_to requires the user to be the sole owner of a workspace",
             );
             return;
           }
@@ -540,8 +714,9 @@ export const adminExtraRoutes = (
           workspaceId: null,
           action: "user.remove",
           target: params.id,
+          detail: Object.keys(outcome).length > 0 ? outcome : undefined,
         });
-        return json({ removed: true });
+        return json({ removed: true, ...outcome });
       },
     )
     .post(
