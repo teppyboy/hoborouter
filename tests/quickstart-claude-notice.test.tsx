@@ -1,9 +1,10 @@
 // Claude Code quickstart tab contract:
 // - The agent tabs include a "Claude Code" tab.
-// - Its content is an honest notice only: Claude Code is NOT yet supported
-//   (the gateway serves no Anthropic Messages /v1/messages endpoint), so the
-//   tab renders an explanatory notice and NO config snippet that would fake
-//   a working setup.
+// - Its content is REAL setup: the gateway serves Anthropic Messages at
+//   /v1/messages natively, so the tab renders env-var setup (ANTHROPIC_BASE_URL
+//   / ANTHROPIC_AUTH_TOKEN) plus a curl example. Keys are only ever referenced
+//   via the HBR_API_KEY environment variable (or the explicit YOUR_API_KEY
+//   curl placeholder) — never a rendered key value.
 import { test, expect, afterAll } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
@@ -102,7 +103,7 @@ test("agent tabs include a Claude Code tab (SSR)", () => {
 let container: HTMLElement;
 let root: ReturnType<typeof createRoot>;
 
-test("the Claude Code tab shows an honest unsupported notice, no fake config", async () => {
+test("the Claude Code tab shows real /v1/messages setup, key only via HBR_API_KEY", async () => {
   container = document.createElement("div");
   document.body.appendChild(container);
   await act(async () => {
@@ -123,13 +124,18 @@ test("the Claude Code tab shows an honest unsupported notice, no fake config", a
   const panel = document.querySelector(`#${tab!.getAttribute("aria-controls") ?? ""}`);
   expect(panel).not.toBeNull();
   const text = panel!.textContent ?? "";
-  // Truthful: names the missing endpoint and says it is not supported yet.
-  expect(text).toContain("not yet supported");
+  // Real setup: native Anthropic Messages endpoint and the env-var wiring.
   expect(text).toContain("/v1/messages");
-  // No invented setup: no copyable config snippet, no API-key placeholder
-  // implying Claude Code can already be wired up.
-  expect(panel!.querySelector("pre, code")).toBeNull();
-  expect(text).not.toContain("YOUR_API_KEY");
+  expect(text).toContain("ANTHROPIC_BASE_URL");
+  expect(text).toContain("ANTHROPIC_AUTH_TOKEN");
+  // Config snippets are rendered (env block + curl example).
+  expect(panel!.querySelector("pre, code")).not.toBeNull();
+  // Key material: only the HBR_API_KEY indirection and the explicit curl
+  // placeholder; the instance base URL is used without a rendered key.
+  expect(text).toContain("$HBR_API_KEY");
+  expect(text).toContain("YOUR_API_KEY");
+  expect(text).toContain("https://hoborouter.example");
+  expect(text).not.toContain("sk-hbr-");
   await act(async () => {
     root.unmount();
   });
