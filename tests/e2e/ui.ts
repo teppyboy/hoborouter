@@ -17,6 +17,23 @@ const NEW_MODEL_ID = "fake/test-model-2";
 const REPORT = "/tmp/hbr-e2e/report.json";
 const SHOTS = process.env.E2E_SHOTS === "1";
 const SHOT_DIR = "/tmp/hbr-e2e/shots";
+// Isolated fake CPA (stack.sh fixes CPA_PORT to E2E_CPA_PORT): the harness
+// reads its mutable management fixture state directly, outside the browser.
+const CPA_BASE = `http://127.0.0.1:${process.env.E2E_CPA_PORT ?? "8399"}`;
+const CPA_MGMT_KEY = process.env.CPA_MANAGEMENT_KEY ?? "e2e-mgmt-key";
+type FakeCpaState = {
+  authFiles: { name: string; disabled: boolean; status: string }[];
+  modelAliases: Record<string, unknown>;
+  excludedModels: Record<string, string[]>;
+  hits: { method: string; path: string; body: unknown }[];
+};
+async function fakeCpaState(): Promise<FakeCpaState> {
+  const r = await fetch(`${CPA_BASE}/__test/state`, {
+    headers: { authorization: `Bearer ${CPA_MGMT_KEY}` },
+  });
+  if (!r.ok) throw new Error(`fake CPA state fetch ${r.status}`);
+  return (await r.json()) as FakeCpaState;
+}
 
 // ---------- CDP plumbing ----------
 let ws: WebSocket;
@@ -24,9 +41,13 @@ let nextId = 1;
 const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
 const eventListeners: ((m: any) => void)[] = [];
 
-function send(method: string, params: Record<string, unknown> = {}): Promise<any> {
+function send(
+  method: string,
+  params: Record<string, unknown> = {},
+  sessionId?: string,
+): Promise<any> {
   const id = nextId++;
-  ws.send(JSON.stringify({ id, method, params }));
+  ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
   return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
 }
 
@@ -304,6 +325,119 @@ async function installHelpers() {
   await evaluate(HELPERS);
 }
 
+// ---------- opaque-iframe (isolated CPA panel) evaluation ----------
+// The panel iframe has an opaque sandboxed origin: Chrome hosts it as an
+// out-of-process target, so evaluation must go through an attached child
+// session rather than the page's execution contexts.
+const frameSessions = new Map<string, { targetId: string; url: string }>();
+onEvent((m) => {
+  if (m.method === "Target.attachedToTarget") {
+    const { sessionId, targetInfo } = m.params;
+    // Only child iframes: the top page session must never match panel evals.
+    if (targetInfo.type === "iframe") {
+      // Surface frame console/page errors and HTTP status in the noise gate.
+      void send("Runtime.enable", {}, sessionId);
+      void send("Network.enable", {}, sessionId);
+      frameSessions.set(sessionId, { targetId: targetInfo.targetId, url: targetInfo.url });
+    }
+  } else if (m.method === "Target.detachedFromTarget") {
+    frameSessions.delete(m.params.sessionId);
+  } else if (m.method === "Target.targetInfoChanged") {
+    for (const session of frameSessions.values())
+      if (session.targetId === m.params.targetInfo.targetId) session.url = m.params.targetInfo.url;
+  }
+});
+
+// Exact panel identity: the sandboxed iframe is mounted at a same-origin
+// pathname, but its document is opaque (sandbox without allow-same-origin).
+// The bootstrap replaces window.localStorage with a frozen in-memory shim
+// (non-writable, non-configurable — the upstream bundle cannot remove it and
+// it re-encrypts stored values at rest, so probing seeded values is not
+// stable). The shim's plain Object prototype distinguishes it from the
+// native Storage both worlds would otherwise see.
+const PANEL_IDENTITY_EXPR = `(() => {
+  try {
+    return location.href.includes("management.html") &&
+      Object.getPrototypeOf(localStorage) === Object.prototype &&
+      typeof localStorage.getItem === 'function';
+  } catch { return false; }
+})();`;
+
+let lastIdentityDiag = "n/a";
+async function evaluateInFrame<T = unknown>(expression: string): Promise<T> {
+  const sessions = [...frameSessions.keys()];
+  for (const sessionId of sessions) {
+    try {
+      const href = await send(
+        "Runtime.evaluate",
+        {
+          expression: "location.href",
+          returnByValue: true,
+        },
+        sessionId,
+      );
+      if (typeof href.result?.value !== "string") continue;
+      const identity = await send(
+        "Runtime.evaluate",
+        { expression: PANEL_IDENTITY_EXPR, returnByValue: true },
+        sessionId,
+      );
+      if (identity.result?.value !== true) {
+        const diag = await send(
+          "Runtime.evaluate",
+          {
+            expression: `JSON.stringify({
+              apiBase: (() => { try { return String(localStorage.getItem('apiBase')); } catch (e) { return 'ERR:' + e; } })(),
+              secOrigin: (() => { try { return String(globalThis.origin); } catch (e) { return 'ERR:' + e; } })(),
+            })`,
+            returnByValue: true,
+          },
+          sessionId,
+        );
+        lastIdentityDiag = String(diag.result?.value ?? diag.exceptionDetails?.text ?? "n/a");
+        continue;
+      }
+      const r = await send(
+        "Runtime.evaluate",
+        {
+          expression,
+          returnByValue: true,
+          awaitPromise: true,
+        },
+        sessionId,
+      );
+      if (r.exceptionDetails) {
+        throw new Error(
+          `frame eval failed: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`,
+        );
+      }
+      return r.result?.value as T;
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("frame eval failed:")) throw err;
+      // Detached/destroyed session: skip; waitForFrame retries.
+    }
+  }
+  throw new Error(
+    `panel frame not found (identity mismatch; diag: ${lastIdentityDiag}; sessions: ${[...frameSessions.values()].map((s) => s.url).join("; ") || "none"})`,
+  );
+}
+
+// Frame content appears across multiple contexts/loads: tolerate missing
+// contexts and failing expressions while polling (same contract as waitForExpr).
+async function waitForFrame(expression: string, desc: string, timeoutMs = 8000): Promise<unknown> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const v = await evaluateInFrame(expression);
+      if (v) return v;
+    } catch (err) {
+      if (Date.now() > deadline) throw err;
+    }
+    if (Date.now() > deadline) throw new Error(`timeout waiting for ${desc}`);
+    await sleep(200);
+  }
+}
+
 // Lazy-loaded pages render after document load: retry "not found" lookups
 // for up to 8s instead of failing on the first frame.
 async function evaluateWhenPresent<T = unknown>(expression: string, timeoutMs = 8000): Promise<T> {
@@ -546,6 +680,13 @@ async function main() {
   await send("Page.enable");
   await send("Runtime.enable");
   await send("Network.enable");
+  // Out-of-process sandboxed iframes (isolated CPA panel) surface as child
+  // targets; auto-attach flattens them into this connection as sessions.
+  await send("Target.setAutoAttach", {
+    autoAttach: true,
+    waitForDebuggerOnStart: false,
+    flatten: true,
+  });
   // Hermetic: never hit the real internet. Blocking fails the avatar <img>,
   // which exercises the intended initials fallback.
   await send("Network.setBlockedURLs", {
@@ -2106,6 +2247,303 @@ async function main() {
           "desktop nav stays visible in landscape",
         );
       });
+    },
+  );
+
+  // --- isolated CPA panel (pinned upstream HTML, opaque iframe, parent-only approvals) ---
+  // The pinned upstream panel renders per-file state as card text
+  // (ENABLED/DISABLED) with a row-selection checkbox and stock bulk
+  // Disable/Enable toolbar action; there is no [role="switch"] element in the
+  // bundle. State is asserted from visible card text only, never CSS.
+  const CARD_SEL = ".AuthFileCard-module__card___uGYSU";
+  const findCardExpr = (name: string) =>
+    `[...document.querySelectorAll('${CARD_SEL}')].find((c) => c.innerText.includes(${JSON.stringify(name.replace(/\.json$/, ""))}))`;
+  // React commits the bulk toolbar only after the selection state update, so
+  // the click, the toolbar wait and the Disable click run in separate JS
+  // stacks — the toolbar visibility is polled, never fixed-sleeped.
+  const selectAuthFile = (name: string) =>
+    evaluateInFrame<{ selected: boolean }>(
+      `
+      (() => {
+        const card = ${findCardExpr(name)};
+        if (!card) throw new Error('auth card not found for ' + ${JSON.stringify(name)});
+        const checkbox = card.querySelector('input[type="checkbox"]');
+        if (!checkbox) throw new Error('selection checkbox missing for ' + ${JSON.stringify(name)});
+        if (!checkbox.checked) checkbox.click();
+        return { selected: checkbox.checked };
+      })()
+    `,
+    );
+  const bulkDisableVisibleExpr = () =>
+    `[...document.querySelectorAll('button')].some(
+      (b) => b.getBoundingClientRect().width > 0 && b.innerText.trim() === 'Disable' && !b.closest('${CARD_SEL}'),
+    )`;
+  const clickBulkDisable = () =>
+    evaluateInFrame<{ clicked: boolean }>(
+      `
+      (() => {
+        const visible = [...document.querySelectorAll('button')].filter(
+          (b) => b.getBoundingClientRect().width > 0 && b.innerText.trim() === 'Disable',
+        );
+        // Prefer the bulk toolbar action (outside the card); the card's own
+        // status button is the verified fallback — both call setStatus.
+        const target = visible.find((b) => !b.closest('${CARD_SEL}')) ?? visible[0];
+        if (!target) throw new Error('Disable button not found');
+        target.click();
+        return { clicked: true };
+      })()
+    `,
+    );
+  const toggleAuthFileSwitch = async (name: string) => {
+    const selected = await selectAuthFile(name);
+    assert(selected.selected, `selection checkbox checked for ${name}`);
+    await waitForFrame(
+      bulkDisableVisibleExpr(),
+      `bulk Disable button committed after selecting ${name}`,
+    );
+    const clicked = await clickBulkDisable();
+    assert(clicked.clicked, `Disable clicked for ${name}`);
+  };
+  const switchState = (name: string) =>
+    evaluateInFrame<string | null>(
+      `
+      (() => {
+        const card = ${findCardExpr(name)};
+        if (!card) throw new Error('auth card not found for ' + ${JSON.stringify(name)});
+        if (/\\bDISABLED\\b/.test(card.innerText)) return 'false';
+        if (/\\bENABLED\\b/.test(card.innerText)) return 'true';
+        throw new Error('state text not found for ' + ${JSON.stringify(name)});
+      })()
+    `,
+    );
+
+  await step("isolated CPA panel renders genuine pinned upstream auth files", async () => {
+    await goto("/admin/cpa");
+    await page.waitForText("Health");
+    await page.click("Auth files");
+    // The parent fetches a CSRF session, then mounts the opaque iframe.
+    await waitForExpr(
+      `!!document.querySelector('iframe[src*="management.html"]')`,
+      "isolated panel iframe mounted",
+    );
+    assert(
+      (await evaluate(
+        `document.querySelector('iframe[src*="management.html"]').getAttribute('sandbox')`,
+      )) === "allow-scripts",
+      "iframe sandbox is allow-scripts only (no same-origin)",
+    );
+    // Genuine upstream render: the pinned bundle logged in with the seeded
+    // placeholder and projected the fake CPA auth-file fixture.
+    // Card file names render without the .json extension.
+    await waitForFrame(
+      `document.readyState === 'complete' && document.body.innerText.includes('qwen-oauth') && document.body.innerText.includes('claude-account')`,
+      "upstream auth-files list rendered from fixture",
+    );
+    const cardCount = await evaluateInFrame<number>(
+      `[...document.querySelectorAll('${CARD_SEL}')].length`,
+    );
+    assert(Number(cardCount) >= 3, `all three fixture auth files render (${cardCount} cards)`);
+    assert((await switchState("qwen-oauth.json")) === "true", "qwen fixture renders enabled");
+    assert(
+      (await switchState("claude-account.json")) === "false",
+      "claude fixture renders disabled",
+    );
+  });
+
+  await step(
+    "isolated panel denies cookies, parent DOM, native network and arbitrary messages",
+    async () => {
+      // Opaque origin: storage and parent DOM must be SecurityError-denied.
+      const denied = await evaluateInFrame<Record<string, string>>(
+        `
+        (() => {
+          const out = {};
+          try { document.cookie; out.cookie = 'ALLOWED'; } catch (e) { out.cookie = String(e).slice(0, 60); }
+          try { parent.document; out.parent = 'ALLOWED'; } catch (e) { out.parent = String(e).slice(0, 60); }
+          // location.origin is the URL origin (same-origin src); globalThis.origin
+          // is the security origin and reports the opaque sandbox as "null".
+          out.origin = String(globalThis.origin);
+          out.xhr = String(window.XMLHttpRequest === undefined);
+          return out;
+        })()
+      `,
+      );
+      assert(denied.origin === "null", `frame origin is opaque, got "${denied.origin}"`);
+      assert(
+        /SecurityError/i.test(denied.cookie ?? ""),
+        `document.cookie denied, got: ${denied.cookie}`,
+      );
+      assert(
+        /SecurityError/i.test(denied.parent ?? ""),
+        `parent.document denied, got: ${denied.parent}`,
+      );
+      assert(denied.xhr === "true", "XMLHttpRequest is unavailable in the frame");
+      // Virtual fetch is the only transport: unsupported paths return the
+      // safe 403 envelope and never touch the network.
+      const rejected = await evaluateInFrame<{ status: number; code: string }>(
+        `
+        (async () => {
+          const r = await fetch('https://fakepanel.invalid/v0/management/config.yaml');
+          return { status: r.status, code: (await r.json()).error.code };
+        })()
+      `,
+      );
+      assert(rejected.status === 403, `unsupported fetch returns 403, got ${rejected.status}`);
+      assert(
+        rejected.code === "HBR_PANEL_UNSUPPORTED",
+        `unsupported fetch error code, got ${rejected.code}`,
+      );
+      const hitsBefore = (await fakeCpaState()).hits.length;
+      await evaluateInFrame(`fetch('https://fakepanel.invalid/v1/models').catch(() => {})`);
+      assert(
+        (await fakeCpaState()).hits.length === hitsBefore,
+        "arbitrary upstream fetch produced no CPA request",
+      );
+      // Forged messages from non-panel sources are ignored: a rogue opaque
+      // sibling frame and the admin page itself both post request envelopes.
+      const forgedId = 999_999;
+      const forged = JSON.stringify({
+        type: "hbr-cpa-panel:request",
+        version: 1,
+        channel: "00000000-0000-0000-0000-000000000000",
+        id: forgedId,
+        operation: "listAuthFiles",
+      });
+      await evaluate(`
+        (() => {
+          // Capture trusted message events at the parent: opaque sibling sends
+          // origin "null" with a foreign source; the admin page's own post is
+          // same-origin with itself as source.
+          window.__hbrForged = [];
+          window.__hbrForgedListener = (e) => window.__hbrForged.push({
+            data: e.data,
+            origin: String(e.origin),
+            trusted: e.isTrusted === true,
+            sourceIsSelf: e.source === window,
+          });
+          window.addEventListener('message', window.__hbrForgedListener);
+          const f = document.createElement('iframe');
+          f.sandbox = 'allow-scripts';
+          f.srcdoc = '<script>parent.postMessage(${forged}, "*")</' + 'script>';
+          document.body.appendChild(f);
+          window.postMessage(${forged}, '*');
+        })()
+      `);
+      await sleep(600);
+      const replies = await evaluate<unknown[]>(
+        `window.__hbrForged.filter((m) => m && m.data && m.data.type === 'hbr-cpa-panel:response' && m.data.id === ${forgedId})`,
+      );
+      assert(replies.length === 0, "forged request envelope got no bridge response");
+      const captured =
+        await evaluate<
+          { data: unknown; origin: string; trusted: boolean; sourceIsSelf: boolean }[]
+        >(`window.__hbrForged`);
+      const sibling = captured.find((m) => m.origin === "null");
+      assert(
+        sibling && sibling.trusted && !sibling.sourceIsSelf,
+        "opaque sibling message captured with null origin and foreign source",
+      );
+      const self = captured.find((m) => m.sourceIsSelf);
+      assert(
+        self && self.trusted && self.origin === BASE,
+        "admin page self-post captured with same origin and self source",
+      );
+      await evaluate(
+        `window.removeEventListener('message', window.__hbrForgedListener); window.__hbrForgedListener = undefined; window.__hbrForged = undefined;`,
+      );
+    },
+  );
+
+  await step("panel disable toggle: parent cancel performs zero execute", async () => {
+    const stateBefore = await fakeCpaState();
+    const qwen = stateBefore.authFiles.find((f) => f.name === "qwen-oauth.json");
+    assert(qwen && qwen.disabled === false, "fixture starts enabled");
+    await toggleAuthFileSwitch("qwen-oauth.json");
+    // Trusted parent dialog appears with the canonical server proposal.
+    // The operation renders as its localized label (en or vi), never the raw
+    // key; poll for either so the assertion is locale-independent.
+    await page.waitForText("Confirm CPA change");
+    await waitForExpr(
+      `window.__hbr.bodyHas("Change auth-file status") || window.__hbr.bodyHas("Thay đổi trạng thái tệp xác thực")`,
+      "dialog shows the canonical operation",
+    );
+    await page.waitForText("qwen-oauth.json");
+    await page.clickDialog("Cancel");
+    await waitForDialogClosed();
+    const stateAfter = await fakeCpaState();
+    assert(
+      stateAfter.authFiles.find((f) => f.name === "qwen-oauth.json")?.disabled === false,
+      "cancel left the fixture untouched",
+    );
+    assert(
+      !stateAfter.hits.some(
+        (h) => h.method === "PATCH" && h.path === "/v0/management/auth-files/status",
+      ),
+      "cancel performed zero mutation calls",
+    );
+    assert(
+      (await switchState("qwen-oauth.json")) === "true",
+      "panel switch stays enabled after cancel",
+    );
+  });
+
+  await step(
+    "panel disable toggle: parent confirm executes the prepared mutation once",
+    async () => {
+      await toggleAuthFileSwitch("qwen-oauth.json");
+      await page.waitForText("Confirm CPA change");
+      await page.clickDialog("Confirm");
+      await waitForDialogClosed();
+      const deadline = Date.now() + 8000;
+      let mutated = false;
+      while (Date.now() < deadline) {
+        const state = await fakeCpaState();
+        const statusCalls = state.hits.filter(
+          (h) => h.method === "PATCH" && h.path === "/v0/management/auth-files/status",
+        );
+        const qwen = state.authFiles.find((f) => f.name === "qwen-oauth.json");
+        if (statusCalls.length === 1 && qwen?.disabled === true) {
+          mutated = true;
+          break;
+        }
+        await sleep(200);
+      }
+      assert(mutated, "confirm executed exactly one status mutation on fake CPA");
+      const confirmState = await fakeCpaState();
+      const confirmHit = confirmState.hits.find(
+        (h) => h.method === "PATCH" && h.path === "/v0/management/auth-files/status",
+      );
+      const payload = confirmHit?.body as { name?: string; disabled?: boolean } | null | undefined;
+      assert(
+        payload?.name === "qwen-oauth.json" && payload?.disabled === true,
+        "PATCH payload targets qwen-oauth.json with disabled:true",
+      );
+      // The upstream panel refreshes its list after the PATCH.
+      try {
+        await waitForFrame(
+          `(() => {
+            const card = ${findCardExpr("qwen-oauth.json")};
+            return !!card && /\\bDISABLED\\b/.test(card.innerText);
+          })()`,
+          "panel reflects disabled state after mutation",
+        );
+      } catch (err) {
+        // Surface the panel's actual state: distinguishes a missed refresh
+        // from a render mismatch.
+        const diag = await evaluateInFrame<string>(
+          `(() => JSON.stringify({
+            cards: [...document.querySelectorAll('${CARD_SEL}')].map((c) => c.innerText.replace(/\\s+/g, ' ').slice(0, 80)),
+          }))()`,
+        );
+        const hits = await fakeCpaState();
+        const tail = hits.hits
+          .slice(-8)
+          .map((h) => `${h.method} ${h.path}`)
+          .join(" | ");
+        throw new Error(
+          `${err instanceof Error ? err.message : err} | panel: ${diag} | cpa tail: ${tail}`,
+        );
+      }
     },
   );
 
