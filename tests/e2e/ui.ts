@@ -1276,55 +1276,30 @@ async function main() {
   );
 
   await step(
-    "chat: New chat welcome, advanced manual key is memory/tab-scoped, no legacy global",
+    "chat: New chat welcome, chat key stays user+workspace scoped, no legacy global",
     async () => {
-      const keysBeforeManual = await chatKeys();
-      await evaluate(`(() => {
-      const s = [...document.querySelectorAll('details > summary')]
-        .find(el => el.textContent.includes('Advanced: use your own API key'));
-      if (!s) throw new Error('advanced key summary not found');
-      s.click();
-      return true;
-    })()`);
-      await page.setInputById("chat-api-key", apiKey);
-      // Memory-only by default: the pasted key exists in no storage entry at all.
-      assert(
-        await evaluate<boolean>(`(() => {
-        for (let i = 0; i < sessionStorage.length; i++) {
-          const k = sessionStorage.key(i);
-          if (k === 'hbr-chat-key' || k.startsWith('hbr-chat-key:')) return false;
-          if ((sessionStorage.getItem(k) ?? '').includes(${JSON.stringify(apiKey)})) return false;
-        }
-        return true;
-      })()`),
-        "pasted manual key stays memory-only before remember",
-      );
-      await typeMessage("manual hi");
-      await page.clickAria('[aria-label="Send message"]');
-      await page.waitForText("Hello from fake/test-model: manual hi");
-      await replyDone();
-      const keysAfterManual = await chatKeys();
-      assert(
-        keysAfterManual.length === keysBeforeManual.length,
-        "manual key path creates no additional key",
-      );
+      // Manual chat key controls were removed (eb5ba85): sends use the managed
+      // Browser Chat key, persisted under hbr-managed-key:<uid>:<wsid>. The
+      // legacy unscoped hbr-chat-key must never appear in any storage.
       await page.click("New chat");
       await page.waitForText("What would you like to build?");
       assert(
         !(await evaluate<boolean>(`!!document.querySelector('[aria-label="Conversation"]')`)),
         "conversation log cleared after New chat",
       );
-      // Remember opts into sessionStorage namespaced by user+workspace — never
-      // the legacy unscoped key (cross-user leak on shared browsers).
-      await page.clickSwitch("chat-remember");
-      const scopedKey = `hbr-chat-key:${chatUserId}:${chatWsId}`;
+      const scopedKey = `hbr-managed-key:${chatUserId}:${chatWsId}`;
       assert(
         await evaluate<boolean>(`(() => {
-        const scoped = sessionStorage.getItem(${JSON.stringify(scopedKey)});
-        if (scoped === null || !scoped.includes('sk-hbr-')) return false;
-        return sessionStorage.getItem('hbr-chat-key') === null;
+        for (const store of [localStorage, sessionStorage]) {
+          for (let i = 0; i < store.length; i++) {
+            const k = store.key(i);
+            if (k === 'hbr-chat-key' || k.startsWith('hbr-chat-key:')) return false;
+          }
+        }
+        const raw = localStorage.getItem(${JSON.stringify(scopedKey)}) ?? sessionStorage.getItem(${JSON.stringify(scopedKey)});
+        return raw !== null && raw.includes('sk-hbr-');
       })()`),
-        "remembered key stored under the user+workspace scoped key only",
+        "chat key persisted under the user+workspace scoped managed key only",
       );
     },
   );
@@ -1334,7 +1309,7 @@ async function main() {
     async () => {
       // The fake CPA echoes the prompt into the reply, so the markdown payload
       // travels as chat content only — no provider or fake-CPA change, and the
-      // send uses the remembered manual key (no new key, fake model, no charge).
+      // send uses the managed Browser Chat key (no new key, fake model, no charge).
       await typeMessage(
         "**bold** <script>alert(1)</script> [click](javascript:alert(1)) ![px](https://evil.example/track.png)",
       );
@@ -1629,28 +1604,40 @@ async function main() {
 
   await step("usage shows breakdown", async () => {
     await goto("/usage");
+    // Per-model breakdown lives behind the "Per model" data view tab.
+    await page.click("Per model");
     await page.waitForText(MODEL_ID);
     assert(!(await page.has("No requests yet")), "usage not empty");
   });
 
   await step("usage KPIs + model filter", async () => {
-    const body = await page.body();
-    for (const kpi of ["Requests", "Tokens", "Cost (USD)", "Errors"])
-      assert(body.includes(kpi), `KPI ${kpi} present`);
-    // Read the Requests KPI semantically from the card structure instead of
-    // guessing bodyText line breaks.
+    // KPI summary strip: one role="group" row, labels + values. The strip's
+    // aria-label is the joined label list; the fourth KPI is Success rate
+    // (per-visibility-gate), not Errors — errors live in the chart tabs.
+    const stripLabel = await evaluate<string>(
+      `(() => document.querySelector('[role="group"][aria-label^="Requests,"]')?.getAttribute('aria-label') ?? '')()`,
+    );
+    assert(
+      stripLabel === "Requests, Tokens, Cost (USD), Success rate",
+      `KPI strip labels, got "${stripLabel}"`,
+    );
     const reqs = Number(
       await evaluate<string>(
-        `(() => { const t = [...document.querySelectorAll('[data-slot="card-title"]')].find(e => e.textContent.trim() === 'Requests'); return t?.closest('[data-slot="card"]')?.querySelector('[data-slot="card-content"] p')?.textContent ?? '' })()`,
+        `(() => {
+        const strip = document.querySelector('[role="group"][aria-label^="Requests,"]');
+        const cell = [...strip.children].find(c => c.querySelector('p')?.textContent === 'Requests');
+        return cell?.querySelector('p + p')?.textContent ?? '';
+      })()`,
       ),
     );
     assert(reqs >= 3, `requests KPI >= 3, got ${reqs}`);
-    // Model metric filter narrows to fake/test-model without emptying the page.
+    // Model metric filter narrows to fake/test-model without emptying the page
+    // (per-model table is the active tab from the previous step).
     await selectOption('[aria-label="Filter by model"]', MODEL_ID);
     await page.waitForText(MODEL_ID);
     assert(!(await page.has("No requests yet")), "model filter keeps data");
     const filtered = await page.body();
-    assert(/Errors\n/.test(filtered), "errors KPI rendered after filter");
+    assert(/Success rate/.test(filtered), "success rate KPI rendered after filter");
     // Chart semantics: named group role, Y-axis labels, period buttons, metric tabs.
     const chartOk = await evaluate<boolean>(
       `(() => {
@@ -1676,18 +1663,18 @@ async function main() {
     );
     assert(!(await page.has("No top-ups yet.")), "top-up history non-empty");
     // Request column shows the full unique gateway request UUID (enrichment was
-    // removed) — never the model name. Scoped to the Usage deductions section.
+    // removed) — never the model name. Scoped to the Usage deductions tab panel
+    // (tabs render only the active panel; usage is the default tab).
     const reqCells = await evaluate<string[]>(
       `(() => {
-        const h3 = [...document.querySelectorAll('h3')].find(e => e.textContent.startsWith('Usage deductions'));
-        if (!h3) return [];
-        const section = h3.parentElement;
-        const cells = [...section.querySelectorAll('tbody tr')].map(r => {
-          const th = [...r.closest('table').querySelectorAll('thead th')];
-          const idx = th.findIndex(t => t.textContent.trim() === 'Request');
-          return r.children[idx]?.textContent.trim() ?? '';
-        });
-        return cells;
+        const tab = [...document.querySelectorAll('[role="tab"]')]
+          .find(e => e.textContent.startsWith('Usage deductions'));
+        if (!tab) return [];
+        const panel = document.getElementById(tab.getAttribute('aria-controls'));
+        if (!panel) return [];
+        const idx = [...panel.querySelectorAll('thead th')]
+          .findIndex(t => t.textContent.trim() === 'Request');
+        return [...panel.querySelectorAll('tbody tr')].map(r => r.children[idx]?.textContent.trim() ?? '');
       })()`,
     );
     assert(reqCells.length >= 3, `>=3 deduction rows with request ids, got ${reqCells.length}`);
