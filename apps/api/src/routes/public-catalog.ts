@@ -20,6 +20,7 @@ import {
 } from "@hoborouter/catalog";
 import { calculateCharge, type PriceSnapshot, type UsageTokens } from "@hoborouter/wallet";
 import { parseUsdCents, usdCentsToVndCeiling } from "@hoborouter/payments";
+import { parseStoredCustomLinks, type SupportCustomLink } from "./support-settings";
 import { readPaymentLimits } from "../payment-creation";
 
 // Public API shapes (consumed by the public web pages; mirrored in the web
@@ -43,6 +44,7 @@ export type PublicInstanceInfo = {
     telegram: string | null;
     facebook: string | null;
     threads: string | null;
+    custom: SupportCustomLink[];
   };
 };
 export type PublicSubscriptionPlan = {
@@ -216,6 +218,7 @@ export const publicCatalogRoutes = (
           "support_telegram",
           "support_facebook",
           "support_threads",
+          "support_custom",
         ]);
         const body: PublicInstanceInfo = {
           name: s.display_name?.trim() || "Hoborouter",
@@ -225,6 +228,8 @@ export const publicCatalogRoutes = (
             telegram: s.support_telegram ?? null,
             facebook: s.support_facebook ?? null,
             threads: s.support_threads ?? null,
+            // Re-validated on read: a stale/corrupt KV value renders as none.
+            custom: parseStoredCustomLinks(s.support_custom),
           },
         };
         return body;

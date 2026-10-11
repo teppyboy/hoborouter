@@ -90,8 +90,44 @@ type SupportShape = {
     telegram: string | null;
     facebook: string | null;
     threads: string | null;
+    custom: SupportCustomLink[];
   };
 };
+
+// Admin-curated extra channels, stored as ONE KV string (`support_custom`, a
+// JSON array) — no schema migration needed. Publicly rendered after the fixed
+// channels, so every entry is re-validated with the same URL rules plus a
+// bounded plain-text label.
+export const SUPPORT_CUSTOM_MAX = 10;
+export const SUPPORT_CUSTOM_LABEL_MAX = 30;
+export type SupportCustomLink = { label: string; url: string };
+
+/** Null for anything that is not a well-formed, bounded custom-link array. */
+function validateCustomLinks(raw: unknown): SupportCustomLink[] | null {
+  if (!Array.isArray(raw) || raw.length > SUPPORT_CUSTOM_MAX) return null;
+  const out: SupportCustomLink[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return null;
+    const { label, url } = item as Record<string, unknown>;
+    if (typeof label !== "string" || typeof url !== "string") return null;
+    const l = label.trim();
+    if (!l || l.length > SUPPORT_CUSTOM_LABEL_MAX || hasControlChars(l)) return null;
+    const u = validateHttpsUrl(url);
+    if (u === null) return null;
+    out.push({ label: l, url: u });
+  }
+  return out;
+}
+
+/** Stored KV string -> rendered array; anything unusable renders as none. */
+export function parseStoredCustomLinks(raw: string | null | undefined): SupportCustomLink[] {
+  if (!raw) return [];
+  try {
+    return validateCustomLinks(JSON.parse(raw) as unknown) ?? [];
+  } catch {
+    return [];
+  }
+}
 
 async function readShape(db: Db): Promise<SupportShape> {
   const rows = await db
@@ -105,6 +141,7 @@ async function readShape(db: Db): Promise<SupportShape> {
       telegram: map.get("support_telegram") ?? null,
       facebook: map.get("support_facebook") ?? null,
       threads: map.get("support_threads") ?? null,
+      custom: parseStoredCustomLinks(map.get("support_custom")),
     },
   };
 }
@@ -116,6 +153,10 @@ const invalid = (message: string) =>
   });
 
 const strOrNull = t.Optional(t.Union([t.String(), t.Null()]));
+// Pass-through at the schema level: every custom-link rule (shape, bounds,
+// label, URL) is enforced in the handler so malformed input gets the route's
+// uniform 400 INVALID, not a 422 schema rejection.
+const supportCustom = t.Optional(t.Any());
 
 export const supportSettingsRoutes = (db: Db, auth: BetterAuthInstance) =>
   new Elysia({ name: "support-settings" })
@@ -146,6 +187,7 @@ export const supportSettingsRoutes = (db: Db, auth: BetterAuthInstance) =>
           support_telegram: strOrNull,
           support_facebook: strOrNull,
           support_threads: strOrNull,
+          support_custom: supportCustom,
         }),
         detail: {
           tags: ["Admin"],
@@ -181,6 +223,22 @@ export const supportSettingsRoutes = (db: Db, auth: BetterAuthInstance) =>
             );
           }
           updates.set(key, valid);
+        }
+
+        // Custom links are a structured key (null clears, array replaces) and
+        // follow the same validate-everything-before-write rule.
+        let customUpdate: SupportCustomLink[] | null | undefined;
+        if ("support_custom" in body) {
+          if (body.support_custom === null) customUpdate = null;
+          else {
+            const links = validateCustomLinks(body.support_custom);
+            if (links === null) {
+              return invalid(
+                "support_custom must be an array of at most 10 { label, url } objects with a non-empty label (max 30 characters) and an HTTPS URL without credentials",
+              );
+            }
+            customUpdate = links;
+          }
         }
 
         const setSetting = async (
@@ -220,6 +278,31 @@ export const supportSettingsRoutes = (db: Db, auth: BetterAuthInstance) =>
               action: "settings.update",
               target: key,
               detail: { before, after: value },
+            });
+          }
+          if (customUpdate !== undefined) {
+            const beforeRaw =
+              (
+                await tx
+                  .select({ value: instanceSettings.value })
+                  .from(instanceSettings)
+                  .where(eq(instanceSettings.key, "support_custom"))
+                  .limit(1)
+              )[0]?.value ?? null;
+            if (customUpdate === null) {
+              await tx.delete(instanceSettings).where(eq(instanceSettings.key, "support_custom"));
+            } else {
+              await setSetting(tx, "support_custom", JSON.stringify(customUpdate));
+            }
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "settings.update",
+              target: "support_custom",
+              detail: {
+                before: beforeRaw === null ? null : parseStoredCustomLinks(beforeRaw),
+                after: customUpdate,
+              },
             });
           }
         });

@@ -16,7 +16,11 @@ import { createTestDb, type Db } from "@hoborouter/db";
 import { calculateCharge, type PriceSnapshot } from "@hoborouter/wallet";
 import { createAuth } from "../src/auth";
 import { publicCatalogRoutes } from "../src/routes/public-catalog";
-import { supportSettingsRoutes } from "../src/routes/support-settings";
+import {
+  SUPPORT_CUSTOM_LABEL_MAX,
+  SUPPORT_CUSTOM_MAX,
+  supportSettingsRoutes,
+} from "../src/routes/support-settings";
 
 async function q<T = Record<string, unknown>>(db: Db, query: SQL): Promise<T[]> {
   return (await db.execute(query)) as unknown as T[];
@@ -273,6 +277,7 @@ describe("GET /api/v1/public/instance", () => {
       telegram: null,
       facebook: null,
       threads: null,
+      custom: [],
     });
     expect(JSON.stringify(body)).not.toMatch(/secret|key|credential/i);
   });
@@ -291,18 +296,20 @@ describe("GET /api/v1/public/instance", () => {
         display_name: "My Router",
         support_email: "help@hoborouter.dev",
         support_telegram: "https://t.me/hoborouter",
+        support_custom: [{ label: "Docs", url: "https://docs.hoborouter.dev/" }],
       },
     });
     const res = await req("/api/v1/public/instance");
     const body = (await res.json()) as {
       name: string;
-      support: Record<string, string | null>;
+      support: Record<string, unknown>;
     };
     expect(body.name).toBe("My Router");
     expect(body.support.email).toBe("help@hoborouter.dev");
     expect(body.support.telegram).toBe("https://t.me/hoborouter");
     expect(body.support.facebook).toBeNull();
     expect(body.support.threads).toBeNull();
+    expect(body.support.custom).toEqual([{ label: "Docs", url: "https://docs.hoborouter.dev/" }]);
   });
 });
 
@@ -437,6 +444,27 @@ describe("admin support-settings", () => {
       { support_telegram: "https:\\evil.example/x" },
       { support_facebook: "https://facebook.com\\@evil.example" },
       { display_name: "bad\u0007name" },
+      // Custom links: shape, bounds, label, and URL rules.
+      { support_custom: "not-an-array" },
+      { support_custom: ["https://not-an-object.example"] },
+      { support_custom: [{ label: "NoUrl" }] },
+      { support_custom: [{ label: "", url: "https://ok.example" }] },
+      { support_custom: [{ label: "bad\u0007label", url: "https://ok.example" }] },
+      {
+        support_custom: [
+          { label: "x".repeat(SUPPORT_CUSTOM_LABEL_MAX + 1), url: "https://ok.example" },
+        ],
+      },
+      { support_custom: [{ label: "X", url: "http://insecure.example" }] },
+      { support_custom: [{ label: "X", url: "https://user:pass@evil.example" }] },
+      { support_custom: [{ label: "X", url: "javascript:alert(1)" }] },
+      { support_custom: [{ label: "X", url: "//evil.example" }] },
+      {
+        support_custom: Array.from({ length: SUPPORT_CUSTOM_MAX + 1 }, (_, i) => ({
+          label: `L${i}`,
+          url: `https://l${i}.example`,
+        })),
+      },
     ];
     for (const body of bad) {
       const res = await req("/api/v1/admin/support-settings", {
@@ -459,6 +487,7 @@ describe("admin support-settings", () => {
         support_telegram: null,
         support_facebook: null,
         support_threads: null,
+        support_custom: null,
       },
     });
     await req("/api/v1/admin/support-settings", {
@@ -485,7 +514,7 @@ describe("admin support-settings", () => {
   test("roundtrip + audit, no money history writes", async () => {
     const [auditsBefore] = await q<{ c: number }>(
       db,
-      sql`SELECT COUNT(*)::int AS c FROM audit_log WHERE action = 'settings.update' AND target IN ('display_name','support_email','support_telegram','support_facebook','support_threads')`,
+      sql`SELECT COUNT(*)::int AS c FROM audit_log WHERE action = 'settings.update' AND target IN ('display_name','support_email','support_telegram','support_facebook','support_threads','support_custom')`,
     );
     const res = await req("/api/v1/admin/support-settings", {
       method: "PUT",
@@ -500,7 +529,7 @@ describe("admin support-settings", () => {
     expect(res.status).toBe(200);
     const put = (await res.json()) as {
       display_name: string | null;
-      support: Record<string, string | null>;
+      support: Record<string, unknown>;
     };
     expect(put).toEqual({
       display_name: "Round Router",
@@ -509,6 +538,7 @@ describe("admin support-settings", () => {
         telegram: null,
         facebook: "https://facebook.com/hoborouter",
         threads: "https://threads.net/@hoborouter",
+        custom: [],
       },
     });
     const g = await req("/api/v1/admin/support-settings", { cookie: adminCookie });
@@ -516,7 +546,7 @@ describe("admin support-settings", () => {
 
     const audits = await q<{ target: string; detail: string }>(
       db,
-      sql`SELECT target, detail FROM audit_log WHERE action = 'settings.update' AND target IN ('display_name','support_email','support_telegram','support_facebook','support_threads') ORDER BY ctid OFFSET ${auditsBefore!.c}`,
+      sql`SELECT target, detail FROM audit_log WHERE action = 'settings.update' AND target IN ('display_name','support_email','support_telegram','support_facebook','support_threads','support_custom') ORDER BY ctid OFFSET ${auditsBefore!.c}`,
     );
     const targets = audits.map((a) => a.target).sort();
     expect(targets).toEqual([
@@ -535,5 +565,115 @@ describe("admin support-settings", () => {
     // Settings are not money history: ledger untouched.
     const [ledger] = await q<{ c: number }>(db, sql`SELECT COUNT(*)::int AS c FROM ledger_entries`);
     expect(ledger!.c).toBe(0);
+  });
+
+  test("custom links: roundtrip, public projection, audit, clear", async () => {
+    // Clean slate for this key.
+    await req("/api/v1/admin/support-settings", {
+      method: "PUT",
+      cookie: adminCookie,
+      body: { support_custom: null },
+    });
+    const [before] = await q<{ c: number }>(
+      db,
+      sql`SELECT COUNT(*)::int AS c FROM audit_log WHERE action = 'settings.update' AND target = 'support_custom'`,
+    );
+    const links = [
+      { label: "Docs", url: "https://docs.hoborouter.dev/guide" },
+      { label: "Status", url: "https://status.hoborouter.dev/" },
+    ];
+    const res = await req("/api/v1/admin/support-settings", {
+      method: "PUT",
+      cookie: adminCookie,
+      body: { support_custom: links },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      display_name: string | null;
+      support: { custom: { label: string; url: string }[] };
+    };
+    expect(body.support.custom).toEqual(links);
+
+    // Public projection renders the same array; no credentials/control data.
+    const pub = await req("/api/v1/public/instance");
+    const pubBody = (await pub.json()) as {
+      support: { custom: { label: string; url: string }[] };
+    };
+    expect(pubBody.support.custom).toEqual(links);
+
+    // Audited once with before/after arrays.
+    const audits = await q<{ detail: string }>(
+      db,
+      sql`SELECT detail FROM audit_log WHERE action = 'settings.update' AND target = 'support_custom' ORDER BY ctid OFFSET ${before!.c}`,
+    );
+    expect(audits).toHaveLength(1);
+    expect(JSON.parse(audits[0]!.detail)).toEqual({ before: null, after: links });
+
+    // null clears: KV row removed, projections show none.
+    const clear = await req("/api/v1/admin/support-settings", {
+      method: "PUT",
+      cookie: adminCookie,
+      body: { support_custom: null },
+    });
+    const clearBody = (await clear.json()) as typeof body;
+    expect(clearBody.support.custom).toEqual([]);
+    const [row] = await q<{ c: number }>(
+      db,
+      sql`SELECT COUNT(*)::int AS c FROM instance_settings WHERE key = 'support_custom'`,
+    );
+    expect(row!.c).toBe(0);
+    const pubAfter = await req("/api/v1/public/instance");
+    const pubAfterBody = (await pubAfter.json()) as typeof pubBody;
+    expect(pubAfterBody.support.custom).toEqual([]);
+  });
+
+  test("custom links participate in whole-body validation: mixed valid+invalid writes NOTHING", async () => {
+    await req("/api/v1/admin/support-settings", {
+      method: "PUT",
+      cookie: adminCookie,
+      body: { support_custom: [{ label: "Keep", url: "https://keep.example/" }] },
+    });
+    const res = await req("/api/v1/admin/support-settings", {
+      method: "PUT",
+      cookie: adminCookie,
+      body: {
+        support_telegram: "http://insecure.example",
+        support_custom: [{ label: "New", url: "https://new.example" }],
+      },
+    });
+    expect(res.status).toBe(400);
+    const g = await req("/api/v1/admin/support-settings", { cookie: adminCookie });
+    const body = (await g.json()) as {
+      support: { telegram: string | null; custom: { label: string; url: string }[] };
+    };
+    // Neither the invalid key nor the valid custom array was persisted.
+    expect(body.support.telegram).toBeNull();
+    expect(body.support.custom).toEqual([{ label: "Keep", url: "https://keep.example/" }]);
+    // Cleanup for other tests.
+    await req("/api/v1/admin/support-settings", {
+      method: "PUT",
+      cookie: adminCookie,
+      body: { support_custom: null },
+    });
+  });
+
+  test("custom links: exactly 10 accepted with URL/label normalization", async () => {
+    const links = Array.from({ length: SUPPORT_CUSTOM_MAX }, (_, i) => ({
+      label: `  L${i} `,
+      url: `https://l${i}.example/`,
+    }));
+    const res = await req("/api/v1/admin/support-settings", {
+      method: "PUT",
+      cookie: adminCookie,
+      body: { support_custom: links },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { support: { custom: { label: string; url: string }[] } };
+    expect(body.support.custom).toEqual(links.map((l) => ({ label: l.label.trim(), url: l.url })));
+    await req("/api/v1/admin/support-settings", {
+      method: "PUT",
+      cookie: adminCookie,
+      body: { support_custom: null },
+    });
   });
 });
