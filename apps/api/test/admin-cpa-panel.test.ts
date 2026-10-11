@@ -26,6 +26,13 @@ function setup() {
     },
   };
   let hits = 0;
+  let fetcher: (
+    input: Parameters<typeof fetch>[0],
+    init?: RequestInit,
+  ) => Promise<Response> = async () => {
+    hits++;
+    return Response.json({ debug: false });
+  };
   const app = adminCpaPanelRoutes(
     db,
     auth,
@@ -34,10 +41,7 @@ function setup() {
       CPA_MANAGEMENT_KEY: 'sentinel"\\key',
       CPA_BASE_URL: "https://fake.invalid",
     },
-    async () => {
-      hits++;
-      return Response.json({ debug: false });
-    },
+    async (input, init) => fetcher(input, init),
   );
   const request = (suffix: string, body?: unknown, headers: Record<string, string> = {}) =>
     app.handle(
@@ -51,6 +55,9 @@ function setup() {
     request,
     audits,
     hits: () => hits,
+    setFetcher: (value: typeof fetcher) => {
+      fetcher = value;
+    },
     demote: () => {
       admin = false;
     },
@@ -105,6 +112,49 @@ test("read is projected/no-store; prepare never dispatches; demotion denies exec
   s.demote();
   expect((await s.request("execute", { approval_id }, headers)).status).toBe(403);
   expect(s.hits()).toBe(1);
+  expect(JSON.stringify(s.audits)).not.toContain("sentinel");
+});
+
+test("execute setAuthFileStatus returns echoed name/disabled; upstream failure propagates", async () => {
+  const s = setup();
+  const token = (await (await s.request("session")).json()).csrf_token;
+  const headers = { "x-hbr-panel-csrf": token };
+  s.setFetcher(async (input, init) => {
+    const request = new Request(input, init);
+    if (request.method === "GET")
+      return Response.json({
+        files: [
+          {
+            name: "fake.json",
+            type: "codex",
+            provider: "codex",
+            disabled: false,
+            status: "active",
+          },
+        ],
+      });
+    if (request.method === "PATCH") return Response.json({ status: "ok" });
+    return Response.json({ error: "boom" }, { status: 500 });
+  });
+  for (const disabled of [true, false]) {
+    const prepared = await s.request(
+      "prepare",
+      { operation: "setAuthFileStatus", args: { name: "fake.json", disabled } },
+      headers,
+    );
+    const { approval_id } = await prepared.json();
+    const executed = await s.request("execute", { approval_id }, headers);
+    expect(executed.status).toBe(200);
+    expect(await executed.json()).toEqual({ data: { ok: true, name: "fake.json", disabled } });
+  }
+  const failed = await s.request(
+    "prepare",
+    { operation: "setAuthFileStatus", args: { name: "fake.json", disabled: true } },
+    headers,
+  );
+  const { approval_id } = await failed.json();
+  s.setFetcher(async () => Response.json({ error: "boom" }, { status: 500 }));
+  expect((await s.request("execute", { approval_id }, headers)).status).toBe(502);
   expect(JSON.stringify(s.audits)).not.toContain("sentinel");
 });
 

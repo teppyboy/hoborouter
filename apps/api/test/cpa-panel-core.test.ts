@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { CpaPanelService, panelMutationSchema, projectPanelRead } from "../src/cpa-panel-core";
+import {
+  CpaPanelService,
+  PanelError,
+  panelMutationSchema,
+  projectPanelRead,
+} from "../src/cpa-panel-core";
 
 const actor = { userId: "admin", sessionId: "session" };
 const proposal = {
@@ -185,6 +190,63 @@ test("all fixed mutations reconstruct bodies; failed execution never replays", a
   await expect(broken.execute(actor, prepared.approval_id)).rejects.toThrow("result unknown");
   await expect(broken.execute(actor, prepared.approval_id)).rejects.toThrow("Approval");
   expect(count).toBe(1);
+});
+
+test("setAuthFileStatus execute echoes name and disabled, never upstream payload", async () => {
+  for (const disabled of [true, false]) {
+    const service = new CpaPanelService({ CPA_MANAGEMENT_KEY: "secret" }, async (input, init) => {
+      const request = new Request(input, init);
+      if (request.method === "GET")
+        return Response.json({
+          files: [
+            {
+              name: "fake.json",
+              type: "codex",
+              provider: "codex",
+              disabled: !disabled,
+              status: "active",
+            },
+          ],
+        });
+      return Response.json({ status: "ok", secret: "sentinel" });
+    });
+    const prepared = service.prepare(actor, {
+      operation: "setAuthFileStatus",
+      args: { name: "fake.json", disabled },
+    });
+    expect(await service.execute(actor, prepared.approval_id)).toEqual({
+      ok: true,
+      name: "fake.json",
+      disabled,
+    });
+  }
+});
+
+test("setAuthFileStatus upstream failure propagates instead of echoing optimistic state", async () => {
+  const service = new CpaPanelService({ CPA_MANAGEMENT_KEY: "secret" }, async (input, init) => {
+    const request = new Request(input, init);
+    if (request.method === "GET")
+      return Response.json({
+        files: [
+          {
+            name: "fake.json",
+            type: "codex",
+            provider: "codex",
+            disabled: false,
+            status: "active",
+          },
+        ],
+      });
+    return Response.json({ error: "upstream" }, { status: 500 });
+  });
+  const prepared = service.prepare(actor, proposal);
+  try {
+    await service.execute(actor, prepared.approval_id);
+    throw new Error("expected rejection");
+  } catch (error) {
+    expect(error).toBeInstanceOf(PanelError);
+    expect((error as PanelError).status).toBe(502);
+  }
 });
 
 test("HTTP success carrying partial deletion or error is not fabricated success", async () => {

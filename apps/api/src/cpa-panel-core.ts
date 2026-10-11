@@ -383,8 +383,13 @@ export class CpaPanelService {
         throw new PanelError(409, "HBR_PANEL_TARGET_MISSING", "Auth file no longer available");
     }
     switch (proposal.operation) {
-      case "setAuthFileStatus":
-        return this.call(actor, proposal.operation, "auth-files/status", "PATCH", proposal.args);
+      case "setAuthFileStatus": {
+        // call() throws unless upstream confirmed success; echo only safe
+        // proposal args so the panel card reflects the requested state instead
+        // of an omitted field the caller would coerce back to enabled.
+        await this.call(actor, proposal.operation, "auth-files/status", "PATCH", proposal.args);
+        return { ok: true, name: proposal.args.name, disabled: proposal.args.disabled };
+      }
       case "deleteAuthFiles": {
         await this.call(actor, proposal.operation, "auth-files", "DELETE", proposal.args);
         return {
