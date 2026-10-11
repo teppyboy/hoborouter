@@ -88,8 +88,12 @@ export const adminSettingsCopy = {
   customLabel: { en: "Label", vi: "Nhãn" },
   customUrl: { en: "URL", vi: "Đường dẫn" },
   customHint: {
-    en: "Up to {max} extra HTTPS links shown publicly after the channels above.",
-    vi: "Tối đa {max} liên kết HTTPS hiển thị công khai sau các kênh ở trên.",
+    en: "Extra HTTPS links shown publicly after the channels above; all links together are limited to 16 KB of stored JSON.",
+    vi: "Các liên kết HTTPS bổ sung hiển thị công khai sau các kênh ở trên; tổng dung lượng JSON lưu trữ tối đa 16 KB.",
+  },
+  customTooLarge: {
+    en: "All custom links together exceed the 16 KB stored-JSON limit. Remove or shorten links.",
+    vi: "Tổng dung lượng JSON lưu trữ của các liên kết vượt quá 16 KB. Hãy xoá hoặc rút gọn liên kết.",
   },
   addCustomLink: { en: "Add link", vi: "Thêm liên kết" },
   removeCustomLink: { en: "Remove", vi: "Xóa" },
@@ -382,8 +386,9 @@ function PaymentIntegerField({
  * Support & contact settings (GET/PUT /api/v1/admin/support-settings).
  * GET response is nested ({ display_name, support: { email, telegram, facebook,
  * threads, custom } }); the PUT body is FLAT over exactly the five whitelisted
- * string keys plus the structured `support_custom` array (null clears, up to
- * 10 { label, url } entries) and is validated as a whole server-side before
+ * string keys plus the structured `support_custom` array (null clears;
+ * entries bounded by the total stored-JSON byte cap, not a count) and is
+ * validated as a whole server-side before
  * any write, so the form always sends every key (dirty value, current value,
  * or null to clear).
  */
@@ -408,8 +413,8 @@ type SupportFieldKey =
 type SupportFlat = Record<SupportFieldKey, string | null>;
 
 // Admin-curated custom links (apps/api/src/routes/support-settings.ts is the
-// validation authority: max 10 entries, labels <= 30, HTTPS URLs).
-const SUPPORT_CUSTOM_MAX = 10;
+// validation authority: total stored-JSON byte cap, labels <= 30, HTTPS URLs).
+const SUPPORT_CUSTOM_MAX_BYTES = 16_384;
 const SUPPORT_CUSTOM_LABEL_MAX = 30;
 type SupportCustomDraft = { label: string; url: string };
 type SupportValues = Partial<Record<SupportFieldKey, string>> & { custom?: SupportCustomDraft[] };
@@ -571,14 +576,20 @@ function CustomLinksEditor({
   onChange: (rows: SupportCustomDraft[]) => void;
 }) {
   const t = useT(adminSettingsCopy);
+  // Client mirror of the server's stored-JSON byte cap (support-settings.ts
+  // SUPPORT_CUSTOM_MAX_BYTES): feedback only, the server re-validates and its
+  // URL canonicalization stays authoritative.
+  const overBound =
+    edited &&
+    new TextEncoder().encode(JSON.stringify(normalizeCustomRows(rows))).length >
+      SUPPORT_CUSTOM_MAX_BYTES;
   const setRow = (i: number, patch: Partial<SupportCustomDraft>) =>
     onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
     <div className="space-y-2">
       <p className="text-sm font-medium">{t("customSection")}</p>
-      <p className="text-xs text-muted-foreground">
-        {t("customHint", { max: SUPPORT_CUSTOM_MAX })}
-      </p>
+      <p className="text-xs text-muted-foreground">{t("customHint")}</p>
+      {overBound && <p className="text-xs text-destructive">{t("customTooLarge")}</p>}
       {rows.map((row, i) => {
         const invalidLabel = edited && !validateSupportCustomLabel(row.label);
         const invalidUrl = edited && !validateSupportHttpsUrl(row.url);
@@ -623,7 +634,6 @@ function CustomLinksEditor({
       <Button
         variant="outline"
         size="sm"
-        disabled={rows.length >= SUPPORT_CUSTOM_MAX}
         onClick={() => onChange([...rows, { label: "", url: "" }])}
       >
         {t("addCustomLink")}

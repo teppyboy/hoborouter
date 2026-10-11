@@ -380,9 +380,10 @@ test("client validation mirrors server: bad URL and long label flagged", async (
 
 // --- bounds -----------------------------------------------------------------
 
-test("Add link disables at the 10-row server bound", async () => {
+test("Add link stays enabled past any row count; byte-cap mirror flags oversized set", async () => {
   useLocaleStore.getState().setLocale("en");
-  const custom = Array.from({ length: 10 }, (_, i) => ({
+  // Well under the 16 KB stored-JSON cap: Add link must never disable on count.
+  const custom = Array.from({ length: 25 }, (_, i) => ({
     label: `L${i}`,
     url: `https://l${i}.example/`,
   }));
@@ -395,8 +396,14 @@ test("Add link disables at the 10-row server bound", async () => {
   await page.settle();
   try {
     const add = page.button("Add link");
-    expect(add.disabled).toBe(true);
-    expect(page.input("custom_label_9")!.value).toBe("L9");
+    expect(add.disabled).toBe(false);
+    expect(page.input("custom_label_24")!.value).toBe("L24");
+    expect(page.bodyText()).not.toContain("exceed the 16 KB stored-JSON limit");
+
+    // Push the edited set past the 16 KB cap: client mirror flags it, server
+    // still re-validates on save.
+    page.setInput(page.input("custom_url_0")!, `https://l0.example/${"p".repeat(17_000)}`);
+    expect(page.bodyText()).toContain("exceed the 16 KB stored-JSON limit");
   } finally {
     await page.unmount();
   }
