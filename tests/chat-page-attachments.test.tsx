@@ -385,6 +385,38 @@ test("a pick in flight shows a Reading status that clears when reads finish", as
   }
 });
 
+test("pasting an image file from the clipboard attaches it like a pick", async () => {
+  await mountPage();
+  const textarea = document.querySelector('textarea[aria-label="Message"]')!;
+  const paste = new (winEvents().Event)("paste", { bubbles: true, cancelable: true }) as Event & {
+    clipboardData?: { files: File[] };
+  };
+  paste.clipboardData = { files: [pngFile(1024)] };
+  textarea.dispatchEvent(paste);
+  await waitFor(() => chipCount() === 1, "pasted attachment chip");
+  // A text-only paste never touches attachments.
+  const textPaste = new (winEvents().Event)("paste", { bubbles: true, cancelable: true }) as Event & {
+    clipboardData?: { files: File[] };
+  };
+  textPaste.clipboardData = { files: [] };
+  textarea.dispatchEvent(textPaste);
+  await flush();
+  expect(chipCount()).toBe(1);
+});
+
+test("dropping a file on the composer attaches it like a pick", async () => {
+  await mountPage();
+  const textarea = document.querySelector('textarea[aria-label="Message"]')!;
+  // Bubbles from the textarea up to the composer card that owns onDrop.
+  const drop = new (winEvents().Event)("drop", { bubbles: true, cancelable: true }) as Event & {
+    dataTransfer?: { files: File[] };
+  };
+  drop.dataTransfer = { files: [textFile("hello", "dropped.txt")] };
+  textarea.dispatchEvent(drop);
+  await waitFor(() => chipCount() === 1, "dropped attachment chip");
+  expect(document.body.textContent).toContain("dropped.txt");
+});
+
 test("clicking a prompt chip focuses the composer", async () => {
   await mountPage();
   const chip = buttonByText("Help me write a debounce function in TypeScript.");

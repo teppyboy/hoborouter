@@ -1480,7 +1480,21 @@ export function ChatPage() {
               </p>
             </div>
           )}
-          <div className="relative rounded-2xl border border-border bg-card p-2 shadow-sm">
+          {/* File drag-and-drop on the whole composer. Dragover is only
+              cancelled for a Files payload so dragging text between editor
+              spots keeps the native drop-to-insert behaviour. */}
+          <div
+            className="relative rounded-2xl border border-border bg-card p-2 shadow-sm"
+            onDragOver={(e) => {
+              if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              if (e.dataTransfer.files.length > 0) {
+                e.preventDefault();
+                handleFiles(e.dataTransfer.files);
+              }
+            }}
+          >
             {(attachments.length > 0 || attachError || readingFiles) && (
               <div className="space-y-1 px-1 pb-1">
                 {readingFiles && (
@@ -1554,6 +1568,14 @@ export function ChatPage() {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   void send();
+                }
+              }}
+              onPaste={(e) => {
+                // Clipboard files (e.g. a screenshot) attach like a pick;
+                // text-only pastes keep the native insert-into-draft path.
+                if (e.clipboardData.files.length > 0) {
+                  e.preventDefault();
+                  handleFiles(e.clipboardData.files);
                 }
               }}
               className="max-h-48 min-h-10 resize-none border-0 bg-transparent px-2 py-1 shadow-none field-sizing-content focus-visible:ring-0"
