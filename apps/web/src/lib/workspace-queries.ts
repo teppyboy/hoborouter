@@ -16,8 +16,10 @@ export function useWorkspaces() {
   const { data: session } = useSession();
 
   const query = useQuery({
-    queryKey: ["workspaces"],
-    queryFn: () => api<Workspace[]>("/api/v1/workspaces"),
+    // Keyed by identity: an identity switch (logout/login as another user)
+    // gets a fresh cache entry instead of reusing the previous user's list.
+    queryKey: ["workspaces", session?.user?.id ?? null],
+    queryFn: ({ signal }) => api<Workspace[]>("/api/v1/workspaces", { signal }),
     // Only fetch with a live session; avoids 401 noise across logout/login.
     enabled: !!session?.user?.id,
     retry: false,

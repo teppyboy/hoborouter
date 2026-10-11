@@ -65,15 +65,17 @@ export function successRateLabel(visibleRequests?: number, visibleErrors?: numbe
 export function useRequestLogs(workspaceId: string | null, limit = 100) {
   return useQuery({
     queryKey: ["usage-logs", workspaceId, limit],
-    queryFn: () =>
-      api<{ data: UsageLogRow[] }>(
-        `/api/v1/workspaces/${workspaceId}/usage-logs?limit=${limit}`,
-      ).then((r) => r.data),
+    queryFn: ({ signal }) =>
+      api<{ data: UsageLogRow[] }>(`/api/v1/workspaces/${workspaceId}/usage-logs?limit=${limit}`, {
+        signal,
+      }).then((r) => r.data),
     enabled: workspaceId != null,
     staleTime: 15_000,
     retry: (count, err) => {
       const status = (err as { status?: number }).status;
-      return status !== 404 && count < 2;
+      // 401/403 are auth states, not transient: retrying only adds dead-cookie
+      // noise on logout.
+      return status !== 404 && status !== 401 && status !== 403 && count < 2;
     },
   });
 }
@@ -81,17 +83,20 @@ export function useRequestLogs(workspaceId: string | null, limit = 100) {
 export function useUsageSummary(workspaceId: string | null, days = 30, model?: string) {
   return useQuery({
     queryKey: ["usage-summary", workspaceId, days, model ?? null],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       api<UsageSummary>(
         `/api/v1/workspaces/${workspaceId}/usage-summary?days=${days}${
           model ? `&model=${encodeURIComponent(model)}` : ""
         }`,
+        { signal },
       ),
     enabled: workspaceId != null,
     staleTime: 15_000,
     retry: (count, err) => {
       const status = (err as { status?: number }).status;
-      return status !== 404 && count < 2;
+      // 401/403 are auth states, not transient: retrying only adds dead-cookie
+      // noise on logout.
+      return status !== 404 && status !== 401 && status !== 403 && count < 2;
     },
   });
 }

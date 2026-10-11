@@ -38,3 +38,45 @@ test("signOutAndReset: no query refetch fires after signOut, navigation is last"
   expect(calls).toEqual(["workspaces"]);
   expect(navigated).toBe(true);
 });
+
+test("signOutAndReset awaits cancelQueries: in-flight query aborted before signOut", async () => {
+  const qc = new QueryClient();
+  const events: string[] = [];
+  const observer = new QueryObserver(qc, {
+    queryKey: ["slow"],
+    retry: false,
+    queryFn: ({ signal }) =>
+      new Promise((_res, rej) => {
+        signal.addEventListener("abort", () => {
+          events.push("aborted");
+          rej(signal.reason);
+        });
+      }),
+  });
+  const unsub = observer.subscribe(() => {});
+  observer
+    .fetchOptimistic({
+      queryKey: ["slow"],
+      retry: false,
+      queryFn: ({ signal }) =>
+        new Promise((_res, rej) => {
+          signal.addEventListener("abort", () => rej(signal.reason));
+        }),
+    })
+    .catch(() => {});
+
+  await signOutAndReset(
+    qc,
+    async () => {
+      events.push("signOut");
+    },
+    () => {
+      events.push("navigate");
+    },
+  );
+  unsub();
+
+  // The in-flight request must be aborted BEFORE the cookie dies.
+  expect(events[0]).toBe("aborted");
+  expect(events).toEqual(["aborted", "signOut", "navigate"]);
+});

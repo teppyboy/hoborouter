@@ -11,7 +11,10 @@ export async function signOutAndReset(
   signOut: () => Promise<unknown>,
   navigate: () => void,
 ): Promise<void> {
-  void queryClient.cancelQueries();
+  // Must be awaited: fire-and-forget cancellation lets signOut clear the auth
+  // cookie while an in-flight query is still running, so the request lands
+  // against the dead session (401 on logout).
+  await queryClient.cancelQueries();
   await signOut();
   navigate();
 }
