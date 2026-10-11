@@ -276,10 +276,7 @@ export default function KeysPage() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  className="text-destructive"
-                  onClick={() => setRemoveTarget(key)}
-                >
+                <DropdownMenuItem className="text-destructive" onClick={() => setRemoveTarget(key)}>
                   {t("remove")}
                 </DropdownMenuItem>
               </DropdownMenuContent>

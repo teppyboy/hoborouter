@@ -476,7 +476,9 @@ describe("admin support-settings", () => {
         })),
       },
       {
-        support_custom: [{ label: "X", url: `https://x.example/${"p".repeat(SUPPORT_CUSTOM_MAX_BYTES)}` }],
+        support_custom: [
+          { label: "X", url: `https://x.example/${"p".repeat(SUPPORT_CUSTOM_MAX_BYTES)}` },
+        ],
       },
     ];
     for (const body of bad) {
