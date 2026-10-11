@@ -1,8 +1,9 @@
 // Shared Help nav group contract (jsdom, real Radix + TanStack router):
 // - The authenticated sidebar (desktop aside) and the mobile sheet both show
-//   one "Help" group with Tutorials (/docs/quickstart) and About (/about).
-// - Labels are locale-aware: EN "Help/Tutorials/About", VI "Trợ giúp/
-//   Hướng dẫn/Giới thiệu".
+//   one "Help" group with Tutorials (/docs/quickstart), FAQ (/faq) and
+//   About (/about).
+// - Labels are locale-aware: EN "Help/Tutorials/FAQ/About", VI "Trợ giúp/
+//   Hướng dẫn/Hỏi đáp/Giới thiệu".
 // - Activating Tutorials navigates to /docs/quickstart (the existing public
 //   quickstart route — no duplicated route or page).
 // - In the collapsed rail the links keep an accessible name (tooltip/aria).
@@ -201,9 +202,12 @@ test("desktop sidebar shows a Help group with Tutorials and About links", async 
     if (!aside) throw new Error("aside not rendered");
     expect(aside.textContent).toContain("Help");
     const tutorials = aside.querySelector<HTMLAnchorElement>('a[href="/docs/quickstart"]');
+    const faq = aside.querySelector<HTMLAnchorElement>('a[href="/faq"]');
     const about = aside.querySelector<HTMLAnchorElement>('a[href="/about"]');
     expect(tutorials).not.toBeNull();
     expect(tutorials?.textContent).toContain("Tutorials");
+    expect(faq).not.toBeNull();
+    expect(faq?.textContent).toContain("FAQ");
     expect(about).not.toBeNull();
     expect(about?.textContent).toContain("About");
   } finally {
@@ -220,6 +224,7 @@ test("the Help group follows the active locale (EN → VI)", async () => {
     if (!aside) throw new Error("aside not rendered");
     expect(aside.textContent).toContain("Trợ giúp");
     expect(aside.querySelector('a[href="/docs/quickstart"]')?.textContent).toContain("Hướng dẫn");
+    expect(aside.querySelector('a[href="/faq"]')?.textContent).toContain("Hỏi đáp");
     expect(aside.querySelector('a[href="/about"]')?.textContent).toContain("Giới thiệu");
   } finally {
     act(() => useLocaleStore.getState().setLocale("en"));
@@ -253,6 +258,7 @@ test("the mobile sheet carries the same Help links", async () => {
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
     expect(dialog?.querySelector('a[href="/docs/quickstart"]')).not.toBeNull();
+    expect(dialog?.querySelector('a[href="/faq"]')).not.toBeNull();
     expect(dialog?.querySelector('a[href="/about"]')).not.toBeNull();
   } finally {
     await unmount(mounted);

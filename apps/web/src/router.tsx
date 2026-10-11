@@ -49,6 +49,7 @@ const Privacy = lazy(() => import("./pages/legal/privacy"));
 const Pricing = lazy(() => import("./pages/public/pricing"));
 const Quickstart = lazy(() => import("./pages/public/quickstart"));
 const About = lazy(() => import("./pages/public/about"));
+const Faq = lazy(() => import("./pages/public/faq"));
 
 function Page({ children }: { children: React.ReactNode }) {
   // Bounded flex column: pages opting into `fill` ScrollPanels stretch to the
@@ -82,7 +83,7 @@ const rootRoute = createRootRoute({
 // access to /about and /docs/quickstart (no redirect, no shell, no protected
 // resource calls); signed-in users get the shell and it persists across
 // navigation into these pages because they are children of this layout.
-const HELP_PUBLIC_PATHS = new Set(["/about", "/docs/quickstart"]);
+const HELP_PUBLIC_PATHS = new Set(["/about", "/faq", "/docs/quickstart"]);
 
 const protectedLayout = createRoute({
   getParentRoute: () => rootRoute,
@@ -242,6 +243,7 @@ const protectedRoutes = [
   // the same page components render their own PublicLayout.
   helpRoute("/docs/quickstart", Quickstart),
   helpRoute("/about", About),
+  helpRoute("/faq", Faq),
 ];
 
 export const routeTree = rootRoute.addChildren([

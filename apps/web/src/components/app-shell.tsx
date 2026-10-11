@@ -9,6 +9,7 @@ import {
   CreditCard,
   Gift,
   Info,
+  CircleHelp,
   Settings2,
   KeyRound,
   LayoutDashboard,
@@ -94,8 +95,9 @@ const NAV_GROUPS: { label: LocaleEntry | ""; items: NavItem[] }[] = [
   {
     label: { en: "Help", vi: "Trợ giúp" },
     items: [
-      // Links to the existing public routes; no duplicated tutorial/about page.
+      // Links to the existing public routes; no duplicated tutorial/faq/about page.
       { label: { en: "Tutorials", vi: "Hướng dẫn" }, to: "/docs/quickstart", icon: BookOpen },
+      { label: { en: "FAQ", vi: "Hỏi đáp" }, to: "/faq", icon: CircleHelp },
       { label: { en: "About", vi: "Giới thiệu" }, to: "/about", icon: Info },
     ],
   },

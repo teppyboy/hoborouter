@@ -273,6 +273,27 @@ test("signed-in: About stays inside the same mounted AppShell with one heading",
   }
 });
 
+test("signed-in: FAQ (/faq) stays inside the AppShell", async () => {
+  state.authenticated = true;
+  const mounted = await mountApp("/");
+  try {
+    await waitFor(() => !!document.querySelector("aside"), "app shell aside");
+    const asideBefore = document.querySelector("aside");
+    await clickHelpLink("/faq");
+    await waitFor(
+      () =>
+        mounted.router.state.location.pathname === "/faq" &&
+        h1Texts().includes("Frequently asked questions"),
+      "FAQ route rendered",
+    );
+    expect(document.querySelector("aside")).toBe(asideBefore);
+    expect(document.body.textContent).toContain("WS");
+    expect(h1Texts()).toEqual(["Frequently asked questions"]);
+  } finally {
+    await unmount(mounted);
+  }
+});
+
 test("signed-in: Tutorials (/docs/quickstart) stays inside the AppShell", async () => {
   state.authenticated = true;
   const mounted = await mountApp("/");
@@ -325,6 +346,22 @@ test("anonymous deep link /about: public chrome, one heading, no protected resou
     expect(h1Texts()).toEqual(["About"]);
     // No session identity, no protected resources fetched.
     expect(document.body.textContent).not.toContain("t@example.test");
+    expect(fetchLog.some((p) => p.includes("/api/v1/me"))).toBe(false);
+    expect(fetchLog.some((p) => p.includes("/api/v1/workspaces"))).toBe(false);
+  } finally {
+    await unmount(mounted);
+  }
+});
+
+test("anonymous deep link /faq: public chrome, one heading, no protected resource calls", async () => {
+  state.authenticated = false;
+  fetchLog.length = 0;
+  const mounted = await mountApp("/faq");
+  try {
+    await waitFor(() => h1Texts().includes("Frequently asked questions"), "FAQ rendered");
+    expect(document.querySelector("aside")).toBeNull();
+    expect(document.body.textContent).toContain("Sign in");
+    expect(h1Texts()).toEqual(["Frequently asked questions"]);
     expect(fetchLog.some((p) => p.includes("/api/v1/me"))).toBe(false);
     expect(fetchLog.some((p) => p.includes("/api/v1/workspaces"))).toBe(false);
   } finally {
