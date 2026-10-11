@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   auditCpaManagement,
+  handleCpaManagementProxy,
   isAllowedManagementPath,
   mapCpaManagementError,
   redactManagementPayload,
@@ -11,6 +12,7 @@ import {
   REDACTED,
 } from "../src/cpa-management-core";
 import { auditLog } from "@hoborouter/db";
+import type { BetterAuthInstance } from "../src/auth-types";
 
 describe("isAllowedManagementPath", () => {
   test("exact allowlisted GET paths pass", () => {
@@ -118,6 +120,53 @@ describe("mapCpaManagementError", () => {
     expect(e.message).toBe("management returned 500");
     const j = mapCpaManagementError("invalid_response", 200);
     expect(j.code).toBe("CPA_MANAGEMENT_INVALID_RESPONSE");
+  });
+});
+
+describe("management panel HTML is never served or proxied", () => {
+  // The upstream control panel (management.html) is runtime-downloaded,
+  // third-party executable HTML — see docs/architecture/cpa-management-panel.md.
+  // These tests pin the prohibition: no panel path is proxyable, and the proxy
+  // wildcard answers panel requests with JSON, never HTML.
+  const adminAuth: BetterAuthInstance = {
+    handler: async () => new Response(null, { status: 404 }),
+    api: {
+      getSession: async () => ({
+        user: { id: "user-1" },
+        session: { id: "sess-1", userId: "user-1" },
+      }),
+    },
+  } as never;
+  // Drizzle chain stub resolving isInstanceAdmin to true; the 404 path under
+  // test never reaches audit or fetch.
+  const adminDb = {
+    select: () => ({
+      from: () => ({
+        where: () => ({ limit: async () => [{ user_id: "user-1" }] }),
+      }),
+    }),
+  } as never;
+
+  test("panel and asset paths are rejected by the allowlist", () => {
+    expect(isAllowedManagementPath("GET", "/v0/management/management.html")).toBe(false);
+    expect(isAllowedManagementPath("GET", "/v0/management/control-panel.js")).toBe(false);
+    expect(isAllowedManagementPath("GET", "/v0/management/assets/panel.css")).toBe(false);
+    expect(isAllowedManagementPath("GET", "/v0/management/management.html.map")).toBe(false);
+  });
+
+  test("proxy wildcard answers a panel path with JSON 404, never HTML", async () => {
+    const res = await handleCpaManagementProxy(
+      adminDb,
+      adminAuth,
+      new Request("http://localhost/api/v1/admin/cpa/management/management.html"),
+      { CPA_MANAGEMENT_KEY: "test-key-not-real" },
+    );
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = await res.text();
+    expect(body.startsWith("<")).toBe(false);
+    expect(body).not.toContain("<script");
+    expect(JSON.parse(body).error.code).toBe("CPA_MANAGEMENT_PATH_NOT_ALLOWED");
   });
 });
 
