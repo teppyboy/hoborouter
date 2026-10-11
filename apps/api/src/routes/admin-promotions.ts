@@ -235,8 +235,7 @@ export const adminPromotionsRoutes = (
         // Encrypt under the server-only secret BEFORE the insert transaction;
         // the AAD binds the ciphertext to this row id.
         const secret = cipherSecret();
-        if (secret)
-          row.code_encrypted = encryptPromoCode(code, secret, row.id);
+        if (secret) row.code_encrypted = encryptPromoCode(code, secret, row.id);
         await db.transaction(async (tx) => {
           // Race-free uniqueness answer: the check runs under the same
           // transaction as the insert, so a variant of an existing code (same

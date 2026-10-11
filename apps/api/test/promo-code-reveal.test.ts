@@ -150,7 +150,9 @@ describe("promo code reveal guards", () => {
       expires_at: null,
     });
     expect((await get(appAs(null), `/api/v1/admin/promotions/${promo!.id}/code`)).status).toBe(401);
-    expect((await get(appAs(MEMBER), `/api/v1/admin/promotions/${promo!.id}/code`)).status).toBe(403);
+    expect((await get(appAs(MEMBER), `/api/v1/admin/promotions/${promo!.id}/code`)).status).toBe(
+      403,
+    );
   });
 });
 
@@ -164,9 +166,7 @@ describe("reveal error policy", () => {
     );
     const res = await get(appAs(ADMIN), `/api/v1/admin/promotions/${legacyId}/code`);
     expect(res.status).toBe(409);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
-      "CODE_UNAVAILABLE",
-    );
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("CODE_UNAVAILABLE");
   });
 
   test("rotated server secret answers 409 CODE_UNAVAILABLE", async () => {
@@ -178,9 +178,7 @@ describe("reveal error policy", () => {
     });
     const res = await get(appAs(ADMIN, SECRET2), `/api/v1/admin/promotions/${promo!.id}/code`);
     expect(res.status).toBe(409);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
-      "CODE_UNAVAILABLE",
-    );
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("CODE_UNAVAILABLE");
   });
 
   test("tampered ciphertext answers 409, no partial plaintext", async () => {
