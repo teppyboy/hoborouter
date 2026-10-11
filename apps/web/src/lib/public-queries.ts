@@ -15,6 +15,8 @@ export interface PublicSupportLinks {
   telegram?: string | null;
   facebook?: string | null;
   threads?: string | null;
+  /** Admin-curated extra channels; server re-validates on read. */
+  custom?: { label: string; url: string }[] | null;
 }
 
 export interface PublicInstance {

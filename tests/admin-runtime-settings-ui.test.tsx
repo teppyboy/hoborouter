@@ -131,6 +131,7 @@ interface SupportShape {
     telegram: string | null;
     facebook: string | null;
     threads: string | null;
+    custom: { label: string; url: string }[];
   };
 }
 
@@ -141,6 +142,7 @@ const SUPPORTED: SupportShape = {
     telegram: "https://t.me/hoborouter",
     facebook: "https://facebook.com/hoborouter",
     threads: null,
+    custom: [],
   },
 };
 
@@ -269,7 +271,7 @@ test("support card shows display-only email fallback hint when email unset", asy
   serve(() =>
     jsonResponse(200, {
       display_name: null,
-      support: { email: null, telegram: null, facebook: null, threads: null },
+      support: { email: null, telegram: null, facebook: null, threads: null, custom: [] },
     }),
   );
   const page = mountPage(<SupportSettingsCard />);
@@ -294,13 +296,15 @@ test("save sends exact flat PUT body with all five keys and refetches", async ()
       putCount++;
       expect(call.body).toBeDefined();
       const body = JSON.parse(call.body!);
-      // Exact flat body: edited email plus the four untouched current values.
+      // Exact flat body: edited email plus the untouched current values
+      // (including the empty custom-links array).
       expect(body).toEqual({
         display_name: "Hoborouter",
         support_email: "help@example.com",
         support_telegram: "https://t.me/hoborouter",
         support_facebook: "https://facebook.com/hoborouter",
         support_threads: null,
+        support_custom: [],
       });
       savedEmail = body.support_email;
       return jsonResponse(200, {
@@ -401,6 +405,13 @@ test("support card copy has natural EN and VI strings", () => {
     "invalidName",
     "invalidEmail",
     "invalidUrl",
+    "customSection",
+    "customLabel",
+    "customUrl",
+    "customHint",
+    "addCustomLink",
+    "removeCustomLink",
+    "invalidCustomLabel",
   ] as const;
   for (const key of keys) {
     const entry = adminSettingsCopy[key];

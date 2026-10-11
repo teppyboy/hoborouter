@@ -84,6 +84,19 @@ export const adminSettingsCopy = {
     en: "Must be an HTTPS URL without credentials.",
     vi: "Phải là URL HTTPS không chứa thông tin đăng nhập.",
   },
+  customSection: { en: "Custom links", vi: "Liên kết tùy chỉnh" },
+  customLabel: { en: "Label", vi: "Nhãn" },
+  customUrl: { en: "URL", vi: "URL" },
+  customHint: {
+    en: "Up to {max} extra HTTPS links shown publicly after the channels above.",
+    vi: "Tối đa {max} liên kết HTTPS hiển thị công khai sau các kênh ở trên.",
+  },
+  addCustomLink: { en: "Add link", vi: "Thêm liên kết" },
+  removeCustomLink: { en: "Remove", vi: "Xóa" },
+  invalidCustomLabel: {
+    en: "Label must be 1–30 characters without control characters.",
+    vi: "Nhãn phải dài 1–30 ký tự, không có ký tự điều khiển.",
+  },
 } as const;
 
 interface AdminSettings {
@@ -368,9 +381,11 @@ function PaymentIntegerField({
 /**
  * Support & contact settings (GET/PUT /api/v1/admin/support-settings).
  * GET response is nested ({ display_name, support: { email, telegram, facebook,
- * threads } }); the PUT body is FLAT over exactly the five whitelisted keys and
- * is validated as a whole server-side before any write, so the form always
- * sends all five (dirty value, current value, or null to clear).
+ * threads, custom } }); the PUT body is FLAT over exactly the five whitelisted
+ * string keys plus the structured `support_custom` array (null clears, up to
+ * 10 { label, url } entries) and is validated as a whole server-side before
+ * any write, so the form always sends every key (dirty value, current value,
+ * or null to clear).
  */
 export interface SupportSettings {
   display_name: string | null;
@@ -379,6 +394,7 @@ export interface SupportSettings {
     telegram: string | null;
     facebook: string | null;
     threads: string | null;
+    custom: { label: string; url: string }[];
   };
 }
 
@@ -390,6 +406,13 @@ type SupportFieldKey =
   | "support_threads";
 
 type SupportFlat = Record<SupportFieldKey, string | null>;
+
+// Admin-curated custom links (apps/api/src/routes/support-settings.ts is the
+// validation authority: max 10 entries, labels <= 30, HTTPS URLs).
+const SUPPORT_CUSTOM_MAX = 10;
+const SUPPORT_CUSTOM_LABEL_MAX = 30;
+type SupportCustomDraft = { label: string; url: string };
+type SupportValues = Partial<Record<SupportFieldKey, string>> & { custom?: SupportCustomDraft[] };
 
 // Mirrored validators (apps/api/src/routes/support-settings.ts is the authority;
 // kept in sync here only for immediate input feedback — the server rejects on
@@ -435,6 +458,19 @@ function validateSupportDisplayName(raw: string): boolean {
   return !!v && v.length <= 100 && !hasSupportControlChars(v);
 }
 
+function validateSupportCustomLabel(raw: string): boolean {
+  const v = raw.trim();
+  return !!v && v.length <= SUPPORT_CUSTOM_LABEL_MAX && !hasSupportControlChars(v);
+}
+
+// Sent rows: trimmed; fully-empty rows dropped (a half-filled row stays so the
+// client feedback and the server rejection can point at it).
+function normalizeCustomRows(rows: SupportCustomDraft[]): SupportCustomDraft[] {
+  return rows
+    .map((r) => ({ label: r.label.trim(), url: r.url.trim() }))
+    .filter((r) => r.label !== "" || r.url !== "");
+}
+
 function supportFieldValid(key: SupportFieldKey, raw: string): boolean {
   switch (key) {
     case "support_email":
@@ -474,16 +510,18 @@ const SUPPORT_FIELDS: {
 // blank input clears (null). Saved values feed the flat PUT body verbatim.
 function buildSupportBody(
   current: SupportFlat,
-  values: Partial<Record<SupportFieldKey, string>>,
-): SupportFlat {
+  currentCustom: SupportCustomDraft[],
+  values: SupportValues | null,
+): SupportFlat & { support_custom: SupportCustomDraft[] } {
   const out = { ...current };
   for (const key of Object.keys(current) as SupportFieldKey[]) {
-    const raw = values[key];
-    if (raw === undefined) continue;
+    const raw = values?.[key];
+    if (typeof raw !== "string") continue;
     const trimmed = raw.trim();
     out[key] = trimmed === "" ? null : trimmed;
   }
-  return out;
+  const custom = values?.custom !== undefined ? values.custom : currentCustom;
+  return { ...out, support_custom: normalizeCustomRows(custom) };
 }
 
 /** One support field: label + input + client-mirror feedback + channel hints. */
@@ -522,16 +560,90 @@ function SupportFieldRow({
   );
 }
 
+/** Admin-curated custom links editor: bounded rows of label + HTTPS URL. */
+function CustomLinksEditor({
+  rows,
+  edited,
+  onChange,
+}: {
+  rows: SupportCustomDraft[];
+  edited: boolean;
+  onChange: (rows: SupportCustomDraft[]) => void;
+}) {
+  const t = useT(adminSettingsCopy);
+  const setRow = (i: number, patch: Partial<SupportCustomDraft>) =>
+    onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-medium">{t("customSection")}</p>
+      <p className="text-xs text-muted-foreground">
+        {t("customHint", { max: SUPPORT_CUSTOM_MAX })}
+      </p>
+      {rows.map((row, i) => {
+        const invalidLabel = edited && !validateSupportCustomLabel(row.label);
+        const invalidUrl = edited && !validateSupportHttpsUrl(row.url);
+        return (
+          <div key={i} className="flex flex-wrap items-start gap-2">
+            <div className="min-w-[8rem] flex-1 space-y-1">
+              <Input
+                id={`custom_label_${i}`}
+                value={row.label}
+                placeholder={t("customLabel")}
+                aria-label={t("customLabel")}
+                aria-invalid={invalidLabel}
+                className={invalidLabel ? "border-destructive" : undefined}
+                onChange={(e) => setRow(i, { label: e.target.value })}
+              />
+              {invalidLabel && (
+                <p className="text-xs text-destructive">{t("invalidCustomLabel")}</p>
+              )}
+            </div>
+            <div className="min-w-[12rem] flex-[2] space-y-1">
+              <Input
+                id={`custom_url_${i}`}
+                value={row.url}
+                placeholder={t("customUrl")}
+                aria-label={t("customUrl")}
+                aria-invalid={invalidUrl}
+                className={invalidUrl ? "border-destructive" : undefined}
+                onChange={(e) => setRow(i, { url: e.target.value })}
+              />
+              {invalidUrl && <p className="text-xs text-destructive">{t("invalidUrl")}</p>}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onChange(rows.filter((_, j) => j !== i))}
+            >
+              {t("removeCustomLink")}
+            </Button>
+          </div>
+        );
+      })}
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={rows.length >= SUPPORT_CUSTOM_MAX}
+        onClick={() => onChange([...rows, { label: "", url: "" }])}
+      >
+        {t("addCustomLink")}
+      </Button>
+    </div>
+  );
+}
+
 /** Edit form: per-field rows + save. Owns the PUT mutation and inline server error. */
 function SupportForm({
   current,
+  currentCustom,
   values,
   setValues,
   emailUnset,
 }: {
   current: SupportFlat;
-  values: Partial<Record<SupportFieldKey, string>> | null;
-  setValues: (values: Partial<Record<SupportFieldKey, string>> | null) => void;
+  currentCustom: SupportCustomDraft[];
+  values: SupportValues | null;
+  setValues: (values: SupportValues | null) => void;
   emailUnset: boolean;
 }) {
   const t = useT(adminSettingsCopy);
@@ -570,11 +682,16 @@ function SupportForm({
           />
         );
       })}
+      <CustomLinksEditor
+        rows={values?.custom ?? currentCustom}
+        edited={values?.custom !== undefined}
+        onChange={(rows) => setValues({ ...values, custom: rows })}
+      />
       {serverError && <p className="text-sm text-destructive">{serverError}</p>}
       <Button
         variant="outline"
         disabled={!dirty || mutation.isPending}
-        onClick={() => values && mutation.mutate(buildSupportBody(current, values))}
+        onClick={() => values && mutation.mutate(buildSupportBody(current, currentCustom, values))}
       >
         {mutation.isPending ? t("saving") : t("save")}
       </Button>
@@ -590,9 +707,10 @@ export function SupportSettingsCard() {
   );
   // null = pristine (render fetched values); otherwise the touched edit strings
   // only (untouched keys keep rendering the fetched value).
-  const [values, setValues] = useState<Partial<Record<SupportFieldKey, string>> | null>(null);
+  const [values, setValues] = useState<SupportValues | null>(null);
 
   const current: SupportFlat | null = query.data ? toFlat(query.data) : null;
+  const currentCustom = query.data?.support.custom ?? [];
   const emailUnset = (current?.support_email ?? "").trim() === "";
 
   return (
@@ -605,6 +723,7 @@ export function SupportSettingsCard() {
           {current ? (
             <SupportForm
               current={current}
+              currentCustom={currentCustom}
               values={values}
               setValues={setValues}
               emailUnset={emailUnset}

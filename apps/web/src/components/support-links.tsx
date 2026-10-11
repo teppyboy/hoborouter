@@ -28,9 +28,10 @@ function isHttpsUrl(value: string, host: string): string | null {
   }
 }
 
-/** Validate + normalize one configured support channel; null when unusable. */
+/** Validate + normalize one configured support channel; null when unusable.
+ * Custom links are handled separately (normalizeCustomLink). */
 export function normalizeSupportLink(
-  kind: keyof Omit<PublicSupportLinks, "email"> | "email",
+  kind: "email" | "telegram" | "facebook" | "threads",
   raw: string | null | undefined,
 ): SupportLink | null {
   const value = raw?.trim();
@@ -57,6 +58,44 @@ export function normalizeSupportLink(
   }
 }
 
+/** Validate + normalize one admin-curated custom link; null when unusable.
+ * The server re-validates on read, but the client stays defensive because
+ * these labels/URLs are rendered on public pages. */
+function normalizeCustomLink(raw: unknown): SupportLink | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const { label, url } = raw as { label?: unknown; url?: unknown };
+  if (typeof label !== "string" || typeof url !== "string") return null;
+  const l = label.trim();
+  if (!l || l.length > 30 || hasControlChars(l)) return null;
+  const value = url.trim();
+  if (!value || hasControlChars(value) || value.includes("\\") || value.startsWith("//"))
+    return null;
+  let href: string;
+  try {
+    const u = new URL(value);
+    if (
+      u.protocol !== "https:" ||
+      u.username ||
+      u.password ||
+      !u.hostname ||
+      !u.hostname.includes(".")
+    )
+      return null;
+    href = u.toString();
+  } catch {
+    return null;
+  }
+  return { label: l, href };
+}
+
+function hasControlChars(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
+}
+
 /** All configured links in a stable order; email falls back to the project
  * contact when the instance has none — including while the instance query is
  * loading/errored (support stays reachable instead of rendering empty). */
@@ -67,6 +106,7 @@ export function supportLinks(support: PublicSupportLinks | null | undefined): Su
         normalizeSupportLink("telegram", support.telegram),
         normalizeSupportLink("facebook", support.facebook),
         normalizeSupportLink("threads", support.threads),
+        ...(support.custom ?? []).map(normalizeCustomLink),
       ].filter((l): l is SupportLink => l !== null)
     : [];
   if (configured.some((l) => l.label === "Email")) return configured;
@@ -81,9 +121,9 @@ export function SupportLinks({ support }: { support: PublicSupportLinks | null |
   if (links.length === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-      {links.map((l) => (
+      {links.map((l, i) => (
         <a
-          key={l.label}
+          key={`${i}-${l.label}`}
           href={l.href}
           target={l.href.startsWith("mailto:") ? undefined : "_blank"}
           rel="noreferrer noopener"
