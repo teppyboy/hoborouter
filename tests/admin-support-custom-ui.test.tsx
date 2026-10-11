@@ -223,7 +223,9 @@ function mountPage(node: React.ReactNode) {
 test("configured custom links render with remove + add controls", async () => {
   useLocaleStore.getState().setLocale("en");
   serve((call) =>
-    call.url.includes("/admin/support-settings") ? jsonResponse(200, SUPPORTED) : jsonResponse(200, {}),
+    call.url.includes("/admin/support-settings")
+      ? jsonResponse(200, SUPPORTED)
+      : jsonResponse(200, {}),
   );
   const page = mountPage(<SupportSettingsCard />);
   await page.settle();
@@ -312,7 +314,10 @@ test("fully-empty rows are dropped; half-filled rows are sent for the server to 
     if (call.method === "PUT") {
       puts.push(JSON.parse(call.body!) as Record<string, unknown>);
       return jsonResponse(400, {
-        error: { code: "INVALID", message: "support_custom must be an array of at most 10 { label, url } objects" },
+        error: {
+          code: "INVALID",
+          message: "support_custom must be an array of at most 10 { label, url } objects",
+        },
       });
     }
     return jsonResponse(200, SUPPORTED);
@@ -347,7 +352,9 @@ test("fully-empty rows are dropped; half-filled rows are sent for the server to 
 test("client validation mirrors server: bad URL and long label flagged", async () => {
   useLocaleStore.getState().setLocale("en");
   serve((call) =>
-    call.url.includes("/admin/support-settings") ? jsonResponse(200, SUPPORTED) : jsonResponse(200, {}),
+    call.url.includes("/admin/support-settings")
+      ? jsonResponse(200, SUPPORTED)
+      : jsonResponse(200, {}),
   );
   const page = mountPage(<SupportSettingsCard />);
   await page.settle();

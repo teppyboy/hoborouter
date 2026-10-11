@@ -83,9 +83,7 @@ const SEED_CONTEXT = {
     { workspaceId: "ws_1", workspaceName: "Acme", role: "owner" },
     { workspaceId: "ws_2", workspaceName: "Globex", role: "member" },
   ],
-  wallets: [
-    { workspaceId: "ws_1", kind: "topup", balance: 90000, reserved: 5000 },
-  ],
+  wallets: [{ workspaceId: "ws_1", kind: "topup", balance: 90000, reserved: 5000 }],
 };
 
 const SEED_MODELS = [
