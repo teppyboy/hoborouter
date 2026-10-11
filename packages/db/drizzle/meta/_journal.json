@@ -134,6 +134,13 @@
       "when": 1792400000000,
       "tag": "0018_promo_codes_encrypted_code",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792500000000,
+      "tag": "0019_subscription_daily_grants",
+      "breakpoints": true
     }
   ]
 }

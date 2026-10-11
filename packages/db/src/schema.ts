@@ -143,7 +143,9 @@ export const ledgerEntries = pgTable(
     direction: text("direction", { enum: ["debit", "credit"] }).notNull(),
     billing_reservation_id: text("billing_reservation_id").references(() => billingReservations.id),
     amount: big("amount").notNull(),
-    kind: text("kind", { enum: ["topup", "settle", "adjustment", "refund"] }).notNull(),
+    kind: text("kind", {
+      enum: ["topup", "settle", "adjustment", "refund", "subscription_daily_grant"],
+    }).notNull(),
     reservation_id: text("reservation_id").references(() => reservations.id),
     original_ledger_entry_id: text("original_ledger_entry_id").references(
       (): AnyPgColumn => ledgerEntries.id,
@@ -172,7 +174,10 @@ export const ledgerEntries = pgTable(
       .on(t.payment_id, t.memo)
       .where(sql`kind = 'adjustment'`),
     check("ledger_direction", sql`${t.direction} IN ('debit','credit')`),
-    check("ledger_kind", sql`${t.kind} IN ('topup','settle','adjustment','refund')`),
+    check(
+      "ledger_kind",
+      sql`${t.kind} IN ('topup','settle','adjustment','refund','subscription_daily_grant')`,
+    ),
     check("ledger_amount_type", sql`${t.amount} > 0 AND ${t.amount} <= ${MAX_BOUND}`),
     check("ledger_balance_after_type", intBounded(t.balance_after)),
     check(
@@ -392,6 +397,11 @@ export const subscriptionPlans = pgTable(
     price_usd: text("price_usd"),
     credit_per_period_usd: text("credit_per_period_usd"),
     creation_fx_rate_vnd_per_usd: big("creation_fx_rate_vnd_per_usd"),
+    // Authored once-per-UTC-day VND grant (migration 0019), credited lazily
+    // inside the gateway funding transaction while the subscription is active
+    // and unexpired. 0 = no daily grant. Snapshot of the applied amount is
+    // stored per grant in subscription_daily_grants.
+    daily_grant_vnd: big("daily_grant_vnd").notNull().default(0),
     // Financial revision columns (migration 0014) — same successor/superseded
     // split as credit_bundles above.
     revision_key: text("revision_key"),
@@ -403,6 +413,7 @@ export const subscriptionPlans = pgTable(
       .where(sql`revision_key IS NOT NULL`),
     check("sp_price_vnd", sql`${t.price_vnd} > 0 AND ${t.price_vnd} <= ${MAX_BOUND}`),
     check("sp_credit_per_period_vnd", intBounded(t.credit_per_period_vnd)),
+    check("sp_daily_grant_vnd", intBounded(t.daily_grant_vnd)),
     check("sp_period_days", sql`${t.period_days} >= 1`),
     check(
       "sp_rate_limit_per_minute",
@@ -484,6 +495,47 @@ export const subscriptionExpiries = pgTable(
     primaryKey({ columns: [t.subscription_id, t.period_end] }),
     check("se_period_end", intBounded(t.period_end)),
     check("se_created_at", intBounded(t.created_at)),
+  ],
+);
+
+/**
+ * Daily-grant idempotency gate (migration 0019): one grant of the plan's
+ * authored daily_grant_vnd per (workspace, subscription, UTC day). Inserted
+ * in the SAME transaction as the subscription_daily_grant ledger credit and
+ * snapshotting the applied terms (plan_id, amount), so a grant row is both
+ * the replay arbiter and the frozen record of what was applied that day.
+ * No catch-up: a day with no gateway funding transaction gets no grant row.
+ */
+export const subscriptionDailyGrants = pgTable(
+  "subscription_daily_grants",
+  {
+    id: text("id").primaryKey(),
+    workspace_id: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    subscription_id: text("subscription_id")
+      .notNull()
+      .references(() => subscriptions.id),
+    plan_id: text("plan_id")
+      .notNull()
+      .references(() => subscriptionPlans.id),
+    /** UTC calendar day of the grant, 'YYYY-MM-DD' (from the funding transaction's now). */
+    grant_day: text("grant_day").notNull(),
+    amount: big("amount").notNull(),
+    ledger_entry_id: text("ledger_entry_id")
+      .notNull()
+      .references(() => ledgerEntries.id),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("subscription_daily_grants_one_per_day").on(
+      t.workspace_id,
+      t.subscription_id,
+      t.grant_day,
+    ),
+    check("sdg_grant_day", sql`${t.grant_day} ~ '^\\d{4}-\\d{2}-\\d{2}$'`),
+    check("sdg_amount", sql`${t.amount} > 0 AND ${t.amount} <= ${MAX_BOUND}`),
+    check("sdg_created_at", intBounded(t.created_at)),
   ],
 );
 
