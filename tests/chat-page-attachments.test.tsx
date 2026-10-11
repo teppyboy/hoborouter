@@ -395,7 +395,10 @@ test("pasting an image file from the clipboard attaches it like a pick", async (
   textarea.dispatchEvent(paste);
   await waitFor(() => chipCount() === 1, "pasted attachment chip");
   // A text-only paste never touches attachments.
-  const textPaste = new (winEvents().Event)("paste", { bubbles: true, cancelable: true }) as Event & {
+  const textPaste = new (winEvents().Event)("paste", {
+    bubbles: true,
+    cancelable: true,
+  }) as Event & {
     clipboardData?: { files: File[] };
   };
   textPaste.clipboardData = { files: [] };
