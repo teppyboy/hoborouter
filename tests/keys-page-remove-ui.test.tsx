@@ -76,6 +76,15 @@ const keysFixture = [
     last_used_at: null,
     revoked_at: null,
   },
+  {
+    id: "key-ui-2",
+    key_prefix: "sk-hbr-revo...ked1",
+    name: "Revoked key",
+    status: "revoked",
+    created_at: 1_699_000_000_000,
+    last_used_at: 1_699_500_000_000,
+    revoked_at: 1_699_600_000_000,
+  },
 ];
 
 let calls: ApiCall[] = [];
@@ -306,6 +315,45 @@ test("Remove asks with soft-delete copy, then POSTs the key's /remove endpoint",
     const posted = calls.filter((c) => c.init?.method === "POST");
     expect(posted).toHaveLength(1);
     expect(posted[0]!.path).toBe("/api/v1/workspaces/ws-test/keys/key-ui-1/remove");
+  } finally {
+    mounted.unmount();
+  }
+});
+
+test("revoked row exposes only Remove; confirm POSTs its /remove endpoint", async () => {
+  calls = [];
+  const mounted = mount(<KeysPage />);
+  try {
+    for (let i = 0; i < 10; i++)
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 25));
+      });
+    expect(mounted.text()).toContain("Revoked key");
+    // Two rows -> two action triggers; the second belongs to the revoked key.
+    const triggers = mounted.container.querySelectorAll<HTMLButtonElement>(
+      "[aria-label='Key actions']",
+    );
+    expect(triggers).toHaveLength(2);
+    await click(triggers[1]!);
+    // Revoked is terminal: no status toggle, rename, restrictions or revoke.
+    const items = menuItems();
+    expect(items).toEqual(["Remove"]);
+    const remove = [...document.body.querySelectorAll("[role='menuitem']")].find(
+      (el) => el.textContent === "Remove",
+    );
+    await click(remove!);
+    // Same soft-delete confirm dialog as an active key's Remove.
+    expect(mounted.bodyText()).toContain("Remove key");
+    expect(mounted.bodyText()).toContain("Revoked key");
+    expect(mounted.bodyText()).toContain("disappear from the list");
+    const confirm = [...document.body.querySelectorAll("button")].find(
+      (el) => el.textContent === "Remove" && el.closest("[role='dialog']"),
+    );
+    expect(confirm).toBeDefined();
+    await click(confirm!);
+    const posted = calls.filter((c) => c.init?.method === "POST");
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.path).toBe("/api/v1/workspaces/ws-test/keys/key-ui-2/remove");
   } finally {
     mounted.unmount();
   }

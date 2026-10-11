@@ -265,7 +265,27 @@ export default function KeysPage() {
       header: "",
       cell: ({ row }) => {
         const key = row.original;
-        if (key.status === "revoked") return null;
+        if (key.status === "revoked") {
+          // Revoked is terminal (PATCH status and rename are 409 on the API);
+          // only cleanup via the existing POST /remove soft-delete remains.
+          return (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="size-7" aria-label={t("keyActions")}>
+                  <MoreHorizontal className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  className="text-destructive"
+                  onClick={() => setRemoveTarget(key)}
+                >
+                  {t("remove")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        }
         return (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
