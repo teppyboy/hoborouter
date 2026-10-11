@@ -57,6 +57,9 @@ export type PublicSubscriptionPlan = {
   price_usd: string | null;
   credit_per_period_usd: string | null;
   creation_fx_rate_vnd_per_usd: number | null;
+  /** Frozen daily grant: derived VND + exact authored USD text (null on VND-authored grants). */
+  daily_grant_vnd: number;
+  daily_grant_usd: string | null;
   period_days: number;
   rate_limit_per_minute: number;
 };
@@ -258,6 +261,8 @@ export const publicCatalogRoutes = (
             price_usd: subscriptionPlans.price_usd,
             credit_per_period_usd: subscriptionPlans.credit_per_period_usd,
             creation_fx_rate_vnd_per_usd: subscriptionPlans.creation_fx_rate_vnd_per_usd,
+            daily_grant_vnd: subscriptionPlans.daily_grant_vnd,
+            daily_grant_usd: subscriptionPlans.daily_grant_usd,
             period_days: subscriptionPlans.period_days,
             rate_limit_per_minute: subscriptionPlans.rate_limit_per_minute,
             created_at: subscriptionPlans.created_at,
@@ -293,6 +298,11 @@ export const publicCatalogRoutes = (
           credit_per_period_usd: r.credit_per_period_usd,
           creation_fx_rate_vnd_per_usd:
             r.creation_fx_rate_vnd_per_usd === null ? null : Number(r.creation_fx_rate_vnd_per_usd),
+          // The daily grant is a frozen financial term: the authored USD text
+          // and the derived VND are returned exactly as stored — NEVER
+          // requoted at the current canonical rate (unlike price_vnd above).
+          daily_grant_vnd: Number(r.daily_grant_vnd),
+          daily_grant_usd: r.daily_grant_usd,
           period_days: r.period_days,
           rate_limit_per_minute: r.rate_limit_per_minute,
         }));

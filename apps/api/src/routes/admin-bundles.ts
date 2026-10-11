@@ -166,11 +166,19 @@ const resolveMixedPlanAmounts = async (
   body: {
     price_vnd?: number;
     credit_per_period_vnd?: number;
+    daily_grant_vnd?: number;
     price_usd?: string;
     credit_per_period_usd?: string;
+    daily_grant_usd?: string;
   },
 ): Promise<
-  | { ok: true; price: FieldAmount; credit: FieldAmount; fxRateVndPerUsd: number }
+  | {
+      ok: true;
+      price: FieldAmount;
+      credit: FieldAmount;
+      dailyGrant: FieldAmount;
+      fxRateVndPerUsd: number;
+    }
   | { ok: false; message: string }
 > => {
   const { usdVndRate } = await readPaymentLimits(tx);
@@ -186,10 +194,16 @@ const resolveMixedPlanAmounts = async (
       ? conv(body.credit_per_period_usd, "credit_per_period_usd", false)
       : vndField(body.credit_per_period_vnd!);
   if (!credit.ok) return credit;
+  const dailyGrant: FieldParse =
+    body.daily_grant_usd !== undefined
+      ? conv(body.daily_grant_usd, "daily_grant_usd", false)
+      : vndField(body.daily_grant_vnd ?? 0);
+  if (!dailyGrant.ok) return dailyGrant;
   return {
     ok: true,
     price: { vnd: price.vnd, usd: price.usd },
     credit: { vnd: credit.vnd, usd: credit.usd },
+    dailyGrant: { vnd: dailyGrant.vnd, usd: dailyGrant.usd },
     fxRateVndPerUsd: usdVndRate,
   };
 };
@@ -577,6 +591,7 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
           period_days: t.Optional(t.Integer()),
           rate_limit_per_minute: t.Optional(t.Integer()),
           daily_grant_vnd: t.Optional(t.Integer()),
+          daily_grant_usd: t.Optional(t.String()),
         }),
         detail: {
           tags: ["Admin"],
@@ -598,7 +613,16 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
             "INVALID",
             "cannot set both credit_per_period_vnd and credit_per_period_usd for one field",
           );
-        const hasPlanUsd = body.price_usd !== undefined || body.credit_per_period_usd !== undefined;
+        if (body.daily_grant_vnd !== undefined && body.daily_grant_usd !== undefined)
+          return jsonError(
+            400,
+            "INVALID",
+            "cannot set both daily_grant_vnd and daily_grant_usd for one field",
+          );
+        const hasPlanUsd =
+          body.price_usd !== undefined ||
+          body.credit_per_period_usd !== undefined ||
+          body.daily_grant_usd !== undefined;
         if (body.price_vnd === undefined && body.price_usd === undefined)
           return jsonError(400, "INVALID", "plan requires price_vnd or price_usd");
         if (body.credit_per_period_vnd === undefined && body.credit_per_period_usd === undefined)
@@ -640,11 +664,12 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
               credit_per_period_vnd: resolved.credit.vnd,
               period_days: body.period_days ?? 30,
               rate_limit_per_minute: body.rate_limit_per_minute ?? 15,
-              daily_grant_vnd: body.daily_grant_vnd ?? 0,
+              daily_grant_vnd: resolved.dailyGrant.vnd,
               active: true,
               created_at: Date.now(),
               price_usd: resolved.price.usd,
               credit_per_period_usd: resolved.credit.usd,
+              daily_grant_usd: resolved.dailyGrant.usd,
               creation_fx_rate_vnd_per_usd: resolved.fxRateVndPerUsd,
             };
             await tx.insert(subscriptionPlans).values(row as typeof subscriptionPlans.$inferInsert);
@@ -681,6 +706,7 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
             created_at: Date.now(),
             price_usd: null,
             credit_per_period_usd: null,
+            daily_grant_usd: null,
             creation_fx_rate_vnd_per_usd: null,
           };
           await db.transaction(async (tx) => {
@@ -713,6 +739,7 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
             credit_per_period_usd: t.Optional(t.String()),
             period_days: t.Optional(t.Integer()),
             daily_grant_vnd: t.Optional(t.Integer()),
+            daily_grant_usd: t.Optional(t.String()),
           },
           { additionalProperties: false },
         ),
@@ -732,6 +759,12 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
             400,
             "INVALID",
             "cannot set both credit_per_period_vnd and credit_per_period_usd for one field",
+          );
+        if (body.daily_grant_vnd !== undefined && body.daily_grant_usd !== undefined)
+          return jsonError(
+            400,
+            "INVALID",
+            "cannot set both daily_grant_vnd and daily_grant_usd for one field",
           );
         if (body.price_vnd === undefined && body.price_usd === undefined)
           return jsonError(400, "INVALID", "plan requires price_vnd or price_usd");
@@ -763,9 +796,14 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
           const resolved = await resolveMixedPlanAmounts(tx, body);
           if (!resolved.ok) return { kind: "invalid", message: resolved.message } as const;
           const periodDays = body.period_days ?? 30;
-          // daily_grant_vnd is a frozen financial term: the successor keeps
-          // the old row's value when the revision body omits it.
-          const dailyGrantVnd = body.daily_grant_vnd ?? old.daily_grant_vnd;
+          // Daily grant is a frozen financial term authored in exactly one
+          // currency: when the body omits both variants the successor carries
+          // the old row's authored USD text AND its frozen derived VND
+          // verbatim — never recomputed at the successor's FX snapshot.
+          const dailyGrant: FieldAmount =
+            body.daily_grant_usd !== undefined || body.daily_grant_vnd !== undefined
+              ? resolved.dailyGrant
+              : { vnd: old.daily_grant_vnd, usd: old.daily_grant_usd };
           // Replay key over the AUTHORED body (canonical USD text / authored
           // VND integers + period), never the FX-resolved VND — same contract
           // as the bundle revise above.
@@ -780,7 +818,10 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
                 ? { usd: canonicalUsd(body.credit_per_period_usd) }
                 : { vnd: body.credit_per_period_vnd },
             period_days: periodDays,
-            daily_grant_vnd: dailyGrantVnd,
+            daily_grant:
+              body.daily_grant_usd !== undefined
+                ? { usd: canonicalUsd(body.daily_grant_usd) }
+                : { vnd: body.daily_grant_vnd ?? old.daily_grant_vnd },
           });
           // Superseded check BEFORE the no-op branch (same ordering as the
           // bundle revise): a closed row is never returned as a no-op 200.
@@ -800,8 +841,8 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
               old.credit_per_period_vnd,
               old.credit_per_period_usd,
             ) &&
-            periodDays === old.period_days &&
-            dailyGrantVnd === old.daily_grant_vnd
+            moneyEquivalent(dailyGrant, old.daily_grant_vnd, old.daily_grant_usd) &&
+            periodDays === old.period_days
           ) {
             // No-op: equivalent financial terms (price, credit, period), old
             // row returned unchanged, no successor, no audit revision.
@@ -817,13 +858,14 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
             // (never a frozen revision term), so the successor must keep the
             // current value instead of resetting new purchases to default.
             rate_limit_per_minute: old.rate_limit_per_minute,
-            daily_grant_vnd: dailyGrantVnd,
+            daily_grant_vnd: dailyGrant.vnd,
             active: true,
             created_at: Date.now(),
             price_usd: resolved.price.usd,
             credit_per_period_usd: resolved.credit.usd,
+            daily_grant_usd: dailyGrant.usd,
             creation_fx_rate_vnd_per_usd:
-              resolved.price.usd !== null || resolved.credit.usd !== null
+              resolved.price.usd !== null || resolved.credit.usd !== null || dailyGrant.usd !== null
                 ? resolved.fxRateVndPerUsd
                 : null,
             revision_key: revisionKey,
