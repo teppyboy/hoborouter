@@ -333,6 +333,10 @@ describe("GET /api/v1/public/subscription-plans", () => {
           "creation_fx_rate_vnd_per_usd",
           "credit_per_period_usd",
           "credit_per_period_vnd",
+          // The daily grant terms are intentionally public: frozen derived VND
+          // plus the exact authored USD text (null when authored in VND).
+          "daily_grant_usd",
+          "daily_grant_vnd",
           "id",
           "name",
           "period_days",
@@ -352,6 +356,8 @@ describe("GET /api/v1/public/subscription-plans", () => {
       price_usd: null,
       credit_per_period_usd: null,
       creation_fx_rate_vnd_per_usd: null,
+      daily_grant_vnd: 0,
+      daily_grant_usd: null,
     });
     expect(JSON.stringify(body)).not.toContain("plan-dead");
   });
@@ -367,6 +373,10 @@ describe("GET /api/v1/public/subscription-plans", () => {
     // Credit grant stays the frozen creation-time VND value.
     expect(usd.credit_per_period_vnd).toBe(260000);
     expect(usd.creation_fx_rate_vnd_per_usd).toBe(26000);
+    // Daily grant terms are exposed on the public payload and stay at their
+    // authored defaults when no grant was authored (never requoted).
+    expect(usd.daily_grant_usd).toBeNull();
+    expect(usd.daily_grant_vnd).toBe(0);
     // Model catalog pricing still uses its own env FX; plans never follow it.
     expect(body.usd_vnd_rate).toBe(27000);
     await q(db, sql`DELETE FROM instance_settings WHERE key = 'payment_usd_vnd_rate'`);
