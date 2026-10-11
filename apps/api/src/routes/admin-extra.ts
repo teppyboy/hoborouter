@@ -79,7 +79,12 @@ async function soleOwnedWorkspaces(db: Db | Tx, userId: string) {
   await db
     .select({ id: workspaces.id })
     .from(workspaces)
-    .where(inArray(workspaces.id, rows.map((r) => r.id)))
+    .where(
+      inArray(
+        workspaces.id,
+        rows.map((r) => r.id),
+      ),
+    )
     .for("update");
   return rows;
 }
@@ -545,7 +550,11 @@ export const adminExtraRoutes = (
         await db.transaction(async (tx) => {
           // Lock the target user row first: a concurrent identity change
           // (e.g. another admin editing) serializes behind this removal.
-          await tx.select({ id: users.id }).from(users).where(eq(users.id, params.id)).for("update");
+          await tx
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.id, params.id))
+            .for("update");
           if (await isInstanceAdmin(tx, params.id)) {
             const adminCount = await tx.select({ n: sql<number>`count(*)` }).from(instanceAdmins);
             if (Number(adminCount[0]?.n ?? 0) <= 1) {
@@ -691,11 +700,9 @@ export const adminExtraRoutes = (
                 }
               }
             } else {
-              violation = conflict(
-                "SOLE_OWNER",
-                "User is the sole owner of workspaces",
-                { workspaces: sole },
-              );
+              violation = conflict("SOLE_OWNER", "User is the sole owner of workspaces", {
+                workspaces: sole,
+              });
               return;
             }
           } else if (transferTo) {

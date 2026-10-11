@@ -62,19 +62,20 @@ async function addUser(id: string, email: string, instanceAdmin = false) {
     `insert into users (id, name, email, created_at, updated_at) values ($1, $1, $2, $3, $3)`,
     [id, email, NOW],
   );
-  if (instanceAdmin) await q(`insert into instance_admins (user_id, created_at) values ($1, $2)`, [id, NOW]);
+  if (instanceAdmin)
+    await q(`insert into instance_admins (user_id, created_at) values ($1, $2)`, [id, NOW]);
 }
 
 // Workspace with owner membership + zero topup wallet (the create-route shape).
 async function addWorkspace(wsId: string, ownerId: string, opts?: { balance?: number }) {
-  await q(
-    `insert into workspaces (id, name, status, created_at) values ($1, $1, 'active', $2)`,
-    [wsId, NOW],
-  );
-  await q(
-    `insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')`,
-    [wsId, ownerId],
-  );
+  await q(`insert into workspaces (id, name, status, created_at) values ($1, $1, 'active', $2)`, [
+    wsId,
+    NOW,
+  ]);
+  await q(`insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')`, [
+    wsId,
+    ownerId,
+  ]);
   await q(
     `insert into wallets (id, workspace_id, kind, currency, balance, reserved, version, created_at)
      values ($1, $2, 'topup', 'VND', $3, 0, 0, $4)`,
@@ -82,9 +83,15 @@ async function addWorkspace(wsId: string, ownerId: string, opts?: { balance?: nu
   );
 }
 
-const errBody = async (res: Response) => (await res.json()) as {
-  error: { code: string; message: string; workspaces?: { id: string; name: string }[]; needs_transfer?: boolean };
-};
+const errBody = async (res: Response) =>
+  (await res.json()) as {
+    error: {
+      code: string;
+      message: string;
+      workspaces?: { id: string; name: string }[];
+      needs_transfer?: boolean;
+    };
+  };
 
 beforeAll(async () => {
   const t = await createTestDb();
@@ -115,9 +122,7 @@ beforeAll(async () => {
             ('led-h2', 'w-ws-hist', 'debit', 100000, 'settle', 0, $1)`,
     [NOW],
   );
-  await q(
-    `update wallets set balance = 0 where id = 'w-ws-hist'`,
-  );
+  await q(`update wallets set balance = 0 where id = 'w-ws-hist'`);
   app = adminExtraRoutes(db, fakeAuth(ADMIN), {});
 });
 
@@ -152,7 +157,9 @@ describe("sole-owner guard", () => {
     const body = await errBody(res);
     expect(body.error.code).toBe("SOLE_OWNER");
     expect(body.error.needs_transfer).toBe(true);
-    await q(`delete from workspace_members where workspace_id = 'ws-sole' and user_id = $1`, [MEMBER]);
+    await q(`delete from workspace_members where workspace_id = 'ws-sole' and user_id = $1`, [
+      MEMBER,
+    ]);
   });
 });
 
@@ -166,7 +173,9 @@ describe("funded wallet block", () => {
     // Nothing touched: user, workspace, wallet, ledger all intact.
     expect(await q(`select 1 from users where id = $1`, [FUNDED])).toHaveLength(1);
     expect(await q(`select 1 from workspaces where id = 'ws-funded'`)).toHaveLength(1);
-    expect(await q(`select balance from wallets where id = 'w-ws-funded'`)).toEqual([{ balance: "50000" }]);
+    expect(await q(`select balance from wallets where id = 'w-ws-funded'`)).toEqual([
+      { balance: "50000" },
+    ]);
     expect(await q(`select 1 from ledger_entries where wallet_id = 'w-ws-funded'`)).toHaveLength(1);
   });
 });
@@ -210,10 +219,19 @@ describe("ownership transfer", () => {
     );
     const res = await removeUser("u-tr", app, { transfer_to: TRANSFEREE });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { removed: boolean; transferred?: { workspace_id: string; to: string }[] };
+    const body = (await res.json()) as {
+      removed: boolean;
+      transferred?: { workspace_id: string; to: string }[];
+    };
     expect(body.transferred).toEqual([{ workspace_id: "ws-tr", to: TRANSFEREE }]);
-    expect(await q(`select role from workspace_members where workspace_id = 'ws-tr' and user_id = $1`, [TRANSFEREE])).toEqual([{ role: "owner" }]);
-    expect(await q(`select status from workspaces where id = 'ws-tr'`)).toEqual([{ status: "active" }]);
+    expect(
+      await q(`select role from workspace_members where workspace_id = 'ws-tr' and user_id = $1`, [
+        TRANSFEREE,
+      ]),
+    ).toEqual([{ role: "owner" }]);
+    expect(await q(`select status from workspaces where id = 'ws-tr'`)).toEqual([
+      { status: "active" },
+    ]);
     // Removed user no longer a member; transfree audit exists.
     expect(await q(`select 1 from workspace_members where user_id = 'u-tr'`)).toHaveLength(0);
     const audits = await q<{ action: string }>(
@@ -230,7 +248,11 @@ describe("ownership transfer", () => {
     expect(body.error.code).toBe("TRANSFER_TARGET_INVALID");
     expect(body.error.workspaces?.map((w) => w.id)).toContain("ws-tf");
     // No transfer happened.
-    expect(await q(`select 1 from workspace_members where workspace_id = 'ws-tf' and user_id = $1`, [MEMBER])).toHaveLength(0);
+    expect(
+      await q(`select 1 from workspace_members where workspace_id = 'ws-tf' and user_id = $1`, [
+        MEMBER,
+      ]),
+    ).toHaveLength(0);
   });
 
   test("transfer_to without a sole-owned workspace is 400", async () => {

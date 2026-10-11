@@ -103,9 +103,10 @@ const usersCopy = {
     en: "This is the last instance admin. Promote another admin first.",
     vi: "Đây là quản trị instance cuối cùng. Hãy nâng quyền một quản trị khác trước.",
   },
-  // No admin-side transfer endpoint exists: ownership transfer happens inside
-  // the workspace by an owner promoting another member (Settings → Members),
-  // so the guidance names that path and the server 409 stays authoritative.
+  // Member-to-member ownership transfer still happens inside the workspace
+  // (Settings → Members): the server transfer_to contract exists but choosing
+  // a transferee needs that workspace's member list, which this page never
+  // loads. The confirm action covers the no-other-members case instead.
   soleOwnerNamed: {
     en: "This user is the sole owner of: {names}. Transfer ownership first — an owner of each workspace can promote another member in that workspace's Settings → Members.",
     vi: "Người dùng này là chủ sở hữu duy nhất của: {names}. Hãy chuyển quyền sở hữu trước — chủ sở hữu của workspace có thể nâng quyền một thành viên khác trong Settings → Members của workspace đó.",
@@ -113,6 +114,23 @@ const usersCopy = {
   soleOwner: {
     en: "This user is the sole owner of at least one workspace. Transfer ownership first — an owner of each workspace can promote another member in that workspace's Settings → Members.",
     vi: "Người dùng này là chủ sở hữu duy nhất của ít nhất một workspace. Hãy chuyển quyền sở hữu trước — chủ sở hữu của workspace có thể nâng quyền một thành viên khác trong Settings → Members của workspace đó.",
+  },
+  // The sole-owner 409 offers a real second action: confirm-remove deletes
+  // empty sole-owned workspaces and archives ones with history (the server
+  // archives rather than deletes whenever money/ledger rows would break).
+  // Member-to-member transfer keeps happening in the workspace's Settings →
+  // Members (needs that workspace's member list, which this page never loads).
+  soleOwnerConfirm: {
+    en: "Delete workspaces and remove",
+    vi: "Xóa workspace và xóa người dùng",
+  },
+  soleOwnerConfirmHint: {
+    en: "Empty sole-owned workspaces are deleted; ones with usage or ledger history are archived (suspended, records kept). Funded wallets block removal.",
+    vi: "Workspace chỉ có một chủ và trống sẽ bị xóa; workspace có lịch sử sử dụng hoặc sổ cái sẽ được lưu trữ (tạm ngưng, giữ hồ sơ). Ví còn tiền sẽ chặn việc xóa.",
+  },
+  workspaceFunded: {
+    en: "A workspace wallet still holds funds or a reservation. Settle or withdraw the funds first; money history cannot be deleted.",
+    vi: "Ví của workspace vẫn còn tiền hoặc đang có khoản đặt cọc. Hãy xử lý số tiền trước; lịch sử tiền không thể bị xóa.",
   },
   emailTaken: {
     en: "A user with this email already exists.",
@@ -245,6 +263,7 @@ function removeErrorMessage(err: unknown, t: UsersT): string {
   if (err instanceof ApiError) {
     if (err.code === "CANNOT_REMOVE_SELF") return t("removeSelf");
     if (err.code === "LAST_ADMIN") return t("lastAdmin");
+    if (err.code === "WORKSPACE_FUNDED") return t("workspaceFunded");
     if (err.code === "SOLE_OWNER") {
       const sole = err as ApiError & SoleOwnerWorkspaces;
       const names = sole.workspaces?.map((w) => w.name).join(", ");
@@ -303,10 +322,11 @@ const makeResetSchema = (t: UsersT) =>
 type ResetValues = z.infer<ReturnType<typeof makeResetSchema>>;
 
 /** Removes a user; returns workspaces list on 409 SOLE_OWNER so UI can name them. */
-async function removeUser(id: string): Promise<void> {
+async function removeUser(id: string, opts?: { confirm?: boolean }): Promise<void> {
   const res = await fetch(`/api/v1/admin/users/${id}`, {
     method: "DELETE",
     credentials: "include",
+    ...(opts?.confirm ? { body: JSON.stringify({ confirm: true }) } : {}),
   });
   if (res.ok) return;
   let code = "unknown";
@@ -784,19 +804,51 @@ function RemoveButton({
   onDone: () => void;
 }) {
   const queryClient = useQueryClient();
+  // Second stage after a 409 SOLE_OWNER: an explicit confirm asks the server to
+  // resolve the sole-owned workspaces (delete empty ones, archive ones with
+  // history). The server still refuses funded wallets (WORKSPACE_FUNDED).
+  const [soleWorkspaces, setSoleWorkspaces] = useState<NonNullable<
+    SoleOwnerWorkspaces["workspaces"]
+  > | null>(null);
   const remove = useMutation({
-    mutationFn: () => removeUser(user.id),
+    mutationFn: (confirm: boolean) => removeUser(user.id, confirm ? { confirm: true } : undefined),
     onSuccess: () => {
       toast.success(t("removedToast", { name: user.name }));
       void queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       onDone();
     },
-    onError: (err) => onError(removeErrorMessage(err, t)),
+    onError: (err) => {
+      onError(removeErrorMessage(err, t));
+      if (err instanceof ApiError && err.code === "SOLE_OWNER") {
+        const sole = err as ApiError & SoleOwnerWorkspaces;
+        setSoleWorkspaces(sole.workspaces && sole.workspaces.length > 0 ? sole.workspaces : null);
+      } else {
+        setSoleWorkspaces(null);
+      }
+    },
   });
   return (
-    <Button variant="destructive" disabled={remove.isPending} onClick={() => remove.mutate()}>
-      {remove.isPending ? t("resetting") : t("remove")}
-    </Button>
+    <div className="flex items-center gap-2">
+      {soleWorkspaces && (
+        <div className="flex flex-col items-end gap-2 text-right">
+          <p className="text-muted-foreground max-w-xs text-sm">{t("soleOwnerConfirmHint")}</p>
+          <Button
+            variant="destructive"
+            disabled={remove.isPending}
+            onClick={() => remove.mutate(true)}
+          >
+            {t("soleOwnerConfirm")}
+          </Button>
+        </div>
+      )}
+      <Button
+        variant="destructive"
+        disabled={remove.isPending}
+        onClick={() => remove.mutate(false)}
+      >
+        {remove.isPending ? t("resetting") : t("remove")}
+      </Button>
+    </div>
   );
 }
 
