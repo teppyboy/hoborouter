@@ -32,6 +32,7 @@ import { adminPaymentRejectRoutes } from "./routes/admin-payment-reject";
 import { adminPaymentLateCreditRoutes } from "./routes/admin-payment-late-credit";
 import { adminUserEditRoutes } from "./routes/admin-user-edit";
 import { adminCpaMutationRoutes } from "./routes/admin-cpa-mutations";
+import { adminCpaPanelRoutes } from "./routes/admin-cpa-panel";
 import { adminSettingsRoutes } from "./routes/admin-settings";
 import { adminRequestsRoutes } from "./routes/admin-requests";
 import { adminBusinessRoutes } from "./routes/admin-business";
@@ -155,6 +156,7 @@ export const buildApp = async (deps: AppDeps = {}) => {
     adminUserEditRoutes(db, auth),
     adminSettingsRoutes(db, auth),
     adminCpaMutationRoutes(db, auth, env),
+    adminCpaPanelRoutes(db, auth, env),
     adminBundlesRoutes(db, auth),
     adminKeysRoutes(db, auth),
     adminWalletAdjustRoutes(db, auth),

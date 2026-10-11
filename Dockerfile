@@ -78,6 +78,7 @@ COPY package.json bun.lock ./
 COPY packages ./packages
 COPY apps/api/package.json apps/api/
 COPY apps/api/src ./apps/api/src
+COPY apps/api/assets ./apps/api/assets
 COPY --from=build /app/apps/web/dist ./apps/web/dist
 RUN mkdir -p /data && chown bun:bun /data
 VOLUME /data

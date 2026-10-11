@@ -1,0 +1,10 @@
+{
+  "version": "v1.22.18",
+  "source": "https://github.com/router-for-me/Cli-Proxy-API-Management-Center/releases/download/v1.22.18/management.html",
+  "license": "MIT",
+  "files": {
+    "management-v1.22.18.html": "f11e7f970ed474d262049b236c54f35ef59f4b9a2da5b9fe1946af14a8641553",
+    "LICENSE": "48fc0d19e5d0918e7e2a7df2deed33b167d9aad1aebb07891a32a8e6f71f80ee",
+    "bootstrap.js": "d57d3d2dd9c64305979e024dbf2029a5dc40d51dbc22e06a50e13e1be6b8ed69"
+  }
+}
