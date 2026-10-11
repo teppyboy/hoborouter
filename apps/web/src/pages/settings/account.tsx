@@ -14,6 +14,14 @@ import { compressAvatar, gravatarUrl, MAX_AVATAR_BYTES } from "../../lib/avatar"
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Skeleton } from "../../components/ui/skeleton";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../../components/ui/card";
+import { Separator } from "../../components/ui/separator";
 import { InitialAvatar } from "../../components/app-shell";
 import {
   Form,
@@ -78,10 +86,23 @@ export const accountCopy = {
   remove: { en: "Remove", vi: "Xoá" },
   uploadAvatar: { en: "Upload avatar image", vi: "Tải ảnh đại diện lên" },
   profile: { en: "Profile", vi: "Hồ sơ" },
+  profileDescription: {
+    en: "Your avatar and display name.",
+    vi: "Ảnh đại diện và tên hiển thị của bạn.",
+  },
+  security: { en: "Security", vi: "Bảo mật" },
+  securityDescription: {
+    en: "Email, password and other sign-in details.",
+    vi: "Email, mật khẩu và thông tin đăng nhập khác.",
+  },
   password: { en: "Password", vi: "Mật khẩu" },
   connectedAccounts: {
     en: "Connected accounts",
     vi: "Tài khoản liên kết",
+  },
+  connectedAccountsDescription: {
+    en: "Sign in with linked providers; the password below always stays available.",
+    vi: "Đăng nhập bằng nhà cung cấp đã liên kết; mật khẩu bên dưới luôn khả dụng.",
   },
   connected: { en: "Connected", vi: "Đã liên kết" },
   notConnected: { en: "Not connected", vi: "Chưa liên kết" },
@@ -381,72 +402,69 @@ function AvatarSection({ user }: { user: SessionUser }) {
   }
 
   return (
-    <section className="grid gap-3">
-      <h3 className="text-sm font-medium">{t("avatar")}</h3>
-      <div className="flex items-center gap-4">
-        {user.image ? (
-          <img src={user.image} alt="" className="size-16 rounded-full object-cover" />
-        ) : showGravatar ? (
-          <img
-            src={gravatar!}
-            alt=""
-            className="size-16 rounded-full object-cover"
-            onError={() => setGravatarFailed(true)}
-          />
-        ) : (
-          <InitialAvatar
-            label={user.name || user.email?.split("@")[0] || "?"}
-            className="size-16 text-xl"
-          />
-        )}
-        <div className="flex gap-2">
+    <div className="flex items-center gap-4">
+      {user.image ? (
+        <img src={user.image} alt="" className="size-16 rounded-full object-cover" />
+      ) : showGravatar ? (
+        <img
+          src={gravatar!}
+          alt=""
+          className="size-16 rounded-full object-cover"
+          onError={() => setGravatarFailed(true)}
+        />
+      ) : (
+        <InitialAvatar
+          label={user.name || user.email?.split("@")[0] || "?"}
+          className="size-16 text-xl"
+        />
+      )}
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() => fileRef.current?.click()}
+        >
+          {t("upload")}
+        </Button>
+        {user.image && (
           <Button
             type="button"
             size="sm"
             variant="outline"
             disabled={busy}
-            onClick={() => fileRef.current?.click()}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await fetch("/api/v1/account/avatar", {
+                  method: "DELETE",
+                  credentials: "include",
+                });
+                await refreshSession();
+                toast.success(t("avatarRemoved"));
+              } finally {
+                setBusy(false);
+              }
+            }}
           >
-            {t("upload")}
+            {t("remove")}
           </Button>
-          {user.image && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await fetch("/api/v1/account/avatar", {
-                    method: "DELETE",
-                    credentials: "include",
-                  });
-                  await refreshSession();
-                  toast.success(t("avatarRemoved"));
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              {t("remove")}
-            </Button>
-          )}
-        </div>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          className="sr-only"
-          aria-label={t("uploadAvatar")}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (file) void onUpload(file);
-          }}
-        />
+        )}
       </div>
-    </section>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        className="sr-only"
+        aria-label={t("uploadAvatar")}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (file) void onUpload(file);
+        }}
+      />
+    </div>
   );
 }
 
@@ -531,50 +549,55 @@ function ConnectedAccountsSection() {
   };
 
   return (
-    <section className="grid gap-3">
-      <h3 className="text-sm font-medium">{t("connectedAccounts")}</h3>
-      <div className="grid gap-2">
-        {providers.map((provider) => {
-          const linked = linkedProviders.has(provider);
-          const providerName = PROVIDER_NAMES[provider];
-          const account = socialAccounts.find((a) => a.providerId === provider);
-          return (
-            <div
-              key={provider}
-              className="flex items-center justify-between gap-4 border-b border-border pb-2"
-            >
-              <div>
-                <span className="text-sm">{providerName}</span>
-                <span className="ml-2 text-xs text-muted-foreground">
-                  {linked ? t("connected") : t("notConnected")}
-                </span>
+    <Card className="lg:col-span-2">
+      <CardHeader>
+        <CardTitle>{t("connectedAccounts")}</CardTitle>
+        <CardDescription>{t("connectedAccountsDescription")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-2">
+          {providers.map((provider) => {
+            const linked = linkedProviders.has(provider);
+            const providerName = PROVIDER_NAMES[provider];
+            const account = socialAccounts.find((a) => a.providerId === provider);
+            return (
+              <div
+                key={provider}
+                className="flex items-center justify-between gap-4 border-b border-border pb-2"
+              >
+                <div>
+                  <span className="text-sm">{providerName}</span>
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {linked ? t("connected") : t("notConnected")}
+                  </span>
+                </div>
+                {linked ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={unlinkingId !== null}
+                    onClick={() => account && void unlink(account.id)}
+                  >
+                    {t("unlink")}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={connecting !== null || accountsQuery.isPending}
+                    onClick={() => void connect(provider)}
+                  >
+                    {t("connect")}
+                  </Button>
+                )}
               </div>
-              {linked ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={unlinkingId !== null}
-                  onClick={() => account && void unlink(account.id)}
-                >
-                  {t("unlink")}
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={connecting !== null || accountsQuery.isPending}
-                  onClick={() => void connect(provider)}
-                >
-                  {t("connect")}
-                </Button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </section>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -582,33 +605,35 @@ export default function AccountTab() {
   const t = useT(accountCopy);
   const { data: session, isPending } = useSession();
 
-  if (isPending) return <Skeleton className="h-24 w-full max-w-md" />;
+  if (isPending) return <Skeleton className="h-24 w-full" />;
 
   const user = session?.user;
   return (
-    <div className="max-w-md space-y-10">
-      {user && <AvatarSection user={user} />}
-      <section className="grid gap-3">
-        <h3 className="text-sm font-medium">{t("profile")}</h3>
-        <NameSection name={user?.name ?? ""} />
-      </section>
-      <section className="grid gap-3">
-        <h3 className="text-sm font-medium">{t("email")}</h3>
-        <EmailSection email={user?.email ?? ""} />
-      </section>
-      <section className="grid gap-3">
-        <h3 className="text-sm font-medium">{t("password")}</h3>
-        <PasswordSection />
-      </section>
+    // Two grouped cards side by side on wide screens, stacked below lg;
+    // connected accounts (when present) spans the full width underneath.
+    <div className="grid items-start gap-6 lg:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("profile")}</CardTitle>
+          <CardDescription>{t("profileDescription")}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-6">
+          {user && <AvatarSection user={user} />}
+          <NameSection name={user?.name ?? ""} />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("security")}</CardTitle>
+          <CardDescription>{t("securityDescription")}</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-6">
+          <EmailSection email={user?.email ?? ""} />
+          <Separator />
+          <PasswordSection />
+        </CardContent>
+      </Card>
       <ConnectedAccountsSection />
-      <div>
-        <dl className="grid gap-3 text-sm">
-          <div className="flex items-center justify-between border-b border-border pb-2">
-            <dt className="text-muted-foreground">{t("email")}</dt>
-            <dd className="font-mono">{user?.email ?? "—"}</dd>
-          </div>
-        </dl>
-      </div>
     </div>
   );
 }
