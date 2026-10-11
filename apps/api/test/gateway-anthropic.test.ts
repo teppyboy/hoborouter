@@ -11,7 +11,7 @@ import { createTestDb } from "@hoborouter/db";
 import { hashApiKey } from "@hoborouter/keys";
 import { settleRequest } from "@hoborouter/wallet";
 import { q, trackDrop, makeApp, waitFor } from "./helpers";
-import { gatewayRoutes } from "../src/routes/v1-gateway";
+import { gatewayRoutes, MAX_BODY_BYTES } from "../src/routes/v1-gateway";
 
 const PLAINTEXT = "sk-hbr-anthropic-key";
 const CPA_KEY = "test-cpa-secret";
@@ -394,6 +394,171 @@ describe("/v1/messages auth + validation", () => {
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: { type: string } };
     expect(body.error.type).toBe("not_found_error");
+    expect(captured.length).toBe(0);
+  });
+
+  test("non-integer / zero max_tokens -> 400, no dispatch", async () => {
+    startFakeCpa(() => messageJson());
+    for (const mt of [0, -5, 1.5, "1024"]) {
+      const res = await mreq(messagesBody({ max_tokens: mt }));
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { type: string; error: { type: string } };
+      expect(body.type).toBe("error");
+      expect(body.error.type).toBe("invalid_request_error");
+    }
+    expect(captured.length).toBe(0);
+  });
+
+  test("count_tokens via Bearer auth: same free passthrough", async () => {
+    startFakeCpa(
+      () =>
+        new Response(JSON.stringify({ input_tokens: 7 }), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const res = await gw(
+      new Request("http://localhost" + COUNT_TOKENS_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${PLAINTEXT}` },
+        body: JSON.stringify({ model: PUBLIC_MODEL, messages: [{ role: "user", content: "hi" }] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { input_tokens: number }).input_tokens).toBe(7);
+    expect(captured[0]!.headers.get("authorization")).toBe(`Bearer ${CPA_KEY}`);
+    expect(await ledgerDelta()).toBe(0);
+    expect((await walletBalance()).reserved).toBe(0);
+  });
+
+  test("count_tokens invalid key -> 401 authentication_error envelope", async () => {
+    startFakeCpa(() => messageJson());
+    const res = await gw(
+      new Request("http://localhost" + COUNT_TOKENS_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": "sk-hbr-nope" },
+        body: JSON.stringify({ model: PUBLIC_MODEL, messages: [{ role: "user", content: "hi" }] }),
+      }),
+    );
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { type: string; error: { type: string } };
+    expect(body.type).toBe("error");
+    expect(body.error.type).toBe("authentication_error");
+    expect(captured.length).toBe(0);
+  });
+
+  test("count_tokens restricted key -> 403 permission_error, no dispatch", async () => {
+    const now = Date.now();
+    await q(
+      db,
+      "INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at) VALUES ('mdl-ct-other','other/ct','other-ct','Other CT','openai',1000,true,true,?,?)",
+      now,
+      now,
+    );
+    await q(
+      db,
+      "INSERT INTO api_key_model_permissions (api_key_id, model_id, created_at) VALUES ('key-gw','mdl-ct-other',?)",
+      now,
+    );
+    startFakeCpa(() => messageJson());
+    const res = await gw(
+      new Request("http://localhost" + COUNT_TOKENS_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": PLAINTEXT },
+        body: JSON.stringify({ model: PUBLIC_MODEL, messages: [{ role: "user", content: "hi" }] }),
+      }),
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { type: string; error: { type: string } };
+    expect(body.type).toBe("error");
+    expect(body.error.type).toBe("permission_error");
+    expect(captured.length).toBe(0);
+    await q(db, "DELETE FROM api_key_model_permissions WHERE api_key_id = 'key-gw'");
+    await q(db, "DELETE FROM models WHERE id = 'mdl-ct-other'");
+  });
+
+  test("count_tokens unknown model -> 404 not_found_error, no dispatch", async () => {
+    startFakeCpa(() => messageJson());
+    const res = await gw(
+      new Request("http://localhost" + COUNT_TOKENS_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": PLAINTEXT },
+        body: JSON.stringify({
+          model: "anthropic/nope",
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      }),
+    );
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { type: string; error: { type: string } };
+    expect(body.type).toBe("error");
+    expect(body.error.type).toBe("not_found_error");
+    expect(captured.length).toBe(0);
+  });
+
+  test("count_tokens response scrubs upstream model id from every string", async () => {
+    startFakeCpa(
+      () =>
+        new Response(
+          JSON.stringify({
+            input_tokens: 42,
+            details: [`echo ${UPSTREAM_MODEL}`],
+            model: UPSTREAM_MODEL,
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    const res = await gw(
+      new Request("http://localhost" + COUNT_TOKENS_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": PLAINTEXT },
+        body: JSON.stringify({ model: PUBLIC_MODEL, messages: [{ role: "user", content: "hi" }] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain(UPSTREAM_MODEL);
+    const body = JSON.parse(text) as { model: string; details: string[] };
+    expect(body.model).toBe(PUBLIC_MODEL);
+    expect(body.details[0]).toBe(`echo ${PUBLIC_MODEL}`);
+  });
+
+  test("count_tokens oversized body -> 413 invalid_request_error, no dispatch, no ledger", async () => {
+    startFakeCpa(() => messageJson());
+    const before = await requestCount();
+    // 1 MiB body limit: content string pushes the JSON body past MAX_BODY_BYTES.
+    const res = await gw(
+      new Request("http://localhost" + COUNT_TOKENS_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": PLAINTEXT },
+        body: JSON.stringify({
+          model: PUBLIC_MODEL,
+          messages: [{ role: "user", content: "x".repeat(MAX_BODY_BYTES) }],
+        }),
+      }),
+    );
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { type: string; error: { type: string } };
+    expect(body.type).toBe("error");
+    expect(body.error.type).toBe("invalid_request_error");
+    expect(captured.length).toBe(0);
+    expect(await requestCount()).toBe(before);
+    expect(await ledgerDelta()).toBe(0);
+    expect((await walletBalance()).reserved).toBe(0);
+  });
+
+  test("count_tokens non-JSON body -> 400 invalid_request_error", async () => {
+    startFakeCpa(() => messageJson());
+    const res = await gw(
+      new Request("http://localhost" + COUNT_TOKENS_PATH, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": PLAINTEXT },
+        body: "not json",
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { type: string; error: { type: string } };
+    expect(body.type).toBe("error");
+    expect(body.error.type).toBe("invalid_request_error");
     expect(captured.length).toBe(0);
   });
 });

@@ -42,6 +42,38 @@ const CHAT_MAX_BODY_BYTES = 16 * 1024 * 1024; // chat-purpose key on /v1/chat/co
 
 export { MAX_BODY_BYTES, CHAT_MAX_BODY_BYTES };
 
+/**
+ * Bounded inbound body read shared by every gateway route: declared
+ * content-length precheck plus a streamed byte cap, so an oversized body is
+ * rejected before (or while) buffering instead of being read whole. Pure
+ * memory guard — performs no DB writes and no wallet side effects; callers
+ * map the neutral failure onto their own error envelope.
+ */
+async function readBoundedBody(
+  request: Request,
+  limit: number,
+): Promise<{ ok: true; text: string } | { ok: false; tooLarge: boolean }> {
+  const declaredLength = Number(request.headers.get("content-length"));
+  if (Number.isSafeInteger(declaredLength) && declaredLength > limit)
+    return { ok: false, tooLarge: true };
+  const bodyReader = request.body?.getReader();
+  if (!bodyReader) return { ok: false, tooLarge: false };
+  let bodyBytes = 0;
+  const chunks: Uint8Array[] = [];
+  const decoder = new TextDecoder();
+  for (;;) {
+    const { done, value } = await bodyReader.read();
+    if (done) break;
+    bodyBytes += value.byteLength;
+    if (bodyBytes > limit) {
+      await bodyReader.cancel().catch(() => {});
+      return { ok: false, tooLarge: true };
+    }
+    chunks.push(value);
+  }
+  return { ok: true, text: decoder.decode(Buffer.concat(chunks)) };
+}
+
 const openAiError = (status: number, message: string, code: string) =>
   new Response(JSON.stringify({ error: { message, type: "invalid_request_error", code } }), {
     status,
@@ -405,24 +437,11 @@ function gatewayHandler(
         ? CHAT_MAX_BODY_BYTES
         : MAX_BODY_BYTES;
     const limitLabel = `${Math.floor(bodyLimit / (1024 * 1024))} MiB`;
-    const declaredLength = Number(request.headers.get("content-length"));
-    if (Number.isSafeInteger(declaredLength) && declaredLength > bodyLimit) {
-      return routeError(413, "payload_too_large", `Request body exceeds ${limitLabel}`);
-    }
-    const bodyReader = request.body?.getReader();
-    if (!bodyReader) return routeError(400, "INVALID", "Body must be a JSON object");
-    let bodyBytes = 0;
-    const chunks: Uint8Array[] = [];
-    const decoder = new TextDecoder();
-    for (;;) {
-      const { done, value } = await bodyReader.read();
-      if (done) break;
-      bodyBytes += value.byteLength;
-      if (bodyBytes > bodyLimit) {
-        await bodyReader.cancel().catch(() => {});
+    const bounded = await readBoundedBody(request, bodyLimit);
+    if (!bounded.ok) {
+      if (bounded.tooLarge)
         return routeError(413, "payload_too_large", `Request body exceeds ${limitLabel}`);
-      }
-      chunks.push(value);
+      return routeError(400, "INVALID", "Body must be a JSON object");
     }
 
     // Both gates passed — the first (and only) DB write of the preflight.
@@ -430,7 +449,7 @@ function gatewayHandler(
       .update(apiKeys)
       .set({ last_used_at: Date.now() })
       .where(eq(apiKeys.id, key.api_key_id));
-    const raw = decoder.decode(Buffer.concat(chunks));
+    const raw = bounded.text;
     let body: Record<string, unknown>;
     try {
       const parsed = JSON.parse(raw) as unknown;
@@ -921,9 +940,16 @@ function countTokensHandler(db: Db, env: Record<string, string | undefined>) {
     }
     const key = token ? await verifyApiKey(db, token) : null;
     if (!key) return anthropicError(401, "Invalid API key provided.");
+    // Same bounded body gate as the paid routes (count_tokens is free, but an
+    // unbounded read here would still be a memory DoS on the instance).
+    const bounded = await readBoundedBody(request, MAX_BODY_BYTES);
+    if (!bounded.ok) {
+      if (bounded.tooLarge) return anthropicError(413, "Request body exceeds 1 MiB");
+      return anthropicError(400, "Body must be a JSON object");
+    }
     let body: Record<string, unknown>;
     try {
-      const parsed = JSON.parse(await request.text()) as unknown;
+      const parsed = JSON.parse(bounded.text) as unknown;
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error();
       body = parsed as Record<string, unknown>;
     } catch {
