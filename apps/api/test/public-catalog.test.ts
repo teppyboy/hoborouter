@@ -18,7 +18,7 @@ import { createAuth } from "../src/auth";
 import { publicCatalogRoutes } from "../src/routes/public-catalog";
 import {
   SUPPORT_CUSTOM_LABEL_MAX,
-  SUPPORT_CUSTOM_MAX,
+  SUPPORT_CUSTOM_MAX_BYTES,
   supportSettingsRoutes,
 } from "../src/routes/support-settings";
 
@@ -470,10 +470,13 @@ describe("admin support-settings", () => {
       { support_custom: [{ label: "X", url: "javascript:alert(1)" }] },
       { support_custom: [{ label: "X", url: "//evil.example" }] },
       {
-        support_custom: Array.from({ length: SUPPORT_CUSTOM_MAX + 1 }, (_, i) => ({
+        support_custom: Array.from({ length: SUPPORT_CUSTOM_MAX_BYTES }, (_, i) => ({
           label: `L${i}`,
           url: `https://l${i}.example`,
         })),
+      },
+      {
+        support_custom: [{ label: "X", url: `https://x.example/${"p".repeat(SUPPORT_CUSTOM_MAX_BYTES)}` }],
       },
     ];
     for (const body of bad) {
@@ -667,8 +670,8 @@ describe("admin support-settings", () => {
     });
   });
 
-  test("custom links: exactly 10 accepted with URL/label normalization", async () => {
-    const links = Array.from({ length: SUPPORT_CUSTOM_MAX }, (_, i) => ({
+  test("custom links: many entries accepted (no count cap) with URL/label normalization", async () => {
+    const links = Array.from({ length: 30 }, (_, i) => ({
       label: `  L${i} `,
       url: `https://l${i}.example/`,
     }));
@@ -680,6 +683,23 @@ describe("admin support-settings", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { support: { custom: { label: string; url: string }[] } };
     expect(body.support.custom).toEqual(links.map((l) => ({ label: l.label.trim(), url: l.url })));
+  });
+
+  test("custom links: accepted exactly at the stored-JSON byte bound", async () => {
+    // {"label":"X","url":"..."} wrapper is exactly JSON.stringify({label:"X",url:""}).length
+    // chars; pad the URL so the stored serialization is exactly
+    // SUPPORT_CUSTOM_MAX_BYTES bytes.
+    const wrap = JSON.stringify([{ label: "X", url: "" }]).length;
+    const base = "https://x.example/";
+    const pad = SUPPORT_CUSTOM_MAX_BYTES - wrap - base.length;
+    const res = await req("/api/v1/admin/support-settings", {
+      method: "PUT",
+      cookie: adminCookie,
+      body: {
+        support_custom: [{ label: "X", url: `${base}${"p".repeat(pad)}` }],
+      },
+    });
+    expect(res.status).toBe(200);
     await req("/api/v1/admin/support-settings", {
       method: "PUT",
       cookie: adminCookie,

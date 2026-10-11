@@ -98,13 +98,24 @@ type SupportShape = {
 // JSON array) — no schema migration needed. Publicly rendered after the fixed
 // channels, so every entry is re-validated with the same URL rules plus a
 // bounded plain-text label.
-export const SUPPORT_CUSTOM_MAX = 10;
+// No entry-count cap: the hard limit is the total serialized size of the
+// stored array (below). Effective payload bound: the stored KV value and the
+// public-catalog render of it never exceed 16384 UTF-8 bytes; a minimal valid
+// entry ({"label":"a","url":"https://a.bc"}) serializes to ~34 bytes, so the
+// bound admits at most ~480 entries while per-entry label (<=30 chars) and
+// HTTPS/credential rules still apply.
+export const SUPPORT_CUSTOM_MAX_BYTES = 16_384;
 export const SUPPORT_CUSTOM_LABEL_MAX = 30;
 export type SupportCustomLink = { label: string; url: string };
 
-/** Null for anything that is not a well-formed, bounded custom-link array. */
+/** Null for anything that is not a well-formed, byte-bounded custom-link array. */
 function validateCustomLinks(raw: unknown): SupportCustomLink[] | null {
-  if (!Array.isArray(raw) || raw.length > SUPPORT_CUSTOM_MAX) return null;
+  if (!Array.isArray(raw)) return null;
+  // Fail fast before per-entry work: bounding the raw serialization bounds the
+  // validation loop itself. Canonicalization can still GROW a URL
+  // (percent-encoding), so the stored value is re-bounded below — this check
+  // is a cheap early rejection, not the security bound.
+  if (Buffer.byteLength(JSON.stringify(raw), "utf8") > SUPPORT_CUSTOM_MAX_BYTES) return null;
   const out: SupportCustomLink[] = [];
   for (const item of raw) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) return null;
@@ -116,6 +127,10 @@ function validateCustomLinks(raw: unknown): SupportCustomLink[] | null {
     if (u === null) return null;
     out.push({ label: l, url: u });
   }
+  // Strict total bound on the STORED value: the KV string below is exactly
+  // JSON.stringify(out), so both storage and the rendered public payload stay
+  // within SUPPORT_CUSTOM_MAX_BYTES regardless of encoding growth.
+  if (Buffer.byteLength(JSON.stringify(out), "utf8") > SUPPORT_CUSTOM_MAX_BYTES) return null;
   return out;
 }
 
@@ -234,7 +249,7 @@ export const supportSettingsRoutes = (db: Db, auth: BetterAuthInstance) =>
             const links = validateCustomLinks(body.support_custom);
             if (links === null) {
               return invalid(
-                "support_custom must be an array of at most 10 { label, url } objects with a non-empty label (max 30 characters) and an HTTPS URL without credentials",
+                "support_custom must be an array of { label, url } objects with a non-empty label (max 30 characters) and an HTTPS URL without credentials, totaling at most 16384 bytes as stored JSON",
               );
             }
             customUpdate = links;
