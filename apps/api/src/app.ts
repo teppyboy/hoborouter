@@ -167,7 +167,7 @@ export const buildApp = async (deps: AppDeps = {}) => {
     publicCatalogRoutes(db, env),
     supportSettingsRoutes(db, auth),
     adminBusinessRoutes(db, auth),
-    adminPromotionsRoutes(db, auth),
+    adminPromotionsRoutes(db, auth, env),
     adminSupportLeadRoutes(db, auth),
     promotionsRoutes(db, auth),
     supportLeadRoutes(db, auth, { env }),

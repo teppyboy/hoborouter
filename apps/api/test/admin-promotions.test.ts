@@ -167,6 +167,7 @@ describe("admin promotions create", () => {
       [
         "active",
         "amount_vnd",
+        "code_available",
         "created_at",
         "expires_at",
         "id",
@@ -237,6 +238,7 @@ describe("admin promotions list", () => {
       [
         "active",
         "amount_vnd",
+        "code_available",
         "created_at",
         "expires_at",
         "id",

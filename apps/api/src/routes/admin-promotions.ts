@@ -1,11 +1,13 @@
 // Instance-admin promo code management. The plaintext code is generated with
-// CSPRNG randomness, revealed exactly once in the create response, and never
-// stored (only its SHA-256, normalized trim().toUpperCase()). No logging of
-// the code anywhere. GET/PATCH responses and audit rows never carry
-// code_hash or plaintext: the hash is a credential-equivalent secret.
+// CSPRNG randomness, revealed exactly once in the create response, and stored
+// twice: only its SHA-256 (normalized trim().toUpperCase()) for redemption
+// lookups, and an AES-256-GCM ciphertext (apps/api/src/promo-code-cipher.ts,
+// key = HKDF of the server-only auth secret) for admin repeat view. No
+// plaintext-or-hash ever appears in a response, audit row, or log. GET/PATCH
+// responses carry a boolean code_available but never code_hash or ciphertext.
 // No hard DELETE: the DELETE endpoint soft-removes (deleted_at + active=false)
 // so redemption/payment/ledger history keeps its FK; deleted codes are
-// invisible to list/redeem/preview but their rows remain.
+// invisible to list/redeem/preview/reveal but their rows remain.
 import { Elysia, t } from "elysia";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Db } from "@hoborouter/db";
@@ -13,6 +15,7 @@ import { MAX_SAFE_INTEGER_MONEY, promoCodes } from "@hoborouter/db";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, writeAudit, jsonError } from "../authz";
 import { hashPromoCode, normalizePromoCodeWithReason } from "../promo-code";
+import { decryptPromoCode, encryptPromoCode } from "../promo-code-cipher";
 
 // Legacy import site for the hash helper (bmc/promo test suites import from
 // here); the single implementation lives in promo-code.ts.
@@ -42,6 +45,7 @@ const safePromo = (r: {
   expires_at?: string | number | null;
   active?: boolean;
   created_at: string | number;
+  code_encrypted?: string | null;
 }) => ({
   id: r.id,
   name: r.name,
@@ -57,6 +61,9 @@ const safePromo = (r: {
   expires_at: r.expires_at === null || r.expires_at === undefined ? null : Number(r.expires_at),
   active: r.active ?? true,
   created_at: Number(r.created_at),
+  // Repeat-view availability only; the ciphertext itself never leaves the
+  // reveal endpoint, and code_hash never leaves the server at all.
+  code_available: Boolean(r.code_encrypted),
 });
 
 // 16 CSPRNG bytes -> 32 uppercase hex chars. Redeem-side lookup contract:
@@ -68,7 +75,13 @@ export const generatePromoCode = (): string => {
     .toUpperCase();
 };
 
-export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
+export const adminPromotionsRoutes = (
+  db: Db,
+  auth: BetterAuthInstance,
+  // Env-equivalent record for the server-only encryption secret; defaults to
+  // process.env exactly like createAuth's env-only mode.
+  env: Record<string, string | undefined> = process.env,
+) => {
   const guard = async (request: Request) => {
     const gate = await requireSession(auth, request);
     if ("error" in gate) return { error: gate.error } as const;
@@ -76,6 +89,11 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
     if (denied) return { error: denied } as const;
     return { userId: gate.session.user.id } as const;
   };
+
+  // Same server-only secret the auth stack requires (>=32 chars in prod).
+  // Absent (some dev/test setups): codes store no ciphertext and are never
+  // re-viewable — identical policy to pre-encryption legacy rows.
+  const cipherSecret = (): string | null => env.BETTER_AUTH_SECRET || env.AUTH_SECRET || null;
 
   return new Elysia({ name: "admin-promotions" })
     .get(
@@ -99,10 +117,13 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
             expires_at: promoCodes.expires_at,
             active: promoCodes.active,
             created_at: promoCodes.created_at,
+            code_encrypted: promoCodes.code_encrypted,
           })
           .from(promoCodes)
           .where(isNull(promoCodes.deleted_at))
           .orderBy(desc(promoCodes.created_at));
+        // code_encrypted is selected only to compute code_available; safePromo
+        // drops it, so the ciphertext cannot leak through the list.
         return json({ data: rows.map(safePromo) });
       },
     )
@@ -208,8 +229,14 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
           expires_at: expiresAt as number | null,
           active: true,
           created_at: now,
+          code_encrypted: null,
         };
         let duplicate = false;
+        // Encrypt under the server-only secret BEFORE the insert transaction;
+        // the AAD binds the ciphertext to this row id.
+        const secret = cipherSecret();
+        if (secret)
+          row.code_encrypted = encryptPromoCode(code, secret, row.id);
         await db.transaction(async (tx) => {
           // Race-free uniqueness answer: the check runs under the same
           // transaction as the insert, so a variant of an existing code (same
@@ -305,6 +332,7 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
               expires_at: promoCodes.expires_at,
               active: promoCodes.active,
               created_at: promoCodes.created_at,
+              code_encrypted: promoCodes.code_encrypted,
             });
           await writeAudit(tx, {
             actorUserId: g.userId,
@@ -364,6 +392,56 @@ export const adminPromotionsRoutes = (db: Db, auth: BetterAuthInstance) => {
           resp = json({ ok: true });
         });
         return resp!;
+      },
+    )
+    .get(
+      "/api/v1/admin/promotions/:id/code",
+      {
+        params: t.Object({ id: t.String() }),
+        detail: {
+          tags: ["Admin"],
+          summary: "Re-view a promo code (admin only)",
+          description:
+            "Decrypts the stored code for repeat view. 409 CODE_UNAVAILABLE when the code was created before encrypted storage, when the server secret was rotated, or when no server secret is configured. Key policy: AES-256-GCM, key = HKDF-SHA256 of the server-only auth secret; rotating the secret makes stored codes permanently unviewable while redemption (code_hash) keeps working. Soft-removed codes are not viewable.",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params }) => {
+        const g = await guard(request);
+        if ("error" in g) return g.error;
+        // Deleted codes are excluded: soft removal removes every surface,
+        // including repeat view.
+        const rows = await db
+          .select()
+          .from(promoCodes)
+          .where(and(eq(promoCodes.id, params.id), isNull(promoCodes.deleted_at)))
+          .limit(1);
+        const row = rows[0];
+        if (!row) return jsonError(404, "NOT_FOUND", "Promo code not found");
+        const secret = cipherSecret();
+        const code =
+          row.code_encrypted && secret
+            ? decryptPromoCode(row.code_encrypted, secret, row.id)
+            : null;
+        // Legacy rows, rotated secrets, tampered ciphertexts and missing
+        // secrets all answer the same explicit 409 — never a 500 and never
+        // partial plaintext.
+        if (code === null)
+          return jsonError(
+            409,
+            "CODE_UNAVAILABLE",
+            "This code cannot be re-viewed: it was created before encrypted storage, the server secret changed, or no server secret is configured",
+          );
+        // Audit records the reveal (who/when/target) but no code material —
+        // plaintext, ciphertext and hash are all secret-equivalent here.
+        await writeAudit(db, {
+          actorUserId: g.userId,
+          workspaceId: null,
+          action: "promo.reveal_code",
+          target: row.id,
+          detail: { name: row.name },
+        });
+        return json({ code });
       },
     );
 };

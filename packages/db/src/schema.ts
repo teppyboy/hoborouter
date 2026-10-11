@@ -520,6 +520,12 @@ export const firstTopupBonuses = pgTable(
  *  - percent: percent_bp basis points off a TOP-UP payment at checkout (1..9999,
  *    never 10000 — the final due must stay positive), with an optional-VND cap
  *    max_discount_vnd. kind/amounts are immutable after creation.
+ *
+ * Repeat view (unlike sk-hbr- API keys): code_encrypted holds the plaintext
+ * under AES-256-GCM (key = HKDF-SHA256 of the server-only auth secret, AAD
+ * binds the ciphertext to this row id). NULL for legacy rows (created before
+ * repeat view) or when no server secret was configured — those codes can
+ * never be re-viewed, only redeemed via code_hash.
  */
 export const promoCodes = pgTable(
   "promo_codes",
@@ -542,6 +548,10 @@ export const promoCodes = pgTable(
     // promo_redemptions/promo_payments keep their FKs and redemption history
     // stays intact. The row (and its code_hash) remains for FK integrity.
     deleted_at: big("deleted_at"),
+    // AES-256-GCM ciphertext of the normalized plaintext code (admin repeat
+    // view). Never selected into any response shape except the admin reveal
+    // endpoint; NULL = not re-viewable (legacy row / no server secret).
+    code_encrypted: text("code_encrypted"),
   },
   (t) => [
     uniqueIndex("promo_codes_code_hash").on(t.code_hash),
