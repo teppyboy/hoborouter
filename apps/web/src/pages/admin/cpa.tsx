@@ -32,6 +32,7 @@ import {
 import { api } from "../../lib/api";
 import { useT, useLocaleEntry, type LocaleEntry } from "../../lib/i18n/t";
 import { AdminGate, useAdminQuery } from "./shared";
+import { CpaIsolatedPanel } from "../../components/admin/cpa-isolated-panel";
 
 // ── Backend contracts (admin-cpa-mutations.ts) ─────────────────────────────
 
@@ -1549,7 +1550,16 @@ export default function AdminCpaPage() {
     { value: "config", label: t("tabConfig"), content: <ConfigCard /> },
     { value: "routing", label: t("tabRouting"), content: <RoutingCard /> },
     { value: "keys", label: t("tabKeys"), content: <ApiKeysCard /> },
-    { value: "auth", label: t("tabAuth"), content: <AuthFilesCard /> },
+    {
+      value: "auth",
+      label: t("tabAuth"),
+      content: (
+        <>
+          <CpaIsolatedPanel />
+          <AuthFilesCard />
+        </>
+      ),
+    },
     {
       value: "models",
       label: t("tabModels"),
