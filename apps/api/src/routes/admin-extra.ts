@@ -13,7 +13,8 @@ import {
 } from "../authz";
 import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments";
 import { checkPassword } from "@hoborouter/shared";
-import { and, desc, eq, ne, notExists, sql, count, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, ne, notExists, sql, count, inArray } from "drizzle-orm";
+import { z } from "zod";
 import type { PgTable } from "drizzle-orm/pg-core";
 import {
   type Db,
@@ -32,12 +33,21 @@ import {
   auditLog,
   unknownResolutions,
   refundOperations,
+  chatConversations,
+  supportLeads,
 } from "@hoborouter/db";
 
 const cpaBase = (env: Record<string, string | undefined> = process.env) =>
   env.CPA_BASE_URL || "http://cpa:8317";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Trust boundary for the optional DELETE body: strict (unknown keys rejected),
+// absent body stays the legacy unconfirmed remove.
+const removeUserBodySchema = z.strictObject({
+  confirm: z.boolean().optional(),
+  transfer_to: z.string().min(1).optional(),
+});
 
 /**
  * Sole-owner workspaces for a user: workspaces where the user is an owner and
@@ -86,7 +96,40 @@ async function soleOwnedWorkspaces(db: Db | Tx, userId: string) {
       ),
     )
     .for("update");
-  return rows;
+  // Re-read under the locks: READ COMMITTED gives this statement a fresh
+  // snapshot, so an owner committed between the first read and the lock is
+  // now visible and the workspace drops out of the sole-owned set.
+  return db
+    .selectDistinct({ id: workspaces.id, name: workspaces.name })
+    .from(workspaces)
+    .innerJoin(
+      workspaceMembers,
+      and(
+        eq(workspaceMembers.workspace_id, workspaces.id),
+        eq(workspaceMembers.user_id, userId),
+        eq(workspaceMembers.role, "owner"),
+      ),
+    )
+    .where(
+      and(
+        inArray(
+          workspaces.id,
+          rows.map((r) => r.id),
+        ),
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(workspaceMembers)
+            .where(
+              and(
+                eq(workspaceMembers.workspace_id, workspaces.id),
+                ne(workspaceMembers.user_id, userId),
+                eq(workspaceMembers.role, "owner"),
+              ),
+            ),
+        ),
+      ),
+    );
 }
 
 /**
@@ -119,6 +162,20 @@ async function removeUserIdentity(db: Db | Tx, userId: string) {
           .select({ n: count() })
           .from(refundOperations)
           .where(eq(refundOperations.actor_user_id, userId))
+      )[0]!.n +
+      // Chat history is user content that must survive identity removal
+      // (tombstone, not deletion) even when no other history references exist.
+      (
+        await tx
+          .select({ n: count() })
+          .from(chatConversations)
+          .where(eq(chatConversations.user_id, userId))
+      )[0]!.n +
+      (
+        await tx
+          .select({ n: count() })
+          .from(supportLeads)
+          .where(eq(supportLeads.handled_by, userId))
       )[0]!.n;
     if (refCount > 0) {
       // History rows must never be deleted; anonymize the user row instead
@@ -149,6 +206,21 @@ const conflict = (code: string, message: string, extra: Record<string, unknown> 
     status: 409,
     headers: { "content-type": "application/json" },
   });
+
+/** True when the error (or a wrapped cause) is a Postgres FK violation (23503). */
+function isFkViolation(e: unknown): boolean {
+  let cur: unknown = e;
+  while (cur) {
+    if (typeof cur === "object") {
+      const err = cur as { code?: string; errno?: string };
+      // bun-sql puts the SQLSTATE in errno (code becomes ERR_POSTGRES_SERVER_ERROR);
+      // drizzle wraps the original in .cause.
+      if (err.code === "23503" || err.errno === "23503") return true;
+    }
+    cur = typeof cur === "object" ? (cur as { cause?: unknown }).cause : undefined;
+  }
+  return false;
+}
 
 export const adminExtraRoutes = (
   db: Db,
@@ -525,7 +597,10 @@ export const adminExtraRoutes = (
           .where(eq(users.id, params.id))
           .limit(1);
         if (!target[0]) return jsonError(404, "NOT_FOUND", "User not found");
-        // Optional body: { confirm?: boolean, transfer_to?: string }.
+        // Trust boundary: Zod strict parse. An ABSENT body stays legacy
+        // (unconfirmed remove); anything present must be valid JSON matching
+        // { confirm?: boolean, transfer_to?: string } — unknown keys and wrong
+        // types are rejected instead of silently ignored.
         // - transfer_to: promote that member to owner of EVERY sole-owned
         //   workspace, then remove the user (workspaces retained).
         // - confirm: allow resolving sole-owned workspaces directly — empty
@@ -533,21 +608,41 @@ export const adminExtraRoutes = (
         //   child are archived (retained, status 'suspended').
         let confirm = false;
         let transferTo: string | undefined;
-        try {
-          const raw = (await request.json()) as Record<string, unknown>;
-          if (raw?.confirm === true) confirm = true;
-          if (typeof raw?.transfer_to === "string" && raw.transfer_to) transferTo = raw.transfer_to;
-        } catch {
-          // no/invalid body: legacy unconfirmed remove
+        const rawBody = await request.text();
+        if (rawBody.trim().length > 0) {
+          let parsedJson: unknown;
+          try {
+            parsedJson = JSON.parse(rawBody);
+          } catch {
+            return jsonError(400, "INVALID", "Invalid JSON body");
+          }
+          const parsed = removeUserBodySchema.safeParse(parsedJson);
+          if (!parsed.success) {
+            return jsonError(
+              400,
+              "INVALID",
+              "Invalid body: confirm must be boolean, transfer_to a non-empty string, no unknown keys",
+            );
+          }
+          confirm = parsed.data.confirm === true;
+          transferTo = parsed.data.transfer_to;
         }
-        // Guards re-read inside the same transaction as the removal:
-        // check-then-act between separate statements could otherwise remove
-        // the last admin or self after a concurrent change. LAST_ADMIN before
-        // self: removing the final instance admin is blocked even when the
-        // remover is that admin (add another admin first).
+        // All-or-nothing: every guard that can produce a 4xx is evaluated
+        // BEFORE any mutation. The only code below the mutation line that can
+        // leave the transaction is a throw (full rollback) or success.
         let violation: Response | undefined;
-        let outcome: Record<string, unknown> = {};
+        const outcome: {
+          deleted?: string[];
+          archived?: string[];
+          transferred?: { workspace_id: string; to: string }[];
+        } = {};
         await db.transaction(async (tx) => {
+          // Serialize user-scoped identity mutations against workspace
+          // creation: the create route takes the same advisory lock, so a
+          // workspace created for this user mid-removal cannot escape the
+          // workspace-row locks below (its memberships FK-lock only its own
+          // brand-new workspace row).
+          await tx.execute(sql`select pg_advisory_xact_lock(19088, hashtext(${params.id}))`);
           // Lock the target user row first: a concurrent identity change
           // (e.g. another admin editing) serializes behind this removal.
           await tx
@@ -556,8 +651,14 @@ export const adminExtraRoutes = (
             .where(eq(users.id, params.id))
             .for("update");
           if (await isInstanceAdmin(tx, params.id)) {
-            const adminCount = await tx.select({ n: sql<number>`count(*)` }).from(instanceAdmins);
-            if (Number(adminCount[0]?.n ?? 0) <= 1) {
+            // Lock ALL admin rows in deterministic order: two concurrent
+            // removals cannot both observe count=2 and leave zero admins.
+            const adminRows = await tx
+              .select({ user_id: instanceAdmins.user_id })
+              .from(instanceAdmins)
+              .orderBy(asc(instanceAdmins.user_id))
+              .for("update");
+            if (adminRows.length <= 1) {
               violation = jsonError(409, "LAST_ADMIN", "Cannot remove the last instance admin");
               return;
             }
@@ -568,33 +669,42 @@ export const adminExtraRoutes = (
           }
           const sole = await soleOwnedWorkspaces(tx, params.id);
           if (sole.length > 0) {
-            // HARD MONEY GUARD — checked before any resolution path: a funded
-            // or reserved wallet means the workspace holds customer money, so
-            // nothing may be deleted or transferred around it.
-            const fundedWallets = await tx
-              .select({ workspace_id: wallets.workspace_id })
+            // Lock ALL wallets of the sole-owned workspaces (ordered), not
+            // just funded ones: a zero-balance wallet must be locked too or a
+            // concurrent topup could credit it between evaluation and delete.
+            const lockedWallets = await tx
+              .select({
+                id: wallets.id,
+                workspace_id: wallets.workspace_id,
+                balance: wallets.balance,
+                reserved: wallets.reserved,
+              })
               .from(wallets)
               .where(
-                and(
-                  inArray(
-                    wallets.workspace_id,
-                    sole.map((w) => w.id),
-                  ),
-                  sql`(${wallets.balance} > 0 OR ${wallets.reserved} > 0)`,
+                inArray(
+                  wallets.workspace_id,
+                  sole.map((w) => w.id),
                 ),
               )
+              .orderBy(asc(wallets.id))
               .for("update");
-            if (fundedWallets.length > 0) {
-              const funded = new Set(fundedWallets.map((w) => w.workspace_id));
+            // HARD MONEY GUARD — validated before ANY mutation: a funded or
+            // reserved wallet means the workspace holds customer money, so
+            // nothing may be deleted or transferred around it.
+            const funded = new Set(
+              lockedWallets
+                .filter((w) => w.balance > 0 || w.reserved > 0)
+                .map((w) => w.workspace_id),
+            );
+            if (funded.size > 0) {
               violation = conflict(
                 "WORKSPACE_FUNDED",
                 "Workspace wallet holds funds or reservations; money history cannot be deleted",
-                {
-                  workspaces: sole.filter((w) => funded.has(w.id)),
-                },
+                { workspaces: sole.filter((w) => funded.has(w.id)) },
               );
               return;
             }
+            // --- validation of ALL workspaces before any mutation ---
             if (transferTo) {
               if (transferTo === params.id) {
                 violation = conflict(
@@ -627,32 +737,7 @@ export const adminExtraRoutes = (
                   return;
                 }
               }
-              outcome.transferred = [];
-              for (const ws of sole) {
-                await tx
-                  .update(workspaceMembers)
-                  .set({ role: "owner" })
-                  .where(
-                    and(
-                      eq(workspaceMembers.workspace_id, ws.id),
-                      eq(workspaceMembers.user_id, transferTo),
-                    ),
-                  );
-                await writeAudit(tx, {
-                  actorUserId: actorId,
-                  workspaceId: ws.id,
-                  action: "member.role_change",
-                  target: transferTo,
-                  detail: { to: "owner", source: "admin_sole_owner_transfer" },
-                });
-                (outcome.transferred as { workspace_id: string; to: string }[]).push({
-                  workspace_id: ws.id,
-                  to: transferTo,
-                });
-              }
             } else if (confirm) {
-              outcome.deleted = [];
-              outcome.archived = [];
               for (const ws of sole) {
                 const others = await tx
                   .select({ n: count() })
@@ -672,12 +757,47 @@ export const adminExtraRoutes = (
                   );
                   return;
                 }
+              }
+            } else {
+              violation = conflict("SOLE_OWNER", "User is the sole owner of workspaces", {
+                workspaces: sole,
+              });
+              return;
+            }
+            // --- mutations (validation passed for ALL workspaces) ---
+            if (transferTo) {
+              outcome.transferred = [];
+              for (const ws of sole) {
+                await tx
+                  .update(workspaceMembers)
+                  .set({ role: "owner" })
+                  .where(
+                    and(
+                      eq(workspaceMembers.workspace_id, ws.id),
+                      eq(workspaceMembers.user_id, transferTo),
+                    ),
+                  );
+                await writeAudit(tx, {
+                  actorUserId: actorId,
+                  workspaceId: ws.id,
+                  action: "member.role_change",
+                  target: transferTo,
+                  detail: { to: "owner", source: "admin_sole_owner_transfer" },
+                });
+                outcome.transferred.push({ workspace_id: ws.id, to: transferTo });
+              }
+            } else {
+              outcome.deleted = [];
+              outcome.archived = [];
+              for (const ws of sole) {
                 // Try physical delete inside a savepoint: any remaining FK
                 // child (api_keys, ledger history, payments, usage, requests,
                 // …) rolls the savepoint back and the workspace is archived
                 // instead (row retained, status 'suspended'). Money history is
                 // never deleted — a wallet with ledger rows always fails the
-                // wallet delete, which is exactly the archive trigger.
+                // wallet delete, which is exactly the archive trigger. Only
+                // FK violations (23503) fall back to archive; any other error
+                // propagates and rolls the WHOLE transaction back.
                 try {
                   await tx.transaction(async (nested) => {
                     await nested
@@ -690,20 +810,19 @@ export const adminExtraRoutes = (
                       .where(eq(workspaceMembers.workspace_id, ws.id));
                     await nested.delete(workspaces).where(eq(workspaces.id, ws.id));
                   });
-                  (outcome.deleted as string[]).push(ws.id);
-                } catch {
+                  outcome.deleted.push(ws.id);
+                } catch (e) {
+                  // drizzle/bun-sql may wrap the PostgresError — walk the
+                  // cause chain. Only FK violations archive; anything else
+                  // propagates and rolls the whole transaction back.
+                  if (!isFkViolation(e)) throw e;
                   await tx
                     .update(workspaces)
                     .set({ status: "suspended" })
                     .where(eq(workspaces.id, ws.id));
-                  (outcome.archived as string[]).push(ws.id);
+                  outcome.archived.push(ws.id);
                 }
               }
-            } else {
-              violation = conflict("SOLE_OWNER", "User is the sole owner of workspaces", {
-                workspaces: sole,
-              });
-              return;
             }
           } else if (transferTo) {
             violation = jsonError(
@@ -714,15 +833,17 @@ export const adminExtraRoutes = (
             return;
           }
           await removeUserIdentity(tx, params.id);
+          // Audit INSIDE the transaction: an audit write failure rolls back
+          // the entire removal (no un-audited identity destruction).
+          await writeAudit(tx, {
+            actorUserId: actorId,
+            workspaceId: null,
+            action: "user.remove",
+            target: params.id,
+            detail: Object.keys(outcome).length > 0 ? outcome : undefined,
+          });
         });
         if (violation) return violation;
-        await writeAudit(db, {
-          actorUserId: actorId,
-          workspaceId: null,
-          action: "user.remove",
-          target: params.id,
-          detail: Object.keys(outcome).length > 0 ? outcome : undefined,
-        });
         return json({ removed: true, ...outcome });
       },
     )

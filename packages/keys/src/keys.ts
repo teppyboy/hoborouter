@@ -2,7 +2,7 @@
 // Plaintext format: `sk-hbr-` + 43 base64url chars (32 CSPRNG bytes, no padding).
 // Only SHA-256 hex is stored. Status: 'active' is legacy and treated as enabled.
 import { and, eq, inArray, isNull } from "drizzle-orm";
-import { apiKeys, apiKeyModelPermissions, type Db, type Tx } from "@hoborouter/db";
+import { apiKeys, apiKeyModelPermissions, workspaces, type Db, type Tx } from "@hoborouter/db";
 
 const PREFIX = "sk-hbr-";
 
@@ -39,6 +39,9 @@ export async function verifyApiKey(db: Db | Tx, plaintext: string): Promise<ApiK
       purpose: apiKeys.purpose,
     })
     .from(apiKeys)
+    // Archived (suspended) workspaces reject their old keys at the gateway;
+    // settlement/refund paths do not use this lookup and stay unaffected.
+    .innerJoin(workspaces, eq(workspaces.id, apiKeys.workspace_id))
     .where(
       and(
         eq(apiKeys.key_hash, hashApiKey(plaintext)),
@@ -46,6 +49,7 @@ export async function verifyApiKey(db: Db | Tx, plaintext: string): Promise<ApiK
         // soft-deleted (removed) keys must never authenticate even if their
         // status column still reads 'enabled'
         isNull(apiKeys.deleted_at),
+        eq(workspaces.status, "active"),
       ),
     )
     .limit(1);

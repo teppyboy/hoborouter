@@ -31,6 +31,7 @@ const MEMBER = "u-member";
 
 let db: Db;
 let drop: () => Promise<void>;
+let tUrl: string;
 let app: ReturnType<typeof adminExtraRoutes>;
 
 const fakeAuth = (userId: string): BetterAuthInstance =>
@@ -97,11 +98,16 @@ beforeAll(async () => {
   const t = await createTestDb();
   db = t.db;
   drop = t.drop;
+  tUrl = t.url;
   await addUser(ADMIN, "admin@t.local", true);
   await addUser(TRANSFEREE, "transferee@t.local");
   await addUser(MEMBER, "member@t.local");
   await addUser("u-tr", "tr-owner@t.local");
   await addUser("u-tf", "tf-owner@t.local");
+  await addUser("u-ao", "ao@t.local");
+  await addUser("u-af", "af@t.local");
+  await addUser("u-legacy", "legacy@t.local");
+  await addWorkspace("ws-legacy", "u-legacy");
   // Sole owner of an empty, unfunded workspace.
   await addUser(SOLE, "sole@t.local");
   await addWorkspace("ws-sole", SOLE);
@@ -258,5 +264,182 @@ describe("ownership transfer", () => {
   test("transfer_to without a sole-owned workspace is 400", async () => {
     const res = await removeUser(MEMBER, app, { transfer_to: ADMIN });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("all-or-nothing validation", () => {
+  test("multi-workspace confirm with a later blocker leaves every workspace unchanged", async () => {
+    // Regression: the old loop deleted/archived ws-ao1 before hitting the
+    // blocker on ws-ao2 and returned 409 with the partial commit in place.
+    await addWorkspace("ws-ao1", "u-ao");
+    await addWorkspace("ws-ao2", "u-ao");
+    await q(
+      `insert into workspace_members (workspace_id, user_id, role) values ('ws-ao2', $1, 'member')`,
+      [MEMBER],
+    );
+    const res = await removeUser("u-ao", app, { confirm: true });
+    expect(res.status).toBe(409);
+    const body = await errBody(res);
+    expect(body.error.needs_transfer).toBe(true);
+    // NOTHING mutated: both workspaces, wallets, memberships, user intact.
+    expect(await q(`select 1 from workspaces where id = 'ws-ao1'`)).toHaveLength(1);
+    expect(await q(`select 1 from workspaces where id = 'ws-ao2'`)).toHaveLength(1);
+    expect(await q(`select 1 from wallets where workspace_id = 'ws-ao1'`)).toHaveLength(1);
+    expect(await q(`select 1 from workspace_members where user_id = 'u-ao'`)).toHaveLength(2);
+  });
+
+  test("multi-workspace funded blocker leaves the deletable workspace unchanged", async () => {
+    await addWorkspace("ws-af1", "u-af");
+    await addWorkspace("ws-af2", "u-af", { balance: 1000 });
+    const res = await removeUser("u-af", app, { confirm: true });
+    expect(res.status).toBe(409);
+    const body = await errBody(res);
+    expect(body.error.code).toBe("WORKSPACE_FUNDED");
+    expect(body.error.workspaces?.map((w) => w.id)).toEqual(["ws-af2"]);
+    expect(await q(`select 1 from workspaces where id = 'ws-af1'`)).toHaveLength(1);
+    expect(await q(`select 1 from workspace_members where user_id = 'u-af'`)).toHaveLength(2);
+  });
+
+  test("strict body parsing: malformed JSON, wrong types, unknown keys are 400", async () => {
+    const bad = async (raw: string) =>
+      app.handle(
+        new Request(`http://t/api/v1/admin/users/u-legacy`, {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: raw,
+        }),
+      );
+    expect((await bad("not json")).status).toBe(400);
+    expect((await bad(JSON.stringify({ confirm: "yes" }))).status).toBe(400);
+    expect((await bad(JSON.stringify({ unknown: 1 }))).status).toBe(400);
+    expect((await bad(JSON.stringify({ confirm: true, transfer_to: "" }))).status).toBe(400);
+    // absent body stays legacy (409 SOLE_OWNER, not 400)
+    expect((await removeUser("u-legacy")).status).toBe(409);
+  });
+
+  test("audit failure rolls back the entire removal", async () => {
+    await addUser("u-aur", "aur@t.local");
+    await addWorkspace("ws-aur", "u-aur");
+    await q(
+      `create or replace function block_user_remove() returns trigger as $$
+       begin
+         if new.action = 'user.remove' then
+           raise exception 'audit sink down';
+         end if;
+         return new;
+       end; $$ language plpgsql`,
+    );
+    await q(
+      `create trigger audit_block before insert on audit_log for each row execute function block_user_remove()`,
+    );
+    try {
+      const res = await removeUser("u-aur", app, { confirm: true });
+      expect(res.status).toBe(500);
+      // Nothing committed: user, workspace, wallet, membership all intact.
+      expect(await q(`select 1 from users where id = 'u-aur'`)).toHaveLength(1);
+      expect(await q(`select 1 from workspaces where id = 'ws-aur'`)).toHaveLength(1);
+      expect(await q(`select 1 from wallets where workspace_id = 'ws-aur'`)).toHaveLength(1);
+      expect(await q(`select 1 from workspace_members where user_id = 'u-aur'`)).toHaveLength(1);
+    } finally {
+      await q(`drop trigger audit_block on audit_log`);
+      await q(`drop function block_user_remove()`);
+    }
+  });
+
+  test("non-FK error in the mutation phase propagates and rolls back atomically", async () => {
+    await addUser("u-awf", "awf@t.local");
+    await addWorkspace("ws-awf", "u-awf");
+    await q(
+      `insert into ledger_entries (id, wallet_id, direction, amount, kind, balance_after, created_at)
+       values ('led-awf', 'w-ws-awf', 'credit', 1000, 'adjustment', 1000, $1)`,
+      [NOW],
+    );
+    // Force a NON-FK error during the archive fallback: the workspace-status
+    // update raises a check violation (23514), which must NOT be swallowed as
+    // an archive and must roll the whole transaction back.
+    await q(
+      `create or replace function block_archive() returns trigger as $$
+       begin
+         if new.status = 'suspended' then
+           raise exception 'boom' using errcode = 'check_violation';
+         end if;
+         return new;
+       end; $$ language plpgsql`,
+    );
+    await q(
+      `create trigger archive_block before update on workspaces for each row execute function block_archive()`,
+    );
+    try {
+      let status = 0;
+      try {
+        const res = await removeUser("u-awf", app, { confirm: true });
+        status = res.status;
+      } catch {
+        status = 500; // unhandled throw also means rollback
+      }
+      expect([500, 0]).toContain(status === 0 ? 500 : status); // never a 2xx/4xx success path
+      // Atomic: workspace retained (not archived, not deleted), ledger intact,
+      // user intact.
+      expect(await q(`select status from workspaces where id = 'ws-awf'`)).toEqual([
+        { status: "active" },
+      ]);
+      expect(await q(`select 1 from ledger_entries where wallet_id = 'w-ws-awf'`)).toHaveLength(1);
+      expect(await q(`select 1 from users where id = 'u-awf'`)).toHaveLength(1);
+    } finally {
+      await q(`drop trigger archive_block on workspaces`);
+      await q(`drop function block_archive()`);
+    }
+  });
+
+  test("chat history is retained and the identity tombstoned (no hard delete)", async () => {
+    await addUser("u-chat", "chat@t.local");
+    await addWorkspace("ws-chat", "u-chat");
+    await q(
+      `insert into chat_conversations (id, user_id, workspace_id, title, messages, created_at, updated_at)
+       values ('cc-1', 'u-chat', 'ws-chat', 't', '[]'::jsonb, $1, $1)`,
+      [NOW],
+    );
+    const res = await removeUser("u-chat", app, { confirm: true });
+    expect(res.status).toBe(200);
+    // Tombstone: no FK-eligible hard delete because chat history references it.
+    const u = await q<{ email: string; name: string }>(
+      `select email, name from users where id = 'u-chat'`,
+    );
+    expect(u).toHaveLength(1);
+    expect(u[0]!.email).toBe("deleted+u-chat@invalid");
+    expect(u[0]!.name).toBe("Deleted user");
+    expect(await q(`select 1 from chat_conversations where id = 'cc-1'`)).toHaveLength(1);
+    // Identity disabled: sessions and accounts gone.
+    expect(await q(`select 1 from session where user_id = 'u-chat'`)).toHaveLength(0);
+    expect(await q(`select 1 from "account" where user_id = 'u-chat'`)).toHaveLength(0);
+    expect(await q(`select 1 from workspace_members where user_id = 'u-chat'`)).toHaveLength(0);
+  });
+
+  test("zero-balance wallet is locked: a held wallet row blocks the confirm removal", async () => {
+    await addUser("u-zl", "zl@t.local");
+    await addWorkspace("ws-zl", "u-zl");
+    const { SQL } = await import("bun");
+    const attacker = new SQL(tUrl, { max: 1 });
+    try {
+      await attacker.unsafe(`begin`);
+      await attacker.unsafe(`select * from wallets where workspace_id = 'ws-zl' for update`);
+      let settled = false;
+      const route = removeUser("u-zl", app, { confirm: true }).then(() => {
+        settled = true;
+      });
+      await new Promise((r) => setTimeout(r, 500));
+      expect(settled).toBe(false); // blocked: zero wallet was FOR UPDATE-locked
+      await attacker.unsafe(`commit`);
+      await route;
+      expect(settled).toBe(true);
+      expect(await q(`select 1 from workspaces where id = 'ws-zl'`)).toHaveLength(0);
+    } finally {
+      try {
+        await attacker.unsafe(`rollback`);
+      } catch {
+        // already committed
+      }
+      attacker.close();
+    }
   });
 });

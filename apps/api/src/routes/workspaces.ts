@@ -3,7 +3,7 @@
 import { Elysia, t } from "elysia";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, writeAudit, jsonError } from "../authz";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { type Db, workspaces, workspaceMembers, wallets, auditLog } from "@hoborouter/db";
 
 export const workspacesRoutes = (db: Db, auth: BetterAuthInstance) =>
@@ -27,6 +27,11 @@ export const workspacesRoutes = (db: Db, auth: BetterAuthInstance) =>
         const name = typeof raw === "string" ? raw.trim() : "";
         if (!name) return jsonError(400, "INVALID", "name is required");
         await db.transaction(async (tx) => {
+          // Serialize against the admin sole-owner removal: it holds the same
+          // user-keyed advisory lock, so a workspace created for a user being
+          // removed cannot slip in between the removal's workspace locks and
+          // commit an ownerless-user workspace.
+          await tx.execute(sql`select pg_advisory_xact_lock(19088, hashtext(${userId}))`);
           await tx
             .insert(workspaces)
             .values({ id, name, status: "active", created_at: Date.now() });

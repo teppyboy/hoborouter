@@ -31,11 +31,16 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
     const denied = await requireWsRole(db, params.id, userId, "admin");
     if (denied) return denied;
     const ws = await db
-      .select({ id: workspaces.id })
+      .select({ id: workspaces.id, status: workspaces.status })
       .from(workspaces)
       .where(eq(workspaces.id, params.id))
       .limit(1);
     if (!ws[0]) return jsonError(404, "NOT_FOUND", "Workspace not found");
+    // Archived (sole-owner removal) workspaces cannot issue new keys; existing
+    // keys already fail gateway auth via the workspace-status join.
+    if (ws[0].status !== "active") {
+      return jsonError(403, "WORKSPACE_SUSPENDED", "Workspace is suspended");
+    }
     const raw = (body as { name?: unknown } | null)?.name;
     const name = typeof raw === "string" ? raw.trim() : "";
     if (!name) return jsonError(400, "INVALID", "name is required");
