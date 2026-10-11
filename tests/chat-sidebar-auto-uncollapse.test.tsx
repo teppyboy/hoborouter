@@ -242,9 +242,7 @@ test("opening a saved conversation from history expands the sidebar WITHOUT rewr
   let row: HTMLButtonElement | null = null;
   for (let i = 0; i < 300 && !row; i++) {
     await flush();
-    row = document.body.querySelector<HTMLButtonElement>(
-      'ul[aria-label="Conversations"] button',
-    );
+    row = document.body.querySelector<HTMLButtonElement>('ul[aria-label="Conversations"] button');
     // Only a conversation row (with a title), not the toggle or rail button.
     if (row && row.textContent?.includes("Rewrite the intro")) break;
     row = null;

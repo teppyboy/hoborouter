@@ -52,7 +52,10 @@ const FAQ_ENTRIES: FaqEntry[] = [
     },
   },
   {
-    q: { en: "Can I attach files in the built-in Chat?", vi: "Có thể đính kèm tệp trong Chat không?" },
+    q: {
+      en: "Can I attach files in the built-in Chat?",
+      vi: "Có thể đính kèm tệp trong Chat không?",
+    },
     a: {
       en: "Yes: images (PNG, JPEG, WebP, GIF up to 10 MB each) and text/code files (up to 64 KB each), at most 4 files and 10 MB total per message. Attachments live only in the current browser session — they are sent with the message but are not stored in your conversation history.",
       vi: "Có: ảnh (PNG, JPEG, WebP, GIF, tối đa 10 MB mỗi ảnh) và tệp văn bản/mã nguồn (tối đa 64 KB mỗi tệp), tối đa 4 tệp và 10 MB mỗi tin nhắn. Tệp đính kèm chỉ tồn tại trong phiên trình duyệt hiện tại — chúng được gửi cùng tin nhắn nhưng không được lưu vào lịch sử hội thoại.",
@@ -90,7 +93,13 @@ function FaqItem({ entry }: { entry: FaqEntry }) {
   );
 }
 
-export function Faq({ instance, embedded }: { instance?: PublicInstance | null; embedded?: boolean }) {
+export function Faq({
+  instance,
+  embedded,
+}: {
+  instance?: PublicInstance | null;
+  embedded?: boolean;
+}) {
   const title = useLocaleEntry(faqTitle);
   const description = useLocaleEntry(faqDescription);
   const noContactText = useLocaleEntry(noContact);
