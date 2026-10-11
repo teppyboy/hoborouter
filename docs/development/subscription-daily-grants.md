@@ -9,12 +9,21 @@ admin API (`apps/api/src/routes/admin-bundles.ts`). Migration 0019.
 
 - `subscription_plans.daily_grant_vnd` (integer VND, NOT NULL, default 0,
   CHECK `sp_daily_grant_vnd`). 0 = no daily grant.
+- Authored in exactly one currency: integer VND (`daily_grant_vnd`) or exact
+  USD text (`daily_grant_usd`, migration 0020, e.g. "5" = 5 USD/day) — never
+  both. USD is converted ONCE to integer VND (ceiling, BigInt only) at the
+  plan's shared `creation_fx_rate_vnd_per_usd` creation FX snapshot, mirroring
+  the per-field mixed-currency price/credit contract. Both the authored text
+  and the frozen VND are stored on the row and exposed on the admin list and
+  the public plans endpoint.
 - Settable at plan creation and revisable through the successor flow
-  (omitted = carried over from the old row); rejected on PATCH (frozen
-  financial term, same contract as `credit_per_period_vnd`).
-- USD-per-day is authored as VND through the admin mixed-currency catalog
-  (e.g. 5 USD/day at a 26,000 VND/USD snapshot = `130000`). The column is a
-  money column: frozen once authored, never recomputed.
+  (omitted = carried over verbatim — authored USD text AND frozen VND, never
+  recomputed at the successor's FX); identical USD-authoring resubmissions are
+  no-ops/replays; rejected on PATCH (frozen financial term, same contract as
+  `credit_per_period_vnd`).
+- The column is a money column: frozen once authored, never recomputed. The
+  public plans endpoint requotes USD PRICES at the current canonical rate but
+  always returns the daily grant exactly as stored.
 
 ## Grant policy
 
