@@ -1,8 +1,12 @@
-// Admin promo code management (safe subset of GET/POST/PATCH
+// Admin promo code management (safe subset of GET/POST/PATCH/DELETE
 // /api/v1/admin/promotions). Money and usage terms (amount_vnd, max_uses,
 // expires_at) are fixed at creation — the PATCH boundary only accepts
 // name/active, so the UI offers rename and activate/deactivate only, never
-// delete and never term edits. The POST response carries the plaintext code
+// term edits. Removal is an explicit confirm behind the DELETE endpoint's soft
+// delete (deleted_at + active=false): the code is hidden from list/redeem/
+// preview/re-view and its hash can never be reused, but redemption, payment,
+// and ledger history is preserved server-side — removal hides, it never
+// deletes financial history. The POST response carries the plaintext code
 // exactly once; it lives in client memory only (never URL, localStorage, or
 // logs) and is cleared the moment its dialog closes, so a later failure can
 // never surface stale plaintext.
@@ -33,8 +37,8 @@ import { parseIntVnd } from "./bundles";
 export const promotionsDict = {
   title: { en: "Promo codes", vi: "Mã khuyến mãi" },
   description: {
-    en: "Top-up promo codes. Amount, usage limit and expiry are fixed at creation; deactivate instead of deleting.",
-    vi: "Mã khuyến mãi nạp tiền. Số tiền, giới hạn lượt dùng và hạn dùng cố định khi tạo; vô hiệu hoá thay vì xoá.",
+    en: "Top-up promo codes. Amount, usage limit and expiry are fixed at creation. Remove hides a code from redemption; financial history is preserved.",
+    vi: "Mã khuyến mãi nạp tiền. Số tiền, giới hạn lượt dùng và hạn dùng cố định khi tạo. Xoá chỉ ẩn mã khỏi redemption; lịch sử tài chính được giữ nguyên.",
   },
   name: { en: "Name", vi: "Tên" },
   kind: { en: "Type", vi: "Loại" },
@@ -138,6 +142,16 @@ export const promotionsDict = {
     vi: "Bắt buộc — phải là mã hoàn toàn mới; mã trùng với mã hiện có sẽ bị từ chối. Có thể xem lại bằng nút Xem mã.",
   },
   replaceConfirm: { en: "Create replacement", vi: "Tạo mã thay thế" },
+  remove: { en: "Remove", vi: "Xoá" },
+  removeA: { en: "Remove {name}", vi: "Xoá {name}" },
+  removeTitle: { en: "Remove promo code", vi: "Xoá mã khuyến mãi" },
+  removeNote: {
+    en: 'Removes "{name}" for everyone: the code stops working immediately and can never be reused or re-viewed. Amount, uses and financial history are preserved. This cannot be undone.',
+    vi: 'Xoá "{name}" với mọi người: mã ngừng hoạt động ngay lập tức và không thể dùng lại hay xem lại. Số tiền, lượt dùng và lịch sử tài chính được giữ nguyên. Không thể hoàn tác.',
+  },
+  removeConfirm: { en: "Remove code", vi: "Xoá mã" },
+  removing: { en: "Removing…", vi: "Đang xoá…" },
+  removed: { en: "Removed", vi: "Đã xoá" },
   deactivateFailed: {
     en: "Replacement created, but the original {name} could not be deactivated — both codes are active. Deactivate the original with its Deactivate control; do not create another replacement.",
     vi: "Đã tạo mã thay thế nhưng không thể vô hiệu hoá bản gốc {name} — cả hai mã đều đang hoạt động. Hãy vô hiệu hoá bản gốc bằng nút Vô hiệu hoá; không tạo lại mã thay thế.",
@@ -643,6 +657,68 @@ function ReplaceDialog({
   );
 }
 
+/**
+ * Soft-delete confirm (existing DELETE endpoint): hides the code from
+ * list/redeem/preview/re-view and permanently retires its hash, while
+ * redemption/payment/ledger history is preserved server-side. A failure
+ * keeps the dialog open with the server message so the admin can retry
+ * without re-opening or losing context; Cancel never issues a DELETE.
+ */
+function RemoveDialog({
+  row,
+  onClose,
+  onConfirm,
+  pending,
+  serverError,
+}: {
+  row: AdminPromo;
+  onClose: () => void;
+  onConfirm: (id: string) => void;
+  pending: boolean;
+  serverError: string | null;
+}) {
+  const t = useT(promotionsDict);
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t("removeTitle")}</DialogTitle>
+          <DialogDescription>{t("removeNote", { name: row.name })}</DialogDescription>
+        </DialogHeader>
+        {serverError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {serverError}
+          </p>
+        ) : null}
+        <DialogFooter>
+          <Button
+            variant="outline"
+            className="pointer-coarse:h-11"
+            onClick={() => {
+              onClose();
+            }}
+          >
+            {t("cancel")}
+          </Button>
+          <Button
+            variant="destructive"
+            className="pointer-coarse:h-11"
+            disabled={pending}
+            onClick={() => onConfirm(row.id)}
+          >
+            {pending ? t("removing") : t("removeConfirm")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** Plaintext reveal (create-time or admin re-view). Component state only. */
 function CodeDialog({
   code,
@@ -711,6 +787,10 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
   // Financial replacement: the row being replaced (null = dialog closed).
   const [replacing, setReplacing] = useState<AdminPromo | null>(null);
   const [replaceCodeError, setReplaceCodeError] = useState<string | null>(null);
+  // Soft-remove confirm: the row being removed (null = dialog closed); a
+  // failure keeps both open with the server message inline for a retry.
+  const [removing, setRemoving] = useState<AdminPromo | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   // Saved partial-failure state: the replacement row exists but the original
   // could not be deactivated. Persisted (survives the reveal dialog) until a
   // successful manual deactivation of that exact row; never auto-retried and
@@ -825,6 +905,24 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
         return;
       }
       toast.error(e instanceof ApiError ? e.message : t("requestFailed"));
+    },
+  });
+
+  // Soft-remove via the existing DELETE endpoint (server soft delete: the row
+  // keeps redemption/payment/ledger history). Success closes the dialog and
+  // refreshes the list (row gone); failure keeps the dialog open with the
+  // server message inline so the exact delete can be retried.
+  const remove = useMutation({
+    mutationFn: (id: string) =>
+      api<{ ok: boolean }>(`/api/v1/admin/promotions/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      setRemoving(null);
+      setRemoveError(null);
+      toast.success(t("removed"));
+      void qc.invalidateQueries({ queryKey: ["admin", "promotions"] });
+    },
+    onError: (e: unknown) => {
+      setRemoveError(e instanceof ApiError ? e.message : t("requestFailed"));
     },
   });
 
@@ -950,6 +1048,18 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
               }}
             >
               {row.active ? t("deactivate") : t("reactivate")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="pointer-coarse:h-11"
+              aria-label={t("removeA", { name: row.name })}
+              onClick={() => {
+                setRemoveError(null);
+                setRemoving(row);
+              }}
+            >
+              {t("remove")}
             </Button>
           </span>
         );
@@ -1171,6 +1281,21 @@ export function PromotionsCard({ data }: { data: AdminPromo[] }) {
           }}
           pending={replaceCreate.isPending}
           serverError={replaceCodeError}
+        />
+      )}
+      {removing !== null && (
+        <RemoveDialog
+          key={removing.id}
+          row={removing}
+          onClose={() => {
+            setRemoving(null);
+            setRemoveError(null);
+          }}
+          onConfirm={(id) => {
+            if (!remove.isPending) remove.mutate(id);
+          }}
+          pending={remove.isPending}
+          serverError={removeError}
         />
       )}
       <CodeDialog

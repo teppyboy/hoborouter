@@ -2,8 +2,9 @@
 // - Create form validation: positive whole VND amount, max uses >= 1 whole,
 //   optional expiry that must be a future date (end of the selected local day).
 // - Safe-subset table: rows render name/amount/uses/expiry/status; row names
-//   are escaped (a hostile name can never inject markup); there is no delete
-//   (promo codes are deactivated, amount/uses/expiry terms are immutable).
+//   are escaped (a hostile name can never inject markup); removal is only the
+//   confirm-gated soft delete (DELETE hides the code, financial history is
+//   preserved server-side) and amount/uses/expiry terms are immutable.
 // - Row actions carry accessible labels built from the promo name.
 // - The typed colocated dictionary always has both English and Vietnamese.
 // Interaction flows run against real ReactDOM in jsdom with the page's actual
@@ -443,14 +444,18 @@ function renderCard(rows: AdminPromo[]): string {
   );
 }
 
-test("rows render amount, uses, expiry and status; no delete exists", () => {
+test("rows render amount, uses, expiry and status with a confirm-gated Remove action", () => {
   const html = renderCard([promo()]);
   expect(html).toContain("Summer promo");
   expect(html).toContain("₫");
   expect(html).toContain("2 / 10");
   expect(html).toContain("Active");
+  // Remove is a plain row action; the destructive confirm (and any DELETE)
+  // only happens inside the dialog, never from the initial markup.
+  expect(html).toContain(">Remove<");
+  expect(html).toContain('aria-label="Remove Summer promo"');
+  expect(html).not.toContain("Remove promo code");
   expect(html).not.toContain(">Delete<");
-  expect(html).not.toContain(">Remove<");
   // Expired-safe row shows a dash instead of a date.
   const none = renderCard([promo({ expires_at: null })]);
   expect(none).toContain("—");
@@ -480,6 +485,7 @@ test("dialogs and one-time code text are absent from initial markup", () => {
   const html = renderCard([promo()]);
   expect(html).not.toContain("shown only once");
   expect(html).not.toContain("Rename promo");
+  expect(html).not.toContain("Remove promo code");
 });
 
 test("empty list renders the empty state", () => {
@@ -1052,6 +1058,74 @@ test("percent row replace posts the exact percent shape with the required code",
     expires_at: null,
     code: "PCTREPL",
   });
+});
+
+// --- soft remove (confirm-gated DELETE; server keeps financial history) ----
+
+test("remove confirm sends exactly one DELETE, hides the row after refresh, closes the dialog", async () => {
+  await mountPage([promoRow()]);
+  const del = deferred();
+  responder = async (call) => {
+    if (call.init?.method === "DELETE") return del.promise;
+    // List refresh after success: the soft-removed row is gone.
+    return jsonRes(200, { data: [] });
+  };
+  click(buttonByLabel("Remove Summer promo")!);
+  await waitFor(() => bodyText().includes("Remove promo code"), "confirm dialog open");
+  // Opening the dialog alone must not delete anything.
+  expect(calls.filter((c) => c.init?.method === "DELETE").length).toBe(0);
+  const confirm = buttonByText("Remove code")!;
+  click(confirm);
+  await waitFor(() => calls.filter((c) => c.init?.method === "DELETE").length === 1, "delete sent");
+  // Exactly the existing DELETE endpoint on the row id, once.
+  expect(calls.find((c) => c.init?.method === "DELETE")!.path).toBe(
+    "/api/v1/admin/promotions/promo_1",
+  );
+  expect(confirm.disabled).toBe(true);
+  expect(bodyText()).toContain("Removing\u2026");
+  click(confirm);
+  await flush();
+  expect(calls.filter((c) => c.init?.method === "DELETE").length).toBe(1);
+  del.resolve(jsonRes(200, { ok: true }));
+  await waitFor(() => !bodyText().includes("Summer promo"), "row hidden after refresh");
+  expect(bodyText()).not.toContain("Remove promo code");
+});
+
+test("remove cancel sends no DELETE and closes the dialog", async () => {
+  await mountPage([promoRow()]);
+  responder = async () => jsonRes(200, { data: [promoRow()] });
+  click(buttonByLabel("Remove Summer promo")!);
+  await waitFor(() => bodyText().includes("Remove promo code"), "dialog open");
+  click(buttonByText("Cancel")!);
+  await waitFor(() => !bodyText().includes("Remove promo code"), "dialog closed");
+  expect(calls.filter((c) => c.init?.method === "DELETE").length).toBe(0);
+  // The action is still available afterwards.
+  expect(buttonByLabel("Remove Summer promo")).not.toBeNull();
+});
+
+test("remove failure keeps the dialog open with the server message; retry succeeds", async () => {
+  await mountPage([promoRow()]);
+  let attempts = 0;
+  responder = async (call) => {
+    if (call.init?.method === "DELETE") {
+      attempts += 1;
+      if (attempts === 1)
+        return jsonRes(500, { error: { code: "INTERNAL", message: "db unavailable" } });
+      return jsonRes(200, { ok: true });
+    }
+    return jsonRes(200, { data: attempts >= 2 ? [] : [promoRow()] });
+  };
+  click(buttonByLabel("Remove Summer promo")!);
+  await waitFor(() => bodyText().includes("Remove promo code"), "dialog open");
+  click(buttonByText("Remove code")!);
+  await waitFor(() => bodyText().includes("db unavailable"), "inline server error");
+  // The dialog stays open; the message is an inline alert for retry.
+  expect(bodyText()).toContain("Remove promo code");
+  expect(calls.filter((c) => c.init?.method === "DELETE").length).toBe(1);
+  click(buttonByText("Remove code")!);
+  await waitFor(() => !bodyText().includes("Summer promo"), "row hidden after retry");
+  expect(calls.filter((c) => c.init?.method === "DELETE").length).toBe(2);
+  expect(bodyText()).not.toContain("db unavailable");
 });
 
 // --- partial failure: create succeeded, deactivate failed -------------------
