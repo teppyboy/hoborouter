@@ -19,7 +19,7 @@ export type CreateReservationArgs = {
   gatewayRequestId: string;
   apiKeyId: string;
   modelBindingId: string;
-  endpoint: "/v1/chat/completions" | "/v1/responses";
+  endpoint: "/v1/chat/completions" | "/v1/responses" | "/v1/messages";
   mode: "stream" | "non-stream";
   priceSnapshotId: string;
   capAmount: number;

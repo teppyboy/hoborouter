@@ -113,6 +113,15 @@ type ResponsesUsageShape = {
   };
 };
 
+type MessagesUsageShape = {
+  usage?: {
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+    cache_creation_input_tokens?: unknown;
+    cache_read_input_tokens?: unknown;
+  };
+};
+
 function chatUsageOf(obj: ChatUsageShape): UsageExtraction {
   const u = obj.usage;
   if (u === undefined) return { kind: "missing" };
@@ -136,13 +145,42 @@ function responsesUsageOf(obj: ResponsesUsageShape): UsageExtraction {
 }
 
 /**
+ * Anthropic Messages usage: input_tokens EXCLUDES cache traffic, so billable
+ * input = input_tokens + cache_creation_input_tokens (billed at the full
+ * input rate); cache_read_input_tokens bills at the cached rate. Anthropic
+ * reports no reasoning split — output_tokens already includes thinking — so
+ * reasoningTokens is exactly 0, never an assumption.
+ */
+function messagesUsageOf(obj: MessagesUsageShape): UsageExtraction {
+  const u = obj.usage;
+  if (u === undefined) return { kind: "missing" };
+  const { input_tokens: input, output_tokens: output } = u;
+  if (input === undefined || output === undefined) return { kind: "missing" };
+  if (!isSafeNonNegative(input) || !isSafeNonNegative(output)) return { kind: "invalid" };
+  const creation = u.cache_creation_input_tokens;
+  if (creation !== undefined && creation !== null && !isSafeNonNegative(creation))
+    return { kind: "invalid" };
+  const read = u.cache_read_input_tokens;
+  if (read !== undefined && read !== null && !isSafeNonNegative(read)) return { kind: "invalid" };
+  return {
+    kind: "ok",
+    usage: {
+      inputTokens: BigInt(input + (typeof creation === "number" ? creation : 0)),
+      outputTokens: BigInt(output),
+      cachedInputTokens: BigInt(typeof read === "number" ? read : 0),
+      reasoningTokens: 0n,
+    },
+  };
+}
+
+/**
  * Observe-only usage tap. The caller forwards response bytes to push() and
  * reads the outcome via end() (or abort() on cancellation). Pass-through is
  * the caller's job; memory is O(line) for streams, O(body) bounded by
  * maxBodyBytes for non-stream JSON.
  */
 export function createUsageTap(options: {
-  protocol: "chat" | "responses";
+  protocol: "chat" | "responses" | "messages";
   stream: boolean;
   maxLineBytes?: number;
   maxBodyBytes?: number;
@@ -165,6 +203,41 @@ export function createUsageTap(options: {
   let sawCleanFinish = false;
   let sawUsage: UsageSplit | null = null;
   let sawInvalidUsage = false;
+  // Anthropic messages stream: usage accumulates from message_start (input
+  // splits) and message_delta (cumulative output); message_stop completes.
+  // Dedicated accumulator: UsageSplit's nullable split fields would fight the
+  // "latest wins" merge.
+  let msgAcc: {
+    input: bigint | null;
+    creation: bigint | null;
+    read: bigint | null;
+    output: bigint | null;
+  } | null = null;
+  let sawMessageStop = false;
+
+  /** Merge one Anthropic SSE usage object into the accumulator; latest wins per field (cumulative). */
+  const mergeMessagesUsage = (u: unknown): void => {
+    if (typeof u !== "object" || u === null) return;
+    const usage = u as Record<string, unknown>;
+    const take = (key: string): bigint | null => {
+      const v = usage[key];
+      if (v === undefined || v === null) return null;
+      if (!isSafeNonNegative(v)) {
+        sawInvalidUsage = true;
+        return null;
+      }
+      return BigInt(v);
+    };
+    const input = take("input_tokens");
+    const creation = take("cache_creation_input_tokens");
+    const read = take("cache_read_input_tokens");
+    const output = take("output_tokens");
+    if (msgAcc === null) msgAcc = { input: null, creation: null, read: null, output: null };
+    if (input !== null) msgAcc.input = input;
+    if (creation !== null) msgAcc.creation = creation;
+    if (read !== null) msgAcc.read = read;
+    if (output !== null) msgAcc.output = output;
+  };
 
   const fail = (reason: string): UsageResult => {
     if (result === null) result = { complete: false, reason };
@@ -174,6 +247,21 @@ export function createUsageTap(options: {
   const finish = (): UsageResult => {
     if (result !== null) return result;
     if (options.stream) {
+      if (options.protocol === "messages") {
+        if (sawInvalidUsage) return fail("invalid_usage");
+        const mu = msgAcc;
+        if (mu === null || mu.input === null || mu.output === null) return fail("missing_usage");
+        if (!sawMessageStop) return fail("missing_stop");
+        return (result = {
+          complete: true,
+          usage: {
+            inputTokens: mu.input + (mu.creation ?? 0n),
+            outputTokens: mu.output,
+            cachedInputTokens: mu.read ?? 0n,
+            reasoningTokens: 0n,
+          },
+        });
+      }
       if (sawInvalidUsage) return fail("invalid_usage");
       if (sawUsage === null) return fail("missing_usage");
       if (options.protocol === "chat") {
@@ -200,6 +288,12 @@ export function createUsageTap(options: {
     const obj = parsed as Record<string, unknown>;
     if (options.protocol === "chat") {
       const extracted = chatUsageOf(obj as ChatUsageShape);
+      if (extracted.kind !== "ok")
+        return fail(extracted.kind === "invalid" ? "invalid_usage" : "missing_usage");
+      return (result = { complete: true, usage: extracted.usage });
+    }
+    if (options.protocol === "messages") {
+      const extracted = messagesUsageOf(obj as MessagesUsageShape);
       if (extracted.kind !== "ok")
         return fail(extracted.kind === "invalid" ? "invalid_usage" : "missing_usage");
       return (result = { complete: true, usage: extracted.usage });
@@ -253,6 +347,23 @@ export function createUsageTap(options: {
     }
     // Responses SSE: completion only on the response.completed event.
     const type = typeof obj.type === "string" ? obj.type : "";
+    if (options.protocol === "messages") {
+      if (type === "message_start") {
+        const message = (obj as { message?: unknown }).message;
+        if (typeof message === "object" && message !== null)
+          mergeMessagesUsage((message as Record<string, unknown>).usage);
+        return;
+      }
+      if (type === "message_delta") {
+        mergeMessagesUsage((obj as Record<string, unknown>).usage);
+        return;
+      }
+      if (type === "message_stop") {
+        sawMessageStop = true;
+        return;
+      }
+      return; // ping and unknown event types carry no usage
+    }
     if (type === "response.failed" || type === "response.incomplete" || type === "error") {
       fail("error_event");
       return;

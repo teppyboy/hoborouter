@@ -104,7 +104,7 @@ export type ReserveRequestArgs = {
   modelId: string;
   mappingId: string;
   modelPriceId: string;
-  endpoint: "/v1/chat/completions" | "/v1/responses";
+  endpoint: "/v1/chat/completions" | "/v1/responses" | "/v1/messages";
   mode: "stream" | "non-stream";
   fxRate: number;
   capVnd: number;

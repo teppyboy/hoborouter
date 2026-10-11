@@ -822,7 +822,10 @@ export const requests = pgTable(
   },
   (t) => [
     index("requests_cpa_trace_idx").on(t.cpa_trace_id),
-    check("requests_endpoint", sql`${t.endpoint} IN ('/v1/chat/completions','/v1/responses')`),
+    check(
+      "requests_endpoint",
+      sql`${t.endpoint} IN ('/v1/chat/completions','/v1/responses','/v1/messages')`,
+    ),
     check("requests_mode", sql`${t.mode} IN ('stream','non-stream')`),
     check(
       "requests_status",

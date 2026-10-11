@@ -48,6 +48,28 @@ const openAiError = (status: number, message: string, code: string) =>
     headers: { "content-type": "application/json" },
   });
 
+/**
+ * Anthropic-native error envelope for the /v1/messages route. Type mapping by
+ * status per the Messages API error taxonomy (authentication_error,
+ * billing_error, permission_error, not_found_error, rate_limit_error,
+ * invalid_request_error, api_error).
+ */
+const anthropicErrorType = (status: number): string => {
+  if (status === 401) return "authentication_error";
+  if (status === 402) return "billing_error";
+  if (status === 403) return "permission_error";
+  if (status === 404) return "not_found_error";
+  if (status === 429) return "rate_limit_error";
+  if (status === 400 || status === 413 || status === 422) return "invalid_request_error";
+  return "api_error";
+};
+
+const anthropicError = (status: number, message: string) =>
+  new Response(
+    JSON.stringify({ type: "error", error: { type: anthropicErrorType(status), message } }),
+    { status, headers: { "content-type": "application/json" } },
+  );
+
 const intEnv = (
   name: string,
   fallback: number,
@@ -241,7 +263,7 @@ function safeUpstreamError(
  * content delta. Role-only chunks, usage-only chunks, pings and empty deltas
  * do not count as first token.
  */
-function isFirstTokenEvent(obj: JsonValue, protocol: "chat" | "responses"): boolean {
+function isFirstTokenEvent(obj: JsonValue, protocol: "chat" | "responses" | "messages"): boolean {
   if (typeof obj !== "object" || obj === null) return false;
   const o = obj as Record<string, unknown>;
   if (protocol === "chat") {
@@ -273,6 +295,18 @@ function isFirstTokenEvent(obj: JsonValue, protocol: "chat" | "responses"): bool
       )
     );
   }
+  if (protocol === "messages") {
+    // Anthropic SSE: real generated content arrives as content_block_delta
+    // with non-empty delta text/thinking; starts/stops/pings are not first token.
+    if (o.type !== "content_block_delta") return false;
+    const delta = o.delta;
+    if (typeof delta !== "object" || delta === null) return false;
+    const d = delta as Record<string, unknown>;
+    return (
+      (typeof d.text === "string" && d.text.length > 0) ||
+      (typeof d.thinking === "string" && d.thinking.length > 0)
+    );
+  }
   // Responses SSE: generated content arrives as *.delta events (text, function
   // call arguments). Completed/usage/ping events are not first-token.
   const type = typeof o.type === "string" ? o.type : "";
@@ -284,7 +318,7 @@ function sseModelRewriteStream(
   source: ReadableStream<Uint8Array>,
   upstreamModel: string,
   publicModel: string,
-  protocol: "chat" | "responses",
+  protocol: "chat" | "responses" | "messages",
   onFirstToken?: (obj: JsonValue) => void,
 ) {
   const dec = new TextDecoder();
@@ -329,7 +363,7 @@ function sseModelRewriteStream(
 function gatewayHandler(
   db: Db,
   path: string,
-  protocol: "chat" | "responses",
+  protocol: "chat" | "responses" | "messages",
   env: Record<string, string | undefined> = process.env,
 ) {
   // Timing uses the monotonic clock: ttft (streams: first real token event;
@@ -337,19 +371,31 @@ function gatewayHandler(
   const monotonic = () => performance.now();
   const roundMs = (n: number) => Math.round(n);
   return async ({ request }: { request: Request }): Promise<Response> => {
+    // Errors on the messages route use the Anthropic envelope; other routes
+    // keep the historical OpenAI/json shapes.
+    const routeError = (status: number, code: string, message: string) =>
+      protocol === "messages" ? anthropicError(status, message) : jsonError(status, code, message);
     // 1. Disabled gate before any DB write (the body gates below keep the
     // preflight side-effect-free: no DB write before they pass).
     if (env.HBR_GATEWAY_ENABLED === "0") {
-      return jsonError(503, "gateway_disabled", "Paid gateway is disabled");
+      return routeError(503, "gateway_disabled", "Paid gateway is disabled");
     }
 
     // 2. Auth lookup only — needed to resolve the body limit. NO writes yet:
     // the preflight (size gates) must be side-effect-free, so last_used_at is
-    // written only after both gates pass below.
+    // written only after both gates pass below. The messages route accepts the
+    // Anthropic-native x-api-key header as well as Bearer.
     const header = request.headers.get("authorization") ?? "";
-    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    let token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    if (protocol === "messages" && !token) {
+      const xApiKey = request.headers.get("x-api-key");
+      if (xApiKey) token = xApiKey.trim();
+    }
     const key = token ? await verifyApiKey(db, token) : null;
-    if (!key) return openAiError(401, "Invalid API key provided.", "invalid_api_key");
+    if (!key)
+      return protocol === "messages"
+        ? anthropicError(401, "Invalid API key provided.")
+        : openAiError(401, "Invalid API key provided.", "invalid_api_key");
 
     // 3. Body validation — size-limited BEFORE buffering (memory DoS guard).
     // Cap resolution: chat-purpose provenance lifts the cap only on the exact
@@ -361,10 +407,10 @@ function gatewayHandler(
     const limitLabel = `${Math.floor(bodyLimit / (1024 * 1024))} MiB`;
     const declaredLength = Number(request.headers.get("content-length"));
     if (Number.isSafeInteger(declaredLength) && declaredLength > bodyLimit) {
-      return jsonError(413, "payload_too_large", `Request body exceeds ${limitLabel}`);
+      return routeError(413, "payload_too_large", `Request body exceeds ${limitLabel}`);
     }
     const bodyReader = request.body?.getReader();
-    if (!bodyReader) return jsonError(400, "INVALID", "Body must be a JSON object");
+    if (!bodyReader) return routeError(400, "INVALID", "Body must be a JSON object");
     let bodyBytes = 0;
     const chunks: Uint8Array[] = [];
     const decoder = new TextDecoder();
@@ -374,7 +420,7 @@ function gatewayHandler(
       bodyBytes += value.byteLength;
       if (bodyBytes > bodyLimit) {
         await bodyReader.cancel().catch(() => {});
-        return jsonError(413, "payload_too_large", `Request body exceeds ${limitLabel}`);
+        return routeError(413, "payload_too_large", `Request body exceeds ${limitLabel}`);
       }
       chunks.push(value);
     }
@@ -391,10 +437,19 @@ function gatewayHandler(
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error();
       body = parsed as Record<string, unknown>;
     } catch {
-      return jsonError(400, "INVALID", "Body must be a JSON object");
+      return routeError(400, "INVALID", "Body must be a JSON object");
     }
     if (typeof body.model !== "string" || body.model === "") {
-      return jsonError(400, "INVALID", "'model' is required");
+      return routeError(400, "INVALID", "'model' is required");
+    }
+    // Anthropic requires max_tokens and a non-empty messages array; reject
+    // before any reservation so a malformed request never touches the wallet.
+    if (protocol === "messages") {
+      const mt = body.max_tokens;
+      if (typeof mt !== "number" || !Number.isSafeInteger(mt) || mt < 1)
+        return routeError(400, "INVALID", "max_tokens is required and must be a positive integer");
+      if (!Array.isArray(body.messages) || body.messages.length === 0)
+        return routeError(400, "INVALID", "messages is required and must be a non-empty array");
     }
     // hoborouter/auto resolves ONCE here to a concrete published model before
     // cap/reserve; everything downstream (billing, streaming, scrubbing) runs
@@ -409,17 +464,17 @@ function gatewayHandler(
             fxRate: intEnv("HBR_USD_VND_RATE", 26000, env),
           })) ?? (await resolveModel(db, body.model)))
         : await resolveModel(db, body.model);
-    if (!resolved) return jsonError(404, "model_not_found", `Model '${body.model}' not found`);
+    if (!resolved) return routeError(404, "model_not_found", `Model '${body.model}' not found`);
     const { model, mapping, price } = resolved;
     const cachingOn = await effectiveCachingOn(db, model.prompt_caching);
     if (!(await isModelAllowed(db, key.api_key_id, model.id))) {
-      return jsonError(403, "FORBIDDEN", "Model not allowed for this API key");
+      return routeError(403, "FORBIDDEN", "Model not allowed for this API key");
     }
 
     // 4. Bounds + cap.
     const contextWindow = model.context_window;
     if (contextWindow === null) {
-      return jsonError(400, "model_missing_context_window", "Model has no context window bound");
+      return routeError(400, "model_missing_context_window", "Model has no context window bound");
     }
     const requestedMax =
       (body.max_tokens as number | undefined) ??
@@ -429,7 +484,7 @@ function gatewayHandler(
       requestedMax !== undefined &&
       (typeof requestedMax !== "number" || !Number.isSafeInteger(requestedMax) || requestedMax < 1)
     ) {
-      return jsonError(400, "INVALID", "max output tokens must be a positive integer");
+      return routeError(400, "INVALID", "max output tokens must be a positive integer");
     }
     // Output cap: absent client limit + absent configured default leaves the
     // forwarded request UNLIMITED (no Hoborouter-imposed 4096). Billing still
@@ -452,7 +507,7 @@ function gatewayHandler(
     const maxInput = Math.min(Math.ceil(Buffer.byteLength(raw)), contextWindow);
     const fxRate = intEnv("HBR_USD_VND_RATE", 26000, env);
     const accessKey = env.CPA_ACCESS_KEY;
-    if (!accessKey) return jsonError(503, "cpa_unconfigured", "CPA access key not configured");
+    if (!accessKey) return routeError(503, "cpa_unconfigured", "CPA access key not configured");
     let capVnd: number;
     try {
       capVnd = estimateCapVnd(
@@ -467,7 +522,7 @@ function gatewayHandler(
         price.markup_ppm,
       );
     } catch (err) {
-      if (err instanceof WalletError) return jsonError(400, "INVALID", err.message);
+      if (err instanceof WalletError) return routeError(400, "INVALID", err.message);
       throw err;
     }
 
@@ -526,19 +581,17 @@ function gatewayHandler(
     const limit = subPlans[0]?.rate ?? null;
     const limiter =
       limit !== null ? checkSubscriptionRateLimit(key.workspace_id, limit, limNow) : null;
-    const rateLimited = (retryAfterSec: number, code: string, message: string) =>
-      new Response(
-        JSON.stringify({
-          error: { message, type: "rate_limit_error", code },
-        }),
-        {
-          status: 429,
-          headers: {
-            "content-type": "application/json",
-            "retry-after": String(retryAfterSec),
-          },
-        },
-      );
+    const rateLimited = (retryAfterSec: number, code: string, message: string) => {
+      const res =
+        protocol === "messages"
+          ? anthropicError(429, message)
+          : new Response(JSON.stringify({ error: { message, type: "rate_limit_error", code } }), {
+              status: 429,
+              headers: { "content-type": "application/json" },
+            });
+      res.headers.set("retry-after", String(retryAfterSec));
+      return res;
+    };
 
     // Allowance over cap: 429 before any other check — no slot was counted
     // by either limiter, so there is nothing to undo.
@@ -560,7 +613,7 @@ function gatewayHandler(
         modelId: model.id,
         mappingId: mapping.id,
         modelPriceId: price.id,
-        endpoint: path as "/v1/chat/completions" | "/v1/responses",
+        endpoint: path as "/v1/chat/completions" | "/v1/responses" | "/v1/messages",
         mode: stream ? "stream" : "non-stream",
         fxRate,
         capVnd,
@@ -596,7 +649,7 @@ function gatewayHandler(
               "Subscription rate limit exceeded. Retry after the window ends or use top-up credit.",
             );
           }
-          return jsonError(402, "insufficient_balance", "Insufficient wallet balance");
+          return routeError(402, "insufficient_balance", "Insufficient wallet balance");
         }
       }
       throw err;
@@ -610,7 +663,7 @@ function gatewayHandler(
         // dispatching already? markDispatching happens right after; safe to ignore here.
       }
       void err;
-      return jsonError(400, "INVALID", "Request could not be prepared");
+      return routeError(400, "INVALID", "Request could not be prepared");
     };
 
     try {
@@ -631,10 +684,16 @@ function gatewayHandler(
         outbound.stream_options = (
           injectChatUsageOption(outbound) as Record<string, unknown>
         ).stream_options;
-    } else {
+    } else if (protocol === "responses") {
       delete outbound.max_tokens;
       delete outbound.max_completion_tokens;
       if (effectiveMax !== undefined) outbound.max_output_tokens = effectiveMax;
+    } else {
+      // messages: Anthropic-native body passes through verbatim (system,
+      // tools, tool_choice stay untouched) — CPA translates upstream. Only
+      // the model is swapped and max_tokens clamped to the context window
+      // like chat. No alias deletion or stream_options injection.
+      if (effectiveMax !== undefined) outbound.max_tokens = effectiveMax;
     }
 
     const controller = new AbortController();
@@ -665,7 +724,7 @@ function gatewayHandler(
       clearTimeout(headerTimeout);
       if (request.signal.aborted) {
         await settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done);
-        return jsonError(499, "client_abort", "Client aborted the request");
+        return routeError(499, "client_abort", "Client aborted the request");
       }
       await settle(
         db,
@@ -673,7 +732,7 @@ function gatewayHandler(
         { kind: "full_hold", reason: "upstream_error", metadata: err },
         done,
       );
-      return jsonError(502, "upstream_error", "Upstream dispatch failed");
+      return routeError(502, "upstream_error", "Upstream dispatch failed");
     }
     clearTimeout(headerTimeout);
 
@@ -721,7 +780,7 @@ function gatewayHandler(
         } else {
           await settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
         }
-        return jsonError(502, "upstream_error", "Upstream body read failed");
+        return routeError(502, "upstream_error", "Upstream body read failed");
       }
       const buf = new Uint8Array(ab);
       tap.push(buf);
@@ -745,7 +804,7 @@ function gatewayHandler(
     const source = upstream.body;
     if (!source) {
       await settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
-      return jsonError(502, "upstream_error", "Upstream returned no body");
+      return routeError(502, "upstream_error", "Upstream returned no body");
     }
     // Pull-based passthrough: client cancel() triggers cancel() below.
     const reader = source.getReader();
@@ -836,4 +895,80 @@ export const gatewayRoutes = (db: Db, env: Record<string, string | undefined> = 
       "/v1/responses",
       { detail: { hide: true } },
       gatewayHandler(db, "/v1/responses", "responses", env),
+    )
+    .post(
+      "/v1/messages",
+      { detail: { hide: true } },
+      gatewayHandler(db, "/v1/messages", "messages", env),
+    )
+    .post("/v1/messages/count_tokens", { detail: { hide: true } }, countTokensHandler(db, env));
+
+/**
+ * Free Anthropic count_tokens passthrough: authenticated, model-restricted,
+ * no wallet reservation and no settlement — CPA exposes
+ * POST /v1/messages/count_tokens natively (docs/research/cliproxyapi.md,
+ * internal/api/server_routes.go), so this is a pure relay with model-ID
+ * scrubbing, never a client-side estimate.
+ */
+function countTokensHandler(db: Db, env: Record<string, string | undefined>) {
+  return async ({ request }: { request: Request }): Promise<Response> => {
+    if (env.HBR_GATEWAY_ENABLED === "0") return anthropicError(503, "Paid gateway is disabled");
+    const header = request.headers.get("authorization") ?? "";
+    let token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    if (!token) {
+      const xApiKey = request.headers.get("x-api-key");
+      if (xApiKey) token = xApiKey.trim();
+    }
+    const key = token ? await verifyApiKey(db, token) : null;
+    if (!key) return anthropicError(401, "Invalid API key provided.");
+    let body: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(await request.text()) as unknown;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error();
+      body = parsed as Record<string, unknown>;
+    } catch {
+      return anthropicError(400, "Body must be a JSON object");
+    }
+    if (typeof body.model !== "string" || body.model === "")
+      return anthropicError(400, "'model' is required");
+    const resolved = await resolveModel(db, body.model);
+    if (!resolved) return anthropicError(404, `Model '${body.model}' not found`);
+    if (!(await isModelAllowed(db, key.api_key_id, resolved.model.id)))
+      return anthropicError(403, "Model not allowed for this API key");
+    const accessKey = env.CPA_ACCESS_KEY;
+    if (!accessKey) return anthropicError(503, "CPA access key not configured");
+    const base = (env.CPA_BASE_URL || "http://cpa:8317").replace(/\/$/, "");
+    let upstream: Response;
+    try {
+      upstream = await fetch(base + "/v1/messages/count_tokens", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${accessKey}`,
+        },
+        body: JSON.stringify({ ...body, model: resolved.mapping.upstream_model }),
+      });
+    } catch {
+      return anthropicError(502, "Upstream dispatch failed");
+    }
+    if (!upstream.ok) {
+      return safeUpstreamError(
+        await upstream.text(),
+        upstream.status,
+        resolved.mapping.upstream_model,
+        resolved.model.public_id,
+        resolved.model.provider,
+      );
+    }
+    const ab = await upstream.arrayBuffer();
+    return new Response(
+      rewriteJsonModel(ab, resolved.mapping.upstream_model, resolved.model.public_id),
+      {
+        status: upstream.status,
+        headers: {
+          "content-type": upstream.headers.get("content-type") ?? "application/json",
+        },
+      },
     );
+  };
+}
