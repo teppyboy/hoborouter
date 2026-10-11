@@ -643,6 +643,14 @@ export const adminExtraRoutes = (
           // workspace-row locks below (its memberships FK-lock only its own
           // brand-new workspace row).
           await tx.execute(sql`select pg_advisory_xact_lock(19088, hashtext(${params.id}))`);
+          // Serialize concurrent admin removals (cross-removal of two admins
+          // would otherwise both observe count=2): one shared admin-set lock
+          // before any admin authorization/count, then revalidate the actor.
+          await tx.execute(sql`select pg_advisory_xact_lock(19089, 0)`);
+          if (!(await isInstanceAdmin(tx, actorId))) {
+            violation = jsonError(403, "FORBIDDEN", "Instance admin required");
+            return;
+          }
           // Lock the target user row first: a concurrent identity change
           // (e.g. another admin editing) serializes behind this removal.
           await tx
@@ -716,7 +724,10 @@ export const adminExtraRoutes = (
               }
               // Target must be an existing member of every sole-owned
               // workspace (same-workspace requirement; no cross-workspace
-              // transfers). Non-owner members are promoted to owner.
+              // transfers). Non-owner members are promoted to owner. The
+              // membership row is locked (same protocol members.ts uses) so a
+              // concurrent member delete/demote serializes here instead of
+              // leaving a promotion that affects zero rows.
               for (const ws of sole) {
                 const membership = await tx
                   .select({ role: workspaceMembers.role })
@@ -727,6 +738,7 @@ export const adminExtraRoutes = (
                       eq(workspaceMembers.user_id, transferTo),
                     ),
                   )
+                  .for("update")
                   .limit(1);
                 if (!membership[0]) {
                   violation = conflict(
@@ -768,7 +780,7 @@ export const adminExtraRoutes = (
             if (transferTo) {
               outcome.transferred = [];
               for (const ws of sole) {
-                await tx
+                const promoted = await tx
                   .update(workspaceMembers)
                   .set({ role: "owner" })
                   .where(
@@ -776,7 +788,14 @@ export const adminExtraRoutes = (
                       eq(workspaceMembers.workspace_id, ws.id),
                       eq(workspaceMembers.user_id, transferTo),
                     ),
-                  );
+                  )
+                  .returning({ user_id: workspaceMembers.user_id });
+                if (promoted.length !== 1) {
+                  // Promotion affected zero rows: the membership vanished
+                  // despite the lock — roll back rather than orphan the
+                  // workspace ownerless.
+                  throw new Error("sole-owner transfer promoted zero rows");
+                }
                 await writeAudit(tx, {
                   actorUserId: actorId,
                   workspaceId: ws.id,

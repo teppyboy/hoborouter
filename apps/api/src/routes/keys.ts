@@ -30,17 +30,12 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
     const userId = gate.session.user.id;
     const denied = await requireWsRole(db, params.id, userId, "admin");
     if (denied) return denied;
-    const ws = await db
-      .select({ id: workspaces.id, status: workspaces.status })
+    const wsExists = await db
+      .select({ id: workspaces.id })
       .from(workspaces)
       .where(eq(workspaces.id, params.id))
       .limit(1);
-    if (!ws[0]) return jsonError(404, "NOT_FOUND", "Workspace not found");
-    // Archived (sole-owner removal) workspaces cannot issue new keys; existing
-    // keys already fail gateway auth via the workspace-status join.
-    if (ws[0].status !== "active") {
-      return jsonError(403, "WORKSPACE_SUSPENDED", "Workspace is suspended");
-    }
+    if (!wsExists[0]) return jsonError(404, "NOT_FOUND", "Workspace not found");
     const raw = (body as { name?: unknown } | null)?.name;
     const name = typeof raw === "string" ? raw.trim() : "";
     if (!name) return jsonError(400, "INVALID", "name is required");
@@ -50,7 +45,24 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
     const { plaintext, hash, prefix } = generateApiKey();
     const id = crypto.randomUUID();
     const now = Date.now();
+    // Workspace lock protocol: a key create that waited behind a concurrent
+    // sole-owner archive must recheck status under the lock, never insert
+    // into a suspended workspace.
+    let suspended = false;
     await db.transaction(async (tx) => {
+      const ws = await tx
+        .select({ id: workspaces.id, status: workspaces.status })
+        .from(workspaces)
+        .where(eq(workspaces.id, params.id))
+        .for("update")
+        .limit(1);
+      if (!ws[0]) throw new Error("workspace vanished before key insert");
+      // Archived (sole-owner removal) workspaces cannot issue new keys; existing
+      // keys already fail gateway auth via the workspace-status join.
+      if (ws[0].status !== "active") {
+        suspended = true;
+        return;
+      }
       await tx.insert(apiKeys).values({
         id,
         workspace_id: params.id,
@@ -70,6 +82,9 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
         detail: { name, key_prefix: prefix, purpose },
       });
     });
+    if (suspended) {
+      return jsonError(403, "WORKSPACE_SUSPENDED", "Workspace is suspended");
+    }
     // The ONLY place plaintext is ever emitted.
     return new Response(
       JSON.stringify({ id, name, key_prefix: prefix, status: "enabled", plaintext, purpose }),

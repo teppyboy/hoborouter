@@ -19,6 +19,8 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { createTestDb, type Db } from "../packages/db/src/index";
 import { adminExtraRoutes } from "../apps/api/src/routes/admin-extra";
+import { membersRoutes } from "../apps/api/src/routes/members";
+import { keysRoutes } from "../apps/api/src/routes/keys";
 import type { BetterAuthInstance } from "../apps/api/src/auth-types";
 
 const NOW = 1_700_000_000_000;
@@ -441,5 +443,228 @@ describe("all-or-nothing validation", () => {
       }
       attacker.close();
     }
+  });
+});
+
+describe("lock-protocol concurrency regressions", () => {
+  const holdAndRun = async (
+    work: (rsv: { unsafe: (q: string) => Promise<unknown>; release: () => void }) => Promise<void>,
+  ) => {
+    const { SQL } = await import("bun");
+    const raw = new SQL(tUrl, { max: 1 });
+    const rsv = await raw.reserve();
+    try {
+      await work(
+        rsv as unknown as {
+          unsafe: (q: string, p?: unknown[]) => Promise<unknown>;
+          release: () => void;
+        },
+      );
+    } finally {
+      rsv.release();
+      raw.close();
+    }
+  };
+
+  test("transfer promotion serializes on the target membership row", async () => {
+    await addUser("u-yo", "yo@t.local");
+    await addWorkspace("ws-yo", "u-yo");
+    await q(
+      `insert into workspace_members (workspace_id, user_id, role) values ('ws-yo', $1, 'member')`,
+      [TRANSFEREE],
+    );
+    await holdAndRun(async (rsv) => {
+      await rsv.unsafe(`begin`);
+      // Hold exactly the membership row the promotion must update.
+      await rsv.unsafe(
+        `select * from workspace_members where workspace_id = 'ws-yo' and user_id = '${TRANSFEREE}' for update`,
+      );
+      let settled = false;
+      const route = removeUser("u-yo", app, { transfer_to: TRANSFEREE }).then(() => {
+        settled = true;
+      });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(settled).toBe(false); // blocked on the membership row lock
+      await rsv.unsafe(`rollback`);
+      await route;
+      expect(settled).toBe(true);
+    });
+    const role = await q<{ role: string }>(
+      `select role from workspace_members where workspace_id = 'ws-yo' and user_id = $1`,
+      [TRANSFEREE],
+    );
+    expect(role).toEqual([{ role: "owner" }]);
+  });
+
+  test("transfer invalidated by a membership deletion that commits while it waits", async () => {
+    await addUser("u-xo", "xo@t.local");
+    await addWorkspace("ws-xo", "u-xo");
+    await q(
+      `insert into workspace_members (workspace_id, user_id, role) values ('ws-xo', $1, 'member')`,
+      [TRANSFEREE],
+    );
+    await holdAndRun(async (rsv) => {
+      await rsv.unsafe(`begin`);
+      // Hold the workspace row (members.ts lock protocol), then remove the
+      // transfer target mid-flight.
+      await rsv.unsafe(`select * from workspaces where id = 'ws-xo' for update`);
+      let settled = false;
+      const route = removeUser("u-xo", app, { transfer_to: TRANSFEREE }).then((r) => {
+        settled = true;
+        return r;
+      });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(settled).toBe(false); // blocked behind the workspace lock
+      await rsv.unsafe(
+        `delete from workspace_members where workspace_id = 'ws-xo' and user_id = '${TRANSFEREE}'`,
+      );
+      await rsv.unsafe(`commit`);
+      const res = (await route) as Response;
+      expect(res.status).toBe(409); // revalidated under the lock: target gone
+      const body = await errBody(res);
+      expect(body.error.code).toBe("TRANSFER_TARGET_INVALID");
+    });
+    // No promotion, no ownerless workspace, user intact.
+    expect(await q(`select 1 from users where id = 'u-xo'`)).toHaveLength(1);
+    expect(
+      await q(
+        `select 1 from audit_log where workspace_id = 'ws-xo' and action = 'member.role_change'`,
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("member add that waited behind an archived workspace inserts nothing", async () => {
+    await addUser("u-aa", "aa@t.local");
+    await addWorkspace("ws-aa", "u-aa");
+    const membersApp = membersRoutes(db, fakeAuth("u-aa"));
+    await holdAndRun(async (rsv) => {
+      await rsv.unsafe(`begin`);
+      await rsv.unsafe(`select * from workspaces where id = 'ws-aa' for update`);
+      let settled = false;
+      const route = membersApp
+        .handle(
+          new Request("http://t/api/v1/workspaces/ws-aa/members", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email: "member@t.local", role: "member" }),
+          }),
+        )
+        .then(() => {
+          settled = true;
+          return undefined as unknown as Response;
+        });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(settled).toBe(false); // blocked behind the workspace lock
+      // Archive the workspace while the add is waiting.
+      await rsv.unsafe(`update workspaces set status = 'suspended' where id = 'ws-aa'`);
+      await rsv.unsafe(`delete from workspace_members where workspace_id = 'ws-aa'`);
+      await rsv.unsafe(`commit`);
+      await route;
+      expect(settled).toBe(true);
+    });
+    // The stale-authorized insert must NOT have landed.
+    expect(
+      await q(`select 1 from workspace_members where workspace_id = 'ws-aa' and user_id = $1`, [
+        MEMBER,
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("member role change serialized on workspace + membership rows", async () => {
+    await addUser("u-rr", "rr@t.local");
+    await addWorkspace("ws-rr", "u-rr");
+    await q(
+      `insert into workspace_members (workspace_id, user_id, role) values ('ws-rr', $1, 'member')`,
+      [MEMBER],
+    );
+    const membersApp = membersRoutes(db, fakeAuth("u-rr"));
+    await holdAndRun(async (rsv) => {
+      await rsv.unsafe(`begin`);
+      await rsv.unsafe(`select * from workspaces where id = 'ws-rr' for update`);
+      let settled = false;
+      let res: Response | undefined;
+      const route = membersApp
+        .handle(
+          new Request("http://t/api/v1/workspaces/ws-rr/members/" + MEMBER, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ role: "admin" }),
+          }),
+        )
+        .then((r) => {
+          settled = true;
+          res = r;
+        });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(settled).toBe(false);
+      await rsv.unsafe(
+        `delete from workspace_members where workspace_id = 'ws-rr' and user_id = '${MEMBER}'`,
+      );
+      await rsv.unsafe(`commit`);
+      await route;
+      expect(res!.status).toBe(403); // membership recheck under the lock
+    });
+    expect(
+      await q(`select role from workspace_members where workspace_id = 'ws-rr' and user_id = $1`, [
+        MEMBER,
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("concurrent cross-removal of two instance admins leaves one admin standing", async () => {
+    await addUser("u-xa", "xa@t.local", true);
+    await addUser("u-xb", "xb@t.local", true);
+    await addWorkspace("ws-xa", "u-xa");
+    await addWorkspace("ws-xb", "u-xb");
+    const appA = adminExtraRoutes(db, fakeAuth("u-xa"), {});
+    const appB = adminExtraRoutes(db, fakeAuth("u-xb"), {});
+    const [ra, rb] = await Promise.all([
+      removeUser("u-xb", appA, { confirm: true }),
+      removeUser("u-xa", appB, { confirm: true }),
+    ]);
+    const statuses = [ra.status, rb.status].sort((a, b) => a - b);
+    // Exactly one removal succeeds; the loser is blocked by the admin-set
+    // lock + revalidation (403 deposed actor) or LAST_ADMIN count.
+    expect(statuses.filter((s) => s === 200)).toHaveLength(1);
+    expect([403, 409]).toContain(statuses[1]!);
+    // ADMIN is a third seeded admin: 3 - 1 removed = 2 remain. The invariant
+    // under test: the loser never removes the winner's admin flag.
+    const admins = await q<{ n: string }>(`select count(*) as n from instance_admins`);
+    expect(Number(admins[0]!.n)).toBe(2);
+  });
+
+  test("key issuance that waited behind an archive inserts nothing", async () => {
+    await addUser("u-kc", "kc@t.local");
+    await addWorkspace("ws-kc", "u-kc");
+    await q(
+      `insert into workspace_members (workspace_id, user_id, role) values ('ws-kc', $1, 'admin')`,
+      [MEMBER],
+    );
+    const keysApp = keysRoutes(db, fakeAuth(MEMBER));
+    await holdAndRun(async (rsv) => {
+      await rsv.unsafe(`begin`);
+      await rsv.unsafe(`select * from workspaces where id = 'ws-kc' for update`);
+      let settled = false;
+      let res: Response | undefined;
+      const route = keysApp
+        .handle(
+          new Request("http://t/api/v1/workspaces/ws-kc/keys", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ name: "raced key" }),
+          }),
+        )
+        .then((r) => {
+          settled = true;
+          res = r;
+        });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(settled).toBe(false);
+      await rsv.unsafe(`update workspaces set status = 'suspended' where id = 'ws-kc'`);
+      await rsv.unsafe(`commit`);
+      await route;
+      expect(res!.status).toBe(403);
+    });
+    expect(await q(`select 1 from api_keys where workspace_id = 'ws-kc'`)).toHaveLength(0);
   });
 });
