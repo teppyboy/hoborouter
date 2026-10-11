@@ -332,10 +332,10 @@ export function Quickstart({
   );
 
   const body = (
-    <div className="space-y-6 py-6">
+    <div className="mx-auto w-full max-w-3xl space-y-6 py-6">
       <PageHeader title={t("title")} description={t("description")} />
 
-      <section className="max-w-2xl">
+      <section>
         <h2 className="text-lg font-semibold">{t("step1Title")}</h2>
         <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
           <li>
@@ -352,7 +352,7 @@ export function Quickstart({
         </ol>
       </section>
 
-      <section className="max-w-3xl space-y-3">
+      <section className="space-y-3">
         <h2 className="text-lg font-semibold">{t("step2Title")}</h2>
         <p className="text-sm text-muted-foreground">
           {t("step2SdkLead")} <code className="font-mono text-xs">{normalizeBase(baseUrl)}/v1</code>{" "}
@@ -384,7 +384,7 @@ export function Quickstart({
         </p>
       </section>
 
-      <section className="max-w-3xl space-y-3">
+      <section className="space-y-3">
         <h2 className="text-lg font-semibold">{t("agentTitle")}</h2>
         <p className="text-sm text-muted-foreground">{t("agentNote")}</p>
         <Card>

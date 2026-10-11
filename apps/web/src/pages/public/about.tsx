@@ -50,7 +50,7 @@ export function About({
   const shownRevision = revision ?? null;
   const hasContact = supportLinks(instance?.support).length > 0;
   const body = (
-    <div className="max-w-2xl space-y-8 py-6">
+    <div className="mx-auto w-full max-w-3xl space-y-8 py-6">
       <PageHeader title={title} description={description} />
 
       <section aria-labelledby="about-version-heading" className="space-y-2">
