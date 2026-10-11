@@ -103,13 +103,16 @@ const usersCopy = {
     en: "This is the last instance admin. Promote another admin first.",
     vi: "Đây là quản trị instance cuối cùng. Hãy nâng quyền một quản trị khác trước.",
   },
+  // No admin-side transfer endpoint exists: ownership transfer happens inside
+  // the workspace by an owner promoting another member (Settings → Members),
+  // so the guidance names that path and the server 409 stays authoritative.
   soleOwnerNamed: {
-    en: "This user is the sole owner of: {names}. Transfer ownership first.",
-    vi: "Người dùng này là chủ sở hữu duy nhất của: {names}. Hãy chuyển quyền sở hữu trước.",
+    en: "This user is the sole owner of: {names}. Transfer ownership first — an owner of each workspace can promote another member in that workspace's Settings → Members.",
+    vi: "Người dùng này là chủ sở hữu duy nhất của: {names}. Hãy chuyển quyền sở hữu trước — chủ sở hữu của workspace có thể nâng quyền một thành viên khác trong Settings → Members của workspace đó.",
   },
   soleOwner: {
-    en: "This user is the sole owner of at least one workspace. Transfer ownership first.",
-    vi: "Người dùng này là chủ sở hữu duy nhất của ít nhất một workspace. Hãy chuyển quyền sở hữu trước.",
+    en: "This user is the sole owner of at least one workspace. Transfer ownership first — an owner of each workspace can promote another member in that workspace's Settings → Members.",
+    vi: "Người dùng này là chủ sở hữu duy nhất của ít nhất một workspace. Hãy chuyển quyền sở hữu trước — chủ sở hữu của workspace có thể nâng quyền một thành viên khác trong Settings → Members của workspace đó.",
   },
   emailTaken: {
     en: "A user with this email already exists.",
@@ -213,6 +216,27 @@ const usersCopy = {
   revokedToast: { en: "Key revoked", vi: "Đã thu hồi key" },
   keyNameRequired: { en: "Key name is required", vi: "Cần tên key" },
   revokeReasonRequired: { en: "Reason is required", vi: "Cần lý do" },
+
+  // User detail dialog (read-only account/membership/wallet/key overview).
+  viewAria: { en: "Details for {email}", vi: "Chi tiết {email}" },
+  detailTitle: { en: "User details", vi: "Chi tiết người dùng" },
+  detailDesc: {
+    en: "Account, membership, wallet and key overview of {name} ({email}). Sensitive values (passwords, key plaintext) are never shown.",
+    vi: "Tổng quan tài khoản, membership, ví và key của {name} ({email}). Giá trị nhạy cảm (mật khẩu, bản rõ key) không bao giờ được hiển thị.",
+  },
+  sectionAccount: { en: "Account", vi: "Tài khoản" },
+  sectionMemberships: { en: "Workspaces & roles", vi: "Workspace & vai trò" },
+  sectionWallets: { en: "Wallet balances", vi: "Số dư ví" },
+  sectionKeys: { en: "API keys", vi: "API key" },
+  noMemberships: {
+    en: "No workspace memberships",
+    vi: "Không thuộc workspace nào",
+  },
+  detailKeysUnavailable: {
+    en: "Keys for this workspace are unavailable",
+    vi: "Không xem được key của workspace này",
+  },
+  close: { en: "Close", vi: "Đóng" },
 } as const;
 
 type UsersT = (key: keyof typeof usersCopy, vars?: Record<string, string | number>) => string;
@@ -335,13 +359,29 @@ export function UsersTable({
   const t = useT(usersCopy);
   const [toRemove, setToRemove] = useState<AdminUser | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [toDetail, setToDetail] = useState<AdminUser | null>(null);
   const [toEdit, setToEdit] = useState<AdminUser | null>(null);
   const [toReset, setToReset] = useState<AdminUser | null>(null);
   const [toWallet, setToWallet] = useState<AdminUser | null>(null);
   const [toKeys, setToKeys] = useState<AdminUser | null>(null);
 
   const columns: ColumnDef<AdminUser, unknown>[] = [
-    { accessorKey: "email", header: t("email") },
+    {
+      accessorKey: "email",
+      header: t("email"),
+      // Clickable affordance into the read-only user detail dialog.
+      cell: (c) => (
+        <Button
+          variant="link"
+          size="sm"
+          className="h-auto p-0"
+          aria-label={t("viewAria", { email: c.row.original.email })}
+          onClick={() => setToDetail(c.row.original)}
+        >
+          {c.row.original.email}
+        </Button>
+      ),
+    },
     {
       accessorKey: "email_verified",
       header: t("emailStatus"),
@@ -487,6 +527,25 @@ export function UsersTable({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {toDetail && (
+        <UserDetailDialog
+          user={toDetail}
+          currentUserId={currentUserId}
+          onClose={() => setToDetail(null)}
+          onEdit={(u) => {
+            setToDetail(null);
+            setToEdit(u);
+          }}
+          onReset={(u) => {
+            setToDetail(null);
+            setToReset(u);
+          }}
+          onRemove={(u) => {
+            setToDetail(null);
+            setToRemove(u);
+          }}
+        />
+      )}
       {toEdit && (
         <EditUserDialog
           user={toEdit}
@@ -1610,6 +1669,233 @@ function ManageKeysDialog({ user, onClose }: { user: AdminUser; onClose: () => v
           <Button type="button" variant="outline" onClick={onClose}>
             {t("cancel")}
           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// --- Read-only user detail (clickable from the email column) ---
+
+/** Per-workspace key overview: null keys means the list failed to load. */
+interface WorkspaceKeysOverview {
+  workspaceId: string;
+  keys: AdminWorkspaceKey[] | null;
+}
+
+function UserDetailDialog({
+  user,
+  currentUserId,
+  onClose,
+  onEdit,
+  onReset,
+  onRemove,
+}: {
+  user: AdminUser;
+  currentUserId: string | null;
+  onClose: () => void;
+  onEdit: (user: AdminUser) => void;
+  onReset: (user: AdminUser) => void;
+  onRemove: (user: AdminUser) => void;
+}) {
+  const t = useT(usersCopy);
+  const contextQuery = useUserContext(user.id);
+  const memberships = contextQuery.data?.memberships ?? [];
+  const wallets = contextQuery.data?.wallets ?? [];
+  const workspaceNames = new Map(memberships.map((m) => [m.workspaceId, m.workspaceName]));
+
+  // All membership workspaces in one shot (each list endpoint is
+  // per-workspace). A failed workspace renders an honest unavailable note
+  // instead of failing the whole overview.
+  const keysOverviewQuery = useQuery<WorkspaceKeysOverview[]>({
+    queryKey: ["admin", "user-detail-keys", user.id],
+    queryFn: () =>
+      Promise.all(
+        memberships.map(async (m): Promise<WorkspaceKeysOverview> => {
+          try {
+            return {
+              workspaceId: m.workspaceId,
+              keys: await api<AdminWorkspaceKey[]>(
+                `/api/v1/admin/workspaces/${m.workspaceId}/keys`,
+              ),
+            };
+          } catch {
+            return { workspaceId: m.workspaceId, keys: null };
+          }
+        }),
+      ),
+    enabled: memberships.length > 0,
+    retry: false,
+  });
+
+  // Same cache key as ManageKeysDialog: public model metadata for labels only.
+  const modelsQuery = useQuery<AdminModel[]>({
+    queryKey: ["admin", "catalog", "models"],
+    queryFn: () => api<AdminModel[]>("/api/v1/admin/catalog/models"),
+    retry: false,
+  });
+  const modelLabels = new Map(
+    (modelsQuery.data ?? []).map((m) => [m.id, m.display_name || m.public_id || m.id]),
+  );
+
+  const pending = contextQuery.isPending || keysOverviewQuery.isPending;
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{t("detailTitle")}</DialogTitle>
+          <DialogDescription>
+            {t("detailDesc", { name: user.name, email: user.email })}
+          </DialogDescription>
+        </DialogHeader>
+
+        <section className="space-y-1 rounded-md border p-3 text-sm">
+          <p className="font-medium">{t("sectionAccount")}</p>
+          <div className="flex items-center gap-1">
+            <span className="font-mono text-xs">{user.id}</span>
+            <CopyButton value={user.id} label={t("copyUserId")} />
+          </div>
+          <p>
+            {t("email")}: {user.email}
+          </p>
+          <p>
+            {t("name")}: {user.name}
+          </p>
+          <p>
+            {t("joined")}: {formatDate(new Date(user.created_at))}
+          </p>
+          <p>
+            {t("emailStatus")}:{" "}
+            {user.email_verified === undefined ? (
+              <Badge variant="secondary">{t("unavailable")}</Badge>
+            ) : user.email_verified ? (
+              <Badge variant="default">{t("verified")}</Badge>
+            ) : (
+              <Badge variant="outline">{t("unverified")}</Badge>
+            )}
+          </p>
+          <p>
+            {t("role")}:{" "}
+            {user.is_instance_admin ? (
+              <Badge variant="default">admin</Badge>
+            ) : (
+              <Badge variant="outline">user</Badge>
+            )}
+          </p>
+        </section>
+
+        {pending && <p className="text-muted-foreground text-sm">…</p>}
+        {contextQuery.isError && (
+          <p className="text-destructive text-sm">
+            {contextQuery.error instanceof Error ? contextQuery.error.message : t("requestFailed")}
+          </p>
+        )}
+
+        {!pending && (
+          <>
+            <section className="space-y-1 rounded-md border p-3 text-sm">
+              <p className="font-medium">{t("sectionMemberships")}</p>
+              {memberships.length === 0 ? (
+                <p className="text-muted-foreground text-sm">{t("noMemberships")}</p>
+              ) : (
+                <ul className="space-y-1">
+                  {memberships.map((m) => (
+                    <li key={m.workspaceId} className="flex items-center gap-2">
+                      <span>{m.workspaceName}</span>
+                      <Badge variant="secondary">{m.role}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section className="space-y-1 rounded-md border p-3 text-sm">
+              <p className="font-medium">{t("sectionWallets")}</p>
+              {memberships.length === 0 ? (
+                <p className="text-muted-foreground text-sm">{t("noMemberships")}</p>
+              ) : (
+                <ul className="space-y-2">
+                  {memberships.map((m) => {
+                    const wallet = wallets.find(
+                      (w) => w.workspaceId === m.workspaceId && w.kind === "topup",
+                    );
+                    return (
+                      <li key={m.workspaceId}>
+                        <p className="font-medium">{m.workspaceName}</p>
+                        {wallet ? (
+                          <p className="text-muted-foreground text-xs">
+                            {t("balanceLabel")}: {formatVnd(wallet.balance)} · {t("reservedLabel")}:{" "}
+                            {formatVnd(wallet.reserved)}
+                          </p>
+                        ) : (
+                          <p className="text-muted-foreground text-xs">{t("noTopupWallet")}</p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+
+            <section className="space-y-2 rounded-md border p-3 text-sm">
+              <p className="font-medium">{t("sectionKeys")}</p>
+              {memberships.length === 0 ? (
+                <p className="text-muted-foreground text-sm">{t("noMemberships")}</p>
+              ) : (
+                (keysOverviewQuery.data ?? []).map((ws) => (
+                  <div key={ws.workspaceId} className="space-y-1">
+                    <p className="text-xs font-medium">
+                      {workspaceNames.get(ws.workspaceId) ?? ws.workspaceId}
+                    </p>
+                    {ws.keys === null ? (
+                      <p className="text-muted-foreground text-xs">{t("detailKeysUnavailable")}</p>
+                    ) : ws.keys.length === 0 ? (
+                      <p className="text-muted-foreground text-xs">{t("noKeys")}</p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {ws.keys.map((k) => (
+                          <li key={k.id} className="text-xs">
+                            <span className="font-medium">{k.name}</span>{" "}
+                            <span className="font-mono">{k.key_prefix}…</span>{" "}
+                            <Badge variant={k.status === "revoked" ? "outline" : "default"}>
+                              {k.status}
+                            </Badge>
+                            <span className="block text-muted-foreground">
+                              {t("createdLabel")}: {formatDate(new Date(k.created_at))} ·{" "}
+                              {t("lastUsed")}:{" "}
+                              {k.last_used_at ? formatDate(new Date(k.last_used_at)) : "—"} ·{" "}
+                              {t("modelsLabel")}:{" "}
+                              {k.modelIds.length === 0
+                                ? t("allModels")
+                                : k.modelIds.map((id) => modelLabels.get(id) ?? id).join(", ")}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))
+              )}
+            </section>
+          </>
+        )}
+
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>
+            {t("close")}
+          </Button>
+          <Button type="button" variant="outline" onClick={() => onEdit(user)}>
+            {t("edit")}
+          </Button>
+          <Button type="button" variant="outline" onClick={() => onReset(user)}>
+            {t("resetPassword")}
+          </Button>
+          {user.id !== currentUserId && (
+            <Button type="button" variant="destructive" onClick={() => onRemove(user)}>
+              {t("remove")}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
