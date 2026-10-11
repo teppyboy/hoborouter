@@ -90,6 +90,7 @@ export const adminBundlesCopy = {
   planPriceCurrency: { en: "Plan price currency", vi: "Đơn vị giá gói" },
   periodDaysLabel: { en: "Period days", vi: "Số ngày kỳ" },
   rateLimitLabel: { en: "Rate limit (req/min)", vi: "Giới hạn (req/phút)" },
+  dailyGrantLabel: { en: "Daily grant (VND)", vi: "Tặng mỗi ngày (VND)" },
   createPlan: { en: "Create plan", vi: "Tạo gói đăng ký" },
 
   // Help text.
@@ -105,6 +106,7 @@ export const adminBundlesCopy = {
   },
   bonusPartUsd: { en: " + {amount} bonus", vi: " + {amount} thưởng" },
   planDetailTail: { en: "{days}d · {rate}/min", vi: "{days} ngày · {rate}/phút" },
+  dailyGrantDetail: { en: " + {amount}/day", vi: " + {amount}/ngày" },
 
   // Amount validation (shared shapes per field).
   usdInvalid: {
@@ -157,6 +159,8 @@ interface Plan {
   credit_per_period_usd?: string | null;
   period_days: number;
   rate_limit_per_minute: number;
+  /** Authored once-per-UTC-day VND grant; 0 = none. */
+  daily_grant_vnd: number;
   active: boolean;
   created_at: number;
 }
@@ -431,6 +435,14 @@ function EditDialog({
   const [period, setPeriod] = useState(
     target.kind === "plan" ? String(target.row.period_days) : "",
   );
+  // Blank means "keep the row's current grant" (carried by the server), so a
+  // 0-grant plan prefills blank instead of "0" — keeps legacy rows without
+  // the column rendering a valid, unchanged dialog.
+  const [dailyGrant, setDailyGrant] = useState(
+    target.kind === "plan" && target.row.daily_grant_vnd > 0
+      ? String(target.row.daily_grant_vnd)
+      : "",
+  );
   const [price, setPrice] = useState<AmountInput>(() => amountFrom(row.price_usd, row.price_vnd));
   const [credit, setCredit] = useState<AmountInput>(() =>
     target.kind === "bundle"
@@ -455,6 +467,7 @@ function EditDialog({
   const bonusUsdT = parseUsdAmount(bonus.usd);
   const periodN = parseIntVnd(period);
   const rateN = parseIntVnd(rate);
+  const dailyGrantN = parseIntVnd(dailyGrant);
 
   const priceError =
     price.currency === "USD"
@@ -483,6 +496,8 @@ function EditDialog({
   const periodError =
     period !== "" && (periodN === null || periodN < 1) ? t("periodInvalid") : null;
   const rateError = rate !== "" && rateLimitInvalid(rateN) ? t("rateInvalid") : null;
+  const dailyGrantError =
+    dailyGrant !== "" && (dailyGrantN === null || dailyGrantN < 0) ? t("vndNonNegative") : null;
 
   const nameValid = name.trim().length > 0;
   const moneyValid =
@@ -491,7 +506,8 @@ function EditDialog({
       : priceN !== null && priceN > 0) &&
     (credit.currency === "USD" ? creditUsdT !== null : creditN !== null && creditN >= 0) &&
     (isPlan
-      ? period === "" || (periodN !== null && periodN >= 1)
+      ? (period === "" || (periodN !== null && periodN >= 1)) &&
+        (dailyGrant === "" || (dailyGrantN !== null && dailyGrantN >= 0))
       : bonus.currency === "USD"
         ? bonusUsdT !== null || bonus.usd.trim() === ""
         : (bonusN !== null && bonusN >= 0) || bonus.vnd.trim() === "");
@@ -518,7 +534,9 @@ function EditDialog({
       (credit.currency === "USD"
         ? p.credit_per_period_usd !== creditUsdT
         : p.credit_per_period_vnd !== creditN) ||
-      (periodN !== null && periodN !== p.period_days)
+      (periodN !== null && periodN !== p.period_days) ||
+      // Blank means "keep the row's current grant" (carried by the server).
+      (dailyGrant !== "" && dailyGrantN !== p.daily_grant_vnd)
     );
   })();
   const changed = nameChanged || rateChanged || moneyChanged;
@@ -547,6 +565,7 @@ function EditDialog({
           if (credit.currency === "USD") body.credit_per_period_usd = creditUsdT!;
           else body.credit_per_period_vnd = creditN!;
           if (periodN !== null) body.period_days = periodN!;
+          if (dailyGrant !== "" && dailyGrantN !== null) body.daily_grant_vnd = dailyGrantN;
         }
         const res = await onRevise(row.id, body);
         const successorId = revisedRowId(res);
@@ -615,24 +634,34 @@ function EditDialog({
             error={creditError}
           />
           {isPlan ? (
-            <div className="grid grid-cols-2 gap-3">
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <CreateField
+                  id="edit-period"
+                  label={t("periodDaysLabel")}
+                  value={period}
+                  onChange={setPeriod}
+                  placeholder="30"
+                  error={periodError}
+                />
+                <CreateField
+                  id="edit-rate"
+                  label={t("rateLimitLabel")}
+                  value={rate}
+                  onChange={setRate}
+                  placeholder="15"
+                  error={rateError}
+                />
+              </div>
               <CreateField
-                id="edit-period"
-                label={t("periodDaysLabel")}
-                value={period}
-                onChange={setPeriod}
-                placeholder="30"
-                error={periodError}
+                id="edit-daily-grant"
+                label={t("dailyGrantLabel")}
+                value={dailyGrant}
+                onChange={setDailyGrant}
+                placeholder="0"
+                error={dailyGrantError}
               />
-              <CreateField
-                id="edit-rate"
-                label={t("rateLimitLabel")}
-                value={rate}
-                onChange={setRate}
-                placeholder="15"
-                error={rateError}
-              />
-            </div>
+            </>
           ) : (
             <AmountField
               idPrefix="edit-bonus"
@@ -970,6 +999,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
   const [credit, setCredit] = useState<AmountInput>(emptyAmount);
   const [period, setPeriod] = useState("30");
   const [rateLimit, setRateLimit] = useState("15");
+  const [dailyGrant, setDailyGrant] = useState("");
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const patchAsync = (id: string, body: { name?: string; rate_limit_per_minute?: number }) =>
     update.mutateAsync({ id, body });
@@ -980,6 +1010,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
   const creditN = parseIntVnd(credit.vnd);
   const periodN = parseIntVnd(period);
   const rateN = parseIntVnd(rateLimit);
+  const dailyGrantN = parseIntVnd(dailyGrant);
   const priceUsdT = parseUsdAmount(price.usd);
   const creditUsdT = parseUsdAmount(credit.usd);
   const rateInvalid = (v: number | null) => v === null || v < 1 || v > 600;
@@ -1006,10 +1037,13 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
   const periodError =
     period !== "" && (periodN === null || periodN < 1) ? t("periodInvalid") : null;
   const rateError = rateLimit !== "" && rateInvalid(rateN) ? t("rateInvalid") : null;
+  const dailyGrantError =
+    dailyGrant !== "" && (dailyGrantN === null || dailyGrantN < 0) ? t("vndNonNegative") : null;
   // Only the field's own active currency is validated; the hidden text of a
   // toggled field is dormant state, never part of the request body.
   const valid =
     sharedValid &&
+    dailyGrantError === null &&
     (price.currency === "USD"
       ? priceUsdT !== null && Number(priceUsdT) > 0
       : priceN !== null && priceN > 0) &&
@@ -1021,6 +1055,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
     setCredit(emptyAmount());
     setPeriod("30");
     setRateLimit("15");
+    setDailyGrant("");
   };
   const submit = () => {
     // Exactly one amount key per field, keyed by that field's own currency.
@@ -1032,6 +1067,8 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
     else body.credit_per_period_vnd = creditN!;
     if (period !== "") body.period_days = periodN!;
     if (rateLimit !== "") body.rate_limit_per_minute = rateN!;
+    // Optional authored term: omitted (0 server default) when left blank.
+    if (dailyGrant !== "" && dailyGrantN !== null) body.daily_grant_vnd = dailyGrantN;
     create.mutate(body, { onSuccess: reset });
   };
   return (
@@ -1090,6 +1127,14 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
             placeholder="15"
             error={rateError}
           />
+          <CreateField
+            id="plan-daily-grant"
+            label={t("dailyGrantLabel")}
+            value={dailyGrant}
+            onChange={setDailyGrant}
+            placeholder="0"
+            error={dailyGrantError}
+          />
           <Button type="submit" disabled={!valid || create.isPending}>
             {create.isPending ? t("creating") : t("createPlan")}
           </Button>
@@ -1110,7 +1155,7 @@ function PlansCard({ query }: { query: { data?: { data: Plan[] } } }) {
             return `${credit} / ${t("planDetailTail", {
               days: p.period_days,
               rate: p.rate_limit_per_minute,
-            })}`;
+            })}${p.daily_grant_vnd > 0 ? t("dailyGrantDetail", { amount: formatVnd(p.daily_grant_vnd) }) : ""}`;
           }}
           onEdit={(row) => setEditTarget({ kind: "plan", row })}
           onSetActive={(row, active) => update.mutate({ id: row.id, body: { active } })}

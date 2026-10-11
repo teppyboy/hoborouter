@@ -576,6 +576,7 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
           credit_per_period_usd: t.Optional(t.String()),
           period_days: t.Optional(t.Integer()),
           rate_limit_per_minute: t.Optional(t.Integer()),
+          daily_grant_vnd: t.Optional(t.Integer()),
         }),
         detail: {
           tags: ["Admin"],
@@ -614,6 +615,8 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
             "INVALID",
             "rate_limit_per_minute must be an integer between 1 and 600",
           );
+        if (body.daily_grant_vnd !== undefined && !nonNegInt(body.daily_grant_vnd))
+          return jsonError(400, "INVALID", "daily_grant_vnd must be a non-negative integer");
         const id = crypto.randomUUID();
         if (hasPlanUsd) {
           // VND-side values validate before the transaction (mirrors bundles);
@@ -637,6 +640,7 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
               credit_per_period_vnd: resolved.credit.vnd,
               period_days: body.period_days ?? 30,
               rate_limit_per_minute: body.rate_limit_per_minute ?? 15,
+              daily_grant_vnd: body.daily_grant_vnd ?? 0,
               active: true,
               created_at: Date.now(),
               price_usd: resolved.price.usd,
@@ -672,6 +676,7 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
             credit_per_period_vnd: body.credit_per_period_vnd,
             period_days: body.period_days ?? 30,
             rate_limit_per_minute: body.rate_limit_per_minute ?? 15,
+            daily_grant_vnd: body.daily_grant_vnd ?? 0,
             active: true,
             created_at: Date.now(),
             price_usd: null,
@@ -707,6 +712,7 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
             price_usd: t.Optional(t.String()),
             credit_per_period_usd: t.Optional(t.String()),
             period_days: t.Optional(t.Integer()),
+            daily_grant_vnd: t.Optional(t.Integer()),
           },
           { additionalProperties: false },
         ),
@@ -741,6 +747,8 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
           return jsonError(400, "INVALID", "price_vnd must be a positive integer VND amount");
         if (body.credit_per_period_vnd !== undefined && !nonNegInt(body.credit_per_period_vnd))
           return jsonError(400, "INVALID", "credit_per_period_vnd must be a non-negative integer");
+        if (body.daily_grant_vnd !== undefined && !nonNegInt(body.daily_grant_vnd))
+          return jsonError(400, "INVALID", "daily_grant_vnd must be a non-negative integer");
         const id = crypto.randomUUID();
         // Same one-transaction contract as the bundle revise above.
         const result = await db.transaction(async (tx) => {
@@ -755,6 +763,9 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
           const resolved = await resolveMixedPlanAmounts(tx, body);
           if (!resolved.ok) return { kind: "invalid", message: resolved.message } as const;
           const periodDays = body.period_days ?? 30;
+          // daily_grant_vnd is a frozen financial term: the successor keeps
+          // the old row's value when the revision body omits it.
+          const dailyGrantVnd = body.daily_grant_vnd ?? old.daily_grant_vnd;
           // Replay key over the AUTHORED body (canonical USD text / authored
           // VND integers + period), never the FX-resolved VND — same contract
           // as the bundle revise above.
@@ -769,6 +780,7 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
                 ? { usd: canonicalUsd(body.credit_per_period_usd) }
                 : { vnd: body.credit_per_period_vnd },
             period_days: periodDays,
+            daily_grant_vnd: dailyGrantVnd,
           });
           // Superseded check BEFORE the no-op branch (same ordering as the
           // bundle revise): a closed row is never returned as a no-op 200.
@@ -788,7 +800,8 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
               old.credit_per_period_vnd,
               old.credit_per_period_usd,
             ) &&
-            periodDays === old.period_days
+            periodDays === old.period_days &&
+            dailyGrantVnd === old.daily_grant_vnd
           ) {
             // No-op: equivalent financial terms (price, credit, period), old
             // row returned unchanged, no successor, no audit revision.
@@ -804,6 +817,7 @@ export const adminBundlesRoutes = (db: Db, auth: BetterAuthInstance) => {
             // (never a frozen revision term), so the successor must keep the
             // current value instead of resetting new purchases to default.
             rate_limit_per_minute: old.rate_limit_per_minute,
+            daily_grant_vnd: dailyGrantVnd,
             active: true,
             created_at: Date.now(),
             price_usd: resolved.price.usd,
