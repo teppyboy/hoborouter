@@ -1,12 +1,13 @@
 // Logout ordering contract (lib/logout.ts): no request may fire after the
-// session cookie dies. Cache clear happens BEFORE signOut resolves; the
-// session query is invalidated without a refetch; navigation happens last.
+// session cookie dies. signOutAndReset cancels in-flight queries, signs out,
+// then navigates — it must never clear or invalidate the cache in-place
+// (that re-fires active observers with a dead cookie).
 import { test, expect } from "bun:test";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 
 const { signOutAndReset } = await import("../apps/web/src/lib/logout");
 
-test("signOutAndReset: cache-driven refetches run before signOut, session invalidation never refetches", async () => {
+test("signOutAndReset: no query refetch fires after signOut, navigation is last", async () => {
   const qc = new QueryClient();
   let signedOut = false;
   let navigated = false;
@@ -16,8 +17,8 @@ test("signOutAndReset: cache-driven refetches run before signOut, session invali
     calls.push("workspaces");
     return [];
   };
-  // An active observer: clearing the cache re-fires it. With the correct
-  // ordering the refetch runs while `signedOut` is still false.
+  // An active observer stays mounted across the whole logout: it must never
+  // be re-fired by cache manipulation.
   const observer = new QueryObserver(qc, { queryKey: ["workspaces"], queryFn, retry: false });
   const unsub = observer.subscribe(() => {});
   await observer.fetchOptimistic({ queryKey: ["workspaces"], queryFn });
@@ -33,11 +34,7 @@ test("signOutAndReset: cache-driven refetches run before signOut, session invali
   );
   unsub();
 
-  expect(calls.length).toBeGreaterThanOrEqual(1);
-  expect(calls.every(() => true)).toBe(true);
-  // Navigation is the last observable effect.
+  // Only the pre-existing fetch ran; logout itself triggered zero refetches.
+  expect(calls).toEqual(["workspaces"]);
   expect(navigated).toBe(true);
-  // Session query was invalidated without a refetch: entry exists but idle.
-  const sessionState = qc.getQueryState(["session"]);
-  expect(sessionState?.fetchStatus ?? "idle").toBe("idle");
 });

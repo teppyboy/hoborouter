@@ -1638,10 +1638,13 @@ async function main() {
     assert(!(await page.has("No requests yet")), "model filter keeps data");
     const filtered = await page.body();
     assert(/Success rate/.test(filtered), "success rate KPI rendered after filter");
-    // Chart semantics: named group role, Y-axis labels, period buttons, metric tabs.
+    // Chart semantics (chart tab mounts its own group): named group role,
+    // period buttons, metric tabs.
+    await page.click("Chart");
     const chartOk = await evaluate<boolean>(
       `(() => {
-        const g = document.querySelector('[role="group"][aria-label^="Daily "]');
+        // BarSeries names the group after its chart aria label (EN default).
+        const g = document.querySelector('[role="group"][aria-label^="Bar chart of daily usage"]');
         if (!g) return false;
         const periods = [...document.querySelectorAll('[role="group"][aria-label="Time period"] button')].map(b => b.textContent.trim());
         const tabs = [...document.querySelectorAll('[role="tablist"][aria-label="Chart metric"] [role="tab"]')].map(t => t.textContent.trim());
@@ -1650,6 +1653,8 @@ async function main() {
       })()`,
     );
     assert(chartOk, "named chart group + period buttons + metric tabs");
+    // Per-model tab again for the token share column.
+    await page.click("Per model");
     assert(await page.has("Token share"), "per-model token share column present");
   });
 

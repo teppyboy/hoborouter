@@ -369,8 +369,9 @@ function UserMenu() {
         <DropdownMenuItem
           variant="destructive"
           onClick={() => {
-            // Drop workspace-scoped queries before the session dies so no
-            // refetch fires against an invalidated cookie (401 noise).
+            // Cancel in-flight queries, sign out, then leave via a full document
+            // navigation (lib/logout.ts contract): the reload discards the query
+            // cache, so no observer can refetch against the dead cookie.
             useWorkspaceStore.setState({ workspaceId: null });
             void signOutAndReset(
               queryClient,
