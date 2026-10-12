@@ -199,7 +199,7 @@ export type PublicCapabilityFields = {
 
 /**
  * Safe public reasoning projection for one model: the catalog-authored
- * supported public efforts (enabled routes, oldest first) and the authored
+ * supported public efforts (enabled routes, catalog sort_order first) and the authored
  * default effort. Both empty/null means the model has no authored reasoning
  * routes (gateway passes reasoning forms through to CPA untouched). Never
  * includes provider, upstream model, or route internals.
@@ -217,7 +217,11 @@ export async function publicReasoningFields(
     .select({ public_effort: modelReasoningRoutes.public_effort })
     .from(modelReasoningRoutes)
     .where(and(eq(modelReasoningRoutes.model_id, modelId), eq(modelReasoningRoutes.enabled, true)))
-    .orderBy(modelReasoningRoutes.created_at, modelReasoningRoutes.id);
+    .orderBy(
+      modelReasoningRoutes.sort_order,
+      modelReasoningRoutes.created_at,
+      modelReasoningRoutes.id,
+    );
   const modelRows = await db
     .select({ default_effort: models.default_reasoning_effort })
     .from(models)
@@ -303,7 +307,11 @@ export async function getReasoningMetadata(
     })
     .from(modelReasoningRoutes)
     .where(and(eq(modelReasoningRoutes.model_id, modelId), eq(modelReasoningRoutes.enabled, true)))
-    .orderBy(modelReasoningRoutes.created_at, modelReasoningRoutes.id);
+    .orderBy(
+      modelReasoningRoutes.sort_order,
+      modelReasoningRoutes.created_at,
+      modelReasoningRoutes.id,
+    );
   return {
     model_id: modelId,
     default_effort: modelRows[0]?.default_effort ?? null,
