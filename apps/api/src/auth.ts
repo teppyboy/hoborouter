@@ -47,6 +47,49 @@ const withVerifyEmailCallback = (url: string): string => {
   }
 };
 
+/**
+ * Canonical public auth base URL — the ONE origin from which Better Auth
+ * derives every provider callback (redirect_uri sent to Discord/GitHub/Google
+ * portals: `<baseURL>/api/auth/callback/<provider>`), verification links, and
+ * post-auth redirects. Both env aliases resolve to the same value so the
+ * provider callback and the frontend initiation can never diverge.
+ *
+ * Strict on purpose: providers compare redirect_uri as an exact string, so a
+ * trailing slash, a path suffix, or a scheme-less value silently produces a
+ * redirect_uri the portal rejects (`invalid redirect_uri`). Production without
+ * an explicit base is a startup error (never the localhost fallback).
+ */
+export function canonicalAuthBaseURL(env: Record<string, string | undefined>): string {
+  const raw = env.BETTER_AUTH_URL || env.HBR_BASE_URL;
+  if (raw === undefined || raw === "") {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("BETTER_AUTH_URL (or HBR_BASE_URL) is required when NODE_ENV=production");
+    }
+    return "http://localhost:3000";
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(raw.trim());
+  } catch {
+    throw new Error(
+      "BETTER_AUTH_URL (or HBR_BASE_URL) must be an absolute http(s) URL, e.g. https://hoborouter.example.com",
+    );
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(
+      "BETTER_AUTH_URL (or HBR_BASE_URL) must use http:// or https:// — provider callbacks are derived as <base>/api/auth/callback/<provider>",
+    );
+  }
+  if (parsed.pathname !== "/" && parsed.pathname !== "") {
+    throw new Error(
+      "BETTER_AUTH_URL (or HBR_BASE_URL) must be origin-only (no path): Better Auth derives <base>/api/auth/... from it and a path suffix corrupts every callback URL",
+    );
+  }
+  // .origin drops the trailing slash and any default port; a non-default port
+  // is preserved (port mismatch is itself a redirect_uri mismatch).
+  return parsed.origin;
+}
+
 /** Build a Better Auth instance over an existing drizzle/pg Db. `cfg` (the
  *  resolved startup config, apps/api/src/config/schema ResolvedConfig) is
  *  optional: omitted = direct-test/env-only callers read process.env exactly
@@ -90,10 +133,7 @@ function isTrustedCallbackURL(
 
 export function createAuth(db: Db, cfg?: ResolvedConfig) {
   const env: Record<string, string | undefined> = cfg?.env ?? process.env;
-  const baseURL = env.BETTER_AUTH_URL || env.HBR_BASE_URL || "http://localhost:3000";
-  if (process.env.NODE_ENV === "production" && !(env.BETTER_AUTH_URL || env.HBR_BASE_URL)) {
-    throw new Error("BETTER_AUTH_URL (or HBR_BASE_URL) is required when NODE_ENV=production");
-  }
+  const baseURL = canonicalAuthBaseURL(env);
   const secret = env.BETTER_AUTH_SECRET || env.AUTH_SECRET;
   if (process.env.NODE_ENV === "production" && (!secret || secret.length < 32)) {
     throw new Error(

@@ -62,6 +62,13 @@ Must be HTTPS in production (the base URL origin is the only trusted origin
 besides explicit `HBR_TRUSTED_ORIGINS`). Scopes are Better Auth built-in
 defaults — do not configure scopes manually in the provider console.
 
+`auth.base_url` is validated at startup (`canonicalAuthBaseURL` in
+`apps/api/src/auth.ts`): it must be an absolute http(s) origin-only URL. A
+trailing slash is stripped and a non-default port is preserved, so register
+the portal URI with exactly the origin the instance is configured with (a
+port mismatch or an extra path/trailing slash in the portal entry is itself
+an `invalid redirect_uri`).
+
 In production the callback origin is always the `auth.base_url` origin
 (`https://hoborouter.tretrauit.me`); in local development the API's
 `baseURL` (default `http://localhost:3000`) decides the callback, and the
