@@ -30,6 +30,13 @@ describe("deploy/docker-compose.yml", () => {
     expect(env.CPA_BASE_URL).toBe("http://cpa:8317");
   });
 
+  it("hoborouter mounts ./config.yaml read-only at /app/config.yaml", () => {
+    // Loader resolves the default config.yaml relative to the image WORKDIR
+    // (/app); the bind mount must land there and stay read-only.
+    const volumes = (svc as { volumes: string[] }).volumes;
+    expect(volumes).toContain("./config.yaml:/app/config.yaml:ro");
+  });
+
   it("db requires POSTGRES_PASSWORD", () => {
     const env = (compose.services.db as { environment: Record<string, string> }).environment;
     expect(env.POSTGRES_PASSWORD).toContain("?POSTGRES_PASSWORD");
