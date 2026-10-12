@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
+  Activity,
   BarChart3,
   BookOpen,
   Boxes,
@@ -82,6 +83,7 @@ const NAV_GROUPS: { label: LocaleEntry | ""; items: NavItem[] }[] = [
       { label: { en: "Chat", vi: "Chat" }, to: "/chat", icon: MessageSquare },
       { label: { en: "Logs", vi: "Nhật ký" }, to: "/logs", icon: ScrollText },
       { label: { en: "Usage", vi: "Sử dụng" }, to: "/usage", icon: BarChart3 },
+      { label: { en: "Analytics", vi: "Phân tích" }, to: "/analytics", icon: Activity },
     ],
   },
   {

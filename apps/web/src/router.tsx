@@ -24,6 +24,7 @@ import {
   payments,
   settings,
   usage,
+  analytics,
   lazyRoute,
 } from "./lib/prefetch";
 import { queryClient } from "./lib/query-client";
@@ -219,6 +220,7 @@ const protectedRoutes = [
   protectedRoute("/keys", keys),
   protectedRoute("/logs", logs),
   protectedRoute("/usage", usage),
+  protectedRoute("/analytics", analytics),
   protectedRoute("/billing/credits", credits),
   protectedRoute("/billing/bundles", bundles),
   protectedRoute("/billing/payments", payments),
