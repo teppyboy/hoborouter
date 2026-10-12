@@ -25,6 +25,18 @@ export { users, session, account, verification };
 
 /** Largest integer representable exactly in IEEE doubles — upper bound for all canonical money/token columns. */
 export const MAX_SAFE_INTEGER_MONEY = 9007199254740991;
+
+/** Canonical reasoning effort ladder (OpenAI/OpenRouter-compatible names). */
+export const REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 const MAX_BOUND = sql.raw(String(MAX_SAFE_INTEGER_MONEY));
 const intBounded = (col: AnyPgColumn) => sql`${col} >= 0 AND ${col} <= ${MAX_BOUND}`;
 
@@ -766,12 +778,65 @@ export const models = pgTable(
       .default("inherit"),
     // Marks models resolvable by the hoborouter/auto cheapest-first router.
     auto_eligible: boolean("auto_eligible").notNull().default(false),
+    // Catalog-authored default reasoning effort applied when a client enables
+    // reasoning without naming an effort; NULL = no default (such requests
+    // pass through to CPA untouched).
+    default_reasoning_effort: text("default_reasoning_effort", {
+      enum: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    }),
     created_at: big("created_at").notNull(),
     updated_at: big("updated_at").notNull(),
   },
   (t) => [
     uniqueIndex("models_public_id").on(t.public_id),
     check("models_prompt_caching", sql`${t.prompt_caching} IN ('inherit', 'on', 'off')`),
+    check(
+      "models_default_reasoning_effort",
+      sql`${t.default_reasoning_effort} IS NULL OR ${t.default_reasoning_effort} IN ('none','minimal','low','medium','high','xhigh','max')`,
+    ),
+  ],
+);
+
+/**
+ * Catalog-authored reasoning route: one public effort -> one CPA-compatible
+ * upstream (model + effort). Instance-admin authored and audited; the public
+ * effort never leaks the upstream model. At most ONE enabled row per
+ * (model, public_effort) via the partial unique index — a re-authored route
+ * disables the previous row, preserving history like providerModelMappings.
+ */
+export const modelReasoningRoutes = pgTable(
+  "model_reasoning_routes",
+  {
+    id: text("id").primaryKey(),
+    model_id: text("model_id")
+      .notNull()
+      .references(() => models.id),
+    public_effort: text("public_effort", {
+      enum: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    }).notNull(),
+    provider: text("provider").notNull(),
+    upstream_model: text("upstream_model").notNull(),
+    upstream_effort: text("upstream_effort", {
+      enum: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    }).notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    created_at: big("created_at").notNull(),
+    updated_at: big("updated_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("model_reasoning_routes_one_enabled_per_effort")
+      .on(t.model_id, t.public_effort)
+      .where(sql`enabled = true`),
+    check(
+      "mrr_public_effort",
+      sql`${t.public_effort} IN ('none','minimal','low','medium','high','xhigh','max')`,
+    ),
+    check(
+      "mrr_upstream_effort",
+      sql`${t.upstream_effort} IN ('none','minimal','low','medium','high','xhigh','max')`,
+    ),
+    check("mrr_created_at", intBounded(t.created_at)),
+    check("mrr_updated_at", intBounded(t.updated_at)),
   ],
 );
 

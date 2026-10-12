@@ -6,9 +6,13 @@ import { Elysia, t } from "elysia";
 import type { Db, Tx } from "@hoborouter/db";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireInstanceAdmin, writeAudit, jsonError } from "../authz";
-import { MAX_SAFE_INTEGER_MONEY, isUniqueViolation } from "@hoborouter/db";
+import { MAX_SAFE_INTEGER_MONEY, isUniqueViolation, REASONING_EFFORTS } from "@hoborouter/db";
 import { sql, type SQL } from "drizzle-orm";
 import { getCurrentPrice, listPublicModels } from "@hoborouter/catalog";
+
+function isReasoningEffort(v: unknown): v is (typeof REASONING_EFFORTS)[number] {
+  return typeof v === "string" && (REASONING_EFFORTS as readonly string[]).includes(v);
+}
 
 // Bare lowercase slug, or `provider/name`, lowercase slug chars ([a-z0-9-]).
 const PUBLIC_ID_RE = /^(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)?[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -104,6 +108,12 @@ function validateModelBody(b: Record<string, unknown>): string | null {
   // nothing else. Also accepted on its own via the update route.
   if (b.auto_eligible !== undefined && typeof b.auto_eligible !== "boolean")
     return "auto_eligible must be a boolean";
+  if (
+    b.default_reasoning_effort !== undefined &&
+    b.default_reasoning_effort !== null &&
+    !isReasoningEffort(b.default_reasoning_effort)
+  )
+    return "default_reasoning_effort must be a reasoning effort or null";
   return null;
 }
 
@@ -187,7 +197,7 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
         try {
           await db.transaction(async (tx) => {
             await tx.execute(
-              sql`INSERT INTO models (id, public_id, slug, display_name, provider, description, capabilities, context_window, enabled, published, auto_eligible, prompt_caching, created_at, updated_at) VALUES (${id}, ${m.public_id}, ${m.slug}, ${m.display_name}, ${m.provider}, ${m.description ?? null}, ${m.capabilities === undefined || m.capabilities === null ? null : JSON.stringify(m.capabilities)}, ${m.context_window ?? null}, ${b.enabled === false ? false : true}, ${b.published === true ? true : false}, ${b.auto_eligible === true}, ${(b.prompt_caching as string | undefined) ?? "inherit"}, ${now}, ${now})`,
+              sql`INSERT INTO models (id, public_id, slug, display_name, provider, description, capabilities, context_window, enabled, published, auto_eligible, prompt_caching, default_reasoning_effort, created_at, updated_at) VALUES (${id}, ${m.public_id}, ${m.slug}, ${m.display_name}, ${m.provider}, ${m.description ?? null}, ${m.capabilities === undefined || m.capabilities === null ? null : JSON.stringify(m.capabilities)}, ${m.context_window ?? null}, ${b.enabled === false ? false : true}, ${b.published === true ? true : false}, ${b.auto_eligible === true}, ${(b.prompt_caching as string | undefined) ?? "inherit"}, ${(b.default_reasoning_effort as string | undefined | null) ?? null}, ${now}, ${now})`,
             );
             await writeAudit(tx, {
               actorUserId: userId,
@@ -348,6 +358,10 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
           capabilities: b.capabilities ?? parseCaps(existing.capabilities),
           context_window: b.context_window ?? existing.context_window,
           prompt_caching: b.prompt_caching ?? existing.prompt_caching,
+          default_reasoning_effort:
+            b.default_reasoning_effort !== undefined
+              ? b.default_reasoning_effort
+              : existing.default_reasoning_effort,
         };
         const invalid = validateModelBody(merged as Record<string, unknown>);
         if (invalid) return jsonError(400, "INVALID", invalid);
@@ -359,7 +373,7 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
         try {
           await db.transaction(async (tx) => {
             await tx.execute(
-              sql`UPDATE models SET public_id = ${merged.public_id}, slug = ${merged.slug as string}, display_name = ${merged.display_name as string}, provider = ${merged.provider as string}, description = ${b.description !== undefined ? (b.description as string | null) : (existing.description as string | null)}, capabilities = ${b.capabilities !== undefined ? (b.capabilities === null ? null : JSON.stringify(b.capabilities)) : existing.capabilities == null ? null : JSON.stringify(existing.capabilities)}, context_window = ${b.context_window !== undefined ? ((b.context_window as number | null) ?? null) : ((existing.context_window as number | null) ?? null)}, enabled = ${b.enabled !== undefined ? !!b.enabled : !!existing.enabled}, published = ${b.published !== undefined ? !!b.published : !!existing.published}, auto_eligible = ${autoEligible}, prompt_caching = ${(b.prompt_caching as string | undefined) ?? (existing.prompt_caching as string)}, updated_at = ${Date.now()} WHERE id = ${params.id}`,
+              sql`UPDATE models SET public_id = ${merged.public_id}, slug = ${merged.slug as string}, display_name = ${merged.display_name as string}, provider = ${merged.provider as string}, description = ${b.description !== undefined ? (b.description as string | null) : (existing.description as string | null)}, capabilities = ${b.capabilities !== undefined ? (b.capabilities === null ? null : JSON.stringify(b.capabilities)) : existing.capabilities == null ? null : JSON.stringify(existing.capabilities)}, context_window = ${b.context_window !== undefined ? ((b.context_window as number | null) ?? null) : ((existing.context_window as number | null) ?? null)}, enabled = ${b.enabled !== undefined ? !!b.enabled : !!existing.enabled}, published = ${b.published !== undefined ? !!b.published : !!existing.published}, auto_eligible = ${autoEligible}, prompt_caching = ${(b.prompt_caching as string | undefined) ?? (existing.prompt_caching as string)}, default_reasoning_effort = ${(merged.default_reasoning_effort as string | null | undefined) ?? null}, updated_at = ${Date.now()} WHERE id = ${params.id}`,
             );
             if (renamedPublicId)
               await writeAudit(tx, {
@@ -577,6 +591,115 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
           });
         });
         return { id: params.id, enabled: b.enabled };
+      },
+    )
+    .post(
+      "/api/v1/admin/catalog/models/:id/reasoning-routes",
+      {
+        params: t.Object({ id: t.String() }),
+        body: t.Optional(t.Record(t.String(), t.Any())),
+        detail: {
+          tags: ["Catalog"],
+          summary: "Create or replace a reasoning route for a model",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params, body }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const userId = gate.session.user.id;
+        const denied = await requireInstanceAdmin(db, userId);
+        if (denied) return denied;
+        if (!(await modelExists(db, params.id)))
+          return jsonError(404, "NOT_FOUND", "Model not found");
+        const b = (body ?? {}) as Record<string, unknown>;
+        if (!isReasoningEffort(b.public_effort))
+          return jsonError(400, "INVALID", "public_effort must be a reasoning effort");
+        if (b.upstream_effort !== undefined && b.upstream_effort !== null && !isReasoningEffort(b.upstream_effort))
+          return jsonError(400, "INVALID", "upstream_effort must be a reasoning effort or null");
+        if (typeof b.upstream_model !== "string" || !b.upstream_model.trim())
+          return jsonError(400, "INVALID", "upstream_model is required");
+        if (b.provider !== undefined && (typeof b.provider !== "string" || !b.provider.trim()))
+          return jsonError(400, "INVALID", "provider must be a non-empty string");
+        const provider = typeof b.provider === "string" && b.provider.trim() ? b.provider : "cpa";
+        const upstreamEffort = isReasoningEffort(b.upstream_effort) ? b.upstream_effort : b.public_effort;
+        const publicEffort = b.public_effort as (typeof REASONING_EFFORTS)[number];
+        const now = Date.now();
+        // Re-authoring an effort disables the previous enabled row (history
+        // preserved, same pattern as setModelRoute); the partial unique index
+        // on (model_id, public_effort) WHERE enabled arbiters concurrency.
+        const beforeRows = await rawRows<{ id: string; upstream_model: string; upstream_effort: string; provider: string }>(
+          db,
+          sql`SELECT id, upstream_model, upstream_effort, provider FROM model_reasoning_routes WHERE model_id = ${params.id} AND public_effort = ${publicEffort} AND enabled = true LIMIT 1`,
+        );
+        const before = beforeRows[0] ?? null;
+        if (
+          before &&
+          before.upstream_model === b.upstream_model &&
+          before.upstream_effort === upstreamEffort &&
+          before.provider === provider
+        )
+          return { id: before.id, model_id: params.id, public_effort: publicEffort, changed: false };
+        const id = crypto.randomUUID();
+        try {
+          await db.transaction(async (tx) => {
+            if (before)
+              await tx.execute(
+                sql`UPDATE model_reasoning_routes SET enabled = false, updated_at = ${now} WHERE id = ${before.id}`,
+              );
+            await tx.execute(
+              sql`INSERT INTO model_reasoning_routes (id, model_id, public_effort, provider, upstream_model, upstream_effort, enabled, created_at, updated_at) VALUES (${id}, ${params.id}, ${publicEffort}, ${provider}, ${b.upstream_model as string}, ${upstreamEffort}, true, ${now}, ${now})`,
+            );
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "catalog.reasoning_route.update",
+              target: params.id,
+              detail: {
+                public_effort: publicEffort,
+                before: before
+                  ? { id: before.id, provider: before.provider, upstream_model: before.upstream_model, upstream_effort: before.upstream_effort }
+                  : null,
+                after: { id, provider, upstream_model: b.upstream_model, upstream_effort: upstreamEffort },
+              },
+            });
+          });
+        } catch (e) {
+          // Concurrent re-authors of the same effort: the loser hits the
+          // partial unique index mid-transaction and rolls back whole.
+          if (isUniqueViolation(e))
+            return jsonError(409, "DUPLICATE", "A concurrent update changed this effort's route; retry");
+          throw e;
+        }
+        return new Response(
+          JSON.stringify({ id, model_id: params.id, public_effort: publicEffort, upstream_effort: upstreamEffort }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        );
+      },
+    )
+    .get(
+      "/api/v1/admin/catalog/models/:id/reasoning-routes",
+      {
+        params: t.Object({ id: t.String() }),
+        detail: {
+          tags: ["Catalog"],
+          summary: "List reasoning routes for a model",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const denied = await requireInstanceAdmin(db, gate.session.user.id);
+        if (denied) return denied;
+        if (!(await modelExists(db, params.id)))
+          return jsonError(404, "NOT_FOUND", "Model not found");
+        return (
+          await rawRows(
+            db,
+            sql`SELECT id, public_effort, provider, upstream_model, upstream_effort, enabled, created_at, updated_at FROM model_reasoning_routes WHERE model_id = ${params.id} ORDER BY created_at DESC, id DESC`,
+          )
+        ).map((r) => coerceNums(r));
       },
     )
     .post(
