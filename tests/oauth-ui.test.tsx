@@ -224,7 +224,10 @@ test("email/password form renders before the provider buttons, separated by an a
     expect(buttons.length).toBe(2);
     // Document order: the form's email field comes before every provider button.
     for (const btn of buttons) {
-      expect(emailInput!.compareDocumentPosition(btn) & documentRef.defaultView!.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(
+        emailInput!.compareDocumentPosition(btn) &
+          documentRef.defaultView!.Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
     }
     const divider = dividerOf(c);
     expect(divider).not.toBeNull();
@@ -232,7 +235,8 @@ test("email/password form renders before the provider buttons, separated by an a
     // form, and is hidden for email-only configs (asserted above).
     expect(divider!.getAttribute("aria-label")).toBeTruthy();
     const dividerBeforeButtons =
-      divider!.compareDocumentPosition(buttons[0]!) & documentRef.defaultView!.Node.DOCUMENT_POSITION_FOLLOWING;
+      divider!.compareDocumentPosition(buttons[0]!) &
+      documentRef.defaultView!.Node.DOCUMENT_POSITION_FOLLOWING;
     expect(dividerBeforeButtons).toBeTruthy();
     unmountPage(c);
   }
