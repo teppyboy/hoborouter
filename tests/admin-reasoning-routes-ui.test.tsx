@@ -4,6 +4,8 @@
 import { test, expect } from "bun:test";
 import {
   adminModelsCopy,
+  moveRouteOrder,
+  orderedEnabledRoutes,
   reasoningRoutePayload,
   type ReasoningRouteRow,
 } from "../apps/web/src/pages/admin/models";
@@ -134,4 +136,79 @@ test("history rows carry an enabled flag so replaced routes stay visible", () =>
     updated_at: 2,
   };
   expect(row.enabled).toBe(false);
+});
+
+test("enabled routes sort by sort_order with creation order as tiebreak", () => {
+  const routes: ReasoningRouteRow[] = [
+    {
+      id: "r2",
+      public_effort: "low",
+      provider: "cpa",
+      upstream_model: "up/x",
+      upstream_effort: "low",
+      enabled: true,
+      sort_order: 2,
+      created_at: 1,
+      updated_at: 1,
+    },
+    {
+      id: "r1",
+      public_effort: "high",
+      provider: "cpa",
+      upstream_model: "up/x",
+      upstream_effort: "high",
+      enabled: true,
+      sort_order: 0,
+      created_at: 9,
+      updated_at: 9,
+    },
+    {
+      id: "r0",
+      public_effort: "medium",
+      provider: "cpa",
+      upstream_model: "up/x",
+      upstream_effort: "medium",
+      enabled: false,
+      sort_order: 1,
+      created_at: 1,
+      updated_at: 1,
+    },
+    // Pre-migration row without sort_order: ordered last, after sorted peers.
+    {
+      id: "r3",
+      public_effort: "max",
+      provider: "cpa",
+      upstream_model: "up/x",
+      upstream_effort: "max",
+      enabled: true,
+      created_at: 1,
+      updated_at: 1,
+    },
+  ];
+  expect(orderedEnabledRoutes(routes).map((r) => r.id)).toEqual(["r1", "r2", "r3"]);
+});
+
+test("moveRouteOrder swaps neighbours and refuses boundary/no-op moves", () => {
+  expect(moveRouteOrder(["a", "b", "c"], "a", "up")).toBeNull();
+  expect(moveRouteOrder(["a", "b", "c"], "c", "down")).toBeNull();
+  expect(moveRouteOrder(["a", "b", "c"], "zzz", "up")).toBeNull();
+  expect(moveRouteOrder(["a", "b", "c"], "b", "up")).toEqual(["b", "a", "c"]);
+  expect(moveRouteOrder(["a", "b", "c"], "b", "down")).toEqual(["a", "c", "b"]);
+});
+
+test("reorder and delete affordances have bilingual copy", () => {
+  for (const key of [
+    "routeOrderHelp",
+    "moveRouteUp",
+    "moveRouteDown",
+    "deleteRoute",
+    "confirmDeleteRoute",
+    "routeDeletedToast",
+    "routeReorderedToast",
+    "confirm",
+    "cancel",
+  ] as const) {
+    expect(adminModelsCopy[key].en.length).toBeGreaterThan(0);
+    expect(adminModelsCopy[key].vi.length).toBeGreaterThan(0);
+  }
 });

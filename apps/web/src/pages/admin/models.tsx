@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
-import { AlertTriangle, Plus } from "lucide-react";
+import { AlertTriangle, GripVertical, Plus, Trash2 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { DataTable, EmptyState, CopyButton, PageHeader } from "../../components/page";
 import { Badge } from "../../components/ui/badge";
@@ -218,6 +218,27 @@ export const adminModelsCopy = {
     en: "Upstream model is required",
     vi: "Bắt buộc nhập mô hình thượng nguồn",
   },
+  cancel: { en: "Cancel", vi: "Huỷ" },
+  confirm: { en: "Confirm", vi: "Xác nhận" },
+  routeOrderHelp: {
+    en: "Drag the handle or use ArrowUp/ArrowDown to reorder; the public efforts list follows this order.",
+    vi: "Kéo tay cầm hoặc dùng mũi tên lên/xuống để sắp xếp lại; danh sách effort công khai theo thứ tự này.",
+  },
+  moveRouteUp: { en: "Move {effort} up", vi: "Chuyển {effort} lên trên" },
+  moveRouteDown: { en: "Move {effort} down", vi: "Chuyển {effort} xuống dưới" },
+  deleteRoute: { en: "Delete route for {effort}", vi: "Xoá route cho {effort}" },
+  confirmDeleteRoute: {
+    en: "Delete route for {effort}? Clients using that effort will be rejected before billing.",
+    vi: "Xoá route cho {effort}? Client dùng effort này sẽ bị từ chối trước khi tính phí.",
+  },
+  routeDeletedToast: {
+    en: "Reasoning route removed",
+    vi: "Đã xoá route suy luận",
+  },
+  routeReorderedToast: {
+    en: "Reasoning route order saved",
+    vi: "Đã lưu thứ tự route suy luận",
+  },
 
   // Pricing section.
   addPrice: { en: "Add price", vi: "Thêm giá" },
@@ -352,8 +373,42 @@ export interface ReasoningRouteRow {
   upstream_model: string;
   upstream_effort: string | null;
   enabled: boolean;
+  sort_order?: number;
   created_at: number;
   updated_at: number;
+}
+
+/**
+ * Enabled routes in catalog display/routing order: sort_order first (older
+ * rows pre-migration may omit it), then creation time as a stable tiebreak.
+ */
+export function orderedEnabledRoutes(routes: ReasoningRouteRow[]): ReasoningRouteRow[] {
+  return routes
+    .filter((r) => r.enabled)
+    .slice()
+    .sort(
+      (a, b) =>
+        (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER) ||
+        a.created_at - b.created_at ||
+        a.id.localeCompare(b.id),
+    );
+}
+
+/**
+ * Move one route ID up/down within the ordered list; returns the new order or
+ * null at the boundary (no-op, so the caller neither mutates nor re-requests).
+ */
+export function moveRouteOrder(ids: string[], id: string, dir: "up" | "down"): string[] | null {
+  const i = ids.indexOf(id);
+  const j = dir === "up" ? i - 1 : i + 1;
+  if (i === -1 || j < 0 || j >= ids.length) return null;
+  const a = ids[i];
+  const b = ids[j];
+  if (a === undefined || b === undefined) return null;
+  const next = ids.slice();
+  next[i] = b;
+  next[j] = a;
+  return next;
 }
 
 export type ReasoningRouteError =
@@ -744,6 +799,10 @@ function ReasoningRoutesSection({ model }: { model: AdminModel }) {
   // "same" means omit upstream_effort; the server defaults it to public_effort.
   const [upstreamEffort, setUpstreamEffort] = useState("same");
   const [error, setError] = useState<string | null>(null);
+  // Local order while dragging; cleared after the server confirms or errors.
+  const [order, setOrder] = useState<string[] | null>(null);
+  const dragId = useRef<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const save = useMutation({
     mutationFn: () => {
@@ -771,10 +830,148 @@ function ReasoningRoutesSection({ model }: { model: AdminModel }) {
     onError: (e) => setError(e.message),
   });
 
+  const reorder = useMutation({
+    mutationFn: (route_ids: string[]) =>
+      api(`/api/v1/admin/catalog/models/${model.id}/reasoning-routes/reorder`, {
+        method: "POST",
+        body: JSON.stringify({ route_ids }),
+      }),
+    onSuccess: () => {
+      toast(t("routeReorderedToast"));
+      setOrder(null);
+      void qc.invalidateQueries({ queryKey: ["admin", "reasoning-routes", model.id] });
+    },
+    onError: (e) => {
+      setOrder(null);
+      toast(e.message);
+      void qc.invalidateQueries({ queryKey: ["admin", "reasoning-routes", model.id] });
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: (routeId: string) =>
+      api(`/api/v1/admin/catalog/reasoning-routes/${routeId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast(t("routeDeletedToast"));
+      setConfirmDeleteId(null);
+      void qc.invalidateQueries({ queryKey: ["admin", "reasoning-routes", model.id] });
+    },
+    onError: (e) => {
+      setConfirmDeleteId(null);
+      toast(e.message);
+      void qc.invalidateQueries({ queryKey: ["admin", "reasoning-routes", model.id] });
+    },
+  });
+
+  const enabledRoutes = orderedEnabledRoutes(routes.data ?? []);
+  const byId = new Map(enabledRoutes.map((r) => [r.id, r]));
+  const ordered = order?.map((id) => byId.get(id)).filter((r) => r !== undefined) ?? enabledRoutes;
+  const move = (id: string, dir: "up" | "down") => {
+    const base = order ?? enabledRoutes.map((r) => r.id);
+    const next = moveRouteOrder(base, id, dir);
+    if (!next) return;
+    setOrder(next);
+    reorder.mutate(next);
+  };
+
   if (routes.isLoading) return null;
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">{t("reasoningIntro")}</p>
+      <AdminGate query={routes}>
+        {ordered.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">{t("routeOrderHelp")}</p>
+            <ul className="space-y-1">
+              {ordered.map((r) => (
+                <li
+                  key={r.id}
+                  draggable
+                  onDragStart={(e) => {
+                    dragId.current = r.id;
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const from = dragId.current;
+                    dragId.current = null;
+                    if (!from || from === r.id) return;
+                    const base = order ?? enabledRoutes.map((x) => x.id);
+                    const without = base.filter((x) => x !== from);
+                    const at = without.indexOf(r.id) + 1;
+                    const next = [...without.slice(0, at), from, ...without.slice(at)];
+                    setOrder(next);
+                    reorder.mutate(next);
+                  }}
+                  onDragEnd={() => {
+                    dragId.current = null;
+                  }}
+                  className="flex items-center gap-2 rounded-md border border-border px-2 py-1.5"
+                >
+                  <button
+                    type="button"
+                    aria-label={`${t("moveRouteUp", { effort: r.public_effort })} / ${t("moveRouteDown", { effort: r.public_effort })}`}
+                    title={t("routeOrderHelp")}
+                    className="cursor-grab text-muted-foreground"
+                    onKeyDown={(e) => {
+                      if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        move(r.id, "up");
+                      } else if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        move(r.id, "down");
+                      }
+                    }}
+                  >
+                    <GripVertical className="size-4" />
+                  </button>
+                  <span className="font-mono text-xs">{r.public_effort}</span>
+                  <span className="font-mono text-xs text-muted-foreground">
+                    → {r.upstream_model}
+                  </span>
+                  <span className="ml-auto flex items-center gap-1">
+                    {confirmDeleteId === r.id ? (
+                      <>
+                        <span className="text-xs text-muted-foreground">
+                          {t("confirmDeleteRoute", { effort: r.public_effort })}
+                        </span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="destructive"
+                          disabled={remove.isPending}
+                          onClick={() => remove.mutate(r.id)}
+                        >
+                          {t("confirm")}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setConfirmDeleteId(null)}
+                        >
+                          {t("cancel")}
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        aria-label={t("deleteRoute", { effort: r.public_effort })}
+                        onClick={() => setConfirmDeleteId(r.id)}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </AdminGate>
       <AdminGate query={routes}>
         <DataTable
           columns={[
