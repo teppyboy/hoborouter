@@ -6,7 +6,7 @@ No source edits, no dependencies, no provider calls.
 
 ## Summary
 
-OpenRouter is a normalized multi-provider router whose *API compatibility*
+OpenRouter is a normalized multi-provider router whose _API compatibility_
 surface is: a unified `reasoning` parameter + `reasoning_details` response
 metadata, a `provider` routing object with model fallbacks, always-on `usage`
 including `cost` and cache splits, a `GET /api/v1/key` limits endpoint, a
@@ -49,7 +49,7 @@ Source: <https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.md> (
   `usage.completion_tokens - usage.completion_tokens_details.reasoning_tokens`.
 - Per-model discovery: `GET /api/v1/models` entries may carry
   `reasoning: { supported_efforts, default_effort, default_enabled,
-  supports_max_tokens, mandatory }`.
+supports_max_tokens, mandatory }`.
 - Legacy params still accepted: `include_reasoning: true/false`.
 - Anthropic Messages normalization table (exact from the page):
   `output_config: { effort }` ⇔ `reasoning: { effort }`;
@@ -100,7 +100,7 @@ Source: <https://openrouter.ai/docs/cookbook/administration/usage-accounting.md>
   token counts. `usage: { include: true }` and
   `stream_options: { include_usage: true }` are "deprecated and have no
   effect".
-- `prompt_tokens_details.cached_tokens` = tokens *read* from cache;
+- `prompt_tokens_details.cached_tokens` = tokens _read_ from cache;
   `prompt_tokens_details.cache_write_tokens` = tokens written (only for
   models with explicit cache-write pricing).
 - Async alternative: fetch usage by generation id via the `/generation`
@@ -142,12 +142,12 @@ Sources: <https://openrouter.ai/docs/guides/routing/provider-selection.md> (fetc
 Source: <https://openrouter.ai/docs/features/structured-outputs> (fetched, 11 KB).
 
 - `response_format: { type: "json_schema", json_schema: { name, strict,
-  schema, additionalProperties: false } }`; "Set `strict: true` so that
+schema, additionalProperties: false } }`; "Set `strict: true` so that
   providers with a native strict mode enforce your schema exactly… exact
   compliance is not guaranteed on every endpoint".
 - Support is per endpoint, not per model; route only to supporting endpoints
   by checking `supported_parameters` and setting `provider.require_parameters:
-  true`. Streaming with structured outputs is supported (partial JSON).
+true`. Streaming with structured outputs is supported (partial JSON).
 - Optional "Response Healing" plugin for non-streaming json_schema requests.
 
 ### 1.6 Limits
@@ -228,10 +228,10 @@ Source: <https://platform.openai.com/docs/guides/reasoning> (fetched in full, 71
   still occupy space in the model's context window and are billed as output
   tokens." Exact usage shape (from the page):
   `usage: { input_tokens, input_tokens_details: { cached_tokens },
-  output_tokens, output_tokens_details: { reasoning_tokens }, total_tokens }`.
+output_tokens, output_tokens_details: { reasoning_tokens }, total_tokens }`.
 - Cost control via `max_output_tokens`; on exhaustion the response has
   `status: "incomplete"` and `incomplete_details.reason: "max_output_tokens"`
-  — a *normal billed outcome*, possibly with zero visible output.
+  — a _normal billed outcome_, possibly with zero visible output.
 - Reasoning summaries: opt-in `reasoning: { summary: "auto" }` (organization
   verification may be required); output item
   `{ type: "reasoning", id: "rs_…", summary: [{ type: "summary_text", text }] }`.
@@ -247,7 +247,7 @@ Source: <https://platform.openai.com/docs/guides/reasoning> (fetched in full, 71
 - Structured outputs: Responses API uses `text.format` =
   `{ type: "json_schema", name, strict: true, schema }` (verified in fetched
   page: `ResponseFormatTextJsonSchemaConfig.builder().name("event")
-  .strict(true).schema(...)`); Chat Completions uses `response_format`.
+.strict(true).schema(...)`); Chat Completions uses `response_format`.
 - Tools: function calling configured via the request `tools` array
   (`type: "function"`); the reasoning guide's examples pass
   `"tools": [... function config ...]` alongside reasoning on Responses.
@@ -277,7 +277,7 @@ Sources: <https://platform.claude.com/docs/en/build-with-claude/thinking> (fetch
   `max_tokens`". Tracking field: "monitor the
   `usage.output_tokens_details.thinking_tokens` field in the response… When
   streaming, this breakdown appears only on the final `message_delta` event."
-- Display: `display: "summarized"` (thinking blocks carry a *summary*, never
+- Display: `display: "summarized"` (thinking blocks carry a _summary_, never
   raw chain of thought; billed tokens > visible summary tokens) vs
   `"omitted"` (empty `thinking` field, `signature` still present; faster
   TTFT) vs `"updates"` (beta, `thinking-display-updates-2026-08-18` header).
@@ -289,10 +289,10 @@ Sources: <https://platform.claude.com/docs/en/build-with-claude/thinking> (fetch
   `message_delta`(s) → `message_stop`; any number of `ping` events may
   interleave; errors can arrive as stream events (e.g. `overloaded_error`).
   Exact claim: "The token counts shown in the `usage` field of the
-  `message_delta` event are *cumulative*." Example shapes show
+  `message_delta` event are _cumulative_." Example shapes show
   `message_start.message.usage = { input_tokens, output_tokens }` and, with
   caching/tools, `{ input_tokens, cache_creation_input_tokens,
-  cache_read_input_tokens, output_tokens, server_tool_use: {...} }`.
+cache_read_input_tokens, output_tokens, server_tool_use: {...} }`.
 - Tools: native `tools`/`tool_choice` on Messages; tool args stream as
   `input_json_delta`; server tools (e.g. `web_search_20250305`) appear in
   usage as `server_tool_use.web_search_requests`.
@@ -367,7 +367,7 @@ route file exists — chat-protocol handling lives in `v1-gateway.ts`
 2. **`response.incomplete` treated as a hard failure** — the tap fails on
    `response.incomplete` (`fail("error_event")` in `handleEventData`) and
    non-stream requires `status === "completed"`. OpenAI documents
-   `status: "incomplete"` with `max_output_tokens` reason as a normal *billed*
+   `status: "incomplete"` with `max_output_tokens` reason as a normal _billed_
    outcome carrying usage (§2). Impact: a partially-successful Responses
    request is settled `full_hold` (`upstream_error` path in v1-gateway.ts)
    instead of charging the real token usage — consistent with the owner's
@@ -403,7 +403,7 @@ route file exists — chat-protocol handling lives in `v1-gateway.ts`
    `throughput_allowance_limited` (429, with `retry-after`). OpenRouter 402s
    carry `error.metadata.limit_source` + `remedy_hint` + `Retry-After`; 429s
    carry `X-RateLimit-*` headers (§1.6). No `X-RateLimit-Remaining/Limit/
-   Reset` headers are emitted anywhere in the gateway.
+Reset` headers are emitted anywhere in the gateway.
 
 ### 4.3 Concrete gaps (product parity — NOT gateway API work per requirements)
 
@@ -466,6 +466,7 @@ milestones. Listed so the parity picture is complete, not as action items:
 ## Sources
 
 Kept:
+
 - OpenRouter Reasoning Tokens — https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.md (full fetch; §1.1)
 - OpenRouter Streaming — https://openrouter.ai/docs/api-reference/streaming.md (full fetch; §1.2)
 - OpenRouter Usage Accounting — https://openrouter.ai/docs/cookbook/administration/usage-accounting.md (full fetch; §1.3)
@@ -483,6 +484,7 @@ Kept:
 - Anthropic Streaming — https://platform.claude.com/docs/en/build-with-claude/streaming (fetch; §3)
 
 Rejected/deprioritized:
+
 - https://openrouter.ai/docs/features/reasoning-tokens — 404 (page moved to
   /docs/guides/best-practices/reasoning-tokens).
 - https://docs.claude.com/en/docs/build-with-claude/usage — 404; usage covered

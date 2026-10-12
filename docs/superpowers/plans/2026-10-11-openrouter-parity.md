@@ -30,6 +30,7 @@
 ### Task 1: Catalog reasoning metadata and migration
 
 **Files:**
+
 - Create: `packages/db/drizzle/0021_model_reasoning_metadata.sql`
 - Modify: `packages/db/drizzle/meta/_journal.json`
 - Modify: `packages/db/src/schema.ts`
@@ -38,6 +39,7 @@
 - Test: `apps/api/test/catalog-reasoning.test.ts`
 
 **Interfaces:**
+
 - Produce `ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"`.
 - Produce `ReasoningRouteMapping { public_effort, provider, upstream_model, upstream_effort }` with bounded strings and strict effort enum.
 - Produce `getReasoningMetadata(db, modelId)` and `validateReasoningRequest(...)` for gateway consumers.
@@ -48,12 +50,14 @@
 ### Task 2: Gateway thinking normalization and usage billing
 
 **Files:**
+
 - Modify: `apps/api/src/routes/v1-gateway.ts`
 - Modify: `packages/usage/src/usage.ts`
 - Test: `apps/api/test/reasoning-gateway.test.ts`
 - Test: `tests/usage-reasoning-splits.test.ts`
 
 **Interfaces:**
+
 - Consume Task 1 metadata.
 - Produce `normalizeReasoningRequest(protocol, body, metadata)` returning `{ body, routeOverride? }` or a safe client error.
 - Extend usage extraction with Anthropic `output_tokens_details.thinking_tokens` and cumulative stream merging.
@@ -66,6 +70,7 @@
 ### Task 3: Public model capabilities and rate-limit metadata
 
 **Files:**
+
 - Modify: `apps/api/src/routes/v1-models.ts`
 - Modify: `packages/catalog/src/catalog.ts`
 - Modify: `apps/api/src/routes/v1-gateway.ts`
@@ -73,6 +78,7 @@
 - Test: `apps/api/test/gateway-rate-limit-headers.test.ts`
 
 **Interfaces:**
+
 - Produce safe `/v1/models` fields: `supported_parameters`, `reasoning`, `capabilities`, `context_window` where public.
 - Produce rate-limit headers only from existing limiter state; no fabricated values.
 
@@ -83,6 +89,7 @@
 ### Task 4: API-key expiry, budgets, and usage endpoint
 
 **Files:**
+
 - Create: `packages/db/drizzle/0022_api_key_budgets.sql`
 - Modify: `packages/db/drizzle/meta/_journal.json`
 - Modify: `packages/db/src/schema.ts`
@@ -93,6 +100,7 @@
 - Test: `tests/keys-page-budget-ui.test.tsx`
 
 **Interfaces:**
+
 - Produce atomic `checkAndReserveKeyBudget(...)`, `GET /api/v1/keys/:id/usage`, and admin/user key fields for `expires_at`, `budget_vnd`, `budget_period`.
 
 - [ ] Add migration/schema fields and strict create/update validation for expiry, VND budget, and daily/weekly/monthly reset.
@@ -103,6 +111,7 @@
 ### Task 5: Usage analytics and model discovery product APIs
 
 **Files:**
+
 - Create: `apps/api/src/routes/analytics.ts`
 - Modify: `apps/api/src/app.ts`
 - Modify: `apps/api/src/routes/v1-models.ts`
@@ -110,6 +119,7 @@
 - Test: `apps/api/test/v1-models-capabilities.test.ts`
 
 **Interfaces:**
+
 - Produce workspace-authorized `GET /api/v1/analytics/activity` and bounded `POST /api/v1/analytics/query` over existing usage/log data.
 - Consume public capability projection from Task 3.
 
@@ -120,6 +130,7 @@
 ### Task 6: Admin/catalog, key, analytics, and Chat thinking UI
 
 **Files:**
+
 - Modify: `apps/web/src/pages/chat/index.tsx`
 - Modify: `apps/web/src/pages/models/detail.tsx`
 - Modify: `apps/web/src/pages/admin/models.tsx`
@@ -132,6 +143,7 @@
 - Test: `tests/analytics-page.test.tsx`
 
 **Interfaces:**
+
 - Consume Tasks 1, 3, 4, and 5 API contracts.
 - Render public effort labels only; never render CPA route/provider IDs.
 
@@ -143,6 +155,7 @@
 ### Task 7: Integration, review, and release
 
 **Files:**
+
 - Modify only files required by review findings and docs/status.
 - Test: affected and full suites.
 
