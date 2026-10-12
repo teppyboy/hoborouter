@@ -12,6 +12,14 @@ import { act } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRouter, createRootRoute, createMemoryHistory } from "@tanstack/react-router";
 import { routerContext } from "@tanstack/react-router/dist/esm/routerContext.js";
+import { isolateBetterAuthClientWindowManagers } from "./helpers/better-auth-client-isolation";
+
+// This file is the only ui-job test that mounts AppShell/useSession: better-auth's
+// session atom installs window listeners whose delayed unmount cleanup would
+// otherwise run after this file's jsdom teardown and throw "window is not
+// defined" in a later file sharing the worker (v0.11.1 ui-job failure).
+// Seed window-free manager stubs BEFORE the app modules below are imported.
+isolateBetterAuthClientWindowManagers();
 
 const GLOBAL_KEYS = [
   "window",
