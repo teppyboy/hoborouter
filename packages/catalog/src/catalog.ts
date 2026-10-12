@@ -256,7 +256,10 @@ function routeFor(metadata: ReasoningMetadata, effort: ReasoningEffort): Reasoni
   // the honest outcome. Any other unrouted effort is unsupported and must
   // fail BEFORE reservation.
   if (effort === "none") return { ok: true, effort, route: null };
-  return reasoningError("unsupported_reasoning", `Reasoning effort '${effort}' is not supported by this model`);
+  return reasoningError(
+    "unsupported_reasoning",
+    `Reasoning effort '${effort}' is not supported by this model`,
+  );
 }
 
 /**
@@ -294,18 +297,31 @@ export function validateReasoningRequest(
       );
     if (hasEffort) {
       if (!isReasoningEffort(r.effort))
-        return reasoningError("invalid_reasoning", "'reasoning.effort' is not a supported reasoning effort");
+        return reasoningError(
+          "invalid_reasoning",
+          "'reasoning.effort' is not a supported reasoning effort",
+        );
       efforts.push(r.effort);
     } else if (hasBudget) {
-      if (typeof r.max_tokens !== "number" || !Number.isSafeInteger(r.max_tokens) || r.max_tokens < 1)
-        return reasoningError("invalid_reasoning", "'reasoning.max_tokens' must be a positive integer");
+      if (
+        typeof r.max_tokens !== "number" ||
+        !Number.isSafeInteger(r.max_tokens) ||
+        r.max_tokens < 1
+      )
+        return reasoningError(
+          "invalid_reasoning",
+          "'reasoning.max_tokens' must be a positive integer",
+        );
       budgetSource = "reasoning.max_tokens";
     } else if (r.enabled === true) enableCount++;
     else if (r.enabled === false) efforts.push("none");
   }
   if (body.reasoning_effort !== undefined && body.reasoning_effort !== null) {
     if (!isReasoningEffort(body.reasoning_effort))
-      return reasoningError("invalid_reasoning", "'reasoning_effort' is not a supported reasoning effort");
+      return reasoningError(
+        "invalid_reasoning",
+        "'reasoning_effort' is not a supported reasoning effort",
+      );
     efforts.push(body.reasoning_effort);
   }
   const thinking = body.thinking;
@@ -316,14 +332,23 @@ export function validateReasoningRequest(
     if (th.type === "enabled") {
       const budget = th.budget_tokens;
       if (budget === undefined || budget === null)
-        return reasoningError("invalid_reasoning", "'thinking.budget_tokens' is required when thinking is enabled");
+        return reasoningError(
+          "invalid_reasoning",
+          "'thinking.budget_tokens' is required when thinking is enabled",
+        );
       if (typeof budget !== "number" || !Number.isSafeInteger(budget) || budget < 1)
-        return reasoningError("invalid_reasoning", "'thinking.budget_tokens' must be a positive integer");
+        return reasoningError(
+          "invalid_reasoning",
+          "'thinking.budget_tokens' must be a positive integer",
+        );
       budgetSource = "thinking.budget_tokens";
     } else if (th.type === "adaptive") enableCount++;
     else if (th.type === "disabled") efforts.push("none");
     else
-      return reasoningError("invalid_reasoning", "'thinking.type' must be 'enabled', 'adaptive', or 'disabled'");
+      return reasoningError(
+        "invalid_reasoning",
+        "'thinking.type' must be 'enabled', 'adaptive', or 'disabled'",
+      );
   }
   const outputConfig = body.output_config;
   if (outputConfig !== undefined && outputConfig !== null) {
@@ -332,7 +357,10 @@ export function validateReasoningRequest(
     const oc = outputConfig as Record<string, unknown>;
     if (oc.effort !== undefined && oc.effort !== null) {
       if (!isReasoningEffort(oc.effort))
-        return reasoningError("invalid_reasoning", "'output_config.effort' is not a supported reasoning effort");
+        return reasoningError(
+          "invalid_reasoning",
+          "'output_config.effort' is not a supported reasoning effort",
+        );
       efforts.push(oc.effort);
     }
   }

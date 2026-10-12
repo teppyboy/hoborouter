@@ -64,10 +64,30 @@ const metadataWithRoutes = (): ReasoningMetadata => ({
   model_id: "mdl-1",
   default_effort: "medium",
   routes: [
-    { public_effort: "max", provider: "z-ai", upstream_model: "z-ai/glm-5.3-flash", upstream_effort: "high" },
-    { public_effort: "xhigh", provider: "z-ai", upstream_model: "z-ai/glm-5.3-flash", upstream_effort: "high" },
-    { public_effort: "low", provider: "z-ai", upstream_model: "z-ai/glm-5.3-flash", upstream_effort: "none" },
-    { public_effort: "medium", provider: "z-ai", upstream_model: "z-ai/glm-5.3-flash", upstream_effort: "high" },
+    {
+      public_effort: "max",
+      provider: "z-ai",
+      upstream_model: "z-ai/glm-5.3-flash",
+      upstream_effort: "high",
+    },
+    {
+      public_effort: "xhigh",
+      provider: "z-ai",
+      upstream_model: "z-ai/glm-5.3-flash",
+      upstream_effort: "high",
+    },
+    {
+      public_effort: "low",
+      provider: "z-ai",
+      upstream_model: "z-ai/glm-5.3-flash",
+      upstream_effort: "none",
+    },
+    {
+      public_effort: "medium",
+      provider: "z-ai",
+      upstream_model: "z-ai/glm-5.3-flash",
+      upstream_effort: "high",
+    },
   ],
 });
 
@@ -181,10 +201,7 @@ describe("validateReasoningRequest", () => {
   });
 
   test("reasoning.effort and reasoning.max_tokens are mutually exclusive", () => {
-    const v = validateReasoningRequest(
-      { reasoning: { effort: "low", max_tokens: 100 } },
-      meta,
-    );
+    const v = validateReasoningRequest({ reasoning: { effort: "low", max_tokens: 100 } }, meta);
     expect(v.ok).toBe(false);
     if (!v.ok) expect(v.code).toBe("conflicting_reasoning");
   });
@@ -262,7 +279,9 @@ describe("admin reasoning metadata API", () => {
   test("admin lists seeded routes and re-authoring replaces with audit", async () => {
     const { db, app, cookie } = await setup();
     await seedExampleModel(db);
-    const listRes = await req(app, "/api/v1/admin/catalog/models/mdl-1/reasoning-routes", { cookie });
+    const listRes = await req(app, "/api/v1/admin/catalog/models/mdl-1/reasoning-routes", {
+      cookie,
+    });
     expect(listRes.status).toBe(200);
     const routes = (await listRes.json()) as { public_effort: string; enabled: boolean }[];
     expect(routes.filter((r) => r.enabled).length).toBe(4);
@@ -270,10 +289,17 @@ describe("admin reasoning metadata API", () => {
     const res = await req(app, "/api/v1/admin/catalog/models/mdl-1/reasoning-routes", {
       method: "POST",
       cookie,
-      body: { public_effort: "low", provider: "z-ai", upstream_model: "z-ai/glm-5.3-flash", upstream_effort: "minimal" },
+      body: {
+        public_effort: "low",
+        provider: "z-ai",
+        upstream_model: "z-ai/glm-5.3-flash",
+        upstream_effort: "minimal",
+      },
     });
     expect(res.status).toBe(201);
-    const after = (await req(app, "/api/v1/admin/catalog/models/mdl-1/reasoning-routes", { cookie }).then((r) => r.json())) as {
+    const after = (await req(app, "/api/v1/admin/catalog/models/mdl-1/reasoning-routes", {
+      cookie,
+    }).then((r) => r.json())) as {
       public_effort: string;
       enabled: boolean;
     }[];
@@ -293,7 +319,12 @@ describe("admin reasoning metadata API", () => {
     const res = await req(app, "/api/v1/admin/catalog/models/mdl-1/reasoning-routes", {
       method: "POST",
       cookie,
-      body: { public_effort: "max", provider: "z-ai", upstream_model: "z-ai/glm-5.3-flash", upstream_effort: "high" },
+      body: {
+        public_effort: "max",
+        provider: "z-ai",
+        upstream_model: "z-ai/glm-5.3-flash",
+        upstream_effort: "high",
+      },
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { changed?: boolean };
@@ -337,7 +368,13 @@ describe("admin reasoning metadata API", () => {
     const bad = await req(app, "/api/v1/admin/catalog/models", {
       method: "POST",
       cookie,
-      body: { public_id: "z/glm2", slug: "glm2", display_name: "GLM2", provider: "z", default_reasoning_effort: "ultra" },
+      body: {
+        public_id: "z/glm2",
+        slug: "glm2",
+        display_name: "GLM2",
+        provider: "z",
+        default_reasoning_effort: "ultra",
+      },
     });
     expect(bad.status).toBe(400);
     const updated = await req(app, "/api/v1/admin/catalog/models/mdl-1", {

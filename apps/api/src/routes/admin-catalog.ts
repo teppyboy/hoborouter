@@ -615,20 +615,31 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
         const b = (body ?? {}) as Record<string, unknown>;
         if (!isReasoningEffort(b.public_effort))
           return jsonError(400, "INVALID", "public_effort must be a reasoning effort");
-        if (b.upstream_effort !== undefined && b.upstream_effort !== null && !isReasoningEffort(b.upstream_effort))
+        if (
+          b.upstream_effort !== undefined &&
+          b.upstream_effort !== null &&
+          !isReasoningEffort(b.upstream_effort)
+        )
           return jsonError(400, "INVALID", "upstream_effort must be a reasoning effort or null");
         if (typeof b.upstream_model !== "string" || !b.upstream_model.trim())
           return jsonError(400, "INVALID", "upstream_model is required");
         if (b.provider !== undefined && (typeof b.provider !== "string" || !b.provider.trim()))
           return jsonError(400, "INVALID", "provider must be a non-empty string");
         const provider = typeof b.provider === "string" && b.provider.trim() ? b.provider : "cpa";
-        const upstreamEffort = isReasoningEffort(b.upstream_effort) ? b.upstream_effort : b.public_effort;
+        const upstreamEffort = isReasoningEffort(b.upstream_effort)
+          ? b.upstream_effort
+          : b.public_effort;
         const publicEffort = b.public_effort as (typeof REASONING_EFFORTS)[number];
         const now = Date.now();
         // Re-authoring an effort disables the previous enabled row (history
         // preserved, same pattern as setModelRoute); the partial unique index
         // on (model_id, public_effort) WHERE enabled arbiters concurrency.
-        const beforeRows = await rawRows<{ id: string; upstream_model: string; upstream_effort: string; provider: string }>(
+        const beforeRows = await rawRows<{
+          id: string;
+          upstream_model: string;
+          upstream_effort: string;
+          provider: string;
+        }>(
           db,
           sql`SELECT id, upstream_model, upstream_effort, provider FROM model_reasoning_routes WHERE model_id = ${params.id} AND public_effort = ${publicEffort} AND enabled = true LIMIT 1`,
         );
@@ -639,7 +650,12 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
           before.upstream_effort === upstreamEffort &&
           before.provider === provider
         )
-          return { id: before.id, model_id: params.id, public_effort: publicEffort, changed: false };
+          return {
+            id: before.id,
+            model_id: params.id,
+            public_effort: publicEffort,
+            changed: false,
+          };
         const id = crypto.randomUUID();
         try {
           await db.transaction(async (tx) => {
@@ -658,9 +674,19 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
               detail: {
                 public_effort: publicEffort,
                 before: before
-                  ? { id: before.id, provider: before.provider, upstream_model: before.upstream_model, upstream_effort: before.upstream_effort }
+                  ? {
+                      id: before.id,
+                      provider: before.provider,
+                      upstream_model: before.upstream_model,
+                      upstream_effort: before.upstream_effort,
+                    }
                   : null,
-                after: { id, provider, upstream_model: b.upstream_model, upstream_effort: upstreamEffort },
+                after: {
+                  id,
+                  provider,
+                  upstream_model: b.upstream_model,
+                  upstream_effort: upstreamEffort,
+                },
               },
             });
           });
@@ -668,11 +694,20 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
           // Concurrent re-authors of the same effort: the loser hits the
           // partial unique index mid-transaction and rolls back whole.
           if (isUniqueViolation(e))
-            return jsonError(409, "DUPLICATE", "A concurrent update changed this effort's route; retry");
+            return jsonError(
+              409,
+              "DUPLICATE",
+              "A concurrent update changed this effort's route; retry",
+            );
           throw e;
         }
         return new Response(
-          JSON.stringify({ id, model_id: params.id, public_effort: publicEffort, upstream_effort: upstreamEffort }),
+          JSON.stringify({
+            id,
+            model_id: params.id,
+            public_effort: publicEffort,
+            upstream_effort: upstreamEffort,
+          }),
           { status: 201, headers: { "content-type": "application/json" } },
         );
       },
