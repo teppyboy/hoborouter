@@ -857,6 +857,9 @@ export const modelReasoningRoutes = pgTable(
       enum: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
     }).notNull(),
     enabled: boolean("enabled").notNull().default(true),
+    // Admin-authored display/routing order among a model's enabled routes;
+    // contiguous 0..n-1 within each model (enforced by the reorder endpoint).
+    sort_order: integer("sort_order").notNull().default(0),
     created_at: big("created_at").notNull(),
     updated_at: big("updated_at").notNull(),
   },
