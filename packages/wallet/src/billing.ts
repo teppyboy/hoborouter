@@ -19,6 +19,17 @@ import {
   wallets,
 } from "@hoborouter/db";
 import { WalletError, lockWallet, requirePositiveSafeInteger, runInImmediate } from "./wallet";
+
+// Lock-order invariant: every transaction that touches BOTH api_keys and
+// wallets must lock api_keys FIRST, then wallets. The reserve path's inserts
+// into requests/billing_reservations take FK KEY SHARE locks on api_keys
+// before the wallet CAS, so a settle/release that locked wallets before
+// api_keys (settleKeyBudgetHold) deadlocked with it under concurrency —
+// Postgres killed one transaction with 'deadlock detected' and the gateway
+// returned a 500. Keep this order in any new billing transaction.
+async function lockApiKey(tx: Tx, apiKeyId: string): Promise<void> {
+  await tx.select({ id: apiKeys.id }).from(apiKeys).where(eq(apiKeys.id, apiKeyId)).for("update");
+}
 import { settleKeyBudgetHold } from "@hoborouter/keys";
 import { calculateCharge, maxStoredMoney, type PriceSnapshot, type UsageTokens } from "./money";
 import {
@@ -143,7 +154,8 @@ export async function reserveRequest(
       const keys = await tx
         .select({ workspace_id: apiKeys.workspace_id, status: apiKeys.status })
         .from(apiKeys)
-        .where(eq(apiKeys.id, args.apiKeyId));
+        .where(eq(apiKeys.id, args.apiKeyId))
+        .for("update");
       const key = keys[0];
       if (!key || key.workspace_id !== args.workspaceId || key.status === "revoked") {
         throw new WalletError(
@@ -350,6 +362,9 @@ export async function releaseRequest(db: Db | Tx, requestId: string, now: number
         `request ${requestId} in state ${row.dispatch_state}; release only allowed pre-dispatch ('reserved')`,
       );
     }
+    // api_keys before wallets: the lock-order invariant above (the key-budget
+    // fold-back below takes the api_keys row lock in this same transaction).
+    if (row.api_key_id !== null) await lockApiKey(tx, row.api_key_id);
     await lockWallet(tx, row.wallet_id);
     const casRes = await tx
       .update(billingReservations)
@@ -469,7 +484,9 @@ export async function settleRequest(
     // Serialize money movement on this wallet BEFORE the idempotency check:
     // a concurrent settle of the same request commits its settlement row
     // while we wait on the lock, so the re-check below sees it (no double
-    // charge, no unique-violation crash).
+    // charge, no unique-violation crash). The api_keys row locks FIRST per
+    // the lock-order invariant — settleKeyBudgetHold below re-enters it.
+    if (row.api_key_id !== null) await lockApiKey(tx, row.api_key_id);
     await lockWallet(tx, row.wallet_id);
 
     // Idempotency: a stored settlement is the single source of truth.

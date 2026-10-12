@@ -653,7 +653,11 @@ describe("/v1/messages money invariants", () => {
   });
 
   test("concurrent reservations: no double-spend, balance drop equals ledger sum", async () => {
-    startFakeCpa(() => messageJson());
+    // Usage must charge UNDER the hold cap: a cap-exceeding settle fails
+    // closed by disabling the provider_model_mapping (billing.cap_exceeded),
+    // and serialized reserves that read that state would correctly 403 —
+    // that is the fail-closed safety path, not a double-spend invariant.
+    startFakeCpa(() => messageJson({ input_tokens: 10, output_tokens: 5 }));
     const initial = (await walletBalance()).balance;
     const initialLedgerSum = Number((await ledgerSum()).s);
     const responses = await Promise.all(
