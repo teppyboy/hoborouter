@@ -79,13 +79,25 @@ guide has the exact local setup.
 
 - Implicit linking on sign-in follows Better Auth 1.7.6 safe defaults and is
   NOT customized: it happens only when the **provider email is verified AND
-  the existing local user row is email-verified**.
-- `allowDifferentEmails` stays `false` and no `trustedProviders` list is
-  configured — a different provider email can never link into an existing
-  account, and an unverified provider claim can never take over a local one.
+  the existing local user row is email-verified**, and the local user is only
+  ever found by the provider email itself — a different email can never link
+  implicitly and an unverified provider claim can never take over a local one.
+- `allowDifferentEmails` is `true` (owner-approved): it widens ONLY the
+  explicit `/api/auth/link-social` flow. A signed-in user may link a provider
+  identity whose email is DIFFERENT from the local account email when that
+  provider email is verified. **Disclosure:** a verified provider identity
+  under any email address can therefore be attached to an account; unverified
+  provider emails are still refused (`unable_to_link_account`). No
+  `trustedProviders` list is configured, so the verified-provider requirement
+  always applies.
 - Provider email missing → clean failure (`email_not_found`); no placeholder
   addresses are created.
-- State, PKCE, and replay protections are Better Auth defaults, untouched.
+- Provider identity uniqueness is preserved: a provider account already owned
+  by another user can never be claimed
+  (`account_already_linked_to_different_user`), and unlinking keeps its fresh
+  session + last-sign-in-method protections.
+- State, PKCE, and replay protections are Better Auth defaults, untouched;
+  explicit-link callback URLs are validated against trusted origins.
 
 ## Instance-admin bootstrap
 

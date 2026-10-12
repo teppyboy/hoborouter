@@ -2,9 +2,10 @@
 // endpoints, audited end to end against a real auth instance):
 // - POST /api/auth/link-social mints a session-bound state (link.userId) with
 //   PKCE; the callback links ONLY that session's user.
-// - Safe linking defaults hold for explicit links too: the provider email must
-//   be verified AND match the local user's email; a provider identity already
-//   owned by another user can never be claimed; no accountLinking overrides.
+// - Safe linking defaults hold for explicit links except the owner-approved
+//   `allowDifferentEmails: true` widening: the provider email must be VERIFIED
+//   but may now DIFFER from the local user's email; a provider identity
+//   already owned by another user can never be claimed.
 // - The callbackURL is validated against trusted origins (no open redirect).
 // - GET /api/auth/list-accounts is session-scoped.
 // - POST /api/auth/unlink-account needs a FRESH session, refuses to remove the
@@ -211,7 +212,7 @@ describe("explicit linking via /api/auth/link-social", () => {
     ).toHaveLength(0);
   });
 
-  test("provider email different from the local user is rejected (allowDifferentEmails stays false)", async () => {
+  test("verified provider email different from the local user links (allowDifferentEmails: true)", async () => {
     const { db, app } = await setup();
     await signUp(app, "linker@e2e.test");
     await q(db, "UPDATE users SET email_verified = true WHERE email = 'linker@e2e.test'");
@@ -227,8 +228,35 @@ describe("explicit linking via /api/auth/link-social", () => {
     const res = await linkCallback(app, init, { email: "someone-else@e2e.test", verified: true });
     expect(res.status).toBe(302);
     expect(
+      new URL(res.headers.get("location")!, "http://localhost:5199").searchParams.has("error"),
+    ).toBe(false);
+    // The provider identity lands on the local account; the local email is
+    // never rewritten by the link.
+    expect(
+      (await accountsOf(db, "linker@e2e.test")).filter((r) => r.provider_id === "github"),
+    ).toHaveLength(1);
+    const email = await q(db, "SELECT email FROM users WHERE email = 'linker@e2e.test'");
+    expect(email).toHaveLength(1);
+  });
+
+  test("UNVERIFIED provider email different from the local user is still rejected", async () => {
+    const { db, app } = await setup();
+    await signUp(app, "linker@e2e.test");
+    await q(db, "UPDATE users SET email_verified = true WHERE email = 'linker@e2e.test'");
+    const init = await linkInit(
+      app,
+      cookieOf(
+        await req(app, "/api/auth/sign-in/email", {
+          method: "POST",
+          body: { email: "linker@e2e.test", password: "Correct-Horse-Battery-Staple-1" },
+        }),
+      ),
+    );
+    const res = await linkCallback(app, init, { email: "someone-else@e2e.test", verified: false });
+    expect(res.status).toBe(302);
+    expect(
       new URL(res.headers.get("location")!, "http://localhost:5199").searchParams.get("error"),
-    ).toBe("email_does_not_match");
+    ).toBe("unable_to_link_account");
     expect(
       (await accountsOf(db, "linker@e2e.test")).filter((r) => r.provider_id === "github"),
     ).toHaveLength(0);

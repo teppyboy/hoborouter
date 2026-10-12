@@ -163,13 +163,24 @@ export function createAuth(db: Db, cfg?: ResolvedConfig) {
     }),
     user: { modelName: "users" },
     // OAuth sign-in (Google/Discord/GitHub) only when BOTH credentials for a
-    // provider are configured. Nothing here changes linking semantics: Better
-    // Auth's safe defaults apply (implicit linking requires a VERIFIED provider
-    // email AND a verified local user; allowDifferentEmails stays false), so an
-    // unverified OAuth identity can never silently take over an account.
+    // provider are configured. Implicit sign-in linking keeps Better Auth's
+    // safe defaults: it requires a VERIFIED provider email AND a verified
+    // local user, and the local user is only ever found by the provider email,
+    // so an unverified OAuth identity can never silently take over an account
+    // and implicit linking never merges different email addresses.
+    // allowDifferentEmails widens ONLY the explicit /link-social flow: a user
+    // who is already signed in may link a DIFFERENT provider email when that
+    // identity is provider-verified (previously rejected with
+    // email_does_not_match). Provider identity uniqueness (one provider
+    // account can belong to only one user), the verified-provider requirement,
+    // state/PKCE, and unlink last-method protection are all unchanged. Owner
+    // approved this trade-off: the disclosure lives in docs/oauth/README.md.
     // Admin bootstrap still flows through the email-matched user.create.after
     // hook above — provider identity grants no privilege by itself.
     socialProviders: socialProvidersOption(env),
+    account: {
+      accountLinking: { allowDifferentEmails: true },
+    },
     databaseHooks: {
       user: {
         create: {

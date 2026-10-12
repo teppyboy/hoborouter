@@ -1,9 +1,11 @@
-// Implicit account-linking policy (Better Auth 1.7.6 defaults, audited):
-// linking on OAuth sign-in happens ONLY when the provider email is verified
-// AND the existing local user row is email-verified. No accountLinking
-// overrides are configured anywhere (allowDifferentEmails stays false,
-// trustedProviders stays empty), so a different email can never link into an
-// existing account and an unverified local row is never taken over.
+// Implicit account-linking policy (Better Auth 1.7.6, audited; owner-approved
+// accountLinking.allowDifferentEmails=true): implicit linking on sign-in is
+// UNCHANGED by that flag — Better Auth only ever finds the local user by the
+// provider email, and linking still requires a VERIFIED provider email AND a
+// verified local user row. No trustedProviders list is configured, so an
+// unverified OAuth identity can never silently take over an account and a
+// different email can never link implicitly. The flag widens only the
+// explicit /link-social flow (see account-linking.test.ts).
 // GitHub endpoints are stubbed at the fetch layer (see turnstile.test.ts
 // pattern); the real Better Auth callback code runs end to end.
 import { afterEach, describe, expect, test } from "bun:test";
