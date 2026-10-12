@@ -29,6 +29,7 @@ import {
 } from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
 import { api, ApiError } from "../../lib/api";
+import { REASONING_EFFORTS } from "../chat/reasoning";
 import { formatDate, formatUsdMicroPer1m } from "../../lib/format";
 import { useT, type LocaleEntry } from "../../lib/i18n/t";
 import { KNOWN_CAPABILITIES } from "../../lib/capabilities";
@@ -178,6 +179,46 @@ export const adminModelsCopy = {
   colEnabled: { en: "Enabled", vi: "Bật" },
   no: { en: "No", vi: "Không" },
 
+  // Reasoning routes section (admin-only surface: private upstream IDs may
+  // show here; user-facing pages keep public effort labels only).
+  tabReasoning: { en: "Reasoning", vi: "Suy luận" },
+  reasoningIntro: {
+    en: "Map each public effort to the upstream model and effort CPA receives. Requests using an effort without an enabled route are rejected before billing.",
+    vi: "Ánh xạ mỗi mức effort công khai sang mô hình và mức effort thượng nguồn mà CPA nhận. Request dùng effort không có route đang bật sẽ bị từ chối trước khi tính phí.",
+  },
+  reasoningEffortLabel: { en: "Public effort", vi: "Mức effort công khai" },
+  chooseEffort: { en: "Choose an effort", vi: "Chọn mức effort" },
+  upstreamEffortLabel: {
+    en: "Upstream effort (defaults to public effort)",
+    vi: "Effort thượng nguồn (mặc định theo mức công khai)",
+  },
+  sameAsPublic: { en: "Same as public effort", vi: "Giống mức công khai" },
+  saveReasoningRoute: { en: "Save route", vi: "Lưu route" },
+  reasoningRouteSavedToast: {
+    en: "Reasoning route saved",
+    vi: "Đã lưu route suy luận",
+  },
+  noReasoningRoutes: {
+    en: "No reasoning routes yet.",
+    vi: "Chưa có route suy luận nào.",
+  },
+  colPublicEffort: { en: "Effort", vi: "Effort" },
+  colUpstreamEffort: { en: "Upstream effort", vi: "Effort thượng nguồn" },
+  reasoningRoutesScrollLabel: { en: "Reasoning routes", vi: "Route suy luận" },
+  yes: { en: "Yes", vi: "Có" },
+  effortRequired: {
+    en: "Choose a public effort",
+    vi: "Chọn mức effort công khai",
+  },
+  upstreamEffortInvalid: {
+    en: "Invalid upstream effort",
+    vi: "Effort thượng nguồn không hợp lệ",
+  },
+  upstreamModelRequired: {
+    en: "Upstream model is required",
+    vi: "Bắt buộc nhập mô hình thượng nguồn",
+  },
+
   // Pricing section.
   addPrice: { en: "Add price", vi: "Thêm giá" },
   noPriceRows: { en: "No price rows yet.", vi: "Chưa có dòng giá nào." },
@@ -301,6 +342,56 @@ interface MappingRow {
   upstream_model: string;
   enabled: boolean;
   created_at: number;
+}
+
+/** Reasoning-route row from GET /models/:id/reasoning-routes (history included). */
+export interface ReasoningRouteRow {
+  id: string;
+  public_effort: string;
+  provider: string;
+  upstream_model: string;
+  upstream_effort: string | null;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export type ReasoningRouteError =
+  | "effortRequired"
+  | "upstreamEffortInvalid"
+  | "upstreamModelRequired";
+
+/**
+ * Build the POST /models/:id/reasoning-routes body; mirrors the server's
+ * validation (effort ladder, required upstream model, optional provider and
+ * upstream effort). Empty upstream_effort means "same as public effort" — the
+ * field is omitted and the server fills it from public_effort.
+ */
+export function reasoningRoutePayload(
+  input: Pick<
+    ReasoningRouteRow,
+    "public_effort" | "upstream_model" | "provider" | "upstream_effort"
+  >,
+): { ok: true; body: Record<string, string> } | { ok: false; error: ReasoningRouteError } {
+  if (!(REASONING_EFFORTS as readonly string[]).includes(input.public_effort))
+    return { ok: false, error: "effortRequired" };
+  if (
+    input.upstream_effort != null &&
+    input.upstream_effort !== "" &&
+    !(REASONING_EFFORTS as readonly string[]).includes(input.upstream_effort)
+  )
+    return { ok: false, error: "upstreamEffortInvalid" };
+  const upstreamModel = input.upstream_model.trim();
+  if (!upstreamModel) return { ok: false, error: "upstreamModelRequired" };
+  const body: Record<string, string> = {
+    public_effort: input.public_effort,
+    upstream_model: upstreamModel,
+  };
+  const provider = input.provider?.trim();
+  if (provider) body.provider = provider;
+  if (input.upstream_effort != null && input.upstream_effort !== "")
+    body.upstream_effort = input.upstream_effort;
+  return { ok: true, body };
 }
 
 /** Add-price form shared by the model sheet and the standalone Pricing page. */
@@ -630,6 +721,183 @@ function RoutingSection({ model }: { model: AdminModel }) {
   );
 }
 
+/**
+ * Per-effort reasoning routes: list the full history and create/replace the
+ * enabled route for one public effort. The POST endpoint is create-or-replace,
+ * so "Save route" re-authors the chosen effort (old row disabled, not deleted).
+ */
+function ReasoningRoutesSection({ model }: { model: AdminModel }) {
+  const t = useT(adminModelsCopy);
+  const qc = useQueryClient();
+  const routes = useAdminQuery<ReasoningRouteRow[]>(
+    ["admin", "reasoning-routes", model.id],
+    `/api/v1/admin/catalog/models/${model.id}/reasoning-routes`,
+  );
+  const cpaModels = useAdminQuery<{ data: { id: string }[] }>(
+    ["admin", "cpa-models"],
+    "/api/v1/admin/cpa/models",
+  );
+  const cpaIds = (cpaModels.data?.data ?? []).map((m) => m.id);
+  const [effort, setEffort] = useState("");
+  const [upstreamModel, setUpstreamModel] = useState("");
+  const [provider, setProvider] = useState("");
+  // "same" means omit upstream_effort; the server defaults it to public_effort.
+  const [upstreamEffort, setUpstreamEffort] = useState("same");
+  const [error, setError] = useState<string | null>(null);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const result = reasoningRoutePayload({
+        public_effort: effort,
+        upstream_model: upstreamModel,
+        provider,
+        upstream_effort: upstreamEffort === "same" ? null : upstreamEffort,
+      });
+      if (!result.ok) throw new Error(t(result.error));
+      return api(`/api/v1/admin/catalog/models/${model.id}/reasoning-routes`, {
+        method: "POST",
+        body: JSON.stringify(result.body),
+      });
+    },
+    onSuccess: () => {
+      toast(t("reasoningRouteSavedToast"));
+      setError(null);
+      setEffort("");
+      setUpstreamModel("");
+      setProvider("");
+      setUpstreamEffort("same");
+      void qc.invalidateQueries({ queryKey: ["admin", "reasoning-routes", model.id] });
+    },
+    onError: (e) => setError(e.message),
+  });
+
+  if (routes.isLoading) return null;
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">{t("reasoningIntro")}</p>
+      <AdminGate query={routes}>
+        <DataTable
+          columns={[
+            {
+              header: t("colPublicEffort"),
+              accessorKey: "public_effort",
+              cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
+            },
+            {
+              header: t("colUpstreamModel"),
+              accessorKey: "upstream_model",
+              cell: (c) => <span className="font-mono text-xs">{c.getValue() as string}</span>,
+            },
+            { header: t("colLabel"), accessorKey: "provider" },
+            {
+              header: t("colUpstreamEffort"),
+              accessorKey: "upstream_effort",
+              cell: (c) => (
+                <span className="font-mono text-xs">{(c.getValue() as string) ?? ""}</span>
+              ),
+            },
+            {
+              id: "enabled",
+              header: t("colEnabled"),
+              cell: ({ row }) => (row.original.enabled ? t("yes") : t("no")),
+            },
+            {
+              header: t("colAdded"),
+              accessorKey: "updated_at",
+              cell: (c) => formatDate(c.getValue() as number),
+            },
+          ]}
+          data={routes.data ?? []}
+          empty={t("noReasoningRoutes")}
+          scroll={{ label: t("reasoningRoutesScrollLabel") }}
+        />
+      </AdminGate>
+      <AdminGate query={routes}>
+        <form
+          className="grid gap-3 rounded-md border border-border p-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save.mutate();
+          }}
+        >
+          <p className="text-sm font-medium">{t("saveReasoningRoute")}</p>
+          <div className="grid gap-1.5">
+            <Label htmlFor={`rr-effort-${model.id}`}>{t("reasoningEffortLabel")}</Label>
+            <Select value={effort} onValueChange={setEffort}>
+              <SelectTrigger id={`rr-effort-${model.id}`}>
+                <SelectValue placeholder={t("chooseEffort")} />
+              </SelectTrigger>
+              <SelectContent>
+                {REASONING_EFFORTS.map((e) => (
+                  <SelectItem key={e} value={e}>
+                    {e}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor={`rr-upstream-${model.id}`}>{t("upstreamLabel")}</Label>
+            <Input
+              id={`rr-upstream-${model.id}`}
+              className="font-mono"
+              list={`rr-cpa-models-${model.id}`}
+              placeholder="z-ai/glm-5.3-flash"
+              value={upstreamModel}
+              onChange={(e) => setUpstreamModel(e.target.value)}
+              required
+            />
+            <datalist id={`rr-cpa-models-${model.id}`}>
+              {cpaIds.map((id) => (
+                <option key={id} value={id} />
+              ))}
+            </datalist>
+            {upstreamModel.trim() &&
+              cpaIds.length > 0 &&
+              !cpaIds.includes(upstreamModel.trim()) && (
+                <p className="flex items-center gap-1 text-xs text-destructive">
+                  <AlertTriangle className="size-3" /> {t("notInCpaList")}
+                </p>
+              )}
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor={`rr-provider-${model.id}`}>{t("providerOptionalLabel")}</Label>
+            <Input
+              id={`rr-provider-${model.id}`}
+              className="font-mono"
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">{t("labelOnlyHelp")}</p>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor={`rr-upstream-effort-${model.id}`}>{t("upstreamEffortLabel")}</Label>
+            <Select value={upstreamEffort} onValueChange={setUpstreamEffort}>
+              <SelectTrigger id={`rr-upstream-effort-${model.id}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="same">{t("sameAsPublic")}</SelectItem>
+                {REASONING_EFFORTS.map((e) => (
+                  <SelectItem key={e} value={e}>
+                    {e}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {error && <p className="text-xs text-destructive">{error}</p>}
+          <div>
+            <Button type="submit" size="sm" disabled={save.isPending}>
+              {t("saveReasoningRoute")}
+            </Button>
+          </div>
+        </form>
+      </AdminGate>
+    </div>
+  );
+}
+
 function DetailsSection({ model, onSaved }: { model: AdminModel; onSaved: () => void }) {
   const t = useT(adminModelsCopy);
   const qc = useQueryClient();
@@ -842,11 +1110,14 @@ function ModelSheet({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const [section, setSection] = useState<"details" | "routing" | "pricing">("details");
+  const [section, setSection] = useState<"details" | "routing" | "reasoning" | "pricing">(
+    "details",
+  );
   const t = useT(adminModelsCopy);
   const tabs = [
     ["details", t("tabDetails")],
     ["routing", t("tabRouting")],
+    ["reasoning", t("tabReasoning")],
     ["pricing", t("tabPricing")],
   ] as const;
   return (
@@ -870,6 +1141,7 @@ function ModelSheet({
         </div>
         {section === "details" && <DetailsSection model={model} onSaved={() => {}} />}
         {section === "routing" && <RoutingSection model={model} />}
+        {section === "reasoning" && <ReasoningRoutesSection model={model} />}
         {section === "pricing" && <PriceHistorySection model={model} />}
       </SheetContent>
     </Sheet>
