@@ -18,6 +18,7 @@ export interface CatalogModelItem {
   description: string | null;
   capabilities: string[];
   context_window: number | null;
+  reasoning: { supported_efforts: string[]; default_effort: string | null };
   price: CatalogPrice;
 }
 
@@ -29,6 +30,7 @@ export interface CatalogModel {
   description: string | null;
   capabilities: string[];
   contextWindow: number | null;
+  reasoning: { supported_efforts: string[]; default_effort: string | null };
   price: CatalogPrice;
 }
 
@@ -55,6 +57,7 @@ export function useCatalogModels(): {
     description: m.description,
     capabilities: m.capabilities ?? [],
     contextWindow: m.context_window,
+    reasoning: m.reasoning ?? { supported_efforts: [], default_effort: null },
     price: m.price,
   }));
   return { models, loading: false, error: null };

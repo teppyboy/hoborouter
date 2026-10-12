@@ -61,8 +61,7 @@ import {
   buildChatRequestBody,
   EFFORT_LABELS,
   EFFORT_UNSET,
-  REASONING_EFFORTS,
-  supportsReasoning,
+  supportedEffortOptions,
   type ReasoningEffort,
 } from "./reasoning";
 // Chat page copy: inline LocaleEntry set (see lib/i18n/common.ts). Model
@@ -373,12 +372,15 @@ export function ChatPage() {
   // Thinking effort for the canonical reasoning carrier (see ./reasoning).
   // "default" sends no reasoning field at all — legacy request shape.
   const [effort, setEffort] = React.useState<string>(EFFORT_UNSET);
-  // Selected model's stored capabilities drive the effort selector: only an
-  // explicit "reasoning" capability shows the picker, and only then does the
-  // request carry the canonical reasoning field. An effort picked for one
-  // model is dropped, never leaked into another model's request.
-  const showEffort = supportsReasoning(models.find((m) => m.publicId === model)?.capabilities);
-  const effortForSend = showEffort ? effort : EFFORT_UNSET;
+  // Selected model's catalog-authored reasoning metadata drives the effort
+  // selector: only models with authored supported_efforts show the picker, and
+  // only those authored efforts are offered (never the full ladder — no
+  // unsupported options). An effort picked for one model is dropped, never
+  // leaked into another model's request.
+  const effortOptions = supportedEffortOptions(models.find((m) => m.publicId === model)?.reasoning);
+  const showEffort = effortOptions.length > 0;
+  const effortForSend =
+    showEffort && effortOptions.includes(effort as ReasoningEffort) ? effort : EFFORT_UNSET;
 
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [input, setInput] = React.useState("");
@@ -1315,7 +1317,7 @@ export function ChatPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={EFFORT_UNSET}>{t("effortDefault")}</SelectItem>
-                {REASONING_EFFORTS.map((e: ReasoningEffort) => (
+                {effortOptions.map((e: ReasoningEffort) => (
                   <SelectItem key={e} value={e}>
                     {EFFORT_LABELS[e][locale]}
                   </SelectItem>

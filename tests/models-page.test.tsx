@@ -180,6 +180,7 @@ const catalog = {
       // and appear in the filter, never renamed or dropped.
       capabilities: ["tools", "ocr"],
       context_window: 200000,
+      reasoning: { supported_efforts: [], default_effort: null },
       price: {
         input_usd_micro_per_1m: 10_000_000,
         output_usd_micro_per_1m: 30_000_000,
@@ -195,6 +196,7 @@ const catalog = {
       description: null,
       capabilities: ["chat"],
       context_window: 128000,
+      reasoning: { supported_efforts: [], default_effort: null },
       price: {
         input_usd_micro_per_1m: 150_000,
         output_usd_micro_per_1m: 600_000,
@@ -210,6 +212,7 @@ const catalog = {
       description: null,
       capabilities: ["chat", "tools"],
       context_window: 128000,
+      reasoning: { supported_efforts: [], default_effort: null },
       price: {
         input_usd_micro_per_1m: 1_000_000,
         output_usd_micro_per_1m: 4_000_000,
@@ -268,6 +271,7 @@ test("sortModels 'recommended' promotes cheaper models by input+output per-1M pr
     description: m.description,
     capabilities: m.capabilities,
     contextWindow: m.context_window,
+    reasoning: m.reasoning,
     price: m.price,
   }));
   const out = sortModels(models, "recommended");
@@ -286,6 +290,7 @@ test("sortModels 'recommended' ties break by public_id, 'name' sorts by public_i
       description: null,
       capabilities: [],
       contextWindow: null,
+      reasoning: { supported_efforts: [], default_effort: null },
       price: {
         input_usd_micro_per_1m: input,
         output_usd_micro_per_1m: output,

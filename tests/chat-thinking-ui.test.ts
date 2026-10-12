@@ -14,23 +14,32 @@ import {
   EFFORT_UNSET,
   isReasoningEffort,
   REASONING_EFFORTS,
-  supportsReasoning,
+  supportedEffortOptions,
 } from "../apps/web/src/pages/chat/reasoning";
 
-describe("supportsReasoning (tolerant public metadata)", () => {
-  test("explicit 'reasoning' capability enables the selector", () => {
-    expect(supportsReasoning(["chat", "reasoning"])).toBe(true);
+describe("supportedEffortOptions (catalog-authored metadata)", () => {
+  test("only catalog-authored supported efforts are offered", () => {
+    expect(
+      supportedEffortOptions({ supported_efforts: ["low", "high"], default_effort: "low" }),
+    ).toEqual(["low", "high"]);
   });
 
-  test("absent, null, and unknown capability lists never infer support", () => {
-    expect(supportsReasoning(undefined)).toBe(false);
-    expect(supportsReasoning(null)).toBe(false);
-    expect(supportsReasoning([])).toBe(false);
-    expect(supportsReasoning(["chat", "vision", "tools"])).toBe(false);
+  test("missing, malformed, and empty metadata never infer options", () => {
+    expect(supportedEffortOptions(undefined)).toEqual([]);
+    expect(supportedEffortOptions(null)).toEqual([]);
+    expect(supportedEffortOptions({ supported_efforts: [], default_effort: null })).toEqual([]);
   });
 
-  test("capability values are matched verbatim, case-sensitive", () => {
-    expect(supportsReasoning(["Reasoning"])).toBe(false);
+  test("unknown effort ids are dropped, never shown as selectable options", () => {
+    expect(
+      supportedEffortOptions({ supported_efforts: ["low", "ultra", "MAX"], default_effort: null }),
+    ).toEqual(["low"]);
+  });
+
+  test("authored order is preserved (no re-sorting to the canonical ladder)", () => {
+    expect(
+      supportedEffortOptions({ supported_efforts: ["high", "low"], default_effort: null }),
+    ).toEqual(["high", "low"]);
   });
 });
 

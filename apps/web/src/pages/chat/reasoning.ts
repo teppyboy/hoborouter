@@ -1,14 +1,18 @@
 // Canonical reasoning effort selection for the Chat page (OpenRouter parity
 // plan Task 6 web controls).
 //
-// Tolerant public metadata contract: clients are never given route or effort
-// metadata — the only server signal is the stored capability mirror
-// ("reasoning") from the public catalog. The selector therefore offers the
-// canonical public effort ladder and the gateway stays the single validator:
-// an authored model without a matching route rejects the request with a
-// pre-reservation 400 (before any wallet hold), and an un-authored model
-// passes the form through verbatim. Public effort labels only — CPA route,
-// upstream model, and provider identifiers never appear in this module.
+// Catalog-authored reasoning effort selection for the Chat page (OpenRouter
+// parity plan Task 6 web controls).
+//
+// Public metadata contract: the server projects each model's catalog-authored
+// reasoning metadata (supported_efforts from enabled routes, default_effort).
+// The selector offers ONLY those authored efforts — a level with no catalog
+// route is never shown, so no unsupported option can be sent. The gateway
+// stays the single validator: an authored model without a matching route
+// rejects the request with a pre-reservation 400 (before any wallet hold),
+// and a model with no authored routes passes the form through verbatim.
+// Public effort labels only — CPA route, upstream model, and provider
+// identifiers never appear in this module.
 import type { LocaleEntry } from "../../lib/i18n/t";
 
 /** Canonical public effort ladder (mirrors the gateway's accepted values). */
@@ -34,10 +38,22 @@ export type ChatCompletionBody = {
   reasoning?: { effort: ReasoningEffort };
 };
 
-/** True only when the stored capabilities explicitly carry "reasoning";
- * absent/null/unknown lists never infer support (tolerant metadata). */
-export function supportsReasoning(capabilities: readonly string[] | null | undefined): boolean {
-  return Array.isArray(capabilities) && capabilities.includes("reasoning");
+/** Public reasoning metadata shape projected by the catalog APIs. */
+export type PublicReasoningMetadata = {
+  supported_efforts: string[];
+  default_effort: string | null;
+};
+
+/**
+ * Catalog-authored efforts the selector may offer, in authored order and
+ * filtered to known effort ids. Unknown or malformed values are dropped —
+ * never shown as selectable options. Empty list = no selector.
+ */
+export function supportedEffortOptions(
+  metadata: PublicReasoningMetadata | null | undefined,
+): ReasoningEffort[] {
+  if (!metadata || !Array.isArray(metadata.supported_efforts)) return [];
+  return metadata.supported_efforts.filter(isReasoningEffort);
 }
 
 export function isReasoningEffort(v: unknown): v is ReasoningEffort {
