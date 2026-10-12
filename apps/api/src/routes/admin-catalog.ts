@@ -664,7 +664,7 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
                 sql`UPDATE model_reasoning_routes SET enabled = false, updated_at = ${now} WHERE id = ${before.id}`,
               );
             await tx.execute(
-              sql`INSERT INTO model_reasoning_routes (id, model_id, public_effort, provider, upstream_model, upstream_effort, enabled, created_at, updated_at) VALUES (${id}, ${params.id}, ${publicEffort}, ${provider}, ${b.upstream_model as string}, ${upstreamEffort}, true, ${now}, ${now})`,
+              sql`INSERT INTO model_reasoning_routes (id, model_id, public_effort, provider, upstream_model, upstream_effort, enabled, sort_order, created_at, updated_at) VALUES (${id}, ${params.id}, ${publicEffort}, ${provider}, ${b.upstream_model as string}, ${upstreamEffort}, true, (SELECT COALESCE(MAX(sort_order) + 1, 0) FROM model_reasoning_routes WHERE model_id = ${params.id} AND enabled = true), ${now}, ${now})`,
             );
             await writeAudit(tx, {
               actorUserId: userId,
@@ -732,9 +732,158 @@ export const adminCatalogRoutes = (db: Db, auth: BetterAuthInstance) =>
         return (
           await rawRows(
             db,
-            sql`SELECT id, public_effort, provider, upstream_model, upstream_effort, enabled, created_at, updated_at FROM model_reasoning_routes WHERE model_id = ${params.id} ORDER BY created_at DESC, id DESC`,
+            sql`SELECT id, public_effort, provider, upstream_model, upstream_effort, enabled, sort_order, created_at, updated_at FROM model_reasoning_routes WHERE model_id = ${params.id} ORDER BY created_at DESC, id DESC`,
           )
         ).map((r) => coerceNums(r));
+      },
+    )
+    .delete(
+      "/api/v1/admin/catalog/reasoning-routes/:routeId",
+      {
+        params: t.Object({ routeId: t.String() }),
+        detail: {
+          tags: ["Catalog"],
+          summary: "Soft-disable (delete) a reasoning route",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const userId = gate.session.user.id;
+        const denied = await requireInstanceAdmin(db, userId);
+        if (denied) return denied;
+        const existingRows = await rawRows<{
+          id: string;
+          model_id: string;
+          public_effort: string;
+          provider: string;
+          upstream_model: string;
+          upstream_effort: string;
+          enabled: boolean;
+        }>(
+          db,
+          sql`SELECT id, model_id, public_effort, provider, upstream_model, upstream_effort, enabled FROM model_reasoning_routes WHERE id = ${params.routeId}`,
+        );
+        const route = existingRows[0];
+        if (!route) return jsonError(404, "NOT_FOUND", "Reasoning route not found");
+        if (!route.enabled)
+          return { id: route.id, model_id: route.model_id, enabled: false, changed: false };
+        // Guards: a model must keep at least one enabled route, and the route
+        // backing its default effort cannot be removed (the gateway would
+        // reject every default-effort request). Both checks race with the
+        // update inside one transaction.
+        const guards = await rawRows<{
+          enabled_count: number;
+          default_effort: string | null;
+        }>(
+          db,
+          sql`SELECT (SELECT COUNT(*) FROM model_reasoning_routes WHERE model_id = ${route.model_id} AND enabled = true) AS enabled_count, (SELECT default_reasoning_effort FROM models WHERE id = ${route.model_id}) AS default_effort`,
+        );
+        const g = guards[0];
+        if (g && Number(g.enabled_count) <= 1)
+          return jsonError(
+            409,
+            "LAST_ENABLED_ROUTE",
+            "Cannot remove the last enabled reasoning route for a model",
+          );
+        if (g && g.default_effort !== null && g.default_effort === route.public_effort)
+          return jsonError(
+            409,
+            "DEFAULT_ROUTE",
+            "This route backs the model's default reasoning effort; change default_reasoning_effort first",
+          );
+        await db.transaction(async (tx) => {
+          await tx.execute(
+            sql`UPDATE model_reasoning_routes SET enabled = false, updated_at = ${Date.now()} WHERE id = ${route.id}`,
+          );
+          await writeAudit(tx, {
+            actorUserId: userId,
+            workspaceId: null,
+            action: "catalog.reasoning_route.delete",
+            target: route.id,
+            detail: {
+              model_id: route.model_id,
+              public_effort: route.public_effort,
+              provider: route.provider,
+              upstream_model: route.upstream_model,
+              upstream_effort: route.upstream_effort,
+            },
+          });
+        });
+        return { id: route.id, model_id: route.model_id, enabled: false, changed: true };
+      },
+    )
+    .post(
+      "/api/v1/admin/catalog/models/:id/reasoning-routes/reorder",
+      {
+        params: t.Object({ id: t.String() }),
+        body: t.Optional(t.Record(t.String(), t.Any())),
+        detail: {
+          tags: ["Catalog"],
+          summary: "Reorder a model's enabled reasoning routes",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params, body }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const userId = gate.session.user.id;
+        const denied = await requireInstanceAdmin(db, userId);
+        if (denied) return denied;
+        if (!(await modelExists(db, params.id)))
+          return jsonError(404, "NOT_FOUND", "Model not found");
+        const b = (body ?? {}) as Record<string, unknown>;
+        const ids = b.route_ids;
+        if (
+          !Array.isArray(ids) ||
+          ids.some((x) => typeof x !== "string") ||
+          new Set(ids).size !== ids.length
+        )
+          return jsonError(
+            400,
+            "INVALID",
+            "route_ids must be an ordered array of unique route IDs",
+          );
+        try {
+          const result = await db.transaction(async (tx) => {
+            // Lock the model's enabled routes: the strict set check and the
+            // rewrites below race against concurrent create/delete/reorder.
+            const enabled = await rawRows<{ id: string }>(
+              tx,
+              sql`SELECT id FROM model_reasoning_routes WHERE model_id = ${params.id} AND enabled = true ORDER BY sort_order, created_at, id FOR UPDATE`,
+            );
+            const enabledIds = enabled.map((r) => r.id);
+            const ordered = ids as string[];
+            const sameSet =
+              ordered.length === enabledIds.length &&
+              [...ordered].sort().join("\n") === [...enabledIds].sort().join("\n");
+            if (!sameSet) return null;
+            for (const [i, rid] of ordered.entries())
+              await tx.execute(
+                sql`UPDATE model_reasoning_routes SET sort_order = ${i} WHERE id = ${rid}`,
+              );
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: null,
+              action: "catalog.reasoning_route.reorder",
+              target: params.id,
+              detail: { route_ids: ordered },
+            });
+            return { route_ids: ordered };
+          });
+          if (!result)
+            return jsonError(
+              400,
+              "INVALID",
+              "route_ids must be exactly the model's enabled reasoning routes",
+            );
+          return result;
+        } catch (e) {
+          if (isUniqueViolation(e))
+            return jsonError(409, "DUPLICATE", "A concurrent update changed these routes; retry");
+          throw e;
+        }
       },
     )
     .post(

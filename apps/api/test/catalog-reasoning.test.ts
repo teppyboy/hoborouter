@@ -12,6 +12,7 @@ import { createAuth } from "../src/auth";
 import { buildApp } from "../src/app";
 import {
   getReasoningMetadata,
+  publicReasoningFields,
   REASONING_EFFORTS,
   validateReasoningRequest,
   type ReasoningEffort,
@@ -388,5 +389,196 @@ describe("admin reasoning metadata API", () => {
       "SELECT default_reasoning_effort FROM models WHERE id = 'mdl-1'",
     );
     expect(rows[0]?.default_reasoning_effort).toBeNull();
+  });
+});
+
+describe("admin reasoning route delete", () => {
+  test("non-admin gets 403 on delete", async () => {
+    const { db, app, cookie } = await setup({ admin: false });
+    await seedExampleModel(db);
+    const res = await req(app, "/api/v1/admin/catalog/reasoning-routes/rr-0", {
+      method: "DELETE",
+      cookie,
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("delete soft-disables a route, keeps history, and audits", async () => {
+    const { db, app, cookie } = await setup();
+    await seedExampleModel(db);
+    const res = await req(app, "/api/v1/admin/catalog/reasoning-routes/rr-0", {
+      method: "DELETE",
+      cookie,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { changed?: boolean };
+    expect(body.changed).toBe(true);
+    const rows = await q<{ id: string; enabled: boolean }>(
+      db,
+      "SELECT id, enabled FROM model_reasoning_routes WHERE id = 'rr-0'",
+    );
+    // Soft disable: history row stays, never hard-deleted.
+    expect(rows[0]?.enabled).toBe(false);
+    const audit = await q(
+      db,
+      "SELECT action FROM audit_log WHERE action = 'catalog.reasoning_route.delete'",
+    );
+    expect(audit.length).toBe(1);
+    // Deleting again is a no-op without a second audit row.
+    const again = await req(app, "/api/v1/admin/catalog/reasoning-routes/rr-0", {
+      method: "DELETE",
+      cookie,
+    });
+    expect(again.status).toBe(200);
+    const againBody = (await again.json()) as { changed?: boolean };
+    expect(againBody.changed).toBe(false);
+    const auditCount = await q(
+      db,
+      "SELECT COUNT(*) c FROM audit_log WHERE action = 'catalog.reasoning_route.delete'",
+    );
+    expect(auditCount[0]?.c).toBe(1);
+  });
+
+  test("deleting the last enabled route is rejected", async () => {
+    const { db, app, cookie } = await setup();
+    const now = Date.now();
+    // No default_reasoning_effort here: isolates the last-enabled-route guard
+    // (the default-effort guard is covered separately).
+    await db.execute(
+      sql`INSERT INTO models (id, public_id, slug, display_name, provider, enabled, published, created_at, updated_at) VALUES ('mdl-9','z/last','last','Last','z',true,true,${now},${now})`,
+    );
+    for (const [i, [id, effort]] of [
+      ["rr-a", "high"],
+      ["rr-b", "low"],
+    ].entries()) {
+      await db.execute(
+        sql`INSERT INTO model_reasoning_routes (id, model_id, public_effort, provider, upstream_model, upstream_effort, enabled, sort_order, created_at, updated_at) VALUES (${id},'mdl-9',${effort},'z','up/x',${effort},true,${i},${now + i},${now + i})`,
+      );
+    }
+    const first = await req(app, "/api/v1/admin/catalog/reasoning-routes/rr-a", {
+      method: "DELETE",
+      cookie,
+    });
+    expect(first.status).toBe(200);
+    const res = await req(app, "/api/v1/admin/catalog/reasoning-routes/rr-b", {
+      method: "DELETE",
+      cookie,
+    });
+    expect(res.status).toBe(409);
+    const rows = await q<{ enabled: boolean }>(
+      db,
+      "SELECT enabled FROM model_reasoning_routes WHERE id = 'rr-b'",
+    );
+    expect(rows[0]?.enabled).toBe(true);
+  });
+
+  test("deleting the route backing the default effort is rejected", async () => {
+    const { db, app, cookie } = await setup();
+    await seedExampleModel(db);
+    const res = await req(app, "/api/v1/admin/catalog/reasoning-routes/rr-3", {
+      method: "DELETE",
+      cookie,
+    });
+    expect(res.status).toBe(409);
+    const rows = await q<{ enabled: boolean }>(
+      db,
+      "SELECT enabled FROM model_reasoning_routes WHERE id = 'rr-3'",
+    );
+    expect(rows[0]?.enabled).toBe(true);
+  });
+
+  test("unknown route id is 404", async () => {
+    const { app, cookie } = await setup();
+    const res = await req(app, "/api/v1/admin/catalog/reasoning-routes/nope", {
+      method: "DELETE",
+      cookie,
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("admin reasoning route reorder", () => {
+  test("non-admin gets 403 on reorder", async () => {
+    const { db, app, cookie } = await setup({ admin: false });
+    await seedExampleModel(db);
+    const res = await req(app, "/api/v1/admin/catalog/models/mdl-1/reasoning-routes/reorder", {
+      method: "POST",
+      cookie,
+      body: { route_ids: ["rr-0", "rr-1", "rr-2", "rr-3"] },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  test("admin reorders routes; catalog reads follow sort_order", async () => {
+    const { db, app, cookie } = await setup();
+    await seedExampleModel(db);
+    const order = ["rr-2", "rr-0", "rr-3", "rr-1"];
+    const res = await req(app, "/api/v1/admin/catalog/models/mdl-1/reasoning-routes/reorder", {
+      method: "POST",
+      cookie,
+      body: { route_ids: order },
+    });
+    expect(res.status).toBe(200);
+    const meta = await getReasoningMetadata(db, "mdl-1");
+    expect(meta.routes.map((r) => r.public_effort)).toEqual(["low", "max", "medium", "xhigh"]);
+    const pub = await publicReasoningFields(db, "mdl-1");
+    expect(pub.supported_efforts).toEqual(["low", "max", "medium", "xhigh"]);
+    const audit = await q(
+      db,
+      "SELECT action FROM audit_log WHERE action = 'catalog.reasoning_route.reorder'",
+    );
+    expect(audit.length).toBe(1);
+  });
+
+  test("cross-model, missing, extra, and duplicate ids are rejected", async () => {
+    const { db, app, cookie } = await setup();
+    await seedExampleModel(db);
+    const now = Date.now();
+    await db.execute(
+      sql`INSERT INTO models (id, public_id, slug, display_name, provider, enabled, published, created_at, updated_at) VALUES ('mdl-2','x/y','y','Y','z',true,true,${now},${now})`,
+    );
+    await db.execute(
+      sql`INSERT INTO model_reasoning_routes (id, model_id, public_effort, provider, upstream_model, upstream_effort, enabled, sort_order, created_at, updated_at) VALUES ('rr-x','mdl-2','high','z','up/x','high',true,0,${now},${now})`,
+    );
+    const call = (route_ids: string[]) =>
+      req(app, "/api/v1/admin/catalog/models/mdl-1/reasoning-routes/reorder", {
+        method: "POST",
+        cookie,
+        body: { route_ids },
+      });
+    // Cross-model id mixed into mdl-1's set.
+    expect((await call(["rr-x", "rr-0", "rr-1", "rr-2"])).status).toBe(400);
+    // Missing one of mdl-1's enabled routes.
+    expect((await call(["rr-0", "rr-1", "rr-2"])).status).toBe(400);
+    // Unknown extra id.
+    expect((await call(["rr-0", "rr-1", "rr-2", "rr-3", "rr-nope"])).status).toBe(400);
+    // Duplicate id.
+    expect((await call(["rr-0", "rr-0", "rr-1", "rr-2"])).status).toBe(400);
+    // Malformed body.
+    expect((await call(["rr-0", 5] as unknown as string[])).status).toBe(400);
+  });
+
+  test("concurrent reorders serialize; final order stays contiguous", async () => {
+    const { db, app, cookie } = await setup();
+    await seedExampleModel(db);
+    const all = ["rr-0", "rr-1", "rr-2", "rr-3"];
+    const a = [...all].reverse();
+    const b = ["rr-1", "rr-0", "rr-3", "rr-2"];
+    const results = await Promise.all(
+      [a, b].map((route_ids) =>
+        req(app, "/api/v1/admin/catalog/models/mdl-1/reasoning-routes/reorder", {
+          method: "POST",
+          cookie,
+          body: { route_ids },
+        }),
+      ),
+    );
+    for (const r of results) expect(r.status).toBe(200);
+    const rows = await q<{ id: string; sort_order: number }>(
+      db,
+      "SELECT id, sort_order FROM model_reasoning_routes WHERE model_id = 'mdl-1' AND enabled = true ORDER BY sort_order",
+    );
+    expect(rows.map((r) => r.sort_order)).toEqual([0, 1, 2, 3]);
+    expect(new Set(rows.map((r) => r.id))).toEqual(new Set(all));
   });
 });
