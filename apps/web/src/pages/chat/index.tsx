@@ -57,6 +57,14 @@ import {
 import { useT, useLocaleEntry, translate, type LocaleEntry } from "../../lib/i18n/t";
 import { useLocaleStore } from "../../lib/i18n/locale";
 import { useCapabilityLabel } from "../../lib/capabilities";
+import {
+  buildChatRequestBody,
+  EFFORT_LABELS,
+  EFFORT_UNSET,
+  REASONING_EFFORTS,
+  supportsReasoning,
+  type ReasoningEffort,
+} from "./reasoning";
 // Chat page copy: inline LocaleEntry set (see lib/i18n/common.ts). Model
 // names, message content and API errors stay verbatim — only chrome, notices
 // and controls are translated. Module-level helpers read the live locale via
@@ -203,6 +211,8 @@ const chatCopy = {
   loadingModels: { en: "Loading models…", vi: "Đang tải mô hình…" },
   modelsUnavailable: { en: "Model list unavailable", vi: "Không tải được danh sách mô hình" },
   chooseModel: { en: "Choose a model", vi: "Chọn một mô hình" },
+  effort: { en: "Thinking effort", vi: "Mức suy luận" },
+  effortDefault: { en: "Default", vi: "Mặc định" },
   newChat: { en: "New chat", vi: "Trò chuyện mới" },
   conflictTitle: {
     en: "This conversation changed on another device or tab.",
@@ -329,6 +339,7 @@ function PromptChip({ chip, onPick }: { chip: LocaleEntry; onPick: (text: string
 
 export function ChatPage() {
   const t = useChatT();
+  const locale = useLocaleStore((s) => s.locale);
   const capabilityLabelFor = useCapabilityLabel();
   const { data: session } = useSession();
   const userId = session?.user?.id ?? null;
@@ -359,6 +370,15 @@ export function ChatPage() {
   // never an infinite hidden wait.
   const catalogReady = !modelsLoading && !modelsError;
   const [model, setModel] = React.useState("");
+  // Thinking effort for the canonical reasoning carrier (see ./reasoning).
+  // "default" sends no reasoning field at all — legacy request shape.
+  const [effort, setEffort] = React.useState<string>(EFFORT_UNSET);
+  // Selected model's stored capabilities drive the effort selector: only an
+  // explicit "reasoning" capability shows the picker, and only then does the
+  // request carry the canonical reasoning field. An effort picked for one
+  // model is dropped, never leaked into another model's request.
+  const showEffort = supportsReasoning(models.find((m) => m.publicId === model)?.capabilities);
+  const effortForSend = showEffort ? effort : EFFORT_UNSET;
 
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [input, setInput] = React.useState("");
@@ -865,7 +885,13 @@ export function ChatPage() {
     // Gateway caps the body in UTF-8 BYTES (1 MiB), not UTF-16 chars: measure
     // the exact payload BEFORE any side effect (conversation create, key
     // mint, draft reset) so a rejection leaves the draft fully untouched.
-    const bodyJson = JSON.stringify({ model, messages: history, stream: true });
+    // Reasoning carrier (see ./reasoning): only when the selected model
+    // explicitly advertises the "reasoning" capability — an effort picked
+    // for a different model is dropped, never leaked into another model's
+    // request.
+    const bodyJson = JSON.stringify(
+      buildChatRequestBody({ model, messages: history, effort: effortForSend }),
+    );
     if (utf8ByteLength(bodyJson) > MAX_REQUEST_BODY_BYTES) {
       setError(t("tooLarge"));
       busyRef.current = false;
@@ -1278,6 +1304,25 @@ export function ChatPage() {
               ))}
             </SelectContent>
           </Select>
+          {showEffort && (
+            <Select value={effort} onValueChange={setEffort}>
+              <SelectTrigger
+                id="chat-effort"
+                aria-label={t("effort")}
+                className="h-9 w-36 gap-1 border-0 bg-muted/50 shadow-none"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={EFFORT_UNSET}>{t("effortDefault")}</SelectItem>
+                {REASONING_EFFORTS.map((e: ReasoningEffort) => (
+                  <SelectItem key={e} value={e}>
+                    {EFFORT_LABELS[e][locale]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
             <Button
               variant="outline"
