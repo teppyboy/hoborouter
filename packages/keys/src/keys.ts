@@ -80,3 +80,171 @@ export async function isModelAllowed(
     .limit(1);
   return hit.length > 0;
 }
+
+// --- key policy: expiry + per-period VND budget (atomic admission) ---
+// budget_used_vnd is a POLICY counter on api_keys, never wallet money: the
+// wallet ledger/reservation/settlement semantics in @hoborouter/wallet are
+// unchanged. Admission holds capVnd against the current window under the
+// api_keys row lock (FOR UPDATE) so concurrent requests serialize and cannot
+// overspend the period budget.
+
+export type KeyBudgetPeriod = "daily" | "weekly" | "monthly";
+
+export type KeyBudgetErrorCode = "key_invalid" | "expired" | "budget_exceeded";
+
+export class KeyBudgetError extends Error {
+  constructor(
+    readonly code: KeyBudgetErrorCode,
+    /** ms until the current budget window resets; null when not budget-related. */
+    readonly retryAfterMs: number | null,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * UTC window containing `now`: daily = calendar day, weekly = Monday-based
+ * week, monthly = calendar month. Both bounds are epoch ms.
+ */
+export function budgetWindow(period: KeyBudgetPeriod, now: number): { start: number; end: number } {
+  const d = new Date(now);
+  const dayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  if (period === "daily") return { start: dayStart, end: dayStart + 86_400_000 };
+  if (period === "weekly") {
+    // Monday-based week: getUTCDay() 0=Sun..6=Sat -> offset (day+6)%7 back to Monday.
+    const start = dayStart - ((d.getUTCDay() + 6) % 7) * 86_400_000;
+    return { start, end: start + 7 * 86_400_000 };
+  }
+  const monthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+  return { start: monthStart, end: Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) };
+}
+
+// keys must not depend on @hoborouter/wallet (wallet -> keys for settlement),
+// so the tiny tx wrapper is duplicated here with the same "$client" sniff.
+function inTx<T>(db: Db | Tx, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  if ("$client" in db) return db.transaction(fn);
+  return fn(db);
+}
+
+function requirePositiveCap(v: unknown): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v <= 0) {
+    throw new KeyBudgetError("key_invalid", null, "capVnd must be a positive safe integer");
+  }
+  return v;
+}
+
+export interface KeyBudgetAdmission {
+  /** Window start that received the hold; null = key has no budget configured. */
+  periodStart: number | null;
+}
+
+/**
+ * Atomic key-policy admission BEFORE wallet reservation: throws on expired
+ * keys and exhausted period budgets; otherwise holds capVnd against the
+ * key's current budget window (used += cap) under the api_keys row lock, so
+ * concurrent admissions serialize and cannot overspend. Returns the window
+ * start that received the hold so a later failed reserve can release it.
+ * Window rollover (first admission after daily/weekly/monthly boundary)
+ * resets the counter to 0 before the check.
+ */
+export async function checkAndReserveKeyBudget(
+  db: Db | Tx,
+  args: { apiKeyId: string; capVnd: number; now: number },
+): Promise<KeyBudgetAdmission> {
+  const capVnd = requirePositiveCap(args.capVnd);
+  return inTx(db, async (tx) => {
+    const rows = await tx
+      .select({
+        status: apiKeys.status,
+        deleted_at: apiKeys.deleted_at,
+        expires_at: apiKeys.expires_at,
+        budget_vnd: apiKeys.budget_vnd,
+        budget_period: apiKeys.budget_period,
+        budget_used_vnd: apiKeys.budget_used_vnd,
+        budget_period_start: apiKeys.budget_period_start,
+      })
+      .from(apiKeys)
+      .where(eq(apiKeys.id, args.apiKeyId))
+      .for("update")
+      .limit(1);
+    const key = rows[0];
+    if (!key || key.deleted_at !== null || key.status === "disabled" || key.status === "revoked") {
+      throw new KeyBudgetError("key_invalid", null, "API key is not active");
+    }
+    if (key.expires_at !== null && args.now >= key.expires_at) {
+      throw new KeyBudgetError("expired", null, "API key expired");
+    }
+    if (key.budget_vnd === null || key.budget_period === null) return { periodStart: null };
+    const window = budgetWindow(key.budget_period, args.now);
+    const used = key.budget_period_start === window.start ? key.budget_used_vnd : 0;
+    if (used + capVnd > key.budget_vnd) {
+      throw new KeyBudgetError(
+        "budget_exceeded",
+        window.end - args.now,
+        "API key budget exhausted for the current period",
+      );
+    }
+    await tx
+      .update(apiKeys)
+      .set({ budget_used_vnd: used + capVnd, budget_period_start: window.start })
+      .where(eq(apiKeys.id, args.apiKeyId));
+    return { periodStart: window.start };
+  });
+}
+
+/**
+ * Release an admission hold after a FAILED wallet reserve (pre-dispatch, no
+ * request row exists yet). No-op without a budget or when the window already
+ * rolled over (the reset cleared the hold). The hold MUST be released on
+ * every admission-then-fail path or the counter permanently over-counts.
+ */
+export async function releaseKeyBudgetHold(
+  db: Db | Tx,
+  args: { apiKeyId: string; periodStart: number | null; holdVnd: number },
+): Promise<void> {
+  if (args.periodStart === null) return;
+  await inTx(db, async (tx) => {
+    const rows = await tx
+      .select({
+        budget_vnd: apiKeys.budget_vnd,
+        budget_period_start: apiKeys.budget_period_start,
+        budget_used_vnd: apiKeys.budget_used_vnd,
+      })
+      .from(apiKeys)
+      .where(eq(apiKeys.id, args.apiKeyId))
+      .for("update")
+      .limit(1);
+    const key = rows[0];
+    if (!key || key.budget_vnd === null || key.budget_period_start !== args.periodStart) return;
+    await tx
+      .update(apiKeys)
+      .set({ budget_used_vnd: Math.max(0, key.budget_used_vnd - args.holdVnd) })
+      .where(eq(apiKeys.id, args.apiKeyId));
+  });
+}
+
+/**
+ * Fold an admission hold back into the key's period budget INSIDE the
+ * caller's transaction (billing settle/release in @hoborouter/wallet):
+ * used = max(0, used - hold) + charged. Settlement clamps charge <= cap, so
+ * the counter never exceeds budget_vnd. If the window rolled over between
+ * admission and settlement the reset already cleared the hold and the charge
+ * still counts (conservative: never under-counts spend). No-op without a
+ * budget. Wallet ledger rows are untouched by this.
+ */
+export async function settleKeyBudgetHold(
+  tx: Tx,
+  args: { apiKeyId: string; holdVnd: number; chargedVnd: number },
+): Promise<void> {
+  const rows = await tx
+    .select({ budget_vnd: apiKeys.budget_vnd, budget_used_vnd: apiKeys.budget_used_vnd })
+    .from(apiKeys)
+    .where(eq(apiKeys.id, args.apiKeyId))
+    .for("update")
+    .limit(1);
+  const key = rows[0];
+  if (!key || key.budget_vnd === null) return;
+  const used = Math.max(0, key.budget_used_vnd - args.holdVnd) + args.chargedVnd;
+  await tx.update(apiKeys).set({ budget_used_vnd: used }).where(eq(apiKeys.id, args.apiKeyId));
+}

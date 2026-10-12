@@ -7,7 +7,7 @@ import { KeyRound, MoreHorizontal, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "../../lib/api";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
-import { formatDate } from "../../lib/format";
+import { formatDate, formatVnd } from "../../lib/format";
 import { formatStatusLabel } from "../../lib/display";
 import { Button } from "../../components/ui/button";
 import { Badge } from "../../components/ui/badge";
@@ -115,6 +115,9 @@ const keysCopy = {
     vi: "Để trống để cho phép tất cả mô hình khả dụng với workspace này.",
   },
   notAvailableYet: { en: "Not available yet.", vi: "Chưa khả dụng." },
+  expiresCol: { en: "Expires", vi: "Hết hạn" },
+  budgetCol: { en: "Budget", vi: "Ngân sách" },
+  expiredBadge: { en: "Expired", vi: "Hết hạn" },
 } as const;
 
 const makeNameSchema = (t: (k: "nameRequired" | "nameTooLong") => string) =>
@@ -132,6 +135,12 @@ interface ApiKey {
   created_at: number;
   last_used_at: number | null;
   revoked_at: number | null;
+  // Key policy (Task 4): expiry + per-period VND budget display state.
+  expires_at: number | null;
+  budget_vnd: number | null;
+  budget_period: "daily" | "weekly" | "monthly" | null;
+  budget_used_vnd: number;
+  budget_period_start: number | null;
 }
 
 interface CatalogModelItem {
@@ -252,10 +261,48 @@ export default function KeysPage() {
       header: t("statusCol"),
       cell: ({ row }) => {
         const s = row.original.status;
+        // Effective status: a key past expires_at no longer admits requests
+        // even while its stored status still reads enabled/disabled.
+        const expired = row.original.expires_at !== null && Date.now() >= row.original.expires_at;
+        if (expired) return <Badge variant="secondary">{t("expiredBadge")}</Badge>;
         return (
           <Badge variant={s === "enabled" ? "default" : s === "disabled" ? "outline" : "secondary"}>
             {formatStatusLabel(s)}
           </Badge>
+        );
+      },
+    },
+    {
+      accessorKey: "expires_at",
+      header: t("expiresCol"),
+      cell: ({ row }) =>
+        row.original.expires_at ? formatDate(new Date(row.original.expires_at)) : "—",
+    },
+    {
+      id: "budget",
+      header: t("budgetCol"),
+      cell: ({ row }) => {
+        const k = row.original;
+        if (k.budget_vnd === null || k.budget_period === null) return "—";
+        // In-window usage: a stale period_start means no request has admitted
+        // since the last boundary, so effective usage is 0.
+        const windowStart = k.budget_period_start;
+        const inWindow =
+          windowStart !== null &&
+          (() => {
+            const d = new Date();
+            const dayStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+            if (k.budget_period === "daily") return windowStart === dayStart;
+            if (k.budget_period === "weekly")
+              return windowStart === dayStart - ((d.getUTCDay() + 6) % 7) * 86_400_000;
+            return windowStart === Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+          })();
+        const used = inWindow ? k.budget_used_vnd : 0;
+        return (
+          <span className="text-xs">
+            {formatVnd(used)} / {formatVnd(k.budget_vnd)}
+            <span className="text-muted-foreground"> · {k.budget_period}</span>
+          </span>
         );
       },
     },

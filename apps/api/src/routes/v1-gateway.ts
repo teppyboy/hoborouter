@@ -6,7 +6,7 @@
 // upper bound — no tokenizer can exceed it), capped by context_window.
 import { Elysia } from "elysia";
 import type { Db } from "@hoborouter/db";
-import { verifyApiKey, isModelAllowed } from "@hoborouter/keys";
+import { verifyApiKey, isModelAllowed, checkAndReserveKeyBudget, releaseKeyBudgetHold, KeyBudgetError } from "@hoborouter/keys";
 import {
   AUTO_PUBLIC_ID,
   getReasoningMetadata,
@@ -740,6 +740,33 @@ function gatewayHandler(
 
     const requestId = crypto.randomUUID();
     const stream = body.stream === true;
+    // Key-policy admission BEFORE wallet reservation: expiry + per-period VND
+    // budget, serialized on the api_keys row (FOR UPDATE) so concurrent
+    // requests cannot overspend the period budget. Holds capVnd against the
+    // budget until settlement/release; the hold is returned below when the
+    // wallet reserve fails so the counter never permanently over-counts.
+    let budgetPeriodStart: number | null = null;
+    try {
+      ({ periodStart: budgetPeriodStart } = await checkAndReserveKeyBudget(db, {
+        apiKeyId: key.api_key_id,
+        capVnd,
+        now: Date.now(),
+      }));
+    } catch (err) {
+      if (err instanceof KeyBudgetError) {
+        if (err.code === "expired") {
+          return routeError(403, "key_expired", "API key expired");
+        }
+        if (err.code === "budget_exceeded") {
+          return rateLimited(
+            Math.max(1, Math.ceil((err.retryAfterMs ?? 60_000) / 1000)),
+            "key_budget_exceeded",
+            "API key budget for the current period is exhausted. Retry after the period resets.",
+          );
+        }
+      }
+      throw err;
+    }
     try {
       const reserved = await reserveRequest(db, {
         requestId,
@@ -765,6 +792,20 @@ function gatewayHandler(
         uncountSubscriptionRateLimit(key.workspace_id, limiter.windowStart);
       }
     } catch (err) {
+      // Wallet reserve failed: return the key-budget hold so the period
+      // counter does not permanently over-count. A failed release is the
+      // conservative direction (over-counts spend, never under-counts).
+      if (budgetPeriodStart !== null) {
+        try {
+          await releaseKeyBudgetHold(db, {
+            apiKeyId: key.api_key_id,
+            periodStart: budgetPeriodStart,
+            holdVnd: capVnd,
+          });
+        } catch {
+          // keep mapping the reserve error below
+        }
+      }
       if (err instanceof WalletError) {
         if (limiter?.underLimit)
           uncountSubscriptionRateLimit(key.workspace_id, limiter.windowStart);

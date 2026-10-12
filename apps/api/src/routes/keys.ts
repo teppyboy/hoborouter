@@ -7,12 +7,106 @@
 import { Elysia, t } from "elysia";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, writeAudit, jsonError } from "../authz";
-import { generateApiKey } from "@hoborouter/keys";
-import { and, asc, eq, inArray, isNull } from "drizzle-orm";
-import { type Db, workspaces, apiKeys, models, apiKeyModelPermissions } from "@hoborouter/db";
+import { generateApiKey, budgetWindow, type KeyBudgetPeriod } from "@hoborouter/keys";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import {
+  type Db,
+  workspaces,
+  apiKeys,
+  models,
+  apiKeyModelPermissions,
+  usageLogs,
+  workspaceMembers,
+  MAX_SAFE_INTEGER_MONEY,
+} from "@hoborouter/db";
 
 // Shared display-name bound for create and rename; keeps the two paths consistent.
 const MAX_KEY_NAME = 128;
+
+const BUDGET_PERIODS: readonly string[] = ["daily", "weekly", "monthly"];
+
+interface KeyPolicyInput {
+  expires_at?: unknown;
+  budget_vnd?: unknown;
+  budget_period?: unknown;
+}
+
+/** Validated policy fields; undefined = field absent from the request. */
+interface KeyPolicyValidated {
+  expires_at?: number | null;
+  budget_vnd?: number | null;
+  budget_period?: KeyBudgetPeriod | null;
+}
+
+/**
+ * Strict validation for key policy fields (create + PATCH): epoch-ms expiry
+ * must be a FUTURE safe integer; a VND budget is a positive safe integer and
+ * requires its reset period; clearing requires both budget fields null. On
+ * CREATE (forCreate) there is no prior budget, so a period-only field is
+ * meaningless and rejected; on PATCH it may adjust an existing budget.
+ */
+function validateKeyPolicy(
+  body: KeyPolicyInput,
+  now: number,
+  opts: { forCreate?: boolean } = {},
+): { ok: true; policy: KeyPolicyValidated } | { ok: false; error: Response } {
+  const policy: KeyPolicyValidated = {};
+  if (body.expires_at !== undefined) {
+    if (body.expires_at === null) policy.expires_at = null;
+    else if (
+      typeof body.expires_at !== "number" ||
+      !Number.isSafeInteger(body.expires_at) ||
+      body.expires_at <= now ||
+      body.expires_at > MAX_SAFE_INTEGER_MONEY
+    )
+      return {
+        ok: false,
+        error: jsonError(400, "INVALID", "expires_at must be a future epoch ms integer"),
+      };
+    else policy.expires_at = body.expires_at;
+  }
+  if (body.budget_vnd !== undefined) {
+    if (body.budget_vnd === null) policy.budget_vnd = null;
+    else if (
+      typeof body.budget_vnd !== "number" ||
+      !Number.isSafeInteger(body.budget_vnd) ||
+      body.budget_vnd <= 0 ||
+      body.budget_vnd > MAX_SAFE_INTEGER_MONEY
+    )
+      return {
+        ok: false,
+        error: jsonError(400, "INVALID", "budget_vnd must be a positive integer VND amount"),
+      };
+    else policy.budget_vnd = body.budget_vnd;
+  }
+  if (body.budget_period !== undefined) {
+    if (body.budget_period === null) policy.budget_period = null;
+    else if (typeof body.budget_period !== "string" || !BUDGET_PERIODS.includes(body.budget_period))
+      return {
+        ok: false,
+        error: jsonError(400, "INVALID", "budget_period must be daily, weekly, or monthly"),
+      };
+    else policy.budget_period = body.budget_period as KeyBudgetPeriod;
+  }
+  if (opts.forCreate && policy.budget_period !== undefined && policy.budget_vnd === undefined)
+    return {
+      ok: false,
+      error: jsonError(400, "INVALID", "budget_period is only valid together with budget_vnd"),
+    };
+  if (policy.budget_vnd !== undefined && policy.budget_vnd !== null) {
+    if (policy.budget_period === undefined)
+      return {
+        ok: false,
+        error: jsonError(400, "INVALID", "budget_period is required with budget_vnd"),
+      };
+  }
+  if (policy.budget_vnd === null && policy.budget_period != null)
+    return {
+      ok: false,
+      error: jsonError(400, "INVALID", "budget_period must be null when clearing budget_vnd"),
+    };
+  return { ok: true, policy };
+}
 
 export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
   // Shared key creation for POST /keys (generic) and POST /chat-key (chat):
@@ -24,6 +118,7 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
     params: { id: string },
     body: { name?: unknown } | null,
     purpose: "generic" | "chat",
+    policyInput?: KeyPolicyInput,
   ) => {
     const gate = await requireSession(auth, request);
     if ("error" in gate) return gate.error;
@@ -41,6 +136,11 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
     if (!name) return jsonError(400, "INVALID", "name is required");
     if (name.length > MAX_KEY_NAME)
       return jsonError(400, "INVALID", `name must be at most ${MAX_KEY_NAME} characters`);
+    const policyCheck = validateKeyPolicy(policyInput ?? {}, Date.now(), { forCreate: true });
+    if (!policyCheck.ok) return policyCheck.error;
+    const policy = policyCheck.policy;
+    const budgetVnd = policy.budget_vnd ?? null;
+    const budgetPeriod = policy.budget_period ?? null;
 
     const { plaintext, hash, prefix } = generateApiKey();
     const id = crypto.randomUUID();
@@ -72,6 +172,11 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
         status: "enabled",
         created_at: now,
         purpose,
+        expires_at: policy.expires_at ?? null,
+        budget_vnd: budgetVnd,
+        budget_period: budgetPeriod,
+        // A new budget always starts at its current window's beginning.
+        budget_period_start: budgetVnd !== null ? budgetWindow(budgetPeriod!, now).start : null,
       });
       // audit detail carries only non-secret metadata — never plaintext or full hash
       await writeAudit(tx, {
@@ -79,7 +184,13 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
         workspaceId: params.id,
         action: "key.create",
         target: id,
-        detail: { name, key_prefix: prefix, purpose },
+        detail: {
+          name,
+          key_prefix: prefix,
+          purpose,
+          ...(policy.expires_at !== undefined ? { expires_at: policy.expires_at } : {}),
+          ...(budgetVnd !== null ? { budget_vnd: budgetVnd, budget_period: budgetPeriod } : {}),
+        },
       });
     });
     if (suspended) {
@@ -100,14 +211,19 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
       "/api/v1/workspaces/:id/keys",
       {
         params: t.Object({ id: t.String() }),
-        body: t.Object({ name: t.Optional(t.String()) }),
+        body: t.Object({
+          name: t.Optional(t.String()),
+          expires_at: t.Optional(t.Any()),
+          budget_vnd: t.Optional(t.Any()),
+          budget_period: t.Optional(t.Any()),
+        }),
         detail: {
           tags: ["Keys"],
           summary: "Create API key",
           security: [{ cookieAuth: [] }],
         },
       },
-      async ({ request, params, body }) => createKey(request, params, body, "generic"),
+      async ({ request, params, body }) => createKey(request, params, body, "generic", body),
     )
     .post(
       "/api/v1/workspaces/:id/chat-key",
@@ -146,6 +262,13 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
             created_at: apiKeys.created_at,
             last_used_at: apiKeys.last_used_at,
             revoked_at: apiKeys.revoked_at,
+            // Key policy (Task 4): expiry + per-period VND budget state for
+            // the status/reset display; used includes pending admission holds.
+            expires_at: apiKeys.expires_at,
+            budget_vnd: apiKeys.budget_vnd,
+            budget_period: apiKeys.budget_period,
+            budget_used_vnd: apiKeys.budget_used_vnd,
+            budget_period_start: apiKeys.budget_period_start,
           })
           .from(apiKeys)
           // removed keys are hidden from the management list
@@ -160,10 +283,16 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
       "/api/v1/workspaces/:id/keys/:keyId",
       {
         params: t.Object({ id: t.String(), keyId: t.String() }),
-        body: t.Object({ status: t.Optional(t.String()), name: t.Optional(t.String()) }),
+        body: t.Object({
+          status: t.Optional(t.String()),
+          name: t.Optional(t.String()),
+          expires_at: t.Optional(t.Any()),
+          budget_vnd: t.Optional(t.Any()),
+          budget_period: t.Optional(t.Any()),
+        }),
         detail: {
           tags: ["Keys"],
-          summary: "Update API key (enable/disable, rename)",
+          summary: "Update API key (enable/disable, rename, policy)",
           security: [{ cookieAuth: [] }],
         },
       },
@@ -173,11 +302,30 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
         const userId = gate.session.user.id;
         const denied = await requireWsRole(db, params.id, userId, "admin");
         if (denied) return denied;
-        const rawBody = (body as { status?: unknown; name?: unknown } | null) ?? {};
+        const rawBody =
+          (body as {
+            status?: unknown;
+            name?: unknown;
+            expires_at?: unknown;
+            budget_vnd?: unknown;
+            budget_period?: unknown;
+          } | null) ?? {};
         const requested = rawBody.status;
         const hasStatus = requested !== undefined;
         const hasName = rawBody.name !== undefined;
-        if (!hasStatus && !hasName) return jsonError(400, "INVALID", "status or name is required");
+        const hasPolicy =
+          rawBody.expires_at !== undefined ||
+          rawBody.budget_vnd !== undefined ||
+          rawBody.budget_period !== undefined;
+        if (!hasStatus && !hasName && !hasPolicy)
+          return jsonError(400, "INVALID", "status, name, or policy field is required");
+        const now = Date.now();
+        let policy: KeyPolicyValidated = {};
+        if (hasPolicy) {
+          const check = validateKeyPolicy(rawBody, now);
+          if (!check.ok) return check.error;
+          policy = check.policy;
+        }
         let name: string | undefined;
         if (hasName) {
           if (typeof rawBody.name !== "string")
@@ -199,7 +347,12 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
         let finalStatus = "";
         await db.transaction(async (tx) => {
           const key = await tx
-            .select({ status: apiKeys.status, name: apiKeys.name })
+            .select({
+              status: apiKeys.status,
+              name: apiKeys.name,
+              budget_vnd: apiKeys.budget_vnd,
+              budget_period: apiKeys.budget_period,
+            })
             .from(apiKeys)
             .where(
               and(
@@ -216,11 +369,25 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
             terminal = true;
             return;
           }
+          // Policy update: any change to budget_vnd/budget_period starts a
+          // FRESH period (used reset to 0 at the new/current window start) so
+          // a lowered budget can never be instantly exhausted by past spend.
+          let budgetReset: { budget_used_vnd: number; budget_period_start: number } | null = null;
+          if (hasPolicy) {
+            const newVnd = policy.budget_vnd !== undefined ? policy.budget_vnd : key[0].budget_vnd;
+            const newPeriod =
+              policy.budget_period !== undefined ? policy.budget_period : key[0].budget_period;
+            if (newVnd !== null && newPeriod !== null) {
+              const window = budgetWindow(newPeriod, now);
+              budgetReset = { budget_used_vnd: 0, budget_period_start: window.start };
+            }
+          }
           const changed = await tx
             .update(apiKeys)
             .set({
               ...(hasStatus ? { status: requested as "enabled" | "disabled" } : {}),
               ...(hasName ? { name: name! } : {}),
+              ...(hasPolicy ? { ...policy, ...(budgetReset ?? {}) } : {}),
             })
             .where(
               and(
@@ -249,6 +416,14 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
                 action: "key.rename",
                 target: params.keyId,
                 detail: { name, previous_name: key[0].name },
+              });
+            if (hasPolicy)
+              await writeAudit(tx, {
+                actorUserId: userId,
+                workspaceId: params.id,
+                action: "key.policy.update",
+                target: params.keyId,
+                detail: { ...policy },
               });
           }
         });
@@ -469,6 +644,106 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
           target: params.keyId,
         });
         return new Response(null, { status: 200 });
+      },
+    )
+    .get(
+      "/api/v1/keys/:id/usage",
+      {
+        params: t.Object({ id: t.String() }),
+        detail: {
+          tags: ["Keys"],
+          summary: "Key usage and budget state",
+          description:
+            "Per-key usage totals, effective expiry, and current-period budget state (workspace member+). No secret material.",
+          security: [{ cookieAuth: [] }],
+        },
+      },
+      async ({ request, params }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        // Key id is global; authorization resolves through the key's workspace
+        // (member+). Cross-workspace key ids are invisible (404).
+        const keyRows = await db
+          .select({
+            id: apiKeys.id,
+            workspace_id: apiKeys.workspace_id,
+            key_prefix: apiKeys.key_prefix,
+            name: apiKeys.name,
+            status: apiKeys.status,
+            expires_at: apiKeys.expires_at,
+            budget_vnd: apiKeys.budget_vnd,
+            budget_period: apiKeys.budget_period,
+            budget_used_vnd: apiKeys.budget_used_vnd,
+            budget_period_start: apiKeys.budget_period_start,
+          })
+          .from(apiKeys)
+          .where(and(eq(apiKeys.id, params.id), isNull(apiKeys.deleted_at)))
+          .limit(1);
+        const key = keyRows[0];
+        // Existence check BEFORE authorization: a non-member must not learn
+        // that a key id exists, so any foreign workspace yields the same 404.
+        if (!key) return jsonError(404, "NOT_FOUND", "Key not found");
+        const membership = await db
+          .select({ role: workspaceMembers.role })
+          .from(workspaceMembers)
+          .where(
+            and(
+              eq(workspaceMembers.workspace_id, key.workspace_id),
+              eq(workspaceMembers.user_id, gate.session.user.id),
+            ),
+          )
+          .limit(1);
+        // Any workspace role (owner/admin/member) satisfies member+ access.
+        if (!membership[0]) return jsonError(404, "NOT_FOUND", "Key not found");
+        const now = Date.now();
+        const totalsRows = await db
+          .select({
+            requests: sql<number>`count(*)`.mapWith(Number),
+            input_tokens: sql<number>`coalesce(sum(${usageLogs.input_tokens}), 0)`.mapWith(Number),
+            output_tokens: sql<number>`coalesce(sum(${usageLogs.output_tokens}), 0)`.mapWith(
+              Number,
+            ),
+            cached_input_tokens:
+              sql<number>`coalesce(sum(${usageLogs.cached_input_tokens}), 0)`.mapWith(Number),
+            reasoning_tokens: sql<number>`coalesce(sum(${usageLogs.reasoning_tokens}), 0)`.mapWith(
+              Number,
+            ),
+            charged_vnd: sql<number>`coalesce(sum(${usageLogs.charged_vnd}), 0)`.mapWith(Number),
+          })
+          .from(usageLogs)
+          .where(eq(usageLogs.api_key_id, key.id));
+        const totals = totalsRows[0]!;
+        // Effective status: a key past expires_at no longer admits requests
+        // even while its status column still reads enabled/disabled.
+        const expired = key.expires_at !== null && now >= key.expires_at;
+        const budget =
+          key.budget_vnd === null || key.budget_period === null
+            ? null
+            : (() => {
+                const window = budgetWindow(key.budget_period, now);
+                // The counter may predate the current window (no request has
+                // admitted since the boundary); report the effective in-window
+                // usage, not the stale stored value.
+                const used = key.budget_period_start === window.start ? key.budget_used_vnd : 0;
+                return {
+                  budget_vnd: key.budget_vnd,
+                  period: key.budget_period,
+                  used_vnd: used,
+                  remaining_vnd: Math.max(0, key.budget_vnd - used),
+                  period_start: window.start,
+                  resets_at: window.end,
+                };
+              })();
+        return {
+          key_id: key.id,
+          name: key.name,
+          key_prefix: key.key_prefix,
+          status: key.status,
+          expired,
+          expires_at: key.expires_at,
+          budget,
+          totals,
+        };
       },
     );
 };

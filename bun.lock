@@ -146,6 +146,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@hoborouter/db": "workspace:",
+        "@hoborouter/keys": "workspace:",
         "drizzle-orm": "0.45.3",
       },
       "devDependencies": {

@@ -19,6 +19,7 @@ import {
   wallets,
 } from "@hoborouter/db";
 import { WalletError, lockWallet, requirePositiveSafeInteger, runInImmediate } from "./wallet";
+import { settleKeyBudgetHold } from "@hoborouter/keys";
 import { calculateCharge, maxStoredMoney, type PriceSnapshot, type UsageTokens } from "./money";
 import {
   applySubscriptionDailyGrant,
@@ -335,6 +336,7 @@ export async function releaseRequest(db: Db | Tx, requestId: string, now: number
         br_status: billingReservations.status,
         cap_vnd: billingReservations.cap_vnd,
         wallet_id: billingReservations.wallet_id,
+        api_key_id: billingReservations.api_key_id,
       })
       .from(requests)
       .innerJoin(billingReservations, eq(billingReservations.request_id, requests.id))
@@ -378,6 +380,15 @@ export async function releaseRequest(db: Db | Tx, requestId: string, now: number
         "conflict",
         `wallet ${row.wallet_id} reserved invariant violated on release`,
       );
+    }
+    // Pre-dispatch release: return the key-budget admission hold (charged 0);
+    // no-op for keys without a budget. Policy counter only — no ledger row.
+    if (row.api_key_id !== null) {
+      await settleKeyBudgetHold(tx, {
+        apiKeyId: row.api_key_id,
+        holdVnd: row.cap_vnd,
+        chargedVnd: 0,
+      });
     }
     // No ledger row: releasing a hold is not a cash movement.
   });
@@ -696,6 +707,18 @@ export async function settleRequest(
           `wallet ${row.wallet_id} concurrent modification during zero-charge settle`,
         );
       }
+    }
+
+    // Settle the key-budget admission hold with the ACTUAL charge (full_hold:
+    // charged == cap, net zero). Policy counter only — wallet ledger above is
+    // untouched; no-op for keys without a budget. api_key_id is schema-nullable
+    // but always set by reserveRequest; a null is a legacy row with no policy.
+    if (row.api_key_id !== null) {
+      await settleKeyBudgetHold(tx, {
+        apiKeyId: row.api_key_id,
+        holdVnd: row.cap_vnd,
+        chargedVnd: charge,
+      });
     }
 
     if (outcome.kind === "usage") {

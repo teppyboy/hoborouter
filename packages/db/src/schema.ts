@@ -100,11 +100,48 @@ export const apiKeys = pgTable(
     revoked_at: big("revoked_at"),
     deleted_at: big("deleted_at"),
     deleted_by: text("deleted_by"),
+    // Key policy (Task 4 parity): optional epoch-ms expiry and a per-period
+    // VND spend budget. budget_used_vnd is a POLICY counter (admission holds
+    // + settled charges in the current window), never wallet money; wallet
+    // ledger/reservation semantics are unchanged.
+    expires_at: big("expires_at"),
+    budget_vnd: big("budget_vnd"),
+    budget_period: text("budget_period", { enum: ["daily", "weekly", "monthly"] }),
+    budget_used_vnd: big("budget_used_vnd").notNull().default(0),
+    budget_period_start: big("budget_period_start"),
   },
   (t) => [
     uniqueIndex("api_keys_key_hash").on(t.key_hash),
     check("api_keys_status", sql`${t.status} IN ('active','enabled','disabled','revoked')`),
     check("api_keys_purpose", sql`${t.purpose} IN ('generic','chat')`),
+    check(
+      "api_keys_expires_at_bound",
+      sql`${t.expires_at} IS NULL OR (${t.expires_at} >= 0 AND ${t.expires_at} <= ${MAX_BOUND})`,
+    ),
+    check(
+      "api_keys_budget_vnd_bound",
+      sql`${t.budget_vnd} IS NULL OR (${t.budget_vnd} > 0 AND ${t.budget_vnd} <= ${MAX_BOUND})`,
+    ),
+    check(
+      "api_keys_budget_period_enum",
+      sql`${t.budget_period} IS NULL OR ${t.budget_period} IN ('daily','weekly','monthly')`,
+    ),
+    check(
+      "api_keys_budget_used_bound",
+      sql`${t.budget_used_vnd} >= 0 AND ${t.budget_used_vnd} <= ${MAX_BOUND}`,
+    ),
+    check(
+      "api_keys_budget_period_start_bound",
+      sql`${t.budget_period_start} IS NULL OR (${t.budget_period_start} >= 0 AND ${t.budget_period_start} <= ${MAX_BOUND})`,
+    ),
+    // budget_vnd and budget_period are set/cleared together.
+    check("api_keys_budget_pair", sql`(${t.budget_vnd} IS NULL) = (${t.budget_period} IS NULL)`),
+    // An admitted window always records its start; a budget without a start
+    // would be an un-reset counter.
+    check(
+      "api_keys_budget_start_required",
+      sql`${t.budget_vnd} IS NULL OR ${t.budget_period_start} IS NOT NULL`,
+    ),
   ],
 );
 

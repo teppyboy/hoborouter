@@ -155,6 +155,13 @@
       "when": 1792700000000,
       "tag": "0021_model_reasoning_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792800000000,
+      "tag": "0022_api_key_budgets",
+      "breakpoints": true
     }
   ]
 }
