@@ -62,7 +62,10 @@ mock.module("@radix-ui/react-use-layout-effect", () => ({
 const INSTANCE = {
   name: "Hoborouter",
   api_base_url: "https://hoborouter.example",
-  support: { email: "support@example.test", telegram: null, facebook: null, threads: null },
+  // Not "support@example.test": that string ends with "t@example.test", the
+  // signed-in identity below, and would make the no-leak substring checks
+  // race-dependent (CI renders the contact before they run; local does not).
+  support: { email: "help@example.test", telegram: null, facebook: null, threads: null },
 };
 
 const state = { authenticated: false };
@@ -265,7 +268,7 @@ test("signed-in: About stays inside the same mounted AppShell with one heading",
     // Configured DB contact email wins inside the shell too (not the
     // project fallback).
     await waitFor(
-      () => document.body.innerHTML.includes("mailto:support@example.test"),
+      () => document.body.innerHTML.includes("mailto:help@example.test"),
       "configured contact rendered",
     );
   } finally {
