@@ -119,6 +119,7 @@ type MessagesUsageShape = {
     output_tokens?: unknown;
     cache_creation_input_tokens?: unknown;
     cache_read_input_tokens?: unknown;
+    output_tokens_details?: { thinking_tokens?: unknown };
   };
 };
 
@@ -147,9 +148,10 @@ function responsesUsageOf(obj: ResponsesUsageShape): UsageExtraction {
 /**
  * Anthropic Messages usage: input_tokens EXCLUDES cache traffic, so billable
  * input = input_tokens + cache_creation_input_tokens (billed at the full
- * input rate); cache_read_input_tokens bills at the cached rate. Anthropic
- * reports no reasoning split — output_tokens already includes thinking — so
- * reasoningTokens is exactly 0, never an assumption.
+ * input rate); cache_read_input_tokens bills at the cached rate. When the
+ * provider reports output_tokens_details.thinking_tokens it becomes the
+ * reasoning split (a subset of output, billed at the reasoning rate); absent
+ * details keep reasoningTokens at 0 — never an assumption.
  */
 function messagesUsageOf(obj: MessagesUsageShape): UsageExtraction {
   const u = obj.usage;
@@ -162,13 +164,17 @@ function messagesUsageOf(obj: MessagesUsageShape): UsageExtraction {
     return { kind: "invalid" };
   const read = u.cache_read_input_tokens;
   if (read !== undefined && read !== null && !isSafeNonNegative(read)) return { kind: "invalid" };
+  const thinking = u.output_tokens_details?.thinking_tokens;
+  if (thinking !== undefined && thinking !== null) {
+    if (!isSafeNonNegative(thinking) || thinking > output) return { kind: "invalid" };
+  }
   return {
     kind: "ok",
     usage: {
       inputTokens: BigInt(input + (typeof creation === "number" ? creation : 0)),
       outputTokens: BigInt(output),
       cachedInputTokens: BigInt(typeof read === "number" ? read : 0),
-      reasoningTokens: 0n,
+      reasoningTokens: BigInt(typeof thinking === "number" ? thinking : 0),
     },
   };
 }
@@ -212,6 +218,7 @@ export function createUsageTap(options: {
     creation: bigint | null;
     read: bigint | null;
     output: bigint | null;
+    thinking: bigint | null;
   } | null = null;
   let sawMessageStop = false;
 
@@ -232,11 +239,25 @@ export function createUsageTap(options: {
     const creation = take("cache_creation_input_tokens");
     const read = take("cache_read_input_tokens");
     const output = take("output_tokens");
-    if (msgAcc === null) msgAcc = { input: null, creation: null, read: null, output: null };
+    const details = usage.output_tokens_details;
+    let thinking: bigint | null = null;
+    if (typeof details === "object" && details !== null) {
+      const t = (details as Record<string, unknown>).thinking_tokens;
+      if (t !== undefined && t !== null) {
+        if (!isSafeNonNegative(t)) {
+          sawInvalidUsage = true;
+        } else {
+          thinking = BigInt(t);
+        }
+      }
+    }
+    if (msgAcc === null)
+      msgAcc = { input: null, creation: null, read: null, output: null, thinking: null };
     if (input !== null) msgAcc.input = input;
     if (creation !== null) msgAcc.creation = creation;
     if (read !== null) msgAcc.read = read;
     if (output !== null) msgAcc.output = output;
+    if (thinking !== null) msgAcc.thinking = thinking;
   };
 
   const fail = (reason: string): UsageResult => {
@@ -258,7 +279,7 @@ export function createUsageTap(options: {
             inputTokens: mu.input + (mu.creation ?? 0n),
             outputTokens: mu.output,
             cachedInputTokens: mu.read ?? 0n,
-            reasoningTokens: 0n,
+            reasoningTokens: mu.thinking ?? 0n,
           },
         });
       }
@@ -298,7 +319,10 @@ export function createUsageTap(options: {
         return fail(extracted.kind === "invalid" ? "invalid_usage" : "missing_usage");
       return (result = { complete: true, usage: extracted.usage });
     }
-    if (obj.status !== "completed") return fail("not_completed");
+    // status "incomplete" (e.g. max_output_tokens) is a normal BILLED
+    // outcome when it carries valid usage; usage-less/invalid ones stay
+    // missing/invalid and settle as a full hold.
+    if (obj.status !== "completed" && obj.status !== "incomplete") return fail("not_completed");
     const extracted = responsesUsageOf(obj as ResponsesUsageShape);
     if (extracted.kind !== "ok")
       return fail(extracted.kind === "invalid" ? "invalid_usage" : "missing_usage");
@@ -345,7 +369,8 @@ export function createUsageTap(options: {
       if (extracted.kind === "ok") sawUsage = extracted.usage;
       return;
     }
-    // Responses SSE: completion only on the response.completed event.
+    // Responses SSE: usage accepted only from the terminal response.completed
+    // / response.incomplete events (see below).
     const type = typeof obj.type === "string" ? obj.type : "";
     if (options.protocol === "messages") {
       if (type === "message_start") {
@@ -364,16 +389,17 @@ export function createUsageTap(options: {
       }
       return; // ping and unknown event types carry no usage
     }
-    if (type === "response.failed" || type === "response.incomplete" || type === "error") {
+    if (type === "response.failed" || type === "error") {
       fail("error_event");
       return;
     }
-    if (type === "response.completed") {
+    // Both terminal events carry the response object; incomplete with valid
+    // usage is a normal billed outcome, without usage it fails to full hold.
+    // Terminal events without a response payload carry no usage — ignore them
+    // (the stream ends missing_usage, i.e. full hold, never a hard error).
+    if (type === "response.incomplete" || type === "response.completed") {
       const response = obj.response;
-      if (typeof response !== "object" || response === null) {
-        fail("malformed_json");
-        return;
-      }
+      if (typeof response !== "object" || response === null) return;
       const extracted = responsesUsageOf(response as ResponsesUsageShape);
       if (extracted.kind === "invalid") sawInvalidUsage = true;
       if (extracted.kind === "ok") sawUsage = extracted.usage;

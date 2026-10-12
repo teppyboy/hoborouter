@@ -329,12 +329,19 @@ describe("responses SSE tap", () => {
     });
   });
 
-  test("response.incomplete => incomplete", () => {
+  test("response.incomplete without usage => missing usage (full hold, not an error)", () => {
     const input = 'event: response.incomplete\ndata: {"type":"response.incomplete"}\n\n';
     expect(runStream({ protocol: "responses", stream: true }, input)).toEqual({
       complete: false,
-      reason: "error_event",
+      reason: "missing_usage",
     });
+  });
+
+  test("response.incomplete with valid usage => complete (billed outcome)", () => {
+    const input =
+      "event: response.incomplete\n" +
+      'data: {"type":"response.incomplete","response":{"status":"incomplete","usage":{"input_tokens":2,"output_tokens":3}}}\n\n';
+    expect(runStream({ protocol: "responses", stream: true }, input).complete).toBe(true);
   });
 
   test("error event => incomplete", () => {

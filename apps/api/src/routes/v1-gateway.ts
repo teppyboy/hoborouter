@@ -7,7 +7,13 @@
 import { Elysia } from "elysia";
 import type { Db } from "@hoborouter/db";
 import { verifyApiKey, isModelAllowed } from "@hoborouter/keys";
-import { AUTO_PUBLIC_ID, resolveModel } from "@hoborouter/catalog";
+import {
+  AUTO_PUBLIC_ID,
+  getReasoningMetadata,
+  resolveModel,
+  validateReasoningRequest,
+  type ReasoningMetadata,
+} from "@hoborouter/catalog";
 import { resolveAutoModel } from "../auto-resolve";
 import {
   estimateCapVnd,
@@ -237,10 +243,11 @@ function rewriteJsonModel(
   ab: ArrayBuffer,
   upstreamModel: string,
   publicModel: string,
+  extra: readonly (readonly [string, string])[] = [],
 ): ArrayBuffer {
   try {
     const o = JSON.parse(new TextDecoder().decode(ab)) as JsonValue;
-    const scrubbed = scrubJsonStrings(o, upstreamModel, publicModel);
+    const scrubbed = scrubJsonStrings(o, upstreamModel, publicModel, extra);
     return new TextEncoder().encode(JSON.stringify(scrubbed)).buffer as ArrayBuffer;
   } catch {
     // not JSON — passthrough (unparseable bodies are replaced wholesale below)
@@ -261,6 +268,7 @@ function safeUpstreamError(
   upstreamModel: string,
   publicModel: string,
   providerLabel: string,
+  extra: readonly (readonly [string, string])[] = [],
 ): Response {
   const status = upstreamStatus; // status codes carry no upstream-id leak; bodies do
   let payload: unknown = {
@@ -275,6 +283,7 @@ function safeUpstreamError(
     if (typeof parsed === "object" && parsed !== null) {
       payload = scrubJsonStrings(parsed, upstreamModel, publicModel, [
         [providerLabel, publicModel],
+        ...extra,
       ]);
     }
   } catch {
@@ -351,6 +360,7 @@ function sseModelRewriteStream(
   upstreamModel: string,
   publicModel: string,
   protocol: "chat" | "responses" | "messages",
+  extra: readonly (readonly [string, string])[] = [],
   onFirstToken?: (obj: JsonValue) => void,
 ) {
   const dec = new TextDecoder();
@@ -362,7 +372,7 @@ function sseModelRewriteStream(
     try {
       const o = JSON.parse(line.slice(6)) as JsonValue;
       if (onFirstToken && isFirstTokenEvent(o, protocol)) onFirstToken(o);
-      return `data: ${JSON.stringify(scrubJsonStrings(o, upstreamModel, publicModel))}`;
+      return `data: ${JSON.stringify(scrubJsonStrings(o, upstreamModel, publicModel, extra))}`;
     } catch {
       // not JSON — passthrough
     }
@@ -390,6 +400,70 @@ function sseModelRewriteStream(
       void reader.cancel().catch(() => {});
     },
   });
+}
+
+/**
+ * Reasoning normalization (parity plan Task 2): resolve the client's OpenRouter
+ * / OpenAI / Anthropic reasoning form against catalog route metadata and, when
+ * an authored route exists, rewrite the body to the route's CPA-compatible
+ * upstream model + effort. Route-less outcomes (no form, no metadata, disable
+ * without a 'none' route) pass the body through verbatim — CPA owns
+ * conversion for un-authored models. Errors are pre-reservation client 400s.
+ */
+export type ReasoningRouteOverride = {
+  provider: string;
+  upstream_model: string;
+  upstream_effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+};
+
+export type ReasoningNormalization =
+  | {
+      ok: true;
+      body: Record<string, unknown>;
+      routeOverride: ReasoningRouteOverride | null;
+    }
+  | {
+      ok: false;
+      code: "invalid_reasoning" | "conflicting_reasoning" | "unsupported_reasoning";
+      message: string;
+    };
+
+export function normalizeReasoningRequest(
+  protocol: "chat" | "responses" | "messages",
+  body: Record<string, unknown>,
+  metadata: ReasoningMetadata,
+): ReasoningNormalization {
+  const v = validateReasoningRequest(body, metadata);
+  if (!v.ok) return v;
+  if (v.route === null) return { ok: true, body, routeOverride: null };
+  const route = v.route;
+  // The selected route determines the upstream model AND the CPA-compatible
+  // effort field; every client reasoning form is stripped so exactly one
+  // canonical effort carrier reaches CPA per protocol.
+  const out: Record<string, unknown> = { ...body };
+  delete out.reasoning;
+  delete out.reasoning_effort;
+  delete out.thinking;
+  delete out.output_config;
+  if (protocol === "chat") {
+    out.reasoning_effort = route.upstream_effort;
+  } else if (protocol === "responses") {
+    out.reasoning = { effort: route.upstream_effort };
+  } else if (route.upstream_effort === "none") {
+    // Anthropic-native disable form; output_config.effort has no 'none'.
+    out.thinking = { type: "disabled" };
+  } else {
+    out.output_config = { effort: route.upstream_effort };
+  }
+  return {
+    ok: true,
+    body: out,
+    routeOverride: {
+      provider: route.provider,
+      upstream_model: route.upstream_model,
+      upstream_effort: route.upstream_effort,
+    },
+  };
 }
 
 function gatewayHandler(
@@ -489,6 +563,23 @@ function gatewayHandler(
     if (!(await isModelAllowed(db, key.api_key_id, model.id))) {
       return routeError(403, "FORBIDDEN", "Model not allowed for this API key");
     }
+
+    // Reasoning normalization (parity plan Task 2): resolve catalog route
+    // metadata and normalize OpenRouter/OpenAI/Anthropic reasoning forms
+    // BEFORE cap estimation and reservation, so unsupported/ambiguous
+    // reasoning requests fail without touching the wallet or limiters.
+    const reasoningMeta = await getReasoningMetadata(db, model.id);
+    const normalized = normalizeReasoningRequest(protocol, body, reasoningMeta);
+    if (!normalized.ok) return routeError(400, normalized.code, normalized.message);
+    body = normalized.body;
+    const routeOverride = normalized.routeOverride;
+    // Route override replaces the base mapping's upstream model for this
+    // request; scrubbing must rewrite BOTH ids back to the public id.
+    const upstreamModel = routeOverride ? routeOverride.upstream_model : mapping.upstream_model;
+    const extraScrubPairs: (readonly [string, string])[] =
+      routeOverride && routeOverride.upstream_model !== mapping.upstream_model
+        ? [[mapping.upstream_model, model.public_id]]
+        : [];
 
     // 4. Bounds + cap.
     const contextWindow = model.context_window;
@@ -691,7 +782,7 @@ function gatewayHandler(
       return await releaseOrFail(err);
     }
 
-    const outbound: Record<string, unknown> = { ...body, model: mapping.upstream_model };
+    const outbound: Record<string, unknown> = { ...body, model: upstreamModel };
     if (protocol === "chat") {
       delete outbound.max_completion_tokens;
       delete outbound.max_output_tokens;
@@ -766,7 +857,7 @@ function gatewayHandler(
       reasoning: BigInt(price.reasoning_usd_micro_per_1m),
     };
     const meta = {
-      upstreamModel: mapping.upstream_model,
+      upstreamModel,
       provider: model.provider,
       publicModel: model.public_id,
     };
@@ -778,9 +869,10 @@ function gatewayHandler(
       const errRes = safeUpstreamError(
         text,
         upstream.status,
-        mapping.upstream_model,
+        upstreamModel,
         model.public_id,
         model.provider,
+        extraScrubPairs,
       );
       errRes.headers.set("x-hbr-request-id", requestId);
       return errRes;
@@ -809,7 +901,7 @@ function gatewayHandler(
       await settleFromTap(db, requestId, result, rates, meta, cachingOn, done, {
         latencyMs: roundMs(monotonic() - t0),
       });
-      const body = rewriteJsonModel(ab, mapping.upstream_model, model.public_id);
+      const body = rewriteJsonModel(ab, upstreamModel, model.public_id, extraScrubPairs);
       return new Response(body, {
         status: upstream.status,
         headers: {
@@ -881,9 +973,10 @@ function gatewayHandler(
     return new Response(
       sseModelRewriteStream(
         passthrough,
-        mapping.upstream_model,
+        upstreamModel,
         model.public_id,
         protocol,
+        extraScrubPairs,
         (obj) => {
           if (ttftMs === undefined) ttftMs = roundMs(monotonic() - t0);
           void obj;
