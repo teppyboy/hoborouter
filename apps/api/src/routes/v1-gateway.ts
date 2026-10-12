@@ -36,6 +36,7 @@ import {
 } from "@hoborouter/db";
 import { jsonError } from "../authz";
 import {
+  RATE_LIMIT_WINDOW_MS,
   checkSubscriptionRateLimit,
   checkThroughputAllowanceLimit,
   rateLimitNow,
@@ -116,6 +117,27 @@ const intEnv = (
   const raw = env[name];
   const n = raw === undefined ? NaN : Number(raw);
   return Number.isSafeInteger(n) && n > 0 ? n : fallback;
+};
+
+/**
+ * Safe X-RateLimit-* metadata, set ONLY when a concrete workspace limit exists
+ * (active subscription plan or prepaid throughput allowance). Every value is
+ * read from the limiter's own state — nothing is fabricated; callers without
+ * a known limit simply skip these headers.
+ */
+const setRateLimitHeaders = (
+  res: Response,
+  limit: number,
+  remaining: number,
+  windowStart: number,
+  now: number,
+) => {
+  res.headers.set("x-ratelimit-limit", String(limit));
+  res.headers.set("x-ratelimit-remaining", String(Math.max(0, remaining)));
+  res.headers.set(
+    "x-ratelimit-reset",
+    String(Math.max(1, Math.ceil((windowStart + RATE_LIMIT_WINDOW_MS - now) / 1000))),
+  );
 };
 
 /**
@@ -704,13 +726,16 @@ function gatewayHandler(
     };
 
     // Allowance over cap: 429 before any other check — no slot was counted
-    // by either limiter, so there is nothing to undo.
+    // by either limiter, so there is nothing to undo. The concrete admission
+    // limit exists, so the response carries its rate-limit state.
     if (allowanceCheck && !allowanceCheck.underLimit) {
-      return rateLimited(
+      const res = rateLimited(
         allowanceCheck.retryAfterSec,
         "throughput_allowance_limited",
         "Prepaid throughput allowance limit exceeded. This is a gateway admission limit for your workspace; retry after the window ends.",
       );
+      setRateLimitHeaders(res, allowanceLimit!, 0, allowanceCheck.windowStart, limNow);
+      return res;
     }
 
     const requestId = crypto.randomUUID();
@@ -753,13 +778,28 @@ function gatewayHandler(
           if (limiter && !limiter.underLimit) {
             // The sub-limited slot was returned above only after the
             // allowance slot was returned too — both tentatively counted.
-            return rateLimited(
+            const res = rateLimited(
               limiter.retryAfterSec,
               "subscription_rate_limited",
               "Subscription rate limit exceeded. Retry after the window ends or use top-up credit.",
             );
+            setRateLimitHeaders(res, limit!, 0, limiter.windowStart, limNow);
+            return res;
           }
-          return routeError(402, "insufficient_balance", "Insufficient wallet balance");
+          const res = routeError(402, "insufficient_balance", "Insufficient wallet balance");
+          // The concrete funding-side limit (if any) is still real metadata
+          // on a 402: quota state the client can act on when retrying.
+          if (limiter)
+            setRateLimitHeaders(res, limit!, limiter.remaining, limiter.windowStart, limNow);
+          else if (allowanceCheck && allowanceLimit !== null)
+            setRateLimitHeaders(
+              res,
+              allowanceLimit,
+              allowanceCheck.remaining,
+              allowanceCheck.windowStart,
+              limNow,
+            );
+          return res;
         }
       }
       throw err;

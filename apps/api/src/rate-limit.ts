@@ -4,9 +4,17 @@
 // ponytail: in-memory Map — must move to shared storage (e.g. a Postgres
 // counter table) when a second API instance exists, or each instance limits
 // independently and the effective cap multiplies.
-const WINDOW_MS = 60_000;
+export const RATE_LIMIT_WINDOW_MS = 60_000;
 
 type Window = { windowStart: number; count: number };
+
+export type RateLimitSlot = {
+  underLimit: boolean;
+  retryAfterSec: number;
+  windowStart: number;
+  /** Quota left AFTER this check counted its slot; 0 when over the limit. */
+  remaining: number;
+};
 
 // Fixed-window limiter factory: one counter space per instance so two limit
 // policies on the same workspace (subscription-funded vs ALL traffic under a
@@ -14,11 +22,7 @@ type Window = { windowStart: number; count: number };
 function makeWindowLimiter() {
   const windows = new Map<string, Window>();
   return {
-    check(
-      workspaceId: string,
-      limitPerMinute: number,
-      now: number,
-    ): { underLimit: boolean; retryAfterSec: number; windowStart: number } {
+    check(workspaceId: string, limitPerMinute: number, now: number): RateLimitSlot {
       const windowStart = windowStartOf(now);
       let w = windows.get(workspaceId);
       if (!w || w.windowStart !== windowStart) {
@@ -28,12 +32,21 @@ function makeWindowLimiter() {
       if (w.count >= limitPerMinute) {
         return {
           underLimit: false,
-          retryAfterSec: Math.max(1, Math.ceil((w.windowStart + WINDOW_MS - now) / 1000)),
+          retryAfterSec: Math.max(
+            1,
+            Math.ceil((w.windowStart + RATE_LIMIT_WINDOW_MS - now) / 1000),
+          ),
           windowStart,
+          remaining: 0,
         };
       }
       w.count += 1;
-      return { underLimit: true, retryAfterSec: 0, windowStart };
+      return {
+        underLimit: true,
+        retryAfterSec: 0,
+        windowStart,
+        remaining: Math.max(0, limitPerMinute - w.count),
+      };
     },
     uncount(workspaceId: string, windowStart: number): void {
       const w = windows.get(workspaceId);
@@ -64,13 +77,14 @@ export function resetThroughputAllowanceLimits(): void {
   allowanceLimiter.reset();
 }
 
-const windowStartOf = (now: number) => Math.floor(now / WINDOW_MS) * WINDOW_MS;
+const windowStartOf = (now: number) =>
+  Math.floor(now / RATE_LIMIT_WINDOW_MS) * RATE_LIMIT_WINDOW_MS;
 
 export function checkSubscriptionRateLimit(
   workspaceId: string,
   limitPerMinute: number,
   now: number,
-): { underLimit: boolean; retryAfterSec: number; windowStart: number } {
+): RateLimitSlot {
   return subscriptionLimiter.check(workspaceId, limitPerMinute, now);
 }
 
@@ -93,7 +107,7 @@ export function checkThroughputAllowanceLimit(
   workspaceId: string,
   limitPerMinute: number,
   now: number,
-): { underLimit: boolean; retryAfterSec: number; windowStart: number } {
+): RateLimitSlot {
   return allowanceLimiter.check(workspaceId, limitPerMinute, now);
 }
 
