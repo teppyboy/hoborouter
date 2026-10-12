@@ -6,7 +6,13 @@
 // upper bound — no tokenizer can exceed it), capped by context_window.
 import { Elysia } from "elysia";
 import type { Db } from "@hoborouter/db";
-import { verifyApiKey, isModelAllowed, checkAndReserveKeyBudget, releaseKeyBudgetHold, KeyBudgetError } from "@hoborouter/keys";
+import {
+  verifyApiKey,
+  isModelAllowed,
+  checkAndReserveKeyBudget,
+  releaseKeyBudgetHold,
+  KeyBudgetError,
+} from "@hoborouter/keys";
 import {
   AUTO_PUBLIC_ID,
   getReasoningMetadata,
