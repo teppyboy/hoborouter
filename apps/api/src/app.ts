@@ -27,6 +27,7 @@ import { adminWalletAdjustRoutes } from "./routes/admin-wallet-adjust";
 import { mockWebhookRoutes } from "./routes/webhooks-mock";
 import { payosWebhookRoutes } from "./routes/webhooks-payos";
 import { dashboardRoutes } from "./routes/dashboard";
+import { analyticsRoutes } from "./routes/analytics";
 import { adminExtraRoutes } from "./routes/admin-extra";
 import { adminPaymentRejectRoutes } from "./routes/admin-payment-reject";
 import { adminPaymentLateCreditRoutes } from "./routes/admin-payment-late-credit";
@@ -68,6 +69,7 @@ const openapiDocumentation = {
     { name: "Catalog", description: "Public model catalog" },
     { name: "Admin", description: "Instance-admin catalog and payments management" },
     { name: "Dashboard", description: "Wallet, ledger, request, and usage views" },
+    { name: "Analytics", description: "Bounded workspace usage/activity analytics" },
     { name: "Billing", description: "Payments and wallet top-ups" },
     { name: "Payments", description: "Payment provider callbacks" },
     { name: "System", description: "CPA health and system status" },
@@ -150,6 +152,7 @@ export const buildApp = async (deps: AppDeps = {}) => {
     adminModelsRoutes(db, auth),
     adminCatalogRoutes(db, auth),
     dashboardRoutes(db, auth),
+    analyticsRoutes(db, auth),
     adminExtraRoutes(db, auth, env),
     adminPaymentRejectRoutes(db, auth),
     adminPaymentLateCreditRoutes(db, auth),
