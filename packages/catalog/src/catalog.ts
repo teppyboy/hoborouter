@@ -192,11 +192,42 @@ export async function resolveModel(
  */
 export type PublicCapabilityFields = {
   supported_parameters: string[];
-  reasoning: boolean;
   capabilities: string[];
   /** Omitted when the catalog declares no context window. */
   context_window?: number;
 };
+
+/**
+ * Safe public reasoning projection for one model: the catalog-authored
+ * supported public efforts (enabled routes, oldest first) and the authored
+ * default effort. Both empty/null means the model has no authored reasoning
+ * routes (gateway passes reasoning forms through to CPA untouched). Never
+ * includes provider, upstream model, or route internals.
+ */
+export type PublicReasoningFields = {
+  supported_efforts: ReasoningEffort[];
+  default_effort: ReasoningEffort | null;
+};
+
+export async function publicReasoningFields(
+  db: Db | Tx,
+  modelId: string,
+): Promise<PublicReasoningFields> {
+  const routeRows = await db
+    .select({ public_effort: modelReasoningRoutes.public_effort })
+    .from(modelReasoningRoutes)
+    .where(and(eq(modelReasoningRoutes.model_id, modelId), eq(modelReasoningRoutes.enabled, true)))
+    .orderBy(modelReasoningRoutes.created_at, modelReasoningRoutes.id);
+  const modelRows = await db
+    .select({ default_effort: models.default_reasoning_effort })
+    .from(models)
+    .where(eq(models.id, modelId))
+    .limit(1);
+  return {
+    supported_efforts: routeRows.map((r) => r.public_effort),
+    default_effort: modelRows[0]?.default_effort ?? null,
+  };
+}
 
 /**
  * Stored capabilities may arrive as raw JSON text (driver decode of the jsonb
@@ -226,7 +257,6 @@ export function publicCapabilityFields(
       ...(caps.includes("tools") ? ["tools"] : []),
       ...(caps.includes("reasoning") ? ["reasoning"] : []),
     ],
-    reasoning: caps.includes("reasoning"),
     capabilities: caps,
   };
   if (model.context_window !== null) fields.context_window = model.context_window;

@@ -8,6 +8,7 @@ export {
   listAutoCandidates,
   listPublicModels,
   publicCapabilityFields,
+  publicReasoningFields,
   resolveModel,
   REASONING_EFFORTS,
   validateReasoningRequest,
@@ -21,4 +22,5 @@ export type {
   ReasoningRouteMapping,
   ReasoningValidation,
   PublicCapabilityFields,
+  PublicReasoningFields,
 } from "./catalog";

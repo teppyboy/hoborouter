@@ -10,6 +10,7 @@ import {
   listPublicModels,
   resolveModel,
   getCurrentPrice,
+  publicReasoningFields,
   type ModelRow,
   type PriceRow,
 } from "@hoborouter/catalog";
@@ -18,7 +19,7 @@ function parseCaps(v: unknown): string[] {
   return Array.isArray(v) && v.every((c) => typeof c === "string") ? (v as string[]) : [];
 }
 
-export const toCatalogItem = (model: ModelRow, price: PriceRow) => ({
+export const toCatalogItem = async (db: Db, model: ModelRow, price: PriceRow) => ({
   id: model.id,
   public_id: model.public_id,
   display_name: model.display_name,
@@ -26,6 +27,7 @@ export const toCatalogItem = (model: ModelRow, price: PriceRow) => ({
   description: model.description,
   capabilities: parseCaps(model.capabilities),
   context_window: model.context_window,
+  reasoning: await publicReasoningFields(db, model.id),
   price: {
     input_usd_micro_per_1m: price.input_usd_micro_per_1m,
     output_usd_micro_per_1m: price.output_usd_micro_per_1m,
@@ -51,7 +53,7 @@ export const catalogPublicRoutes = (db: Db, auth: BetterAuthInstance) =>
         if ("error" in gate) return gate.error;
         const rows = await listPublicModels(db);
         const data = await Promise.all(
-          rows.map(async (m) => toCatalogItem(m, (await getCurrentPrice(db, m.id))!)),
+          rows.map(async (m) => toCatalogItem(db, m, (await getCurrentPrice(db, m.id))!)),
         );
         return { data };
       },
@@ -73,6 +75,6 @@ export const catalogPublicRoutes = (db: Db, auth: BetterAuthInstance) =>
         const publicId = Object.values(params).join("/");
         const found = await resolveModel(db, publicId);
         if (!found) return jsonError(404, "NOT_FOUND", "Model not found");
-        return toCatalogItem(found.model, found.price);
+        return toCatalogItem(db, found.model, found.price);
       },
     );

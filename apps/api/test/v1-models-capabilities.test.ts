@@ -18,12 +18,19 @@ async function seedModel(
     publicId: string;
     caps: string[] | null;
     contextWindow: number | null;
+    defaultEffort?: string | null;
+    routeEffort?: string;
   },
 ) {
   const now = Date.now();
   await db.execute(
-    sql`INSERT INTO models (id, public_id, slug, display_name, provider, capabilities, context_window, enabled, published, created_at, updated_at) VALUES (${o.id}, ${o.publicId}, ${o.id + "-slug"}, ${o.id}, 'z-ai', ${o.caps === null ? null : JSON.stringify(o.caps)}, ${o.contextWindow}, true, true, ${now}, ${now})`,
+    sql`INSERT INTO models (id, public_id, slug, display_name, provider, capabilities, context_window, enabled, published, default_reasoning_effort, created_at, updated_at) VALUES (${o.id}, ${o.publicId}, ${o.id + "-slug"}, ${o.id}, 'z-ai', ${o.caps === null ? null : JSON.stringify(o.caps)}, ${o.contextWindow}, true, true, ${o.defaultEffort ?? null}, ${now}, ${now})`,
   );
+  if (o.routeEffort !== undefined) {
+    await db.execute(
+      sql`INSERT INTO model_reasoning_routes (id, model_id, public_effort, provider, upstream_model, upstream_effort, enabled, created_at, updated_at) VALUES (${o.id + "-route"}, ${o.id}, ${o.routeEffort}, 'cpa', 'secret-upstream/route-x', ${o.routeEffort}, true, ${now}, ${now})`,
+    );
+  }
   await db.execute(
     sql`INSERT INTO provider_model_mappings (id, model_id, provider, upstream_model, enabled, created_at, updated_at) VALUES (${o.id + "-map"}, ${o.id}, 'cpa', ${UPSTREAM}, true, ${now}, ${now})`,
   );
@@ -48,6 +55,8 @@ async function setup() {
     publicId: "test-full",
     caps: ["chat", "tools", "reasoning"],
     contextWindow: 128000,
+    defaultEffort: "low",
+    routeEffort: "high",
   });
   await seedModel(db, {
     id: "mdl-plain",
@@ -64,7 +73,7 @@ type ModelEntry = {
   id: string;
   object: string;
   supported_parameters?: string[];
-  reasoning?: boolean;
+  reasoning?: { supported_efforts: string[]; default_effort: string | null };
   capabilities?: string[];
   context_window?: number;
 };
@@ -87,13 +96,15 @@ describe("GET /v1/models capability projection", () => {
     expect(body.object).toBe("list");
     const full = body.data.find((m) => m.id === "test-full")!;
     expect(full.supported_parameters).toEqual(["stream", "tools", "reasoning"]);
-    expect(full.reasoning).toBe(true);
+    // Reasoning is catalog-authored metadata, not a bare boolean: only the
+    // authored supported efforts and default effort, never route internals.
+    expect(full.reasoning).toEqual({ supported_efforts: ["high"], default_effort: "low" });
     expect(full.capabilities).toEqual(["chat", "tools", "reasoning"]);
     expect(full.context_window).toBe(128000);
 
     const plain = body.data.find((m) => m.id === "test-plain")!;
     expect(plain.supported_parameters).toEqual(["stream"]);
-    expect(plain.reasoning).toBe(false);
+    expect(plain.reasoning).toEqual({ supported_efforts: [], default_effort: null });
     // Null stored capabilities are undeclared, projected as [] — never inferred.
     expect(plain.capabilities).toEqual([]);
     // Unknown context window: the key is absent, not fabricated.
@@ -107,7 +118,7 @@ describe("GET /v1/models capability projection", () => {
     const m = (await res.json()) as ModelEntry;
     expect(m.id).toBe("test-full");
     expect(m.supported_parameters).toEqual(["stream", "tools", "reasoning"]);
-    expect(m.reasoning).toBe(true);
+    expect(m.reasoning).toEqual({ supported_efforts: ["high"], default_effort: "low" });
     expect(m.context_window).toBe(128000);
     expect((await req(app, "/v1/models/test/missing", { headers: bearer })).status).toBe(404);
   });

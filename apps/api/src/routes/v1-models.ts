@@ -8,6 +8,7 @@ import { verifyApiKey } from "@hoborouter/keys";
 import {
   listPublicModels,
   publicCapabilityFields,
+  publicReasoningFields,
   resolveModel,
   type ModelRow,
 } from "@hoborouter/catalog";
@@ -20,15 +21,17 @@ async function keyAuth(db: Db, request: Request) {
 }
 
 // OpenAI list shape plus the safe capability projection: supported_parameters,
-// reasoning, capabilities, context_window. Fields derive from stored catalog
-// data only — no mapping/upstream/reasoning-route internals (see
-// publicCapabilityFields in @hoborouter/catalog).
-const toOpenAiModel = (m: ModelRow) => ({
+// reasoning metadata (supported_efforts + default_effort, not a bare boolean),
+// capabilities, context_window. Fields derive from stored catalog data only —
+// no mapping/upstream/reasoning-route internals (see publicCapabilityFields and
+// publicReasoningFields in @hoborouter/catalog).
+const toOpenAiModel = async (db: Db, m: ModelRow) => ({
   id: m.public_id,
   object: "model" as const,
   created: Math.floor(m.created_at / 1000),
   owned_by: m.provider,
   ...publicCapabilityFields(m),
+  reasoning: await publicReasoningFields(db, m.id),
 });
 
 export const v1ModelsRoutes = (db: Db) =>
@@ -38,7 +41,7 @@ export const v1ModelsRoutes = (db: Db) =>
       if (!key) return jsonError(401, "UNAUTHORIZED", "Valid Bearer sk-hbr- key required");
       return {
         object: "list",
-        data: (await listPublicModels(db)).map(toOpenAiModel),
+        data: await Promise.all((await listPublicModels(db)).map((m) => toOpenAiModel(db, m))),
       };
     })
     .get("/v1/models/:id", async ({ request, params }) => {
@@ -46,5 +49,5 @@ export const v1ModelsRoutes = (db: Db) =>
       if (!key) return jsonError(401, "UNAUTHORIZED", "Valid Bearer sk-hbr- key required");
       const r = await resolveModel(db, params.id);
       if (!r) return jsonError(404, "NOT_FOUND", "Model not found");
-      return toOpenAiModel(r.model);
+      return toOpenAiModel(db, r.model);
     });
