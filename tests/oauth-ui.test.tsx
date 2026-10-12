@@ -1,8 +1,11 @@
 // OAuth social sign-in UI contract (semantic render + interaction):
 // - Provider buttons appear only for providers the server's public-config
 //   socialProviders map flags enabled (absent map -> no buttons, email-only).
+// - The email/password form renders BEFORE the provider buttons, separated by
+//   an accessible divider; no divider and no buttons for email-only configs.
 // - Exact accessible labels: "Continue with Google/Discord/GitHub"; provider
-//   names are proper nouns and never translated.
+//   names are proper nouns and never translated; each button carries a
+//   decorative aria-hidden brand mark (no new icon dependency).
 // - A pending provider attempt locks every provider button (no duplicate
 //   clicks); an initiation failure shows the shared non-leaky recovery error
 //   ("Sign-in could not complete. Try again or use email.") — never the raw
@@ -185,12 +188,52 @@ function providerButtons(html: string): string[] {
   );
 }
 
+function providerButtonElements(container: HTMLElement): HTMLButtonElement[] {
+  return [...container.querySelectorAll("button")].filter((b) =>
+    (b.textContent ?? "").includes("Continue with "),
+  ) as HTMLButtonElement[];
+}
+
+function dividerOf(container: HTMLElement): HTMLElement | null {
+  return container.querySelector('[role="separator"]');
+}
+
 // --- SSR: availability flags -------------------------------------------------
 
 test("no socialProviders in config: no provider buttons on login or signup", () => {
   for (const page of ["login", "signup"] as const) {
     const c = renderPage(page, (qc) => qc.setQueryData(CONFIG_KEY, baseConfig));
     expect(providerButtons(c.innerHTML)).toEqual([]);
+    // Email-only page: no divider either — the form is the only path.
+    expect(dividerOf(c)).toBeNull();
+    unmountPage(c);
+  }
+});
+
+test("email/password form renders before the provider buttons, separated by an accessible divider", () => {
+  for (const page of ["login", "signup"] as const) {
+    const c = renderPage(page, (qc) =>
+      qc.setQueryData(CONFIG_KEY, {
+        ...baseConfig,
+        socialProviders: { google: true, discord: false, github: true },
+      }),
+    );
+    const emailInput = c.querySelector('input[type="email"]');
+    expect(emailInput).not.toBeNull();
+    const buttons = providerButtonElements(c);
+    expect(buttons.length).toBe(2);
+    // Document order: the form's email field comes before every provider button.
+    for (const btn of buttons) {
+      expect(emailInput!.compareDocumentPosition(btn) & documentRef.defaultView!.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    const divider = dividerOf(c);
+    expect(divider).not.toBeNull();
+    // The divider is announced (non-empty accessible label), sits after the
+    // form, and is hidden for email-only configs (asserted above).
+    expect(divider!.getAttribute("aria-label")).toBeTruthy();
+    const dividerBeforeButtons =
+      divider!.compareDocumentPosition(buttons[0]!) & documentRef.defaultView!.Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(dividerBeforeButtons).toBeTruthy();
     unmountPage(c);
   }
 });
@@ -224,6 +267,23 @@ test("config load error hides provider buttons and keeps email submit fail-close
   expect(providerButtons(c.innerHTML)).toEqual([]);
   expect(c.innerHTML).toContain("Could not load security options");
   expect(c.innerHTML).toMatch(/type="submit"[^>]*disabled/);
+  unmountPage(c);
+});
+
+test("provider buttons carry a decorative aria-hidden brand mark and their text label", () => {
+  const c = renderPage("login", (qc) =>
+    qc.setQueryData(CONFIG_KEY, {
+      ...baseConfig,
+      socialProviders: { google: true, discord: true, github: true },
+    }),
+  );
+  for (const btn of providerButtonElements(c)) {
+    const icon = btn.querySelector("svg");
+    expect(icon).not.toBeNull();
+    expect(icon!.getAttribute("aria-hidden")).toBe("true");
+    // The accessible name comes from the text label, not the image.
+    expect((btn.textContent ?? "").startsWith("Continue with ")).toBe(true);
+  }
   unmountPage(c);
 });
 

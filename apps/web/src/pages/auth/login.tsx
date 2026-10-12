@@ -87,17 +87,6 @@ export default function LoginPage() {
           {t("oauthFailed")}
         </p>
       )}
-      <SocialSignInButtons
-        providers={providers}
-        disabled={form.formState.isSubmitting}
-        onAttempt={() => setOauthError(false)}
-        onError={() => setOauthError(true)}
-      />
-      {providers.length > 0 && (
-        <p aria-hidden="true" className="mt-6 text-center text-xs text-muted-foreground">
-          {t("orContinueWithEmail")}
-        </p>
-      )}
       <Form {...form}>
         <form onSubmit={form.handleSubmit(handleValid)} className="mt-6 grid gap-4">
           {(["email", "password"] as const).map((name, i) => (
@@ -178,6 +167,19 @@ export default function LoginPage() {
           </p>
         </form>
       </Form>
+      {providers.length > 0 && (
+        <div className="mt-6 flex items-center gap-3" role="separator" aria-label={t("orDivider")}>
+          <span aria-hidden="true" className="h-px flex-1 bg-border" />
+          <span className="text-xs text-muted-foreground">{t("orDivider")}</span>
+          <span aria-hidden="true" className="h-px flex-1 bg-border" />
+        </div>
+      )}
+      <SocialSignInButtons
+        providers={providers}
+        disabled={form.formState.isSubmitting}
+        onAttempt={() => setOauthError(false)}
+        onError={() => setOauthError(true)}
+      />
     </AuthLayout>
   );
 }

@@ -30,12 +30,11 @@ export const authCopy = {
   retry: { en: "Retry", vi: "Thử lại" },
 
   // Social sign-in (provider availability comes from the server's public
-  // config; provider names are proper nouns and never translated).
+  // config; provider names are proper nouns and never translated). The
+  // email/password form renders FIRST; this label sits on the divider between
+  // it and the provider buttons below.
   continueWith: { en: "Continue with {provider}", vi: "Tiếp tục với {provider}" },
-  orContinueWithEmail: {
-    en: "or continue with email",
-    vi: "hoặc tiếp tục bằng email",
-  },
+  orDivider: { en: "or", vi: "hoặc" },
   oauthFailed: {
     en: "Sign-in could not complete. Try again or use email.",
     vi: "Đăng nhập không hoàn tất. Hãy thử lại hoặc dùng email.",
