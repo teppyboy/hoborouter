@@ -5,7 +5,12 @@
 import { Elysia } from "elysia";
 import type { Db } from "@hoborouter/db";
 import { verifyApiKey } from "@hoborouter/keys";
-import { listPublicModels, resolveModel } from "@hoborouter/catalog";
+import {
+  listPublicModels,
+  publicCapabilityFields,
+  resolveModel,
+  type ModelRow,
+} from "@hoborouter/catalog";
 import { jsonError } from "../authz";
 
 async function keyAuth(db: Db, request: Request) {
@@ -14,11 +19,16 @@ async function keyAuth(db: Db, request: Request) {
   return verifyApiKey(db, token); // null for missing/malformed/revoked keys
 }
 
-const toOpenAiModel = (m: { public_id: string; provider: string; created_at: number }) => ({
+// OpenAI list shape plus the safe capability projection: supported_parameters,
+// reasoning, capabilities, context_window. Fields derive from stored catalog
+// data only — no mapping/upstream/reasoning-route internals (see
+// publicCapabilityFields in @hoborouter/catalog).
+const toOpenAiModel = (m: ModelRow) => ({
   id: m.public_id,
   object: "model" as const,
   created: Math.floor(m.created_at / 1000),
   owned_by: m.provider,
+  ...publicCapabilityFields(m),
 });
 
 export const v1ModelsRoutes = (db: Db) =>

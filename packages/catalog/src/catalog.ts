@@ -183,6 +183,56 @@ export async function resolveModel(
   return { model, mapping, price };
 }
 
+/**
+ * Safe public /v1/models capability projection. Derived ONLY from stored
+ * catalog fields: capabilities verbatim (null = undeclared, projected as []),
+ * streaming (gateway truth for every model), and capability-gated request
+ * parameters. Never includes mappings, upstream model ids, or reasoning route
+ * metadata — private config must not reach public model responses.
+ */
+export type PublicCapabilityFields = {
+  supported_parameters: string[];
+  reasoning: boolean;
+  capabilities: string[];
+  /** Omitted when the catalog declares no context window. */
+  context_window?: number;
+};
+
+/**
+ * Stored capabilities may arrive as raw JSON text (driver decode of the jsonb
+ * column) or an already-parsed array; normalize to a plain string[]. Unknown
+ * shapes degrade to [] — nothing is ever inferred or renamed.
+ */
+export function parseStoredCapabilities(v: string[] | string | null): string[] {
+  if (Array.isArray(v)) return v.filter((c) => typeof c === "string");
+  if (typeof v === "string") {
+    try {
+      const parsed: unknown = JSON.parse(v);
+      return Array.isArray(parsed) ? parsed.filter((c) => typeof c === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+export function publicCapabilityFields(
+  model: Pick<ModelRow, "capabilities" | "context_window">,
+): PublicCapabilityFields {
+  const caps = parseStoredCapabilities(model.capabilities);
+  const fields: PublicCapabilityFields = {
+    supported_parameters: [
+      "stream",
+      ...(caps.includes("tools") ? ["tools"] : []),
+      ...(caps.includes("reasoning") ? ["reasoning"] : []),
+    ],
+    reasoning: caps.includes("reasoning"),
+    capabilities: caps,
+  };
+  if (model.context_window !== null) fields.context_window = model.context_window;
+  return fields;
+}
+
 /** Canonical public id clients send to trigger cheapest-first automatic routing. */
 export const AUTO_PUBLIC_ID = "hoborouter/auto";
 

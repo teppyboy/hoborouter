@@ -7,6 +7,7 @@ export {
   isAutoPublicId,
   listAutoCandidates,
   listPublicModels,
+  publicCapabilityFields,
   resolveModel,
   REASONING_EFFORTS,
   validateReasoningRequest,
@@ -19,4 +20,5 @@ export type {
   ReasoningMetadata,
   ReasoningRouteMapping,
   ReasoningValidation,
+  PublicCapabilityFields,
 } from "./catalog";
