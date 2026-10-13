@@ -8,6 +8,7 @@
   },
   "devDependencies": {
     "@types/jsdom": "30.0.0",
+    "bun-types": "^1.4.2",
     "jsdom": "30.1.1"
   }
 }
