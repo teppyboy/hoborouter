@@ -20,3 +20,6 @@ deploy/cpa/config.yaml
 deploy/cpa/auths/
 
 .dev/
+
+# Private coursework and reference documents must never be published.
+/knkn/
