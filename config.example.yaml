@@ -64,10 +64,10 @@ cpa:
 
 gateway:
   enabled: true # HBR_GATEWAY_ENABLED (default: enabled; env disables with "0")
-  # Optional. Omit = no Hoborouter-imposed output cap: requests without an
-  # explicit client limit stay unlimited upstream; wallet reservation then
-  # uses the model's full context window (larger worst-case holds; provider
-  # output limits still apply).
+  # Optional. Omit = no Hoborouter-imposed output default: the client limit
+  # (else the model context window) is clamped to what the wallet/key budget
+  # can actually afford, and that affordable cap is both reserved and
+  # forwarded upstream.
   # default_max_output_tokens: 4096  # HBR_DEFAULT_MAX_OUTPUT_TOKENS
   # upstream_headers_timeout_ms: 120000  # HBR_UPSTREAM_HEADERS_TIMEOUT_MS (upstream response-header timeout)
 

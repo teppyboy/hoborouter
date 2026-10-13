@@ -222,7 +222,7 @@ confirm the webhook credits the wallet.
 
 `HBR_GATEWAY_ENABLED` defaults to ON. Set `HBR_GATEWAY_ENABLED=0` in `deploy/.env` and `docker compose up -d` to disable paid traffic. Before relying on it in production:
 
-1. Billing audit: verify wallet debit, USD→VND rate (`HBR_USD_VND_RATE`), and the optional per-request max-output-token default (`HBR_DEFAULT_MAX_OUTPUT_TOKENS`, absent = unlimited, hold bounded by model context window) behave correctly against a staging instance.
+1. Billing audit: verify wallet debit, USD→VND rate (`HBR_USD_VND_RATE`), and the optional per-request max-output-token default (`HBR_DEFAULT_MAX_OUTPUT_TOKENS`; output limits are clamped to wallet/key-budget affordability and the affordable cap is reserved and forwarded) behave correctly against a staging instance.
 2. Confirm CPA credentials rotate cleanly and `CPA_BASE_URL` resolves from the `hoborouter` container.
 3. QA gates: key auth, insufficient-credit path, and audit log entries all verified end to end.
 
