@@ -1,0 +1,112 @@
+name: CI
+
+# Blocking push/PR validation, run before any release tag (release.yml stays
+# the release gate; see docs/research/2026-10-13-chat-first-application-audit.md
+# finding 18). All jobs must pass: type checks, lint/check, the unit/integration
+# gate on an isolated Postgres, and the UI/copy gate (blocking here, unlike the
+# cosmetic release-time job, so UI regressions cannot merge).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the web build embeds build metadata resolved from
+          # git, and tests/sqlite-to-pg.test.ts runs `git show 3af6325:...`.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - name: vp check (typecheck + lint gate)
+        run: bun run check
+      # Direct tsc binaries, no bunx (see AGENTS.md), as a second, independent
+      # gate so a vp-check regression cannot hide behind cached state.
+      - name: Typecheck API
+        run: node_modules/.bin/tsc -p apps/api/tsconfig.json --noEmit
+      - name: Typecheck web
+        run: cd apps/web && node_modules/.bin/tsc -b
+      - name: Build web production bundle
+        run: cd apps/web && bun run build
+
+  test:
+    runs-on: ubuntu-latest
+    # Service-container Postgres instead of a `docker run -p` host bind: the
+    # runner VM is ephemeral, so nothing can collide with a developer's
+    # hbr-test-pg on 55432 or a dev stack on 55433. The mapped 55432 only
+    # exists inside this job's VM.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 55432:5432
+        # TCP health check (matching scripts/wait-postgres.sh rationale: a
+        # socket-only pg_isready can pass against the init-phase server).
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      # 80-col lint: URL split, shell re-joins as one word.
+      HBR_TEST_DATABASE_URL: >-
+        postgres://postgres:postgres@127.0.0.1:55432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # tests/sqlite-to-pg.test.ts runs `git show 3af6325:...` and needs
+          # the legacy SQLite file from history; depth-1 checkout breaks it.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      # Cosmetic UI/copy tests (tests/ci-cosmetic-ui.txt) are excluded here and
+      # run blocking in the `ui` job below.
+      - name: Run unit/integration gate
+        id: tests
+        # continue-on-error keeps the job alive so the marker-gated retry below
+        # can decide; the job's final status is set by that step.
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          PORT=3998 bun run test:gate --timeout 20000 2>&1 | tee ci-test.log
+      # Retry once, only on the exact transient Postgres connection-loss marker
+      # (see release.yml: run 37590822468). Never retry assertion/timeout
+      # failures — deterministic regressions must fail fast.
+      - name: Retry only on transient Postgres connection loss
+        if: steps.tests.outcome == 'failure'
+        run: |
+          if ! grep -q 'PostgresError: Connection closed' ci-test.log; then
+            echo "No transient 'Connection closed' error in log; failing as-is."
+            exit 1
+          fi
+          echo 'Transient PostgresError: Connection closed'
+          echo 'detected; retrying once.'
+          sleep 5
+          set -o pipefail
+          if ! PORT=3998 bun test --parallel=4 \
+            --timeout 20000 2>&1 | tee ci-retry.log; then
+            echo 'Retry also failed; both attempts failed.'
+            exit 1
+          fi
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      # Blocking UI/copy gate (tests/ci-cosmetic-ui.txt list). Pure render,
+      # i18n and layout checks: no database, no service needed.
+      - name: Run blocking UI/copy gate
+        run: bun run test:ui --timeout 20000
