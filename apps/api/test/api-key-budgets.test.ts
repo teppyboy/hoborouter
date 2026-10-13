@@ -10,6 +10,7 @@ import { createTestDb } from "@hoborouter/db";
 import {
   budgetWindow,
   checkAndReserveKeyBudget,
+  getKeyBudgetRemainingVnd,
   releaseKeyBudgetHold,
   settleKeyBudgetHold,
   KeyBudgetError,
@@ -188,6 +189,47 @@ describe("checkAndReserveKeyBudget", () => {
 // --- Part C: billing integration (budget folds with reserve/settle) ---
 
 const ENDPOINT = "/v1/chat/completions" as const;
+
+describe("getKeyBudgetRemainingVnd", () => {
+  let db: Db;
+  let drop: () => Promise<void>;
+  beforeAll(async () => {
+    const t = await createTestDb();
+    db = t.db;
+    drop = t.drop;
+  });
+  afterAll(() => drop());
+
+  test("remaining = budget - in-window used; exhausted reports retryAfterMs to window end", async () => {
+    const { key } = await seedKey(db, { budgetVnd: 1000, period: "daily" });
+    await checkAndReserveKeyBudget(db, { apiKeyId: key, capVnd: 700, now: T0 });
+    await releaseKeyBudgetHold(db, { apiKeyId: key, periodStart: T0, holdVnd: 700 });
+    await db.execute(sql`UPDATE api_keys SET budget_used_vnd = 700 WHERE id = ${key}`);
+    const headroom = await getKeyBudgetRemainingVnd(db, key, T0);
+    expect(headroom).toMatchObject({ remaining: 300, expired: false, retryAfterMs: null });
+    await db.execute(sql`UPDATE api_keys SET budget_used_vnd = 1000 WHERE id = ${key}`);
+    const exhausted = await getKeyBudgetRemainingVnd(db, key, T0);
+    expect(exhausted.remaining).toBe(0);
+    expect(exhausted.retryAfterMs).toBe(budgetWindow("daily", T0).end - T0);
+  });
+
+  test("stale period_start (older window) counts as unused; no budget configured is null", async () => {
+    const stale = await seedKey(db, { budgetVnd: 500, period: "daily" });
+    await db.execute(
+      sql`UPDATE api_keys SET budget_used_vnd = 500, budget_period_start = ${T0 - 86_400_000} WHERE id = ${stale.key}`,
+    );
+    expect((await getKeyBudgetRemainingVnd(db, stale.key, T0)).remaining).toBe(500);
+    const unbudgeted = await seedKey(db, {});
+    const headroom = await getKeyBudgetRemainingVnd(db, unbudgeted.key, T0);
+    expect(headroom).toEqual({ remaining: null, expired: false, retryAfterMs: null });
+  });
+
+  test("expired key reports expired=true with null remaining (must not mask the 403)", async () => {
+    const { key } = await seedKey(db, { budgetVnd: 1000, period: "daily", expiresAt: T0 - 1 });
+    const headroom = await getKeyBudgetRemainingVnd(db, key, T0);
+    expect(headroom).toMatchObject({ remaining: null, expired: true, retryAfterMs: null });
+  });
+});
 
 describe("key budget x billing", () => {
   let db: Db;

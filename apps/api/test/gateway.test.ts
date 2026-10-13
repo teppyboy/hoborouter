@@ -6,7 +6,7 @@ import { Elysia } from "elysia";
 import { createTestDb } from "@hoborouter/db";
 import { hashApiKey } from "@hoborouter/keys";
 import { q, trackDrop, makeApp, waitFor } from "./helpers";
-import { estimateCapVnd } from "@hoborouter/wallet";
+import { estimateCapVnd, estimateAffordableOutputTokens } from "@hoborouter/wallet";
 import { gatewayRoutes } from "../src/routes/v1-gateway";
 
 const PLAINTEXT = "sk-hbr-gw-test-key";
@@ -358,7 +358,7 @@ describe("gateway core", () => {
   });
 });
 
-describe("output token cap (unlimited default)", () => {
+describe("output token cap (affordable clamp)", () => {
   const fx = 26000;
   const price = {
     inputUsdMicroPer1m: 1000000,
@@ -371,22 +371,22 @@ describe("output token cap (unlimited default)", () => {
   const expectedCap = (maxInputTokens: number, maxOutputTokens: number) =>
     estimateCapVnd({ maxInputTokens, maxOutputTokens }, price, fx, markupPpm);
 
-  test("no client max + no configured default -> upstream body has no output cap, hold bounded by full context", async () => {
+  test("no client max + no configured default -> affordable cap forwarded (context-bound with ample funds), hold = cap", async () => {
     startFakeCpa(() => chatJson());
     const body = { model: "openai/gw-test", messages: [{ role: "user", content: "hi" }] };
     const res = await gwr(CHAT_PATH, body);
     expect(res.status).toBe(200);
     const forwarded = JSON.parse(captured[0]!.body) as Record<string, unknown>;
-    expect(forwarded).not.toHaveProperty("max_tokens");
+    // Outbound limit IS the affordable hold; ample balance clamps to context.
+    expect(forwarded.max_tokens).toBe(ctx);
     expect(forwarded).not.toHaveProperty("max_completion_tokens");
     expect(forwarded).not.toHaveProperty("max_output_tokens");
-    // Finite conservative hold: full context window priced as output.
     const maxInput = Math.min(Math.ceil(Buffer.byteLength(JSON.stringify(body))), ctx);
     expect((await lastCharge()).cap_vnd).toBe(expectedCap(maxInput, ctx));
     expect(Number.isSafeInteger((await lastCharge()).cap_vnd)).toBe(true);
   });
 
-  test("responses: no client max + no default -> no max_output_tokens upstream, full-context hold", async () => {
+  test("responses: no client max + no default -> affordable max_output_tokens upstream, hold = cap", async () => {
     startFakeCpa(
       () =>
         new Response(
@@ -409,7 +409,7 @@ describe("output token cap (unlimited default)", () => {
     const res = await gwr(RESPONSES_PATH, body);
     expect(res.status).toBe(200);
     const forwarded = JSON.parse(captured[0]!.body) as Record<string, unknown>;
-    expect(forwarded).not.toHaveProperty("max_output_tokens");
+    expect(forwarded.max_output_tokens).toBe(ctx);
     expect(forwarded).not.toHaveProperty("max_tokens");
     const maxInput = Math.min(Math.ceil(Buffer.byteLength(JSON.stringify(body))), ctx);
     expect((await lastCharge()).cap_vnd).toBe(expectedCap(maxInput, ctx));
@@ -520,22 +520,46 @@ describe("output token cap (unlimited default)", () => {
     expect((JSON.parse(captured[0]!.body) as Record<string, unknown>).max_tokens).toBe(ctx);
   });
 
-  test("insufficient wallet for full-context hold -> 402, no dispatch, hold history unchanged", async () => {
+  test("small wallet: previously-402 full-context hold now dispatches an affordable positive cap", async () => {
     startFakeCpa(() => chatJson());
-    // Balance strictly below the full-context hold for this model.
+    // Balance far below the full-context hold for this model.
     await q(db, "UPDATE wallets SET balance = 100 WHERE id = 'wal-gw'");
-    const before = await requestCount();
+    const body = {
+      model: "openai/gw-test",
+      messages: [{ role: "user", content: "hi" }],
+    };
+    const raw = JSON.stringify(body);
+    const maxInput = Math.min(Math.ceil(Buffer.byteLength(raw)), ctx);
+    const affordable = estimateAffordableOutputTokens(
+      Math.max(maxInput, 1),
+      ctx,
+      100,
+      price,
+      fx,
+      markupPpm,
+    );
+    expect(affordable).toBeGreaterThan(0);
+    const res = await gwr(CHAT_PATH, body);
+    expect(res.status).toBe(200);
+    expect((JSON.parse(captured[0]!.body) as Record<string, unknown>).max_tokens).toBe(affordable);
+    expect((await lastCharge()).cap_vnd).toBe(expectedCap(maxInput, affordable));
+    expect((await lastCharge()).cap_vnd).toBeLessThanOrEqual(100);
+    expect((await walletBalance()).reserved).toBe(0); // settled, hold released
+  });
+
+  test("explicit too-large max_tokens clamps to context then to the affordable cap", async () => {
+    startFakeCpa(() => chatJson());
+    await q(db, "UPDATE wallets SET balance = 100 WHERE id = 'wal-gw'");
     const res = await gwr(CHAT_PATH, {
       model: "openai/gw-test",
       messages: [{ role: "user", content: "hi" }],
+      max_tokens: 500000,
     });
-    expect(res.status).toBe(402);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
-      "insufficient_balance",
-    );
-    expect(captured.length).toBe(0);
-    expect(await requestCount()).toBe(before);
-    expect((await walletBalance()).reserved).toBe(0);
+    expect(res.status).toBe(200);
+    const forwarded = (JSON.parse(captured[0]!.body) as Record<string, unknown>).max_tokens;
+    expect(forwarded).toBeGreaterThan(0);
+    expect(forwarded).toBeLessThan(500000);
+    expect((await lastCharge()).cap_vnd).toBeLessThanOrEqual(100);
   });
 });
 

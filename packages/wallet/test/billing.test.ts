@@ -7,6 +7,7 @@ import { createDb } from "@hoborouter/db";
 import type { Db } from "@hoborouter/db";
 import {
   estimateCapVnd,
+  estimateAffordableOutputTokens,
   reserveRequest,
   markDispatching,
   releaseRequest,
@@ -111,6 +112,72 @@ afterEach(async () => {
 });
 
 const ENDPOINT = "/v1/chat/completions" as const;
+
+describe("estimateAffordableOutputTokens", () => {
+  // $1/1M input, $2/1M output, fx 26000, markup 1e6 (1x): per-token output
+  // cost is 2e-6 * 26000 = 0.052 VND; 1000 input tokens cost 26 VND.
+  const price = {
+    inputUsdMicroPer1m: 1_000_000,
+    outputUsdMicroPer1m: 2_000_000,
+    cachedInputUsdMicroPer1m: 0,
+    reasoningUsdMicroPer1m: 0,
+  };
+
+  test("actual $19 = 494000 VND: exact boundary (n fits, n+1 does not)", () => {
+    const n = estimateAffordableOutputTokens(1000, 10_000_000, 494_000, price, 26000, 1_000_000);
+    expect(
+      estimateCapVnd({ maxInputTokens: 1000, maxOutputTokens: n }, price, 26000, 1_000_000),
+    ).toBeLessThanOrEqual(494_000);
+    expect(
+      estimateCapVnd({ maxInputTokens: 1000, maxOutputTokens: n + 1 }, price, 26000, 1_000_000),
+    ).toBeGreaterThan(494_000);
+  });
+
+  test("overflow probe does not throw: huge maxOutput with tiny cap returns a finite cap", () => {
+    const n = estimateAffordableOutputTokens(
+      1,
+      Number.MAX_SAFE_INTEGER,
+      1000,
+      price,
+      26000,
+      1_000_000,
+    );
+    expect(n).toBeGreaterThan(0);
+    expect(n).toBeLessThanOrEqual(1000 / 0.052 + 1);
+  });
+
+  test("zero when even one output token is unfundable", () => {
+    expect(estimateAffordableOutputTokens(1000, 1000, 0, price, 26000, 1_000_000)).toBe(0);
+    expect(estimateAffordableOutputTokens(1000, 1000, 26, price, 26000, 1_000_000)).toBe(0);
+  });
+
+  test("already-affordable client limit is preserved unchanged", () => {
+    expect(estimateAffordableOutputTokens(1000, 500, 1_000_000, price, 26000, 1_000_000)).toBe(500);
+  });
+
+  test("binary search exact for odd spans (lo + half-gap midpoint)", () => {
+    // Output cost 0.052 VND/token: only one exact boundary in a wide span.
+    for (const cap of [27, 51, 77, 103]) {
+      const n = estimateAffordableOutputTokens(1, 1000, cap, price, 26000, 1_000_000);
+      expect(
+        estimateCapVnd({ maxInputTokens: 1, maxOutputTokens: n }, price, 26000, 1_000_000),
+      ).toBeLessThanOrEqual(cap);
+      if (n < 1000)
+        expect(
+          estimateCapVnd({ maxInputTokens: 1, maxOutputTokens: n + 1 }, price, 26000, 1_000_000),
+        ).toBeGreaterThan(cap);
+    }
+  });
+
+  test("rejects invalid bounds with typed WalletError", () => {
+    expect(() => estimateAffordableOutputTokens(0, 10, 100, price, 26000, 1_000_000)).toThrow(
+      /inputTokens/,
+    );
+    expect(() => estimateAffordableOutputTokens(1, 10, -1, price, 26000, 1_000_000)).toThrow(
+      /availableCapVnd/,
+    );
+  });
+});
 
 describe("estimateCapVnd", () => {
   test("regression: 1_000_000 usd micro, fx 26000, markup 1e6 => 26000 VND", () => {

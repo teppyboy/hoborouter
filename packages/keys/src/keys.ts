@@ -224,6 +224,56 @@ export async function releaseKeyBudgetHold(
   });
 }
 
+export type KeyBudgetHeadroom = {
+  /** Remaining VND for the current window; null = no configured budget (unlimited). */
+  remaining: number | null;
+  /** True when past expires_at — admission (checkAndReserveKeyBudget) is the
+   * canonical expiry gate and must still produce its 403, so callers must not
+   * mask expiry with an earlier 402/429. */
+  expired: boolean;
+  /** ms until the budget window resets; null unless a configured budget is exhausted. */
+  retryAfterMs: number | null;
+};
+
+/**
+ * Read-only budget headroom for the key's CURRENT UTC window (no row lock,
+ * no writes): budget_vnd minus the in-window used counter (0 when the stored
+ * counter predates the window). remaining is null when the key has no budget
+ * configured (unlimited) — and also when the key is past expires_at, because
+ * a 0 there would mask expiry with an earlier insufficient-balance rejection.
+ * Advisory only: callers must re-run admission for the authoritative
+ * serialized check.
+ */
+export async function getKeyBudgetRemainingVnd(
+  db: Db | Tx,
+  apiKeyId: string,
+  now: number,
+): Promise<KeyBudgetHeadroom> {
+  const rows = await db
+    .select({
+      expires_at: apiKeys.expires_at,
+      budget_vnd: apiKeys.budget_vnd,
+      budget_period: apiKeys.budget_period,
+      budget_used_vnd: apiKeys.budget_used_vnd,
+      budget_period_start: apiKeys.budget_period_start,
+    })
+    .from(apiKeys)
+    .where(eq(apiKeys.id, apiKeyId))
+    .limit(1);
+  const key = rows[0];
+  const expired = key !== undefined && key.expires_at !== null && now >= key.expires_at;
+  if (!key || key.budget_vnd === null || key.budget_period === null || expired)
+    return { remaining: null, expired, retryAfterMs: null };
+  const window = budgetWindow(key.budget_period, now);
+  const used = key.budget_period_start === window.start ? key.budget_used_vnd : 0;
+  const remaining = Math.max(0, key.budget_vnd - used);
+  return {
+    remaining,
+    expired,
+    retryAfterMs: remaining === 0 ? Math.max(0, window.end - now) : null,
+  };
+}
+
 /**
  * Fold an admission hold back into the key's period budget INSIDE the
  * caller's transaction (billing settle/release in @hoborouter/wallet):

@@ -39,7 +39,7 @@ import {
   getSubscriptionWallet,
 } from "./subscription";
 
-type UnitPrice = {
+export type UnitPrice = {
   inputUsdMicroPer1m: number;
   outputUsdMicroPer1m: number;
   cachedInputUsdMicroPer1m: number;
@@ -108,6 +108,53 @@ export function estimateCapVnd(
   if (chargedVnd > maxStoredMoney)
     throw new WalletError("overflow", "estimated cap exceeds maxStoredMoney");
   return Number(chargedVnd);
+}
+
+/**
+ * Largest output token count in [1, maxOutputTokens] whose conservative hold
+ * (estimateCapVnd, max-rate fold) fits availableCapVnd together with
+ * inputTokens — or 0 when even one output token is unfundable. cap(n) is
+ * monotone nondecreasing in n, so a bounded binary search over integer money
+ * is exact. Pure: no DB, no side effects; overflow at a probe means that
+ * bound is simply unaffordable, not an error.
+ */
+export function estimateAffordableOutputTokens(
+  inputTokens: number,
+  maxOutputTokens: number,
+  availableCapVnd: number,
+  price: UnitPrice,
+  fxRate: number,
+  markupPpm: number,
+): number {
+  const input = requirePositiveSafeInteger("inputTokens", inputTokens);
+  const maxOutput = requirePositiveSafeInteger("maxOutputTokens", maxOutputTokens);
+  requireNonnegativeSafeInteger("availableCapVnd", availableCapVnd);
+  const fits = (outputTokens: number): boolean => {
+    try {
+      return (
+        estimateCapVnd(
+          { maxInputTokens: input, maxOutputTokens: outputTokens },
+          price,
+          fxRate,
+          markupPpm,
+        ) <= availableCapVnd
+      );
+    } catch (err) {
+      if (err instanceof WalletError && err.code === "overflow") return false;
+      throw err;
+    }
+  };
+  if (!fits(1)) return 0;
+  if (fits(maxOutput)) return maxOutput;
+  let lo = 1;
+  let hi = maxOutput;
+  while (hi - lo > 1) {
+    // lo + half-gap: cannot overflow even for spans near MAX_SAFE_INTEGER.
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (fits(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
 }
 
 export type ReserveRequestArgs = {

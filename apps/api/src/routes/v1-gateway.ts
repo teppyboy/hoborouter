@@ -11,6 +11,7 @@ import {
   isModelAllowed,
   checkAndReserveKeyBudget,
   releaseKeyBudgetHold,
+  getKeyBudgetRemainingVnd,
   KeyBudgetError,
 } from "@hoborouter/keys";
 import {
@@ -23,10 +24,12 @@ import {
 import { resolveAutoModel } from "../auto-resolve";
 import {
   estimateCapVnd,
+  estimateAffordableOutputTokens,
   reserveRequest,
   markDispatching,
   releaseRequest,
   settleRequest,
+  utcDay,
   WalletError,
 } from "@hoborouter/wallet";
 import { injectChatUsageOption, createUsageTap, resolveBillableUsage } from "@hoborouter/usage";
@@ -36,9 +39,11 @@ import {
   apiKeys,
   requests,
   instanceSettings,
+  subscriptionDailyGrants,
   subscriptionPlans,
   subscriptions,
   throughputAllowances,
+  wallets,
 } from "@hoborouter/db";
 import { jsonError } from "../authz";
 import {
@@ -624,45 +629,23 @@ function gatewayHandler(
     ) {
       return routeError(400, "INVALID", "max output tokens must be a positive integer");
     }
-    // Output cap: absent client limit + absent configured default leaves the
-    // forwarded request UNLIMITED (no Hoborouter-imposed 4096). Billing still
-    // holds a finite conservative cap (full context window priced as output).
-    // A client limit above the model context window clamps to the context
-    // bound (never the configured default), so currently-valid clients stay
-    // valid instead of being rejected.
+    // Output candidate bound: client limit wins (clamped to the context
+    // bound), else the configured default, else the context window itself.
     let maxOutput = requestedMax;
     if (maxOutput !== undefined && maxOutput > contextWindow) maxOutput = contextWindow;
     const configuredMax = intEnv("HBR_DEFAULT_MAX_OUTPUT_TOKENS", 0, env) || undefined;
-    // Effective outbound cap: client limit wins, else configured default,
-    // else UNLIMITED (no Hoborouter-imposed cap — provider's own limits apply).
-    const effectiveMax =
-      maxOutput ??
-      (configuredMax !== undefined ? Math.min(configuredMax, contextWindow) : undefined);
-    // Reservation bound is always finite positive: effective cap, or the full
-    // context window (output cannot exceed context; conservative hold).
-    const holdOutput = effectiveMax ?? contextWindow;
+    const candidateMax = Math.min(maxOutput ?? configuredMax ?? contextWindow, contextWindow);
     // 1 token per byte is a safe upper bound for any tokenizer.
     const maxInput = Math.min(Math.ceil(Buffer.byteLength(raw)), contextWindow);
     const fxRate = intEnv("HBR_USD_VND_RATE", 26000, env);
     const accessKey = env.CPA_ACCESS_KEY;
     if (!accessKey) return routeError(503, "cpa_unconfigured", "CPA access key not configured");
-    let capVnd: number;
-    try {
-      capVnd = estimateCapVnd(
-        { maxInputTokens: Math.max(maxInput, 1), maxOutputTokens: Math.max(holdOutput, 1) },
-        {
-          inputUsdMicroPer1m: price.input_usd_micro_per_1m,
-          outputUsdMicroPer1m: price.output_usd_micro_per_1m,
-          cachedInputUsdMicroPer1m: price.cached_input_usd_micro_per_1m,
-          reasoningUsdMicroPer1m: price.reasoning_usd_micro_per_1m,
-        },
-        fxRate,
-        price.markup_ppm,
-      );
-    } catch (err) {
-      if (err instanceof WalletError) return routeError(400, "INVALID", err.message);
-      throw err;
-    }
+    const unitPrice = {
+      inputUsdMicroPer1m: price.input_usd_micro_per_1m,
+      outputUsdMicroPer1m: price.output_usd_micro_per_1m,
+      cachedInputUsdMicroPer1m: price.cached_input_usd_micro_per_1m,
+      reasoningUsdMicroPer1m: price.reasoning_usd_micro_per_1m,
+    };
 
     // 5. Funding selection (O3) + reserve -> markDispatching (committed) -> exactly one fetch.
     // Subscription wallet only when the workspace has an active unexpired
@@ -705,7 +688,11 @@ function gatewayHandler(
         : null;
 
     const subPlans = await db
-      .select({ rate: subscriptionPlans.rate_limit_per_minute })
+      .select({
+        subId: subscriptions.id,
+        rate: subscriptionPlans.rate_limit_per_minute,
+        dailyGrantVnd: subscriptionPlans.daily_grant_vnd,
+      })
       .from(subscriptions)
       .innerJoin(subscriptionPlans, eq(subscriptions.plan_id, subscriptionPlans.id))
       .where(
@@ -744,6 +731,183 @@ function gatewayHandler(
       return res;
     }
 
+    // Affordable hold: derived from the wallets the reserve selector can
+    // actually choose — topup always; subscription only when an active
+    // unexpired subscription exists AND the limiter says underLimit.
+    // reserveRequest re-checks both under the row lock; the wallet CAS
+    // remains the overdraft gate. MAX of eligible wallets, never the sum:
+    // one request is funded by exactly one wallet, and a cap derived from the
+    // max is always covered by whichever single wallet the selector picks
+    // (subscription iff the whole cap fits it, else topup).
+    const walletRows = await db
+      .select({ kind: wallets.kind, balance: wallets.balance, reserved: wallets.reserved })
+      .from(wallets)
+      .where(eq(wallets.workspace_id, key.workspace_id));
+    const availOf = (w: { balance: number; reserved: number } | undefined) =>
+      w ? Math.max(0, w.balance - w.reserved) : 0;
+    let subAvailable = 0;
+    const subPlan = subPlans[0];
+    if (subPlan && limiter?.underLimit) {
+      subAvailable = availOf(walletRows.find((w) => w.kind === "subscription"));
+      // Pending daily grant: reserve applies it lazily inside the funding
+      // txn; counting it in the estimate is safe — the grant's unique-day
+      // gate and the wallet CAS arbitrate, and a raced grant can only cause
+      // a CAS reject, never an overdraft. No catch-up grant is invented here.
+      if (subPlan.dailyGrantVnd > 0) {
+        const granted = await db
+          .select({ x: subscriptionDailyGrants.subscription_id })
+          .from(subscriptionDailyGrants)
+          .where(
+            and(
+              eq(subscriptionDailyGrants.workspace_id, key.workspace_id),
+              eq(subscriptionDailyGrants.subscription_id, subPlan.subId),
+              eq(subscriptionDailyGrants.grant_day, utcDay(limNow)),
+            ),
+          )
+          .limit(1);
+        if (granted.length === 0) subAvailable += subPlan.dailyGrantVnd;
+      }
+    }
+    const walletAvailable = Math.max(
+      availOf(walletRows.find((w) => w.kind === "topup")),
+      subAvailable,
+    );
+    // Key-period budget headroom (read-only; admission below re-checks it
+    // under the api_keys row lock — the authoritative serialized gate).
+    const keyBudget = await getKeyBudgetRemainingVnd(db, key.api_key_id, Date.now());
+    const availableCapVnd =
+      keyBudget.remaining === null
+        ? walletAvailable
+        : Math.min(walletAvailable, keyBudget.remaining);
+
+    // Nothing has been written yet in this phase, so any exit here must hand
+    // the tentatively-counted limiter slots back first.
+    const returnAdmissionSlots = () => {
+      if (limiter?.underLimit) uncountSubscriptionRateLimit(key.workspace_id, limiter.windowStart);
+      if (allowanceCheck?.underLimit)
+        uncountThroughputAllowanceLimit(key.workspace_id, allowanceCheck.windowStart);
+    };
+
+    // Affordable output cap: the hold AND the forwarded limit are bounded by
+    // what the eligible funding source can actually afford, not by the
+    // context window. Zero means even input + one output token is unfundable
+    // — reject BEFORE reservation (never a synthetic one-token clamp).
+    let effectiveMax: number;
+    try {
+      effectiveMax = estimateAffordableOutputTokens(
+        Math.max(maxInput, 1),
+        candidateMax,
+        availableCapVnd,
+        unitPrice,
+        fxRate,
+        price.markup_ppm,
+      );
+    } catch (err) {
+      // Bad client/env numbers surface as typed WalletError, not a 500.
+      if (err instanceof WalletError) {
+        returnAdmissionSlots();
+        return routeError(400, "INVALID", err.message);
+      }
+      throw err;
+    }
+    // Precedence: an expired key keeps admission's canonical 403 before any
+    // affordable-cap rejection, thinking-budget instruction, or reservation
+    // (a zero wallet or thinking conflict must not mask expiry).
+    if (keyBudget.expired) {
+      returnAdmissionSlots();
+      return routeError(403, "key_expired", "API key expired");
+    }
+    if (effectiveMax === 0) {
+      returnAdmissionSlots();
+      if (limiter && !limiter.underLimit) {
+        const res = rateLimited(
+          limiter.retryAfterSec,
+          "subscription_rate_limited",
+          "Subscription rate limit exceeded. Retry after the window ends or use top-up credit.",
+        );
+        setRateLimitHeaders(res, limit!, 0, limiter.windowStart, limNow);
+        return res;
+      }
+      // Precedence: an expired key keeps admission's canonical 403 even when
+      // nothing is fundable (a zero wallet must not mask expiry with a 402).
+      if (keyBudget.expired) return routeError(403, "key_expired", "API key expired");
+      // An exhausted key-period budget is retryable (429), not a wallet 402.
+      if (keyBudget.remaining === 0) {
+        return rateLimited(
+          Math.max(1, Math.ceil((keyBudget.retryAfterMs ?? 60_000) / 1000)),
+          "key_budget_exceeded",
+          "API key budget for the current period is exhausted. Retry after the period resets.",
+        );
+      }
+      // Partial positive key budget below the minimum hold: the key is the
+      // binding constraint when the wallet alone could still fund the minimum
+      // -> key 429 (retry after window reset), not a generic wallet 402.
+      if (keyBudget.remaining !== null) {
+        try {
+          if (
+            estimateCapVnd(
+              { maxInputTokens: Math.max(maxInput, 1), maxOutputTokens: 1 },
+              unitPrice,
+              fxRate,
+              price.markup_ppm,
+            ) <= walletAvailable
+          )
+            return rateLimited(
+              Math.max(1, Math.ceil((keyBudget.retryAfterMs ?? 60_000) / 1000)),
+              "key_budget_exceeded",
+              "API key budget for the current period is exhausted. Retry after the period resets.",
+            );
+        } catch {
+          // Overflow here cannot happen for a 1-token probe; fall through.
+        }
+      }
+      const res = routeError(402, "insufficient_balance", "Insufficient wallet balance");
+      if (limiter) setRateLimitHeaders(res, limit!, limiter.remaining, limiter.windowStart, limNow);
+      else if (allowanceCheck && allowanceLimit !== null)
+        setRateLimitHeaders(
+          res,
+          allowanceLimit,
+          allowanceCheck.remaining,
+          allowanceCheck.windowStart,
+          limNow,
+        );
+      return res;
+    }
+    // Native Anthropic thinking requires budget_tokens < max_tokens. When the
+    // affordable clamp pushes max_tokens below the client's thinking budget,
+    // reject with instruction instead of sending a body the provider rejects
+    // or silently altering the client's thinking configuration.
+    if (protocol === "messages") {
+      const thinking = body.thinking as { type?: unknown; budget_tokens?: unknown } | undefined;
+      if (
+        thinking?.type === "enabled" &&
+        typeof thinking.budget_tokens === "number" &&
+        thinking.budget_tokens >= effectiveMax
+      ) {
+        returnAdmissionSlots();
+        return routeError(
+          400,
+          "INVALID",
+          `thinking.budget_tokens (${thinking.budget_tokens}) must be less than max_tokens; the output limit was clamped to ${effectiveMax} by the available balance. Lower thinking.budget_tokens or add funds.`,
+        );
+      }
+    }
+    let capVnd: number;
+    try {
+      capVnd = estimateCapVnd(
+        { maxInputTokens: Math.max(maxInput, 1), maxOutputTokens: effectiveMax },
+        unitPrice,
+        fxRate,
+        price.markup_ppm,
+      );
+    } catch (err) {
+      if (err instanceof WalletError) {
+        returnAdmissionSlots();
+        return routeError(400, "INVALID", err.message);
+      }
+      throw err;
+    }
+
     const requestId = crypto.randomUUID();
     const stream = body.stream === true;
     // Key-policy admission BEFORE wallet reservation: expiry + per-period VND
@@ -760,10 +924,13 @@ function gatewayHandler(
       }));
     } catch (err) {
       if (err instanceof KeyBudgetError) {
+        // Pre-reservation rejection: hand the tentative limiter slots back.
         if (err.code === "expired") {
+          returnAdmissionSlots();
           return routeError(403, "key_expired", "API key expired");
         }
         if (err.code === "budget_exceeded") {
+          returnAdmissionSlots();
           return rateLimited(
             Math.max(1, Math.ceil((err.retryAfterMs ?? 60_000) / 1000)),
             "key_budget_exceeded",
@@ -873,10 +1040,10 @@ function gatewayHandler(
     if (protocol === "chat") {
       delete outbound.max_completion_tokens;
       delete outbound.max_output_tokens;
-      // With no client limit and no configured default the request stays
-      // unlimited upstream: the provider's own limits apply, not a Hoborouter
-      // cap. Client-supplied limits keep the existing alias normalization.
-      if (effectiveMax !== undefined) outbound.max_tokens = effectiveMax;
+      // The outbound limit IS the affordable hold: the provider enforces it,
+      // so the stream stops naturally at what was reserved (no overdraft).
+      // Client-supplied limits keep the existing alias normalization.
+      outbound.max_tokens = effectiveMax;
       if (stream)
         outbound.stream_options = (
           injectChatUsageOption(outbound) as Record<string, unknown>
@@ -884,13 +1051,13 @@ function gatewayHandler(
     } else if (protocol === "responses") {
       delete outbound.max_tokens;
       delete outbound.max_completion_tokens;
-      if (effectiveMax !== undefined) outbound.max_output_tokens = effectiveMax;
+      outbound.max_output_tokens = effectiveMax;
     } else {
       // messages: Anthropic-native body passes through verbatim (system,
       // tools, tool_choice stay untouched) — CPA translates upstream. Only
-      // the model is swapped and max_tokens clamped to the context window
+      // the model is swapped and max_tokens clamped to the affordable cap
       // like chat. No alias deletion or stream_options injection.
-      if (effectiveMax !== undefined) outbound.max_tokens = effectiveMax;
+      outbound.max_tokens = effectiveMax;
     }
 
     const controller = new AbortController();
