@@ -65,16 +65,26 @@ export function useChatDraftSync(input: {
   React.useEffect(() => {
     const prevKey = hydratedKeyRef.current;
     const prevScope = currentScopeRef.current;
-    if (prevKey && prevKey !== scopeKey) {
+    // Identity change (user/workspace): flush NOTHING and hydrate NOTHING —
+    // text typed at switch time belongs to the view the user is looking at
+    // (the page preserves it), and writing it under the OLD identity's key
+    // would leak it across workspaces. Only a chat switch within one
+    // identity lands the old draft and hydrates the new one.
+    const identityChanged =
+      prevScope !== null &&
+      scope !== null &&
+      (prevScope.userId !== scope.userId || prevScope.workspaceId !== scope.workspaceId);
+    if (prevKey && prevKey !== scopeKey && scope !== null && !identityChanged) {
       // Explicit context switch: land the previous scope's draft before the
       // new scope hydrates. getText still reflects the previous scope's text
-      // (the new draft has not been applied yet).
+      // (the new draft has not been applied yet). A null NEW scope is an
+      // identity teardown — never flush into the old identity's key.
       cancelTimer();
       if (prevScope) writeChatDraft(prevScope, getTextRef.current());
     }
     currentScopeRef.current = scope;
     hydratedKeyRef.current = scopeKey;
-    if (scope) {
+    if (scope && !identityChanged) {
       const stored = readChatDraft(scope);
       pendingEchoRef.current = stored;
       setTextRef.current(stored);

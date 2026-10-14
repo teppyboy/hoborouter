@@ -45,7 +45,7 @@ const scopeC1 = { userId: "u1", workspaceId: "w1", chatId: "c1" };
 const scopeOtherUser = { userId: "u2", workspaceId: "w1", chatId: null };
 
 test("draft round-trips under its scope; the unsaved view uses the `new` key", () => {
-  expect(chatDraftKey(scope)).toBe("chat.draft.u1.w1.new");
+  expect(chatDraftKey(scope)).toBe("hbr-chat-draft:u1.w1.new");
   writeChatDraft(scope, "hello draft");
   expect(readChatDraft(scope)).toBe("hello draft");
 });
@@ -78,7 +78,7 @@ test("clearChatDraft erases exactly its scope", () => {
   expect(readChatDraft(scopeC1)).toBe("conversation draft");
 });
 
-test("clearChatDrafts sweeps the chat.draft prefix only, optionally per user", () => {
+test("clearChatDrafts sweeps the hbr-chat-draft: prefix only, optionally per user", () => {
   writeChatDraft(scope, "u1 new");
   writeChatDraft(scopeC1, "u1 c1");
   writeChatDraft(scopeOtherUser, "u2 new");

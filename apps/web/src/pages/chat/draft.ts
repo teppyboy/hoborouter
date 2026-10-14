@@ -3,7 +3,9 @@
 // only — the contract forbids binary data in storage. The 64 KiB UTF-8 byte
 // cap matches the contract; an oversized draft simply stays memory-only.
 
-const DRAFT_PREFIX = "chat.draft.";
+const DRAFT_PREFIX = "hbr-chat-draft:";
+// Literal copy of lib/logout.ts CHAT_DRAFT_STORAGE_PREFIX — the canonical
+// logout contract key. Kept as a literal (no import) to avoid a cycle.
 const encoder = new TextEncoder();
 
 /** Largest persisted draft, measured in UTF-8 bytes (not UTF-16 length). */
@@ -64,7 +66,7 @@ export function clearChatDraft(scope: ChatDraftScope): void {
 }
 
 /** Prefix sweep for identity teardown (logout): clears every chat draft
- *  under the chat.draft prefix, optionally narrowed to one user/workspace.
+ *  under the hbr-chat-draft: prefix, optionally narrowed to one user/workspace.
  *  Never touches unrelated keys sharing the storage. */
 export function clearChatDrafts(filter?: { userId?: string; workspaceId?: string }): void {
   const store = sessionStore();

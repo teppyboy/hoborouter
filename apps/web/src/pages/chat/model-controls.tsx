@@ -1,6 +1,5 @@
 import * as React from "react";
 import { ChevronsUpDown, Search } from "lucide-react";
-import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import {
   Select,
@@ -36,6 +35,8 @@ export interface ModelControlsProps {
   effort: string;
   onEffortChange(effort: string): void;
   disabled?: boolean;
+  /** DOM id for the pill trigger (E2E/label anchors, e.g. "chat-model"). */
+  id?: string;
 }
 
 /** Model pill with a searchable picker plus the effort selector, as
@@ -44,7 +45,8 @@ export interface ModelControlsProps {
  *  selector offers only the selected model's authored supported_efforts
  *  (never the full ladder, never inferred options). */
 export function ModelControls(props: ModelControlsProps): React.ReactElement {
-  const { models, loading, error, value, onModelChange, effort, onEffortChange, disabled } = props;
+  const { models, loading, error, value, onModelChange, effort, onEffortChange, disabled, id } =
+    props;
   const t = useComposerT();
   const locale = useLocaleStore((s) => s.locale);
   const [open, setOpen] = React.useState(false);
@@ -92,6 +94,7 @@ export function ModelControls(props: ModelControlsProps): React.ReactElement {
         <button
           ref={pillRef}
           type="button"
+          id={id}
           disabled={disabled || models.length === 0}
           onClick={() => {
             setQuery("");

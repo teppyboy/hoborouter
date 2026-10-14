@@ -38,7 +38,11 @@ function respond(status: number, body: unknown): Response {
   });
 }
 
-function snapshot(over: Partial<ConversationSnapshot> = {}): ConversationSnapshot {
+// Wire-level invalid payloads are the point of several rejection fixtures
+// (system role, unknown fields, malformed refs), so the patch is deliberately
+// loose and the assembled object is cast back to the client-facing type.
+type SnapshotPatch = { [K in keyof ConversationSnapshot]?: unknown };
+function snapshot(over: SnapshotPatch = {}): ConversationSnapshot {
   return {
     id: "chat-1",
     title: "New chat",
@@ -49,7 +53,7 @@ function snapshot(over: Partial<ConversationSnapshot> = {}): ConversationSnapsho
     updated_at: 1700000000000,
     archived_at: null,
     ...over,
-  };
+  } as ConversationSnapshot;
 }
 
 beforeEach(() => {

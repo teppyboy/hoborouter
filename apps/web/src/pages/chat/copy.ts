@@ -222,6 +222,41 @@ export const chatCopy = {
     vi: "Xem trước {name}",
   },
   replyComplete: { en: "Reply complete.", vi: "Đã trả lời xong." },
+  errRateLimited: {
+    en: "Too many requests — try again in {seconds}s.",
+    vi: "Quá nhiều yêu cầu — thử lại sau {seconds} giây.",
+  },
+  errRateLimitedGeneric: {
+    en: "Too many requests — try again shortly.",
+    vi: "Quá nhiều yêu cầu — thử lại sau ít phút.",
+  },
+  topUp: { en: "Top up wallet", vi: "Nạp tiền ví" },
+  keyForbiddenHelp: {
+    en: "Members without owner or admin role cannot create a chat key in this workspace. Ask a workspace admin for help.",
+    vi: "Thành viên (không phải chủ sở hữu hoặc quản trị viên) không thể tạo chat key trong workspace này. Hãy nhờ quản trị viên workspace hỗ trợ.",
+  },
+  attachmentRetention: {
+    en: "Attachments are sent only with this message — they are not saved to your chat history and are lost after reload or New chat.",
+    vi: "Tệp đính kèm chỉ được gửi cùng tin nhắn này — không lưu vào lịch sử hội thoại và sẽ mất khi tải lại hoặc tạo hội thoại mới.",
+  },
+  memberChatBlocked: {
+    en: "Chat is not enabled for this workspace. Ask a workspace admin to enable member chat.",
+    vi: "Chat chưa được bật cho workspace này. Hãy nhờ quản trị viên workspace bật chat cho thành viên.",
+  },
+  memberLimitReached: {
+    en: "You have used today's member chat limit. It resets {time}.",
+    vi: "Bạn đã dùng hết hạn mức chat hôm nay. Hạn mức sẽ đặt lại lúc {time}.",
+  },
+  forkFailed: {
+    en: "Could not fork the conversation.",
+    vi: "Không thể tách hội thoại.",
+  },
+  forkUnsaved: {
+    en: "Save the conversation before forking or editing a turn.",
+    vi: "Hãy lưu hội thoại trước khi tách hoặc sửa một lượt.",
+  },
+  chargedLast: { en: "Last reply cost: {cost}", vi: "Câu trả lời cuối tiêu tốn: {cost}" },
+  usageTokens: { en: "{tokens} tokens", vi: "{tokens} token" },
 } as const;
 
 /** Structured rejection code -> localized copy key (see AttachError in

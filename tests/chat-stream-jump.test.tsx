@@ -453,32 +453,30 @@ test("while streaming and reading older messages, new chunks never pin over the 
   await flush();
 });
 
-test("model picker shows server-published capabilities inline; the trigger shows the name only", async () => {
+test("model pill lists published models in a searchable panel; the trigger shows the name only", async () => {
   await mountPage();
   const trigger = document.querySelector<HTMLButtonElement>("#chat-model")!;
-  const WinCtors = window as unknown as {
-    PointerEvent: new (
-      t: string,
-      i?: { bubbles?: boolean; button?: number; pointerId?: number; pointerType?: string },
-    ) => Event;
-  };
-  trigger.dispatchEvent(
-    new WinCtors.PointerEvent("pointerdown", {
-      bubbles: true,
-      button: 0,
-      pointerId: 1,
-      pointerType: "mouse",
-    }),
-  );
+  trigger.click();
   await waitFor(
     () => document.querySelector('[role="option"]') !== null,
-    "select options rendered",
+    "picker options rendered",
   );
   const option = document.querySelector('[role="option"]')!;
-  // Capability metadata renders via the shared label helper: the known key
-  // "vision" gets its localized EN label; unknown keys would stay verbatim.
+  // Options list the server-published display name — never an upstream ID.
   expect(option.textContent).toContain("Test Model");
-  expect(option.textContent).toContain("Vision");
-  // The trigger reflects the selected NAME, never the capability hint.
+  expect(option.textContent).not.toContain("test/model");
+  // The trigger reflects the selected NAME (capability hints stay in the
+  // models catalog, not the pill).
   expect(trigger.textContent).not.toContain("Vision");
+  // Search narrows the published list; a non-match shows the empty notice.
+  const search = document.querySelector<HTMLInputElement>("[role='searchbox']")!;
+  Object.getOwnPropertyDescriptor(Object.getPrototypeOf(search), "value")!.set!.call(
+    search,
+    "zzz-no-match",
+  );
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  await waitFor(
+    () => (document.body.textContent ?? "").includes("No models match"),
+    "empty search notice",
+  );
 }, 8000);

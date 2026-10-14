@@ -1,13 +1,29 @@
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { History, PanelLeftClose, PanelLeftOpen, Plus } from "lucide-react";
-import { createSseParser, type StreamDelta } from "./sse";
+import { createSseParser, type StreamDelta, type StreamUsage } from "./sse";
 import { Transcript, type TranscriptHandle } from "./transcript";
+import { ModelControls } from "./model-controls";
+import { useChatDraftSync } from "./use-chat-drafts";
+import {
+  recallChatEffort,
+  recallChatModel,
+  rememberChatEffort,
+  rememberChatModel,
+  validModelChoice,
+} from "./preferences";
+import { writeChatDraft } from "./draft";
+import { fetchChatReceipt, chargedVndLabel } from "./receipts";
+import type { MemberChatAccess } from "@hoborouter/shared";
+import { api } from "../../lib/api";
+import { formatDate } from "../../lib/format";
 import { ConversationList, conversationListKey } from "./conversation-list";
-import { buildPersistMessages, findRetryTurn, isEmptyAssistant, type TurnMessage } from "./turn";
+import { buildPersistMessages, createRenderCoalescer, findRetryTurn, isEmptyAssistant, type ChatAttachmentRef, type TurnMessage } from "./turn";
 import {
   ConversationError,
   createConversation,
+  forkConversation,
   getConversation,
   saveConversation,
 } from "./conversations";
@@ -15,22 +31,15 @@ import { ErrorState } from "../../components/page";
 import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../../components/ui/select";
-import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../../components/ui/sheet";
-import { useSession } from "../../lib/auth";
-import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
-import { useCatalogModels } from "../models/data";
-import {
   ManagedKeyError,
   clearManagedChatKey,
   useManagedChatKey,
   type ManagedKeyPurpose,
 } from "./managed-key";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../../components/ui/sheet";
+import { useSession } from "../../lib/auth";
+import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
+import { useCatalogModels } from "../models/data";
 import {
   buildUserContent,
   utf8ByteLength,
@@ -40,16 +49,14 @@ import {
 } from "./attachments";
 import { Composer, useComposerDraft } from "./composer";
 import { useLocaleEntry, type LocaleEntry } from "../../lib/i18n/t";
-import { useLocaleStore } from "../../lib/i18n/locale";
-import { useCapabilityLabel } from "../../lib/capabilities";
 import { PROMPT_CHIPS, readableError, useChatT } from "./copy";
 import {
   buildChatRequestBody,
-  EFFORT_LABELS,
   EFFORT_UNSET,
   supportedEffortOptions,
   type ReasoningEffort,
 } from "./reasoning";
+import { useComposerT } from "./composer-copy";
 // Chat page copy lives in ./copy.ts (see lib/i18n/common.ts). Model
 // names, message content and API errors stay verbatim — only chrome, notices
 // and controls are translated.
@@ -103,8 +110,7 @@ function PromptChip({ chip, onPick }: { chip: LocaleEntry; onPick: (text: string
 
 export function ChatPage() {
   const t = useChatT();
-  const locale = useLocaleStore((s) => s.locale);
-  const capabilityLabelFor = useCapabilityLabel();
+  const composerT = useComposerT();
   const { data: session } = useSession();
   const userId = session?.user?.id ?? null;
   const workspaceId = useCurrentWorkspaceId();
@@ -159,6 +165,12 @@ export function ChatPage() {
   const [lastTurnAttached, setLastTurnAttached] = React.useState(false);
   const [streaming, setStreaming] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // 402 wallet gate: the wallet alert carries a top-up link (SPA route),
+  // cleared with every error so the link never outlives its cause.
+  const [walletGate, setWalletGate] = React.useState(false);
+  // Per-turn billing receipt + validated SSE usage for the last reply.
+  const [receiptLine, setReceiptLine] = React.useState<string | null>(null);
+  const [lastUsage, setLastUsage] = React.useState<StreamUsage | null>(null);
   // Persistent gateway-413 recovery state: the pre-send draft snapshot (text
   // + attachments captured BEFORE the programmatic clear) plus whether the
   // user mutated the draft since (revision changed). Snapshot is held only
@@ -178,6 +190,18 @@ export function ChatPage() {
   // ref mirrors the state so the send lifecycle can read the id after awaits.
   const [activeChatId, setActiveChatId] = React.useState<string | null>(null);
   const activeChatIdRef = React.useRef<string | null>(null);
+  // Draft persistence scope: changes ONLY on user-driven context switches
+  // (open / new / fork) and identity teardown. The send's programmatic
+  // conversation creation deliberately does NOT move it — the scope effect
+  // would hydrate the fresh (empty) draft over the composer in the same
+  // batch as the 413 rollback restore, wiping the recovered snapshot. One
+  // explicit object (not derived from userId) so an identity switch is a
+  // single atomic scope transition, never a half-applied pair.
+  const [draftScope, setDraftScope] = React.useState<{
+    userId: string;
+    workspaceId: string;
+    chatId: string | null;
+  } | null>(null);
   const [historyOpen, setHistoryOpen] = React.useState(false);
   // Desktop conversation-list collapse: device UI pref, identity-independent.
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(readSidebarPref);
@@ -222,6 +246,8 @@ export function ChatPage() {
     content: string;
     reasoning: string;
     model?: string;
+    /** Gateway correlation id for the billing receipt (assistant-only). */
+    request_id?: string;
   }>({ content: "", reasoning: "" });
   const abortRef = React.useRef<AbortController | null>(null);
   // Sticky-bottom follow of the conversation log lives in <Transcript>; the
@@ -245,6 +271,61 @@ export function ChatPage() {
   // Composer-owned draft (text, attachments, revision counter). identityRef
   // and seqRef guard late attachment reads; seqRef moves with the send seam.
   const draft = useComposerDraft({ identityRef, seqRef });
+
+  // Session text-draft persistence (hbr-chat-draft: keys; cleared on logout by
+  // lib/logout.ts). Scope includes the active chat id so drafts never cross
+  // conversations; identity switches flush + hydrate through the hook.
+  const drafts = useChatDraftSync({
+    scope: draftScope,
+    text: draft.input,
+    getText: () => draft.input,
+    setText: draft.setInput,
+  });
+
+  // Remembered model/effort (localStorage, public IDs only — never upstream
+  // keys or raw prompts). Applied once per identity after the catalog settles:
+  // a remembered ID no longer published is dropped, never applied.
+  const prefsAppliedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!userId || !workspaceId || !catalogReady || prefsAppliedRef.current) return;
+    prefsAppliedRef.current = true;
+    const m = validModelChoice(recallChatModel(userId, workspaceId), models);
+    if (m) setModel(m);
+    const e = recallChatEffort(userId, workspaceId);
+    if (e) setEffort(e);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, workspaceId, catalogReady]);
+
+  function changeModel(publicId: string) {
+    setModel(publicId);
+    if (userId && workspaceId) rememberChatModel(userId, workspaceId, publicId);
+  }
+  function changeEffort(effort: string) {
+    setEffort(effort);
+    if (userId && workspaceId) rememberChatEffort(userId, workspaceId, effort);
+  }
+
+  // Member chat access gate (actual API DTO). can_chat=false blocks only
+  // "member" roles here: owner/admin are wrongly reported as blocked while
+  // the policy is off — a known member-chat-policy route bug being fixed by
+  // that lane; the gate must not lock admins out meanwhile.
+  const access = useQuery({
+    queryKey: ["member-chat-access", workspaceId],
+    queryFn: ({ signal }) =>
+      api<MemberChatAccess>(
+        `/api/v1/workspaces/${workspaceId}/member-chat-access`,
+        { signal },
+      ),
+    enabled: Boolean(userId && workspaceId),
+    retry: false,
+  });
+  const memberBlocked =
+    Boolean(access.data) && !access.data!.can_chat && access.data!.role === "member";
+  const memberLimited =
+    Boolean(access.data) &&
+    access.data!.can_chat &&
+    access.data!.daily_cap_vnd !== null &&
+    access.data!.remaining_vnd === 0;
 
   function invalidateGeneration() {
     seqRef.current += 1;
@@ -274,7 +355,14 @@ export function ChatPage() {
     if (identityRef.current === id) return;
     const prev = identityRef.current;
     identityRef.current = id;
-    if (prev === "null:null") return; // initial resolution: nothing to leak
+    if (prev === "null:null") {
+      // Initial identity resolution: the unsaved "new chat" view still owns a
+      // draft scope (chatId null → the `new` key), or fresh-page typing would
+      // never persist.
+      if (userId && workspaceId)
+        setDraftScope({ userId, workspaceId, chatId: activeChatIdRef.current });
+      return; // nothing to leak on first resolution
+    }
     invalidateGeneration();
     loadSeqRef.current += 1;
     activeChatIdRef.current = null;
@@ -290,6 +378,12 @@ export function ChatPage() {
     setSend413(null); // identity switch: the snapshot never crosses identities
     setRestoreConfirm(false);
     setLastTurnAttached(false);
+    setWalletGate(false);
+    setReceiptLine(null);
+    setLastUsage(null);
+    // Identity switch lands the NEW identity's scope (chatId null: the saved
+    // chat was just dropped); a sign-out (null identity) tears the scope down.
+    setDraftScope(userId && workspaceId ? { userId, workspaceId, chatId: null } : null);
     draft.clearAttachments();
     multimodalRef.current.clear();
     lastUserRef.current = null;
@@ -316,6 +410,9 @@ export function ChatPage() {
     loadSeqRef.current += 1;
     activeChatIdRef.current = null;
     setActiveChatId(null);
+    // The unsaved view keeps a real scope (chatId null) so "New chat" typing
+    // still persists under the `new` key.
+    setDraftScope(userId && workspaceId ? { userId, workspaceId, chatId: null } : null);
     setMessages([]);
     setError(null);
     setKeyError(null);
@@ -325,6 +422,9 @@ export function ChatPage() {
     setSend413(null);
     setRestoreConfirm(false);
     setLastTurnAttached(false);
+    setWalletGate(false);
+    setReceiptLine(null);
+    setLastUsage(null);
     draft.clearAttachments();
     lastUserRef.current = null;
     // A fresh view always starts pinned to its latest message (same contract
@@ -386,6 +486,7 @@ export function ChatPage() {
     const isLoadCurrent = () => loadSeqRef.current === seq && identityRef.current === idAtLoad;
     activeChatIdRef.current = chatId;
     setActiveChatId(chatId);
+    if (userId && ws) setDraftScope({ userId, workspaceId: ws, chatId });
     setMessages([]);
     setError(null);
     setConflict(false);
@@ -393,6 +494,9 @@ export function ChatPage() {
     setSend413(null);
     setRestoreConfirm(false);
     setLastTurnAttached(false);
+    setWalletGate(false);
+    setReceiptLine(null);
+    setLastUsage(null);
     draft.clearAttachments();
     lastUserRef.current = null;
     followLog();
@@ -402,15 +506,10 @@ export function ChatPage() {
       const snap = await getConversation(ws, chatId);
       if (!isLoadCurrent()) return;
       versionsRef.current.set(chatId, snap.version);
-      setMessages(
-        snap.messages.map((m) => ({
-          role: m.role,
-          content: m.content,
-          reasoning: m.reasoning ?? "",
-          model: m.role === "assistant" ? m.model : undefined,
-        })),
+      applySnapshot(snap);
+      rehydrateUploads(
+        snap.messages.flatMap((m) => (m.role === "user" ? (m.attachments ?? []) : [])),
       );
-      if (snap.model) setModel(snap.model);
     } catch (e) {
       if (!isLoadCurrent()) return;
       setError(
@@ -428,6 +527,88 @@ export function ChatPage() {
   function reloadActive() {
     const chatId = activeChatIdRef.current;
     if (chatId) void openChat(chatId);
+  }
+
+  /** Server snapshot -> view messages: attachment refs and the billing
+   *  request_id ride along so chips and receipts survive a reload. */
+  function applySnapshot(snap: {
+    messages: Array<{
+      role: "user" | "assistant";
+      content: string;
+      reasoning?: string;
+      model?: string;
+      attachments?: ChatAttachmentRef[];
+      request_id?: string;
+    }>;
+    model: string | null;
+  }) {
+    setMessages(
+      snap.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        reasoning: m.reasoning ?? "",
+        model: m.role === "assistant" ? m.model : undefined,
+        attachments: m.role === "user" ? m.attachments : undefined,
+        request_id: m.role === "assistant" ? m.request_id : undefined,
+      })),
+    );
+    if (snap.model) setModel(snap.model);
+  }
+
+  /** Plug for the persistent attachment client (files lane, not committed
+   *  yet): rehydrates composer/history upload state from the snapshot's
+   *  user-turn attachment refs. Deliberately a no-op until that client lands;
+   *  the call sites (openChat, fork) are the exact wiring point. */
+  function rehydrateUploads(_refs: ChatAttachmentRef[]) {}
+
+  /** Fork the conversation through the turn at `message_index` (the SERVER
+   *  index: the user turn being forked through). The source conversation is
+   *  never touched; the view switches to the returned full snapshot. An
+   *  edited turn pre-fills the composer — the next send is an EXPLICIT paid
+   *  generation, never auto-fired. Unsaved chats (no tracked version) cannot
+   *  fork: the transcript's optimistic turns have no server index. */
+  async function forkAt(messageIndex: number, content?: string, prefill?: string) {
+    const ws = workspaceId;
+    const chatId = activeChatIdRef.current;
+    if (!ws || !chatId || streaming || busyRef.current) return;
+    const version = versionsRef.current.get(chatId);
+    if (version === undefined) {
+      setError(t("forkUnsaved"));
+      return;
+    }
+    try {
+      const snap = await forkConversation(ws, chatId, {
+        version,
+        message_index: messageIndex,
+        ...(content !== undefined ? { content } : {}),
+      });
+      loadSeqRef.current += 1; // stale openChat/fork responses never land here
+      activeChatIdRef.current = snap.id;
+      versionsRef.current.set(snap.id, snap.version);
+      setActiveChatId(snap.id);
+      if (userId) setDraftScope({ userId, workspaceId: ws, chatId: snap.id });
+      setError(null);
+      setConflict(false);
+      setSaveNotice(null);
+      setWalletGate(false);
+      setReceiptLine(null);
+      setLastUsage(null);
+      applySnapshot(snap);
+      rehydrateUploads(
+        snap.messages.flatMap((m) => (m.role === "user" ? (m.attachments ?? []) : [])),
+      );
+      if (prefill !== undefined && prefill !== "" && userId) {
+        // Prefill through the draft STORE, not setInput: the scope switch to
+        // the fork hydrates from storage after this commit — writing there
+        // first makes the hydration itself carry the prefill (no clobber).
+        writeChatDraft({ userId, workspaceId, chatId: snap.id }, prefill);
+      }
+      lastUserRef.current = null;
+      invalidateConversationList();
+      followLog();
+    } catch {
+      setError(t("forkFailed"));
+    }
   }
 
   /** Immutable snapshot of one finished turn, captured before any await so a
@@ -521,6 +702,9 @@ export function ChatPage() {
     // starts before openChat's response lands would be wiped by the snapshot
     // overwriting optimistic state when it resolves.
     if (busyRef.current || streaming || !model || conflict || loadingChat || !catalogReady) return;
+    // Member chat gate: policy-off members and cap-exhausted members cannot
+    // start a new PAID generation (the gateway would reject it anyway).
+    if (memberBlocked || memberLimited) return;
     // Retry regenerates the LAST assistant reply from the existing history:
     // the user turn is reused as-is, never appended a second time.
     const retryTurn = isRetry ? findRetryTurn(messages) : null;
@@ -560,6 +744,10 @@ export function ChatPage() {
     abortRef.current = ac;
     assistantPartialRef.current = { content: "", reasoning: "" };
     let chatId = activeChatIdRef.current;
+    // Exact-final render coalescing: deltas queue and flush at most once per
+    // frame; end() flushes everything queued on done/abort/error so the
+    // terminal transcript equals the sequential stream with nothing dropped.
+    let coalescer: ReturnType<typeof createRenderCoalescer> | null = null;
     // Session-only multimodal retention: an attachment-bearing turn keeps its
     // full request content in memory (conversation id + user-turn index) so
     // follow-ups AND retries still carry the attachments until reload.
@@ -645,6 +833,7 @@ export function ChatPage() {
         const prevLastUser = lastUserRef.current;
         const prevLastTurnAttached = lastTurnAttached;
         draft.setInput("");
+        drafts.clearCurrent(); // the stored draft dies with the send
         draft.applyAttachments([]);
         draft.clearAttachError();
         setLastTurnAttached(turnAttachments.length > 0);
@@ -716,6 +905,19 @@ export function ChatPage() {
         if (res.status === 401) {
           // Managed key revoked or session gone: offer explicit reconnect.
           setKeyError(new ManagedKeyError("unauthorized", t("keyReconnectFresh")));
+        } else if (res.status === 402) {
+          // Wallet exhausted: named error plus the top-up link (walletGate).
+          setError(readableError(res.status, body));
+          setWalletGate(true);
+        } else if (res.status === 429) {
+          // Typed Retry-After (header seconds -> number); the body error code
+          // string is never parsed back into a number.
+          const ra = Number(res.headers.get("retry-after"));
+          setError(
+            Number.isFinite(ra) && ra >= 0
+              ? t("errRateLimited", { seconds: String(Math.ceil(ra)) })
+              : t("errRateLimitedGeneric"),
+          );
         } else {
           setError(readableError(res.status, body));
         }
@@ -728,22 +930,49 @@ export function ChatPage() {
       }
       const reader = res.body?.getReader();
       if (!reader) throw new Error(t("noStreaming"));
+      // The gateway stamps every post-record response with the request row id:
+      // this turn's billing receipt key (GET /workspaces/:id/chat-receipts/:id).
+      const requestId = res.headers.get("x-hbr-request-id");
       const decoder = new TextDecoder();
       const parser = createSseParser();
+      coalescer = createRenderCoalescer({
+        flush: (batch) => {
+          if (!isCurrent()) return;
+          const m = parser.model && catalogModelIds.has(parser.model) ? parser.model : null;
+          for (const delta of batch) appendToLast(delta, m);
+        },
+      });
       for (;;) {
         const { done, value } = await reader.read();
         if (!isCurrent()) return; // superseded: no delta may repopulate state
         if (done) break;
         for (const delta of parser.push(decoder.decode(value, { stream: true }))) {
-          const streamModel =
-            parser.model && catalogModelIds.has(parser.model) ? parser.model : null;
-          appendToLast(delta, streamModel);
+          coalescer.push(delta);
         }
         if (parser.done) break;
       }
+      coalescer.end(); // exact final flush (done path)
+      // Mid-stream error event: keep the partial already rendered and surface
+      // the server's message; the terminal save below still records the turn.
+      if (parser.error) setError(parser.error);
+      const usage = parser.usage; // last valid top-level usage (typed)
+      if (requestId && ws) {
+        const rid = requestId;
+        assistantPartialRef.current = { ...assistantPartialRef.current, request_id: rid };
+        // Actual-cost receipt: pending renders nothing (never "0 ₫");
+        // settled/failed render the ACTUAL charged VND.
+        void fetchChatReceipt(ws, rid)
+          .then((receipt) => {
+            if (!isCurrent()) return;
+            setReceiptLine(chargedVndLabel(receipt));
+          })
+          .catch(() => {}); // receipt is cosmetic; the turn already persisted
+      }
+      if (usage) setLastUsage(usage);
       // Completed: persist the full turn (user + assistant) in one write.
       await saveTurn({ ...assistantPartialRef.current });
     } catch (e) {
+      coalescer?.end(); // exact final flush (abort/error path)
       if (!isCurrent()) return;
       if (e instanceof DOMException && e.name === "AbortError") {
         // Explicit stop: keep whatever streamed so far and persist it.
@@ -778,12 +1007,14 @@ export function ChatPage() {
   const autoEligible = Boolean(userId && workspaceId);
   const canSend = Boolean(
     (draft.input.trim() || draft.attachments.length > 0) &&
-    model &&
-    catalogReady &&
-    !streaming &&
-    !conflict &&
-    !loadingChat &&
-    autoEligible,
+      model &&
+      catalogReady &&
+      !streaming &&
+      !conflict &&
+      !loadingChat &&
+      autoEligible &&
+      !memberBlocked &&
+      !memberLimited,
   );
   const showRetry = !streaming && lastUserRef.current !== null;
 
@@ -829,14 +1060,11 @@ export function ChatPage() {
         {keyError.message}
       </Alert>
       {keyError.kind === "forbidden" ? (
-        <p className="text-xs text-muted-foreground">
-          Members without owner or admin role cannot create a chat key in this workspace. Ask a
-          workspace admin for help.
-        </p>
+        <p className="text-xs text-muted-foreground">{t("keyForbiddenHelp")}</p>
       ) : keyError.kind === "unauthorized" ? (
         <div>
           <Button variant="outline" size="sm" onClick={reconnect}>
-            Reconnect
+            {t("keyTooLargeAction")}
           </Button>
         </div>
       ) : null}
@@ -926,67 +1154,20 @@ export function ChatPage() {
               {historyList}
             </SheetContent>
           </Sheet>
-          <Select value={model} onValueChange={setModel} disabled={models.length === 0}>
-            <SelectTrigger
-              id="chat-model"
-              aria-label={t("model")}
-              className="h-9 min-w-0 max-w-56 flex-1 gap-1 border-0 bg-muted/50 shadow-none"
-            >
-              {/* Explicit trigger label: the selected item's children also
-                carry the capability hint, which must stay dropdown-only. */}
-              <SelectValue
-                className="min-w-0 truncate"
-                placeholder={
-                  modelsLoading
-                    ? t("loadingModels")
-                    : modelsError
-                      ? t("modelsUnavailable")
-                      : t("chooseModel")
-                }
-              >
-                {models.find((m) => m.publicId === model)?.displayName ?? (model || undefined)}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {models.map((m) => (
-                <SelectItem
-                  key={m.publicId}
-                  value={m.publicId}
-                  textValue={m.displayName ?? m.publicId}
-                >
-                  {m.displayName ?? m.publicId}
-                  {/* Server-published capability metadata inline in the
-                    picker only, via the shared capability label helper:
-                    known keys get localized EN/VI labels, unknown stored
-                    values stay verbatim (no inferred capabilities). */}
-                  {m.capabilities.length > 0 && (
-                    <span className="ml-2 text-xs font-normal text-muted-foreground">
-                      {m.capabilities.map((c) => capabilityLabelFor(c)).join(", ")}
-                    </span>
-                  )}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {showEffort && (
-            <Select value={effort} onValueChange={setEffort}>
-              <SelectTrigger
-                id="chat-effort"
-                aria-label={t("effort")}
-                className="h-9 w-36 gap-1 border-0 bg-muted/50 shadow-none"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={EFFORT_UNSET}>{t("effortDefault")}</SelectItem>
-                {effortOptions.map((e: ReasoningEffort) => (
-                  <SelectItem key={e} value={e}>
-                    {EFFORT_LABELS[e][locale]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          <ModelControls
+            id="chat-model"
+            models={models.map((m) => ({
+              publicId: m.publicId,
+              displayName: m.displayName,
+              reasoning: m.reasoning,
+            }))}
+            loading={modelsLoading}
+            error={modelsError}
+            value={model}
+            onModelChange={changeModel}
+            effort={effort}
+            onEffortChange={changeEffort}
+          />
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
             <Button
               variant="outline"
@@ -1047,7 +1228,34 @@ export function ChatPage() {
             {!userId && <p className="text-sm text-muted-foreground">{t("signInStart")}</p>}
           </div>
         ) : (
-          <Transcript ref={transcriptRef} messages={messages} streaming={streaming} />
+          <Transcript
+            ref={transcriptRef}
+            messages={messages}
+            streaming={streaming}
+            {...(activeChatId
+              ? {
+                  // Fork = copy through the PRECEDING user turn (assistant
+                  // turns fork at index-1); the original stays intact. Both
+                  // actions pre-fill the composer — the next send is an
+                  // EXPLICIT paid generation, never auto-fired.
+                  onForkTurn: (index: number) => void forkAt(Math.max(0, index - 1)),
+                  onRegenerateTurn: (index: number) =>
+                    void forkAt(Math.max(0, index - 1), undefined, messages[index - 1]?.content),
+                }
+              : {})}
+            {...(activeChatId
+              ? {
+                  onEditTurn: (index: number, content?: string) =>
+                    void forkAt(index, content, content),
+                }
+              : {})}
+            onPreviewAttachment={(a) => {
+              // Plug until the persistent attachment client lands: expired
+              // refs are labeled by the transcript; live previews need the
+              // files-lane GET (bytes are never client-composable).
+              void a;
+            }}
+          />
         )}
 
         <div className="mx-auto w-full max-w-3xl px-4 pb-safe">
@@ -1055,11 +1263,49 @@ export function ChatPage() {
             <Alert
               variant="destructive"
               className="mx-auto max-w-3xl"
-              onDismiss={() => setError(null)}
+              onDismiss={() => {
+                setError(null);
+                setWalletGate(false);
+              }}
               dismissLabel={t("dismissAlert")}
             >
               {error}
+              {walletGate && (
+                <div className="mt-2">
+                  <Link
+                    to="/billing/credits"
+                    className="inline-flex h-8 items-center rounded-md border border-border px-3 text-sm font-medium hover:bg-muted"
+                  >
+                    {t("topUp")}
+                  </Link>
+                </div>
+              )}
             </Alert>
+          )}
+          {memberBlocked && (
+            <Alert
+              variant="destructive"
+              className="mx-auto max-w-3xl"
+              onDismiss={() => void queryClient.invalidateQueries({ queryKey: ["member-chat-access", workspaceId] })}
+              dismissLabel={t("dismissAlert")}
+            >
+              {t("memberChatBlocked")}
+            </Alert>
+          )}
+          {memberLimited && (
+            <p className="px-4 text-xs text-amber-600" role="status">
+              {t("memberLimitReached", { time: formatDate(access.data!.resets_at) })}
+            </p>
+          )}
+          {(receiptLine || lastUsage) && (
+            <p className="px-4 py-1 text-xs text-muted-foreground" role="status">
+              {[
+                receiptLine ? t("chargedLast", { cost: receiptLine }) : null,
+                lastUsage ? t("usageTokens", { tokens: String(lastUsage.total_tokens) }) : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
           )}
           {send413 && (
             <Alert
@@ -1120,6 +1366,13 @@ export function ChatPage() {
             canSend={canSend}
             onSend={() => void send()}
             onStop={stop}
+            advanced={
+              <>
+                <p className="text-xs text-muted-foreground">{composerT("scopeBilling")}</p>
+                <p className="text-xs text-muted-foreground">{composerT("attachHint")}</p>
+                <p className="text-xs text-muted-foreground">{t("attachmentRetention")}</p>
+              </>
+            }
           />
         </div>
       </div>
