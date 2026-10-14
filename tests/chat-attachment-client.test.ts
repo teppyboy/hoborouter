@@ -80,6 +80,25 @@ test("local validation rejects before any network call", async () => {
   expect(called).toBe(0);
 });
 
+test("413 quota errors map to quota while other 413 errors map to tooLarge", async () => {
+  const cases: Array<[unknown, AttachmentUploadError["kind"]]> = [
+    [{ error: { code: "QUOTA_EXCEEDED", message: "Attachment storage quota exceeded" } }, "quota"],
+    [{ error: { code: "TOO_LARGE", message: "Attachment exceeds size limit" } }, "tooLarge"],
+  ];
+  for (const [body, kind] of cases) {
+    const { fetch } = spyFetch(() => new Response(JSON.stringify(body), { status: 413 }));
+    let caught: unknown;
+    try {
+      await uploadChatAttachment("ws-1", pngFile(), { fetch });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(AttachmentUploadError);
+    expect((caught as AttachmentUploadError).kind).toBe(kind);
+    expect((caught as AttachmentUploadError).status).toBe(413);
+  }
+});
+
 test("server statuses map to typed failures", async () => {
   const cases: Array<[number, AttachmentUploadError["kind"]]> = [
     [401, "unauthorized"],

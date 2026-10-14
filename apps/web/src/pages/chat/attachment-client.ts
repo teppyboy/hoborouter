@@ -116,7 +116,20 @@ export async function uploadChatAttachment(
     415: "unsupported",
     507: "quota",
   };
-  const kind = kindByStatus[res.status] ?? "invalid";
+  let kind = kindByStatus[res.status] ?? "invalid";
+  if (res.status === 413) {
+    const body: unknown = await res.json().catch(() => null);
+    const error =
+      typeof body === "object" && body !== null && "error" in body ? body.error : null;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "QUOTA_EXCEEDED"
+    ) {
+      kind = "quota";
+    }
+  }
   throw new AttachmentUploadError(
     kind,
     `Attachment upload failed (${res.status}).`,

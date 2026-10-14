@@ -193,7 +193,11 @@ async function mountPage(historyMessages: unknown[] = []) {
       return jsonRes(200, snapshot(99, historyMessages));
     if (path === "/api/v1/workspaces/ws1/attachments" && call.init?.method === "POST") {
       const filename = String(new Headers(call.init.headers).get("X-Hbr-Filename"));
-      if (uploadStatus !== 201) return jsonRes(uploadStatus, {});
+      if (uploadStatus !== 201)
+        return jsonRes(
+          uploadStatus,
+          uploadStatus === 413 ? { error: { code: "QUOTA_EXCEEDED", message: "Attachment storage quota exceeded" } } : {},
+        );
       return jsonRes(201, {
         id: "attachment-1",
         name: decodeURIComponent(filename),
@@ -395,8 +399,8 @@ test("file selection uploads raw bytes and saved user turn contains only canonic
   expect(calls.filter((c) => c.path === "/api/v1/workspaces/ws1/attachments")).toHaveLength(1);
 });
 
-test("failed upload adds no sendable chip", async () => {
-  uploadStatus = 507;
+test("quota-exhausted upload adds no sendable chip and shows storage-full copy", async () => {
+  uploadStatus = 413;
   await mountPage();
   await pickFiles([pngFile(1024)]);
   await waitFor(() => bodyText().includes("storage is full"), "upload failure message");
