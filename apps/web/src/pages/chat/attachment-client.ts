@@ -6,7 +6,7 @@
 // explicit caller action. Bytes go in the request body only; never URLs,
 // never logs (filenames are metadata and percent-encoded on the header).
 import type { ChatAttachmentDto, ChatAttachmentRef } from "@hoborouter/shared";
-import { type ChatAttachment, createAttachment, validateFile } from "./attachments";
+import { AttachError, type ChatAttachment, createAttachment, validateFile } from "./attachments";
 
 export type AttachmentUploadFailure =
   | "unauthorized" // 401 / no session: reconnect explicitly, then retry
@@ -77,7 +77,18 @@ export async function uploadChatAttachment(
   file: File,
   opts: UploadAttachmentOptions = {},
 ): Promise<ChatAttachmentDto> {
-  validateFile(file);
+  try {
+    validateFile(file);
+  } catch (e) {
+    // Local rejects join the same typed contract as server rejects — the
+    // composer binding only has to handle AttachmentUploadError kinds.
+    if (e instanceof AttachError) {
+      if (e.code === "imageTooLarge" || e.code === "textTooLarge")
+        throw new AttachmentUploadError("tooLarge", e.message);
+      if (e.code === "unsupported") throw new AttachmentUploadError("unsupported", e.message);
+    }
+    throw e;
+  }
   const doFetch = opts.fetch ?? fetch;
   let res: Response;
   try {
