@@ -1,7 +1,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowDown,
   History,
   Paperclip,
   PanelLeftClose,
@@ -12,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { createSseParser, type StreamDelta } from "./sse";
+import { Transcript, type TranscriptHandle } from "./transcript";
 import { ConversationList, conversationListKey } from "./conversation-list";
 import { buildPersistMessages, findRetryTurn, isEmptyAssistant, type TurnMessage } from "./turn";
 import {
@@ -20,8 +20,7 @@ import {
   getConversation,
   saveConversation,
 } from "./conversations";
-import { ChatMarkdown } from "../../components/chat-markdown";
-import { ErrorState, CopyButton } from "../../components/page";
+import { ErrorState } from "../../components/page";
 import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { Textarea } from "../../components/ui/textarea";
@@ -272,15 +271,10 @@ export function ChatPage() {
     model?: string;
   }>({ content: "", reasoning: "" });
   const abortRef = React.useRef<AbortController | null>(null);
-  // Sticky-bottom follow for the conversation log: ref to the scroll element
-  // plus whether the user is near the bottom. While streaming, the log only
-  // auto-scrolls when the user hasn't scrolled up to read history.
-  const logRef = React.useRef<HTMLDivElement | null>(null);
-  const followLogRef = React.useRef(true);
-  // Render mirror of "user is away from the bottom" (the onScroll latch): a
-  // ref alone cannot drive the Jump-to-latest button, and the boolean only
-  // changes at the 80px threshold, so React bails out of the extra renders.
-  const [logAway, setLogAway] = React.useState(false);
+  // Sticky-bottom follow of the conversation log lives in <Transcript>; the
+  // page re-engages it via the handle on deliberate sends and view resets.
+  const transcriptRef = React.useRef<TranscriptHandle | null>(null);
+  const followLog = () => transcriptRef.current?.follow();
   // Last user prompt for the explicit Retry button. Retrying re-runs the same
   // paid gateway call — it is never fired automatically.
   const lastUserRef = React.useRef<string | null>(null);
@@ -342,8 +336,7 @@ export function ChatPage() {
     applyAttachments([]);
     multimodalRef.current.clear();
     lastUserRef.current = null;
-    followLogRef.current = true;
-    setLogAway(false);
+    followLog();
   }, [userId, workspaceId]);
 
   // Model changes are a per-message choice, not a conversation boundary:
@@ -416,8 +409,7 @@ export function ChatPage() {
     // A fresh view always starts pinned to its latest message (same contract
     // as a deliberate send): reading position from a previous view must not
     // leak into the new one.
-    followLogRef.current = true;
-    setLogAway(false);
+    followLog();
   }
 
   function dropTrailingEmptyAssistant() {
@@ -483,8 +475,7 @@ export function ChatPage() {
     setLastTurnAttached(false);
     applyAttachments([]);
     lastUserRef.current = null;
-    followLogRef.current = true;
-    setLogAway(false);
+    followLog();
     if (!ws) return;
     setLoadingChat(true);
     try {
@@ -758,8 +749,7 @@ export function ChatPage() {
       // follow: the user must see their own message and the streaming reply,
       // even if they had scrolled up, and even if a late scroll event during
       // layout of the previous turn latched followLogRef off.
-      followLogRef.current = true;
-      setLogAway(false);
+      followLog();
       // The view keeps each prior message's reasoning (the Reasoning section
       // stays visible across sends); only the paid request body above strips
       // it to role+content.
@@ -863,38 +853,6 @@ export function ChatPage() {
       if (!last || last.role !== "assistant") return prev;
       return [...prev.slice(0, -1), appendDelta(last, delta, model)];
     });
-  }
-
-  // New content arrived (stream delta or sent message): pin the log to the
-  // bottom only while the user is still following. useLayoutEffect, not a
-  // passive effect: a passive pin runs after the browser's rendering steps,
-  // leaving a frame where the log sits unscrolled with the distance already
-  // grown past the 80px threshold — the onScroll handler then latches
-  // followLogRef off (and scroll anchoring can fight the late pin), so the
-  // log never followed the new message or the stream and stayed at scrollTop
-  // 0. Pinning synchronously before paint removes that window.
-  React.useLayoutEffect(() => {
-    const el = logRef.current;
-    if (el && followLogRef.current) el.scrollTop = el.scrollHeight;
-  }, [messages]);
-
-  /** One user-triggered jump to the newest message. Smooth ONCE (user
-   *  intent), never per stream chunk; prefers-reduced-motion gets an instant
-   *  pin. followLogRef stays false until the scroll actually arrives near the
-   *  bottom (the onScroll latch re-engages it) — setting it here would let
-   *  the layout-effect pin override the smooth animation with an instant
-   *  jump on the next render. */
-  function jumpToLatest() {
-    const el = logRef.current;
-    if (!el) return;
-    const reduceMotion =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduceMotion) {
-      el.scrollTop = el.scrollHeight;
-    } else {
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    }
   }
 
   const autoEligible = Boolean(userId && workspaceId);
@@ -1169,89 +1127,7 @@ export function ChatPage() {
             {!userId && <p className="text-sm text-muted-foreground">{t("signInStart")}</p>}
           </div>
         ) : (
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            <div
-              className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
-              role="log"
-              aria-live="polite"
-              aria-label={t("conversation")}
-              onScroll={() => {
-                const el = logRef.current;
-                if (!el) return;
-                const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-                followLogRef.current = fromBottom < 80;
-                setLogAway(fromBottom >= 80);
-              }}
-              ref={logRef}
-            >
-              <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-4">
-                {messages.map((m, i) =>
-                  m.role === "user" ? (
-                    <div key={i} className="flex justify-end">
-                      <div className="max-w-[85%] wrap-anywhere whitespace-pre-wrap rounded-2xl bg-muted px-4 py-2 text-sm">
-                        {m.content}
-                      </div>
-                    </div>
-                  ) : (
-                    <div key={i} className="w-full space-y-1 text-sm leading-relaxed">
-                      {m.reasoning && (
-                        <details className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-                          <summary className="cursor-pointer select-none font-medium">
-                            {t("reasoning")}
-                          </summary>
-                          <div className="mt-1 wrap-anywhere whitespace-pre-wrap">
-                            {m.reasoning}
-                          </div>
-                        </details>
-                      )}
-                      {m.content ? (
-                        <>
-                          <ChatMarkdown
-                            content={m.content}
-                            streaming={streaming && i === messages.length - 1}
-                          />
-                          {/* Muted ACTUAL-USED model label: the public ID from
-                          the SSE stream / saved history, not the picker's
-                          selection guess (the gateway rewrites to public IDs). */}
-                          {m.role === "assistant" && m.model && (
-                            <p className="text-xs text-muted-foreground">{m.model}</p>
-                          )}
-                          <div className="flex justify-end">
-                            <CopyButton value={m.content} label={t("copyReply")} />
-                          </div>
-                        </>
-                      ) : (
-                        !m.reasoning &&
-                        streaming &&
-                        i === messages.length - 1 && (
-                          <div className="animate-pulse motion-reduce:animate-none text-muted-foreground">
-                            {t("thinking")}
-                          </div>
-                        )
-                      )}
-                    </div>
-                  ),
-                )}
-              </div>
-            </div>
-            {/* Jump to latest: shown whenever the user is reading older
-              messages (static history included, not just mid-stream). One
-              user-triggered scroll; the onScroll latch re-engages follow only
-              when the target arrives. */}
-            {logAway && (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={jumpToLatest}
-                aria-label={t("jumpToLatest")}
-                title={t("jumpToLatest")}
-                className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 shadow-md animate-in fade-in slide-in-from-bottom-2 duration-150"
-              >
-                <ArrowDown className="size-4" aria-hidden />
-                {t("jumpToLatest")}
-              </Button>
-            )}
-          </div>
+          <Transcript ref={transcriptRef} messages={messages} streaming={streaming} />
         )}
 
         <div className="mx-auto w-full max-w-3xl px-4 pb-safe">
