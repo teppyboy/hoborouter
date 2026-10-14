@@ -1,11 +1,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  History,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Plus,
-} from "lucide-react";
+import { History, PanelLeftClose, PanelLeftOpen, Plus } from "lucide-react";
 import { createSseParser, type StreamDelta } from "./sse";
 import { Transcript, type TranscriptHandle } from "./transcript";
 import { ConversationList, conversationListKey } from "./conversation-list";
@@ -47,11 +42,7 @@ import { Composer, useComposerDraft } from "./composer";
 import { useLocaleEntry, type LocaleEntry } from "../../lib/i18n/t";
 import { useLocaleStore } from "../../lib/i18n/locale";
 import { useCapabilityLabel } from "../../lib/capabilities";
-import {
-  PROMPT_CHIPS,
-  readableError,
-  useChatT,
-} from "./copy";
+import { PROMPT_CHIPS, readableError, useChatT } from "./copy";
 import {
   buildChatRequestBody,
   EFFORT_LABELS,

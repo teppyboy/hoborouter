@@ -108,9 +108,7 @@ export const Transcript = React.forwardRef<
                     <summary className="cursor-pointer select-none font-medium">
                       {t("reasoning")}
                     </summary>
-                    <div className="mt-1 wrap-anywhere whitespace-pre-wrap">
-                      {m.reasoning}
-                    </div>
+                    <div className="mt-1 wrap-anywhere whitespace-pre-wrap">{m.reasoning}</div>
                   </details>
                 )}
                 {m.content ? (

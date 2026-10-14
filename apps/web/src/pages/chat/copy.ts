@@ -216,7 +216,10 @@ export const useChatT = () => useT(chatCopy);
 // Actionable starters: each is a real prompt a user can send or edit.
 export const PROMPT_CHIPS: LocaleEntry[] = [chatCopy.chip1, chatCopy.chip2, chatCopy.chip3];
 
-export function readableError(status: number, body: { error?: { message?: string } } | null): string {
+export function readableError(
+  status: number,
+  body: { error?: { message?: string } } | null,
+): string {
   const msg = body?.error?.message;
   const locale = useLocaleStore.getState().locale;
   // 401 never reaches here (the managed-key reconnect path handles it); the

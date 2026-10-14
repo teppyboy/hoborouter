@@ -25,7 +25,7 @@ export interface ApiKeyRecord {
   api_key_id: string;
   workspace_id: string;
   status: string;
-  purpose: "generic" | "chat";
+  purpose: "generic" | "chat" | "chat_member";
 }
 
 /** Hash + lookup. Returns null for unknown/disabled/revoked/removed keys. Used by /v1 auth. */

@@ -7,13 +7,7 @@ import { sql } from "drizzle-orm";
 import { createDb, closeDb, type Db } from "../src/client";
 import { migrate } from "../src/migrate";
 import { createTestDb, type TestDb } from "../src/testing";
-import {
-  chatConversations,
-  ledgerEntries,
-  payments,
-  users,
-  wallets,
-} from "../src/schema";
+import { chatConversations, ledgerEntries, payments, users, wallets } from "../src/schema";
 
 const DEFAULT_TEST_URL = "postgres://postgres:postgres@127.0.0.1:55432/postgres";
 

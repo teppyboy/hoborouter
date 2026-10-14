@@ -21,7 +21,8 @@ import {
 } from "../src/schema";
 import { createTestDb, type TestDb } from "../src/testing";
 
-const DEFAULT_TEST_URL = process.env.HBR_TEST_DATABASE_URL || "postgres://postgres:postgres@127.0.0.1:55432/postgres";
+const DEFAULT_TEST_URL =
+  process.env.HBR_TEST_DATABASE_URL || "postgres://postgres:postgres@127.0.0.1:55432/postgres";
 
 async function expectReject(p: PromiseLike<unknown>): Promise<void> {
   let err: unknown;
@@ -50,7 +51,9 @@ afterAll(async () => {
 });
 
 async function seedUserWorkspace(id: string): Promise<void> {
-  await d.insert(users).values({ id, name: id, email: `${id}@t.local`, emailVerified: false, createdAt: new Date() });
+  await d
+    .insert(users)
+    .values({ id, name: id, email: `${id}@t.local`, emailVerified: false, createdAt: new Date() });
   await d.insert(workspaces).values({ id: `ws-${id}`, name: id, created_at: 1 });
 }
 
@@ -70,10 +73,14 @@ describe("0024 chat_attachments row checks", () => {
     };
     await d.insert(chatAttachments).values(base);
     await expectReject(
-      d.insert(chatAttachments).values({ ...base, id: crypto.randomUUID(), kind: "video" as never }),
+      d
+        .insert(chatAttachments)
+        .values({ ...base, id: crypto.randomUUID(), kind: "video" as never }),
     );
     await expectReject(
-      d.insert(chatAttachments).values({ ...base, id: crypto.randomUUID(), bytes: 10 * 1024 * 1024 + 1 }),
+      d
+        .insert(chatAttachments)
+        .values({ ...base, id: crypto.randomUUID(), bytes: 10 * 1024 * 1024 + 1 }),
     );
     await expectReject(
       d.insert(chatAttachments).values({ ...base, id: crypto.randomUUID(), bytes: 0 }),
@@ -106,7 +113,10 @@ describe("0025 member chat policy row checks", () => {
     expect(rows[0]!.member_chat_enabled).toBe(false);
     expect(rows[0]!.member_chat_daily_cap_vnd).toBeNull();
     await expectReject(
-      d.update(workspaces).set({ member_chat_daily_cap_vnd: -1 }).where(eq(workspaces.id, "ws-pol-u")),
+      d
+        .update(workspaces)
+        .set({ member_chat_daily_cap_vnd: -1 })
+        .where(eq(workspaces.id, "ws-pol-u")),
     );
     // Enabled policy requires an explicit positive cap.
     await expectReject(
@@ -141,19 +151,47 @@ describe("0025 member chat policy row checks", () => {
       owner_user_id: "mc-u",
       created_at: 1,
     });
-    await d.insert(memberChatUsage).values({ workspace_id: "ws-mc-u", user_id: "mc-u", period_start: "2026-10-13", used_vnd: 100, created_at: 1, updated_at: 1 });
+    await d.insert(memberChatUsage).values({
+      workspace_id: "ws-mc-u",
+      user_id: "mc-u",
+      period_start: "2026-10-13",
+      used_vnd: 100,
+      created_at: 1,
+      updated_at: 1,
+    });
     await expectReject(
-      d.insert(memberChatUsage).values({ workspace_id: "ws-mc-u", user_id: "mc-u", period_start: "2026-10-13", used_vnd: 0, created_at: 1, updated_at: 1 }),
+      d.insert(memberChatUsage).values({
+        workspace_id: "ws-mc-u",
+        user_id: "mc-u",
+        period_start: "2026-10-13",
+        used_vnd: 0,
+        created_at: 1,
+        updated_at: 1,
+      }),
     );
     await expectReject(
-      d.insert(memberChatUsage).values({ workspace_id: "ws-mc-u", user_id: "mc-u", period_start: "2026-2-13", created_at: 1, updated_at: 1 }),
+      d.insert(memberChatUsage).values({
+        workspace_id: "ws-mc-u",
+        user_id: "mc-u",
+        period_start: "2026-2-13",
+        created_at: 1,
+        updated_at: 1,
+      }),
     );
   });
 
   test("billing_reservations member ticket pair + key period snapshot", async () => {
     await seedUserWorkspace("br-u");
     const ws = "ws-br-u";
-    await d.insert(models).values({ id: "m-br", public_id: "p-br", slug: "s-br", display_name: "m", provider: "p", created_at: 1, updated_at: 1 });
+    await d.insert(models).values({
+      id: "m-br",
+      public_id: "p-br",
+      slug: "s-br",
+      display_name: "m",
+      provider: "p",
+      created_at: 1,
+      updated_at: 1,
+    });
     await d.insert(modelPrices).values({
       id: "mp-br",
       model_id: "m-br",
@@ -164,7 +202,9 @@ describe("0025 member chat policy row checks", () => {
       markup_ppm: 1,
       effective_at: 1,
     });
-    await d.insert(wallets).values({ id: "w-br", workspace_id: ws, balance: 0, reserved: 0, created_at: 1 });
+    await d
+      .insert(wallets)
+      .values({ id: "w-br", workspace_id: ws, balance: 0, reserved: 0, created_at: 1 });
     await d.insert(requests).values({
       id: "r-br",
       workspace_id: ws,
@@ -186,7 +226,12 @@ describe("0025 member chat policy row checks", () => {
       status: "held" as const,
       created_at: 1,
     };
-    await d.insert(billingReservations).values({ ...base, member_budget_user_id: "br-u", member_budget_period_start: "2026-10-13", key_budget_period_start: 123 });
+    await d.insert(billingReservations).values({
+      ...base,
+      member_budget_user_id: "br-u",
+      member_budget_period_start: "2026-10-13",
+      key_budget_period_start: 123,
+    });
     await d.insert(requests).values({
       id: "r-br2",
       workspace_id: ws,
@@ -198,7 +243,9 @@ describe("0025 member chat policy row checks", () => {
     });
     // Unpaired member ticket rejected.
     await expectReject(
-      d.insert(billingReservations).values({ ...base, id: "brk2", request_id: "r-br2", member_budget_user_id: "br-u" }),
+      d
+        .insert(billingReservations)
+        .values({ ...base, id: "brk2", request_id: "r-br2", member_budget_user_id: "br-u" }),
     );
   });
 });
@@ -224,7 +271,9 @@ describe("populated 0023 -> head upgrade", () => {
       }
       fs.mkdirSync(path.join(dir, "meta"));
       const journal = JSON.parse(fs.readFileSync(path.join(tmp, "meta", "_journal.json"), "utf8"));
-      journal.entries = journal.entries.filter((e: { tag: string }) => !e.tag.startsWith("0024") && !e.tag.startsWith("0025"));
+      journal.entries = journal.entries.filter(
+        (e: { tag: string }) => !e.tag.startsWith("0024") && !e.tag.startsWith("0025"),
+      );
       fs.writeFileSync(path.join(dir, "meta", "_journal.json"), JSON.stringify(journal));
 
       await migrate(legacy, { migrationsFolder: dir });
@@ -236,7 +285,9 @@ describe("populated 0023 -> head upgrade", () => {
       await seedConn.unsafe(
         `INSERT INTO users (id, name, email, email_verified, created_at, updated_at) VALUES ('up-u', 'u', 'up@t.local', false, 1, 1)`,
       );
-      await seedConn.unsafe(`INSERT INTO workspaces (id, name, created_at) VALUES ('ws-up', 'u', 1)`);
+      await seedConn.unsafe(
+        `INSERT INTO workspaces (id, name, created_at) VALUES ('ws-up', 'u', 1)`,
+      );
       await seedConn.unsafe(
         `INSERT INTO chat_conversations (id, user_id, workspace_id, title, messages, version, created_at, updated_at) VALUES ('c-up', 'up-u', 'ws-up', 'legacy', '[{"role":"user","content":"hi"}]'::jsonb, 1, 1, 1)`,
       );
@@ -252,7 +303,10 @@ describe("populated 0023 -> head upgrade", () => {
       expect(ws[0]!.member_chat_enabled).toBe(false);
       const k = await upgraded.select().from(apiKeys).where(eq(apiKeys.id, "k-up"));
       expect(k[0]!.owner_user_id).toBeNull();
-      const c = await upgraded.select().from(chatConversations).where(eq(chatConversations.id, "c-up"));
+      const c = await upgraded
+        .select()
+        .from(chatConversations)
+        .where(eq(chatConversations.id, "c-up"));
       expect(c[0]!.messages).toEqual([{ role: "user", content: "hi" }]);
       await closeDb(upgraded);
     } finally {

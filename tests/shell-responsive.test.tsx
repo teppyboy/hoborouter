@@ -79,7 +79,8 @@ test("header mounts the language toggle beside the theme toggle", () => {
   expect(html).toContain('aria-label="Switch to Vietnamese"');
   expect(html).toContain(">EN<");
   // Language toggle renders before the theme toggle in the header controls.
+  // Theme label is localized since d1acb2a; static default theme is "system".
   expect(html.indexOf('aria-label="Switch to Vietnamese"')).toBeLessThan(
-    html.indexOf('aria-label="Theme:'),
+    html.indexOf('aria-label="System theme"'),
   );
 });

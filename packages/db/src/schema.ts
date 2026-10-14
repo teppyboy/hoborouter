@@ -46,25 +46,29 @@ const intBounded = (col: AnyPgColumn) => sql`${col} >= 0 AND ${col} <= ${MAX_BOU
 const big = (name: string) => bigint(name, { mode: "number" });
 
 // --- workspaces & keys ---
-export const workspaces = pgTable("workspaces", {
-  id: text("id").primaryKey(),
-  name: text("name").notNull(),
-  status: text("status", { enum: ["active", "suspended"] })
-    .notNull()
-    .default("active"),
-  // Member chat policy (migration 0025). Toggling or recapping NEVER resets
-  // member_chat_usage rows or live holds — historical periods stay frozen.
-  member_chat_enabled: boolean("member_chat_enabled").notNull().default(false),
-  member_chat_daily_cap_vnd: big("member_chat_daily_cap_vnd"),
-  created_at: big("created_at").notNull(),
-}, (t) => [
-  // Enabled policy always names an explicit positive per-user daily cap
-  // (user explicitly capped; disabled workspaces keep cap NULL).
-  check(
-    "workspaces_member_chat_cap_required",
-    sql`${t.member_chat_enabled} = false OR ${t.member_chat_daily_cap_vnd} IS NOT NULL`,
-  ),
-]);
+export const workspaces = pgTable(
+  "workspaces",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    status: text("status", { enum: ["active", "suspended"] })
+      .notNull()
+      .default("active"),
+    // Member chat policy (migration 0025). Toggling or recapping NEVER resets
+    // member_chat_usage rows or live holds — historical periods stay frozen.
+    member_chat_enabled: boolean("member_chat_enabled").notNull().default(false),
+    member_chat_daily_cap_vnd: big("member_chat_daily_cap_vnd"),
+    created_at: big("created_at").notNull(),
+  },
+  (t) => [
+    // Enabled policy always names an explicit positive per-user daily cap
+    // (user explicitly capped; disabled workspaces keep cap NULL).
+    check(
+      "workspaces_member_chat_cap_required",
+      sql`${t.member_chat_enabled} = false OR ${t.member_chat_daily_cap_vnd} IS NOT NULL`,
+    ),
+  ],
+);
 
 export const workspaceMembers = pgTable(
   "workspace_members",
@@ -1408,7 +1412,9 @@ export const chatAttachments = pgTable(
   },
   (t) => [
     // Live-bytes quota query (sum WHERE deleted_at IS NULL, per user).
-    index("chat_attachments_user_live_idx").on(t.user_id).where(sql`deleted_at IS NULL`),
+    index("chat_attachments_user_live_idx")
+      .on(t.user_id)
+      .where(sql`deleted_at IS NULL`),
     // Per-workspace listing + GC sweeps by expiry.
     index("chat_attachments_workspace_created_idx").on(t.workspace_id, t.created_at),
     index("chat_attachments_expires_idx").on(t.expires_at),

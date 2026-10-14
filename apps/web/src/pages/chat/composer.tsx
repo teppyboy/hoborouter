@@ -268,12 +268,7 @@ export function Composer(props: {
               <Square className="size-4" aria-hidden />
             </Button>
           ) : (
-            <Button
-              size="icon"
-              onClick={onSend}
-              disabled={!canSend}
-              aria-label={t("sendMessage")}
-            >
+            <Button size="icon" onClick={onSend} disabled={!canSend} aria-label={t("sendMessage")}>
               <Send className="size-4" aria-hidden />
             </Button>
           )}
