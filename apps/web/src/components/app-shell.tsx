@@ -153,6 +153,9 @@ const SHELL = {
   expandSidebar: { en: "Expand sidebar", vi: "Mở rộng thanh bên" },
   collapseSidebar: { en: "Collapse sidebar", vi: "Thu gọn thanh bên" },
   openNavigation: { en: "Open navigation", vi: "Mở điều hướng" },
+  themeLight: { en: "Light theme", vi: "Giao diện sáng" },
+  themeDark: { en: "Dark theme", vi: "Giao diện tối" },
+  themeSystem: { en: "System theme", vi: "Giao diện hệ thống" },
   mainNavigation: { en: "Main navigation", vi: "Điều hướng chính" },
   checkingAdmin: { en: "Checking admin…", vi: "Đang kiểm tra quyền quản trị…" },
   verifyEmail: {
@@ -224,7 +227,14 @@ export function InitialAvatar({ label, className }: { label: string; className?:
 
 const THEME_ICONS = { light: Sun, dark: Moon, system: Monitor } as const;
 
+const THEME_LABEL_KEY = {
+  light: "themeLight",
+  dark: "themeDark",
+  system: "themeSystem",
+} as const;
+
 function ThemeToggle() {
+  const st = useShellT();
   const theme = useThemeStore((s) => s.theme);
   const setTheme = useThemeStore((s) => s.setTheme);
   useEffect(() => {
@@ -234,7 +244,7 @@ function ThemeToggle() {
     <Button
       variant="ghost"
       size="icon"
-      aria-label={`Theme: ${theme}`}
+      aria-label={st(THEME_LABEL_KEY[theme])}
       onClick={() => {
         const order: Theme[] = ["light", "dark", "system"];
         const next = order[(order.indexOf(theme) + 1) % order.length];
@@ -292,9 +302,20 @@ function UserAvatar({
   const [imageFailed, setImageFailed] = useState(false);
   const [gravatar, setGravatar] = useState<string | null>(null);
   const [gravatarFailed, setGravatarFailed] = useState(false);
-  void gravatarUrl(email).then((u) => {
-    if (u) setGravatar(u);
-  });
+  // Hashing runs in an effect keyed on the email (not in render) and resets
+  // when the account changes, so a stale hash can never outlive its email.
+  useEffect(() => {
+    let cancelled = false;
+    setGravatar(null);
+    setGravatarFailed(false);
+    if (!email) return;
+    void gravatarUrl(email).then((u) => {
+      if (!cancelled && u) setGravatar(u);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [email]);
   if (image && !imageFailed) {
     return (
       <img
@@ -564,22 +585,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Empty workspace list means every workspace-scoped query is stuck pending; offer creation instead.
   const { data: workspaces, isSuccess: wsLoaded } = useWorkspaces();
   const emptyWorkspaces = wsLoaded && workspaces?.length === 0;
-  const ToggleIcon = collapsed ? PanelLeft : PanelLeftClose;
   const { data: session } = useSession();
   // Mobile drawer: closed on route change and on link selection (Escape and
   // focus return are handled by the Radix dialog primitives underneath Sheet).
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // Focused Chat: while on /chat the rail starts collapsed via a route-local
+  // override; the persisted sidebar preference is neither read as final nor
+  // written, and leaving /chat restores it.
+  const [chatNavOverride, setChatNavOverride] = useState<boolean | null>(null);
   // Render-time adjustment instead of an effect: no extra render pass.
   const [lastPathname, setLastPathname] = useState(pathname);
   if (lastPathname !== pathname) {
     setLastPathname(pathname);
     setMobileNavOpen(false);
+    setChatNavOverride(pathname === "/chat" || pathname.startsWith("/chat/") ? true : null);
   }
   // Hover-expand: a collapsed desktop rail temporarily opens under the pointer
   // without touching the persisted store state (display-only). The aside is
   // hidden below md, so these handlers never fire for the mobile sheet.
   const [hovered, setHovered] = useState(false);
-  const displayCollapsed = collapsed && !hovered;
+  const effectiveCollapsed = chatNavOverride ?? collapsed;
+  const ToggleIcon = effectiveCollapsed ? PanelLeft : PanelLeftClose;
+  const displayCollapsed = effectiveCollapsed && !hovered;
+  const toggleNav = () => {
+    if (chatNavOverride !== null) setChatNavOverride(!chatNavOverride);
+    else toggleCollapsed();
+  };
 
   return (
     <TooltipProvider>
@@ -612,7 +643,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 aria-label={st("expandSidebar")}
                 aria-expanded={false}
                 title={st("expandSidebar")}
-                onClick={toggleCollapsed}
+                onClick={toggleNav}
               >
                 <Shuffle className="size-4" />
               </Button>
@@ -626,10 +657,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   className="ml-auto size-7"
                   // The action follows the persisted state, not the hover-only
                   // expansion: a hover-expanded rail still offers Expand.
-                  aria-label={collapsed ? st("expandSidebar") : st("collapseSidebar")}
-                  aria-expanded={!collapsed}
-                  title={collapsed ? st("expandSidebar") : st("collapseSidebar")}
-                  onClick={toggleCollapsed}
+                  aria-label={effectiveCollapsed ? st("expandSidebar") : st("collapseSidebar")}
+                  aria-expanded={!effectiveCollapsed}
+                  title={effectiveCollapsed ? st("expandSidebar") : st("collapseSidebar")}
+                  onClick={toggleNav}
                 >
                   <ToggleIcon className="size-4" />
                 </Button>
