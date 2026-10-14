@@ -13,7 +13,7 @@
 // Failures are never cached; every retry is an explicit caller action.
 import * as React from "react";
 
-export type ManagedKeyPurpose = "generic" | "chat";
+export type ManagedKeyPurpose = "generic" | "chat" | "chat_member";
 
 export interface ManagedKey {
   id: string;
@@ -97,64 +97,97 @@ const inflight = new Map<string, InflightEntry>();
 
 const cacheKey = (userId: string, workspaceId: string) => `${userId}:${workspaceId}`;
 
-function resolveStorages(preferred?: KeyStorage | KeyStorage[]): KeyStorage[] {
-  if (preferred) return Array.isArray(preferred) ? preferred : [preferred];
-  // Ordered candidates: localStorage persists across browser sessions (so the
-  // same user+workspace reuses its chat key), sessionStorage is the fallback
-  // when localStorage is unavailable (private mode, quota errors). Any access
-  // is best-effort: total storage failure degrades to the in-memory cache for
-  // this tab only.
-  const list: KeyStorage[] = [];
-  for (const s of [globalThis.localStorage, globalThis.sessionStorage]) if (s) list.push(s);
-  return list;
+/** Ordered storage slots: `persistent: true` = survives browser restarts
+ *  (localStorage), false = dies with the tab (sessionStorage). The `storage`
+ *  test seam keeps its old shape: injected stores are persistent candidates;
+ *  when a two-element array is injected the SECOND slot is treated as the
+ *  session store so the member-key rules below are testable. */
+interface StorageSlot {
+  store: KeyStorage;
+  persistent: boolean;
+}
+
+function resolveStorages(preferred?: KeyStorage | KeyStorage[]): StorageSlot[] {
+  if (preferred) {
+    const list = Array.isArray(preferred) ? preferred : [preferred];
+    return list.map((store, i) => ({ store, persistent: i !== list.length - 1 || list.length === 1 }));
+  }
+// localStorage persists across browser sessions (so the same user+workspace
+// reuses its chat key), sessionStorage is the fallback when localStorage is
+// unavailable (private mode, quota errors). MEMBER keys (purpose
+// "chat_member") are sessionStorage-ONLY — they never touch localStorage and
+// are never restored from it — because a member key is a delegated,
+// quota-metered credential that must die with the tab session; the server
+// remains the only quota authority either way. Any access is best-effort:
+// total storage failure degrades to the in-memory cache for this tab only.
+  const slots: StorageSlot[] = [];
+  for (const s of [globalThis.localStorage, globalThis.sessionStorage])
+    if (s) slots.push({ store: s, persistent: s === globalThis.localStorage });
+  return slots;
 }
 
 // Stored browser records: { id, plaintext, purpose? }. Legacy records lack
 // purpose and restore as "generic"; anything without a valid id/plaintext is
-// corrupt and dropped. purpose other than "chat" is stored as "generic".
+// corrupt and dropped. "chat" stays "chat"; "chat_member" stays
+// "chat_member"; any other purpose value is stored/restore as "generic".
 function parseStoredKey(body: unknown): ManagedKey | null {
   const b = body as { id?: unknown; plaintext?: unknown; purpose?: unknown } | null;
   if (typeof b?.id !== "string" || b.id === "") return null;
   if (typeof b?.plaintext !== "string" || !b.plaintext.startsWith("sk-hbr-")) return null;
-  return { id: b.id, plaintext: b.plaintext, purpose: b.purpose === "chat" ? "chat" : "generic" };
+  return {
+    id: b.id,
+    plaintext: b.plaintext,
+    purpose: b.purpose === "chat" || b.purpose === "chat_member" ? b.purpose : "generic",
+  };
 }
 
-// Mint response from POST /chat-key: purpose "chat" is REQUIRED — a response
-// without it (or with any other value) is never trusted.
+// Mint response from POST /chat-key: the server picks the purpose from its
+// own workspace policy (owner/admin → "chat", member with an enabled chat
+// policy → "chat_member", server-canonical — the client NEVER sends a
+// purpose). A response without one of those two values is never trusted.
 function parseMintResponse(body: unknown): ManagedKey {
   const b = body as { purpose?: unknown } | null;
   const key = parseStoredKey(body);
-  if (key && b?.purpose === "chat") return { ...key, purpose: "chat" };
+  if (key && (b?.purpose === "chat" || b?.purpose === "chat_member")) {
+    return { ...key, purpose: b.purpose };
+  }
   throw new ManagedKeyError("invalid", "Key service returned an unexpected response. Try again.");
 }
 
-/** First valid stored copy across the ordered stores; corrupt entries are
- *  dropped (best-effort) so a fresh key can be minted below. */
-function restoreManagedKey(storages: KeyStorage[], ck: string): ManagedKey | null {
-  for (const s of storages) {
+/** Member keys are tab-session credentials: session slots only, never
+ *  persistent ones (restore or persist). Server stays the quota authority —
+ *  this is hygiene, not a bypass. */
+const isMemberKey = (key: ManagedKey): boolean => key.purpose === "chat_member";
+
+/** First valid stored copy across the ordered slots; corrupt entries are
+ *  dropped (best-effort) so a fresh key can be minted below. A chat_member
+ *  record found in a persistent slot is dropped, never restored. */
+function restoreManagedKey(slots: StorageSlot[], ck: string): ManagedKey | null {
+  for (const { store } of slots) {
     let raw: string | null = null;
     try {
-      raw = s.getItem(STORAGE_PREFIX + ck);
+      raw = store.getItem(STORAGE_PREFIX + ck);
     } catch {
       continue; // unreadable store: try the next candidate
     }
     if (!raw) continue;
     try {
       const key = parseStoredKey(JSON.parse(raw));
-      if (key) {
+      if (key && !(isMemberKey(key) && slots.find((s) => s.store === store)?.persistent)) {
         cache.set(ck, key);
         return key;
       }
-      // Shape-invalid entry: drop it and mint a fresh key below.
+      // Shape-invalid entry, or a member key illegally in a persistent slot:
+      // drop it and mint a fresh key below.
       try {
-        s.removeItem(STORAGE_PREFIX + ck);
+        store.removeItem(STORAGE_PREFIX + ck);
       } catch {
         // Read-only store: the entry is simply ignored on every read.
       }
     } catch {
       // Corrupt or stale entry: drop it and mint a fresh key below.
       try {
-        s.removeItem(STORAGE_PREFIX + ck);
+        store.removeItem(STORAGE_PREFIX + ck);
       } catch {
         // Read-only store: the entry is simply ignored on every read.
       }
@@ -163,11 +196,13 @@ function restoreManagedKey(storages: KeyStorage[], ck: string): ManagedKey | nul
   return null;
 }
 
-/** Persist to the first writable store; failure degrades to memory-only. */
-function persistManagedKey(storages: KeyStorage[], ck: string, key: ManagedKey): void {
-  for (const s of storages) {
+/** Persist to the first eligible slot; failure degrades to memory-only.
+ *  Member keys are eligible for session slots only. */
+function persistManagedKey(slots: StorageSlot[], ck: string, key: ManagedKey): void {
+  for (const { store, persistent } of slots) {
+    if (isMemberKey(key) && persistent) continue;
     try {
-      s.setItem(STORAGE_PREFIX + ck, JSON.stringify(key));
+      store.setItem(STORAGE_PREFIX + ck, JSON.stringify(key));
       return;
     } catch {
       // Unavailable or full: try the next store; memory still holds the key.
@@ -300,7 +335,9 @@ export function clearManagedChatKey(
 ): void {
   // Storage is best-effort: the in-memory cache is the primary clearing target
   // and the stores may not exist (tests, non-browser contexts).
-  const storages = storage ? [storage] : resolveStorages();
+  const slots: StorageSlot[] = storage
+    ? [{ store: storage, persistent: true }]
+    : resolveStorages();
   if (identity) {
     const ck = cacheKey(identity.userId, identity.workspaceId);
     cache.delete(ck);
@@ -309,9 +346,9 @@ export function clearManagedChatKey(
       pendingEntry.invalid = true;
       inflight.delete(ck);
     }
-    for (const s of storages) {
+    for (const { store } of slots) {
       try {
-        s.removeItem(STORAGE_PREFIX + ck);
+        store.removeItem(STORAGE_PREFIX + ck);
       } catch {
         // Unavailable store: the scoped entry just stays unreferenced.
       }
@@ -320,7 +357,7 @@ export function clearManagedChatKey(
     cache.clear();
     for (const e of inflight.values()) e.invalid = true;
     inflight.clear();
-    for (const s of storages) clearPrefixedEntries(s);
+    for (const { store } of slots) clearPrefixedEntries(store);
   }
 }
 
