@@ -10,6 +10,7 @@ import {
   billingReservations,
   apiKeys,
   ledgerEntries,
+  memberChatUsage,
   models as modelsTable,
   modelPrices,
   providerModelMappings,
@@ -17,8 +18,11 @@ import {
   settlements,
   usageLogs,
   wallets,
+  workspaceMembers,
+  workspaces,
 } from "@hoborouter/db";
 import { WalletError, lockWallet, requirePositiveSafeInteger, runInImmediate } from "./wallet";
+import { memberChatDayEndMs, memberChatUtcDay } from "@hoborouter/keys";
 
 // Lock-order invariant: every transaction that touches BOTH api_keys and
 // wallets must lock api_keys FIRST, then wallets. The reserve path's inserts
@@ -157,6 +161,23 @@ export function estimateAffordableOutputTokens(
   return lo;
 }
 
+/**
+ * Typed member-policy admission failure raised INSIDE reserveRequest's
+ * transaction (nothing is written — the surrounding rollback discards the
+ * member hold). Subclasses WalletError so existing catch sites keep working.
+ */
+export type MemberBudgetCode = "denied" | "exceeded";
+export class MemberBudgetError extends WalletError {
+  constructor(
+    readonly memberCode: MemberBudgetCode,
+    message: string,
+    /** ms until the UTC day period resets; set for 'exceeded'. */
+    readonly retryAfterMs: number | null = null,
+  ) {
+    super(memberCode === "exceeded" ? "insufficient" : "ownership", message);
+  }
+}
+
 export type ReserveRequestArgs = {
   requestId: string;
   workspaceId: string;
@@ -176,6 +197,21 @@ export type ReserveRequestArgs = {
    * Absent (default): topup wallet, unchanged legacy behavior.
    */
   funding?: { underLimit: boolean };
+  /**
+   * Member chat budget admission (migration 0025): when present, the api key
+   * is a 'chat_member' key owned by this user. Inside the SAME transaction
+   * (api_keys already locked): workspace policy + membership recheck, then a
+   * hold on the per-(workspace, user, UTC day) member_chat_usage counter.
+   * Denied (policy off / not a member / suspended) or over-cap ->
+   * MemberBudgetError, nothing written.
+   */
+  memberBudget?: { userId: string };
+  /**
+   * Hold-time api_keys.budget_period_start snapshot (key-budget ticket):
+   * persisted on the reservation so settlement folds the hold into the OLD
+   * window only and can never debit the new window after a rollover.
+   */
+  keyBudgetPeriodStart?: number | null;
   now: number;
 };
 
@@ -209,6 +245,90 @@ export async function reserveRequest(
           "ownership",
           `api key ${args.apiKeyId} not usable for workspace ${args.workspaceId}`,
         );
+      }
+      // Member chat policy admission (migration 0025) — same transaction as
+      // the wallet hold so policy check + member counter + wallet CAS commit
+      // or abort together. Lock order: api_keys (above) -> workspaces ->
+      // member_chat_usage -> wallets; no path locks wallets first, so no
+      // deadlock with settle/release (api_keys -> member row -> wallet there).
+      let memberTicket: { userId: string; periodStart: string } | null = null;
+      if (args.memberBudget) {
+        const mbUserId = args.memberBudget.userId;
+        const wsRows = await tx
+          .select({
+            status: workspaces.status,
+            enabled: workspaces.member_chat_enabled,
+            cap: workspaces.member_chat_daily_cap_vnd,
+          })
+          .from(workspaces)
+          .where(eq(workspaces.id, args.workspaceId))
+          .for("update");
+        const ws = wsRows[0];
+        if (!ws || ws.status !== "active")
+          throw new MemberBudgetError("denied", "workspace is not active");
+        if (!ws.enabled)
+          throw new MemberBudgetError("denied", "member chat is disabled for this workspace");
+        const member = await tx
+          .select({ role: workspaceMembers.role })
+          .from(workspaceMembers)
+          .where(
+            and(
+              eq(workspaceMembers.workspace_id, args.workspaceId),
+              eq(workspaceMembers.user_id, mbUserId),
+            ),
+          )
+          .limit(1);
+        if (member.length === 0)
+          throw new MemberBudgetError("denied", "key owner is not a workspace member");
+        // Enabled policy is ALWAYS capped (workspaces_member_chat_cap_required).
+        const cap = ws.cap;
+        if (cap === null)
+          throw new MemberBudgetError("denied", "member chat policy has no daily cap");
+        const periodStart = memberChatUtcDay(args.now);
+        // Historical counter row: create-then-lock (idempotent per period).
+        // Never reset here or anywhere — policy updates and rollovers only
+        // ever move to a NEW period row.
+        await tx
+          .insert(memberChatUsage)
+          .values({
+            workspace_id: args.workspaceId,
+            user_id: mbUserId,
+            period_start: periodStart,
+            used_vnd: 0,
+            created_at: args.now,
+            updated_at: args.now,
+          })
+          .onConflictDoNothing();
+        const usageRows = await tx
+          .select({ used: memberChatUsage.used_vnd })
+          .from(memberChatUsage)
+          .where(
+            and(
+              eq(memberChatUsage.workspace_id, args.workspaceId),
+              eq(memberChatUsage.user_id, mbUserId),
+              eq(memberChatUsage.period_start, periodStart),
+            ),
+          )
+          .for("update");
+        const used = usageRows[0]?.used ?? 0;
+        if (used + capVnd > cap) {
+          throw new MemberBudgetError(
+            "exceeded",
+            `Member daily chat budget for the current period is exhausted. Retry after it resets.`,
+            memberChatDayEndMs(args.now) - args.now,
+          );
+        }
+        await tx
+          .update(memberChatUsage)
+          .set({ used_vnd: used + capVnd, updated_at: args.now })
+          .where(
+            and(
+              eq(memberChatUsage.workspace_id, args.workspaceId),
+              eq(memberChatUsage.user_id, mbUserId),
+              eq(memberChatUsage.period_start, periodStart),
+            ),
+          );
+        memberTicket = { userId: mbUserId, periodStart };
       }
       // Funding source (O3): one request is funded by exactly one wallet.
       // Subscription only when under the per-minute limit AND an active
@@ -329,6 +449,19 @@ export async function reserveRequest(
         cap_vnd: capVnd,
         status: "held",
         created_at: args.now,
+        // Member chat hold ticket: snapshots the policy counter period so a
+        // late settlement modifies the OLD period row only.
+        ...(memberTicket
+          ? {
+              member_budget_user_id: memberTicket.userId,
+              member_budget_period_start: memberTicket.periodStart,
+            }
+          : {}),
+        // Key-budget hold ticket: window start that received the admission
+        // hold (null when the key has no budget).
+        ...(args.keyBudgetPeriodStart !== undefined
+          ? { key_budget_period_start: args.keyBudgetPeriodStart }
+          : {}),
       });
 
       // CAS: available balance must cover the cap; 0 rows = insufficient.
@@ -391,11 +524,15 @@ export async function releaseRequest(db: Db | Tx, requestId: string, now: number
     const rows = await tx
       .select({
         dispatch_state: requests.dispatch_state,
+        workspace_id: requests.workspace_id,
         br_id: billingReservations.id,
         br_status: billingReservations.status,
         cap_vnd: billingReservations.cap_vnd,
         wallet_id: billingReservations.wallet_id,
         api_key_id: billingReservations.api_key_id,
+        key_budget_period_start: billingReservations.key_budget_period_start,
+        member_budget_user_id: billingReservations.member_budget_user_id,
+        member_budget_period_start: billingReservations.member_budget_period_start,
       })
       .from(requests)
       .innerJoin(billingReservations, eq(billingReservations.request_id, requests.id))
@@ -411,6 +548,8 @@ export async function releaseRequest(db: Db | Tx, requestId: string, now: number
     }
     // api_keys before wallets: the lock-order invariant above (the key-budget
     // fold-back below takes the api_keys row lock in this same transaction).
+    // The member period row locks between them (api_keys -> member row ->
+    // wallet), matching the reserve-side order.
     if (row.api_key_id !== null) await lockApiKey(tx, row.api_key_id);
     await lockWallet(tx, row.wallet_id);
     const casRes = await tx
@@ -450,6 +589,17 @@ export async function releaseRequest(db: Db | Tx, requestId: string, now: number
         apiKeyId: row.api_key_id,
         holdVnd: row.cap_vnd,
         chargedVnd: 0,
+        periodStart: row.key_budget_period_start,
+      });
+    }
+    if (row.member_budget_user_id !== null && row.member_budget_period_start !== null) {
+      await settleMemberChatHold(tx, {
+        workspaceId: row.workspace_id,
+        userId: row.member_budget_user_id,
+        periodStart: row.member_budget_period_start,
+        holdVnd: row.cap_vnd,
+        chargedVnd: 0,
+        now,
       });
     }
     // No ledger row: releasing a hold is not a cash movement.
@@ -492,6 +642,52 @@ function requestStatusForReason(reason: string): "client_abort" | "upstream_erro
 }
 
 /**
+ * Fold a member-chat admission hold back into the TICKETED period row inside
+ * the caller's transaction: used = max(0, used - hold) + charged. The row is
+ * identified by the reservation's member_budget_period_start ticket, so a
+ * settlement that lands after a period rollover (or after the policy was
+ * disabled / membership removed) modifies the OLD period row only — never a
+ * new period's holds. Rows are historical and never reset; a missing row
+ * (pre-policy legacy reservation) is a no-op.
+ */
+export async function settleMemberChatHold(
+  tx: Tx,
+  args: {
+    workspaceId: string;
+    userId: string;
+    periodStart: string;
+    holdVnd: number;
+    chargedVnd: number;
+    now: number;
+  },
+): Promise<void> {
+  const rows = await tx
+    .select({ used: memberChatUsage.used_vnd })
+    .from(memberChatUsage)
+    .where(
+      and(
+        eq(memberChatUsage.workspace_id, args.workspaceId),
+        eq(memberChatUsage.user_id, args.userId),
+        eq(memberChatUsage.period_start, args.periodStart),
+      ),
+    )
+    .for("update");
+  const row = rows[0];
+  if (!row) return;
+  const used = Math.max(0, row.used - args.holdVnd) + args.chargedVnd;
+  await tx
+    .update(memberChatUsage)
+    .set({ used_vnd: used, updated_at: args.now })
+    .where(
+      and(
+        eq(memberChatUsage.workspace_id, args.workspaceId),
+        eq(memberChatUsage.user_id, args.userId),
+        eq(memberChatUsage.period_start, args.periodStart),
+      ),
+    );
+}
+
+/**
  * Settle from 'dispatching' only. Usage outcome charges via calculateCharge
  * with the reservation's immutable price row and the snapshotted fx/markup;
  * charge above cap is clamped to the cap (full-hold: audit + disable the
@@ -517,6 +713,9 @@ export async function settleRequest(
         model_price_id: billingReservations.model_price_id,
         api_key_id: billingReservations.api_key_id,
         model_id: billingReservations.model_id,
+        key_budget_period_start: billingReservations.key_budget_period_start,
+        member_budget_user_id: billingReservations.member_budget_user_id,
+        member_budget_period_start: billingReservations.member_budget_period_start,
         workspace_id: requests.workspace_id,
         dispatch_state: requests.dispatch_state,
         provider_model_mapping_id: requests.provider_model_mapping_id,
@@ -533,7 +732,22 @@ export async function settleRequest(
     // while we wait on the lock, so the re-check below sees it (no double
     // charge, no unique-violation crash). The api_keys row locks FIRST per
     // the lock-order invariant — settleKeyBudgetHold below re-enters it.
+    // The member period row locks between api_keys and the wallet (same
+    // order as the reserve path: api_keys -> member row -> wallet).
     if (row.api_key_id !== null) await lockApiKey(tx, row.api_key_id);
+    if (row.member_budget_user_id !== null && row.member_budget_period_start !== null) {
+      await tx
+        .select({ used: memberChatUsage.used_vnd })
+        .from(memberChatUsage)
+        .where(
+          and(
+            eq(memberChatUsage.workspace_id, row.workspace_id),
+            eq(memberChatUsage.user_id, row.member_budget_user_id),
+            eq(memberChatUsage.period_start, row.member_budget_period_start),
+          ),
+        )
+        .for("update");
+    }
     await lockWallet(tx, row.wallet_id);
 
     // Idempotency: a stored settlement is the single source of truth.
@@ -775,13 +989,29 @@ export async function settleRequest(
 
     // Settle the key-budget admission hold with the ACTUAL charge (full_hold:
     // charged == cap, net zero). Policy counter only — wallet ledger above is
-    // untouched; no-op for keys without a budget. api_key_id is schema-nullable
-    // but always set by reserveRequest; a null is a legacy row with no policy.
+    // untouched; no-op for keys without a budget. The period ticket scopes the
+    // fold to the OLD window: after a rollover the reset already cleared the
+    // hold, and the charge must never debit the new window's counter.
+    // api_key_id is schema-nullable but always set by reserveRequest; a null
+    // is a legacy row with no policy.
     if (row.api_key_id !== null) {
       await settleKeyBudgetHold(tx, {
         apiKeyId: row.api_key_id,
         holdVnd: row.cap_vnd,
         chargedVnd: charge,
+        periodStart: row.key_budget_period_start,
+      });
+    }
+    // Member chat hold: fold into the ticketed period row (charged actual;
+    // full_hold debits the whole cap, net zero for the counter).
+    if (row.member_budget_user_id !== null && row.member_budget_period_start !== null) {
+      await settleMemberChatHold(tx, {
+        workspaceId: row.workspace_id,
+        userId: row.member_budget_user_id,
+        periodStart: row.member_budget_period_start,
+        holdVnd: row.cap_vnd,
+        chargedVnd: charge,
+        now,
       });
     }
 

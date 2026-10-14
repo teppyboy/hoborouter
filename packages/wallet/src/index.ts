@@ -22,6 +22,7 @@ export {
   settleRequest,
   recoverPending,
   refundCharge,
+  MemberBudgetError,
 } from "./billing";
 export type {
   ReserveRequestArgs,

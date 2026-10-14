@@ -2,7 +2,15 @@
 // Plaintext format: `sk-hbr-` + 43 base64url chars (32 CSPRNG bytes, no padding).
 // Only SHA-256 hex is stored. Status: 'active' is legacy and treated as enabled.
 import { and, eq, inArray, isNull } from "drizzle-orm";
-import { apiKeys, apiKeyModelPermissions, workspaces, type Db, type Tx } from "@hoborouter/db";
+import {
+  apiKeys,
+  apiKeyModelPermissions,
+  memberChatUsage,
+  workspaceMembers,
+  workspaces,
+  type Db,
+  type Tx,
+} from "@hoborouter/db";
 
 const PREFIX = "sk-hbr-";
 
@@ -26,6 +34,8 @@ export interface ApiKeyRecord {
   workspace_id: string;
   status: string;
   purpose: "generic" | "chat" | "chat_member";
+  /** Owner of a 'chat_member' key; null for generic and instance chat keys. */
+  owner_user_id: string | null;
 }
 
 /** Hash + lookup. Returns null for unknown/disabled/revoked/removed keys. Used by /v1 auth. */
@@ -37,6 +47,7 @@ export async function verifyApiKey(db: Db | Tx, plaintext: string): Promise<ApiK
       workspace_id: apiKeys.workspace_id,
       status: apiKeys.status,
       purpose: apiKeys.purpose,
+      owner_user_id: apiKeys.owner_user_id,
     })
     .from(apiKeys)
     // Archived (suspended) workspaces reject their old keys at the gateway;
@@ -285,16 +296,123 @@ export async function getKeyBudgetRemainingVnd(
  */
 export async function settleKeyBudgetHold(
   tx: Tx,
-  args: { apiKeyId: string; holdVnd: number; chargedVnd: number },
+  args: {
+    apiKeyId: string;
+    holdVnd: number;
+    chargedVnd: number;
+    /**
+     * Hold-time window ticket (billing_reservations.key_budget_period_start).
+     * When present, the fold applies ONLY if the live window still matches —
+     * a rollover already cleared the hold, so an old-period settlement must
+     * never debit the new window's counter (which may carry fresh holds).
+     * null = legacy pre-ticket reservation, folded unconditionally.
+     */
+    periodStart: number | null;
+  },
 ): Promise<void> {
   const rows = await tx
-    .select({ budget_vnd: apiKeys.budget_vnd, budget_used_vnd: apiKeys.budget_used_vnd })
+    .select({
+      budget_vnd: apiKeys.budget_vnd,
+      budget_used_vnd: apiKeys.budget_used_vnd,
+      budget_period_start: apiKeys.budget_period_start,
+    })
     .from(apiKeys)
     .where(eq(apiKeys.id, args.apiKeyId))
     .for("update")
     .limit(1);
   const key = rows[0];
   if (!key || key.budget_vnd === null) return;
+  if (
+    args.periodStart !== null &&
+    args.periodStart !== undefined &&
+    key.budget_period_start !== args.periodStart
+  )
+    return;
   const used = Math.max(0, key.budget_used_vnd - args.holdVnd) + args.chargedVnd;
   await tx.update(apiKeys).set({ budget_used_vnd: used }).where(eq(apiKeys.id, args.apiKeyId));
+}
+
+// --- member chat policy context (migration 0025) ---
+// Per-(workspace, user, UTC day) spend counter with live admission holds.
+// Read-only helpers here; the atomic admission runs inside the wallet
+// reserve transaction (@hoborouter/wallet) so policy check + hold + wallet
+// CAS commit or abort together.
+
+/** UTC calendar day of an epoch-ms instant, 'YYYY-MM-DD' (period_start key). */
+export function memberChatUtcDay(now: number): string {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+/** Epoch ms of the first instant AFTER the UTC day containing `now`. */
+export function memberChatDayEndMs(now: number): number {
+  const d = new Date(now);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+}
+
+export interface MemberChatContext {
+  /** 'YYYY-MM-DD' UTC period key for `now`. */
+  periodStart: string;
+  enabled: boolean;
+  /** Positive daily cap; null while disabled (DB CHECK keeps them in step). */
+  capVnd: number | null;
+  usedVnd: number;
+  /** cap - used (incl. live holds), clamped at 0; null while disabled. */
+  remainingVnd: number | null;
+  /** Epoch ms when the current UTC period rolls over. */
+  resetsAtMs: number;
+  /** Caller holds an active workspace membership (any role). */
+  isMember: boolean;
+}
+
+/**
+ * Read-only snapshot of the member chat policy + today's usage for a user.
+ * Advisory only: the authoritative serialized check runs inside the wallet
+ * reserve transaction.
+ */
+export async function getMemberChatContext(
+  db: Db | Tx,
+  args: { workspaceId: string; userId: string; now: number },
+): Promise<MemberChatContext> {
+  const periodStart = memberChatUtcDay(args.now);
+  const wsRows = await db
+    .select({
+      enabled: workspaces.member_chat_enabled,
+      cap: workspaces.member_chat_daily_cap_vnd,
+    })
+    .from(workspaces)
+    .where(eq(workspaces.id, args.workspaceId))
+    .limit(1);
+  const memberRows = await db
+    .select({ role: workspaceMembers.role })
+    .from(workspaceMembers)
+    .where(
+      and(
+        eq(workspaceMembers.workspace_id, args.workspaceId),
+        eq(workspaceMembers.user_id, args.userId),
+      ),
+    )
+    .limit(1);
+  const usageRows = await db
+    .select({ used: memberChatUsage.used_vnd })
+    .from(memberChatUsage)
+    .where(
+      and(
+        eq(memberChatUsage.workspace_id, args.workspaceId),
+        eq(memberChatUsage.user_id, args.userId),
+        eq(memberChatUsage.period_start, periodStart),
+      ),
+    )
+    .limit(1);
+  const enabled = wsRows[0]?.enabled ?? false;
+  const cap = enabled ? (wsRows[0]?.cap ?? null) : null;
+  const used = usageRows[0]?.used ?? 0;
+  return {
+    periodStart,
+    enabled,
+    capVnd: cap,
+    usedVnd: used,
+    remainingVnd: cap === null ? null : Math.max(0, cap - used),
+    resetsAtMs: memberChatDayEndMs(args.now),
+    isMember: memberRows.length > 0,
+  };
 }
