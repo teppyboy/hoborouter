@@ -2,13 +2,9 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   History,
-  Paperclip,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
-  Send,
-  Square,
-  X,
 } from "lucide-react";
 import { createSseParser, type StreamDelta } from "./sse";
 import { Transcript, type TranscriptHandle } from "./transcript";
@@ -23,7 +19,6 @@ import {
 import { ErrorState } from "../../components/page";
 import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
-import { Textarea } from "../../components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -42,21 +37,17 @@ import {
   type ManagedKeyPurpose,
 } from "./managed-key";
 import {
-  ATTACHMENT_RETENTION_NOTICE,
-  addAttachments,
   buildUserContent,
-  removeAttachment,
   utf8ByteLength,
   withMultimodalContent,
-  AttachError,
   type ChatAttachment,
   type UserContent,
 } from "./attachments";
+import { Composer, useComposerDraft } from "./composer";
 import { useLocaleEntry, type LocaleEntry } from "../../lib/i18n/t";
 import { useLocaleStore } from "../../lib/i18n/locale";
 import { useCapabilityLabel } from "../../lib/capabilities";
 import {
-  ATTACH_ERROR_COPY,
   PROMPT_CHIPS,
   readableError,
   useChatT,
@@ -166,22 +157,6 @@ export function ChatPage() {
     showEffort && effortOptions.includes(effort as ReasoningEffort) ? effort : EFFORT_UNSET;
 
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
-  const [input, setInput] = React.useState("");
-  // Draft revision counter: increments on USER draft mutations only — typing,
-  // paste (both via onChange), prompt-chip pick, attachment pick/remove. The
-  // send flow's own programmatic pre-fetch clear must NOT bump it: the 413
-  // rollback reads its baseline AFTER that clear, so an untouched composer
-  // presents "unchanged" and the wholesale restore path stays reachable.
-  const draftRevisionRef = React.useRef(0);
-  const bumpDraftRevision = () => {
-    draftRevisionRef.current += 1;
-  };
-  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
-  // Per-message attachments (images as multimodal parts, text/code inlined).
-  // Held in memory only; cleared when the message is sent or the view resets.
-  const [attachments, setAttachments] = React.useState<ChatAttachment[]>([]);
-  const attachmentsRef = React.useRef<ChatAttachment[]>([]);
-  const [attachError, setAttachError] = React.useState<AttachError | string | null>(null);
   // Session-only multimodal retention: conversation id -> user-turn index ->
   // the full request content captured when that turn was sent. Lets follow-ups
   // AND retries keep carrying this session's attachments (which persistence
@@ -191,19 +166,6 @@ export function ChatPage() {
   // Whether the most recently SENT turn carried attachments (drives the
   // truthful retry disclosure).
   const [lastTurnAttached, setLastTurnAttached] = React.useState(false);
-  // Serialized attachment reads: two overlapping file picks must both validate
-  // against the LIVE list, never a stale snapshot (count/total budget).
-  const attachQueueRef = React.useRef<Promise<void>>(Promise.resolve());
-  // Files queued for reading but not yet attached: a visible status so the
-  // paperclip button never feels dead while large reads are in flight.
-  const [readingFiles, setReadingFiles] = React.useState(false);
-  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
-  // State + ref move together: the async file-read handler and the send
-  // lifecycle must both see the live list without depending on render timing.
-  function applyAttachments(next: ChatAttachment[]) {
-    attachmentsRef.current = next;
-    setAttachments(next);
-  }
   const [streaming, setStreaming] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   // Persistent gateway-413 recovery state: the pre-send draft snapshot (text
@@ -283,9 +245,15 @@ export function ChatPage() {
   // aborted await may still resume, so every state write re-checks seq AND
   // identity.
   const seqRef = React.useRef(0);
+  // Identity (user:workspace) of the current view; shared by the send
+  // lifecycle and the composer's late-attachment-read guard.
+  const identityRef = React.useRef<string>("null:null");
   // Synchronous busy flag: state alone lags a re-render, so two send events in
   // the same tick (Enter + click) must not both pass the guard.
   const busyRef = React.useRef(false);
+  // Composer-owned draft (text, attachments, revision counter). identityRef
+  // and seqRef guard late attachment reads; seqRef moves with the send seam.
+  const draft = useComposerDraft({ identityRef, seqRef });
 
   function invalidateGeneration() {
     seqRef.current += 1;
@@ -310,7 +278,6 @@ export function ChatPage() {
   // transcript AND the saved-conversation identity so one workspace's context
   // (or one user's private history) can never leak into another's view or
   // follow-ups. The managed-key cache clears itself on logout (see hook).
-  const identityRef = React.useRef<string>("null:null");
   React.useEffect(() => {
     const id = `${userId ?? "null"}:${workspaceId ?? "null"}`;
     if (identityRef.current === id) return;
@@ -329,11 +296,10 @@ export function ChatPage() {
     setHistoryOpen(false);
     setError(null);
     setKeyError(null);
-    setAttachError(null);
     setSend413(null); // identity switch: the snapshot never crosses identities
     setRestoreConfirm(false);
     setLastTurnAttached(false);
-    applyAttachments([]);
+    draft.clearAttachments();
     multimodalRef.current.clear();
     lastUserRef.current = null;
     followLog();
@@ -342,41 +308,6 @@ export function ChatPage() {
   // Model changes are a per-message choice, not a conversation boundary:
   // switching models keeps the existing context (like ChatGPT). The model is
   // persisted with every save; an explicit "New chat" is how context resets.
-
-  /** Serialized, view-pinned attachment ingestion: overlapping picks queue
-   *  behind each other so every batch validates against the LIVE list (count
-   *  + total budget), and a read finishing after newChat/openChat/send (any
-   *  generation bump) or an identity switch is discarded — it can never
-   *  repopulate another conversation's or the sent composer's chip list. */
-  function handleFiles(fileList: FileList | null) {
-    const files = Array.from(fileList ?? []);
-    if (files.length === 0) return;
-    setReadingFiles(true);
-    const run = attachQueueRef.current
-      .then(
-        () => doAttachFiles(files),
-        () => doAttachFiles(files),
-      )
-      .finally(() => {
-        // Clear the reading status only when no later pick is still queued.
-        if (attachQueueRef.current === run) setReadingFiles(false);
-      });
-    attachQueueRef.current = run;
-  }
-
-  async function doAttachFiles(files: File[]) {
-    const idAtPick = identityRef.current;
-    const genAtPick = seqRef.current;
-    const res = await addAttachments(attachmentsRef.current, files);
-    if (identityRef.current !== idAtPick || seqRef.current !== genAtPick) return;
-    if (res.error) {
-      setAttachError(res.error);
-      return;
-    }
-    setAttachError(null);
-    bumpDraftRevision(); // user-initiated pick: counts as a draft mutation
-    applyAttachments([...attachmentsRef.current, ...res.added]);
-  }
 
   function stop() {
     // Abort only — the in-flight send's own terminal path persists the partial
@@ -400,11 +331,10 @@ export function ChatPage() {
     setConflict(false);
     setSaveNotice(null);
     setLoadingChat(false);
-    setAttachError(null);
     setSend413(null);
     setRestoreConfirm(false);
     setLastTurnAttached(false);
-    applyAttachments([]);
+    draft.clearAttachments();
     lastUserRef.current = null;
     // A fresh view always starts pinned to its latest message (same contract
     // as a deliberate send): reading position from a previous view must not
@@ -447,8 +377,8 @@ export function ChatPage() {
    *  replaces the newer draft + attachments. Never fired automatically. */
   function confirmRestore() {
     if (!send413) return;
-    setInput(send413.text);
-    applyAttachments([...send413.attachments]);
+    draft.setInput(send413.text);
+    draft.applyAttachments([...send413.attachments]);
     setSend413(null);
     setRestoreConfirm(false);
   }
@@ -469,11 +399,10 @@ export function ChatPage() {
     setError(null);
     setConflict(false);
     setSaveNotice(null);
-    setAttachError(null);
     setSend413(null);
     setRestoreConfirm(false);
     setLastTurnAttached(false);
-    applyAttachments([]);
+    draft.clearAttachments();
     lastUserRef.current = null;
     followLog();
     if (!ws) return;
@@ -605,10 +534,10 @@ export function ChatPage() {
     // the user turn is reused as-is, never appended a second time.
     const retryTurn = isRetry ? findRetryTurn(messages) : null;
     if (isRetry && (!retryTurn || lastUserRef.current === null)) return;
-    const text = (isRetry ? retryTurn?.userText : (textOverride ?? input))?.trim() ?? "";
+    const text = (isRetry ? retryTurn?.userText : (textOverride ?? draft.input))?.trim() ?? "";
     // Fresh sends carry the pending chips; a retry re-uses the RETAINED full
     // content of the last user turn (below) so attachments survive a retry.
-    const turnAttachments = isRetry ? [] : attachmentsRef.current;
+    const turnAttachments = isRetry ? [] : draft.attachmentsRef.current;
     // Attachment-only retry: only meaningful while the retained multimodal
     // content for that turn is still in this session's memory.
     const retryTurnIndex = isRetry
@@ -720,15 +649,15 @@ export function ChatPage() {
       // retention entry and the retry disclosure together. The snapshot is
       // taken before the clear; the baseline after it.
       if (!isRetry && textOverride === undefined) {
-        preSendText = input;
+        preSendText = draft.input;
         snapshotAttachments = [...turnAttachments];
         const prevLastUser = lastUserRef.current;
         const prevLastTurnAttached = lastTurnAttached;
-        setInput("");
-        applyAttachments([]);
-        setAttachError(null);
+        draft.setInput("");
+        draft.applyAttachments([]);
+        draft.clearAttachError();
         setLastTurnAttached(turnAttachments.length > 0);
-        revisionBaseline = draftRevisionRef.current;
+        revisionBaseline = draft.revision();
         rollback413 = () => {
           setMessages(baseMessages);
           assistantPartialRef.current = { content: "", reasoning: "" };
@@ -777,12 +706,12 @@ export function ChatPage() {
           // never enters history, so a resend cannot duplicate the user
           // message), and surface the persistent reconnect alert.
           rollback413();
-          const revisionChanged = draftRevisionRef.current !== revisionBaseline;
+          const revisionChanged = draft.revision() !== revisionBaseline;
           if (!revisionChanged) {
             // Unchanged revision: wholesale automatic restore of the snapshot
             // (attachments restore without re-reading files — session-only).
-            setInput(preSendText);
-            applyAttachments([...snapshotAttachments]);
+            draft.setInput(preSendText);
+            draft.applyAttachments([...snapshotAttachments]);
           }
           setSend413({
             text: preSendText,
@@ -857,7 +786,7 @@ export function ChatPage() {
 
   const autoEligible = Boolean(userId && workspaceId);
   const canSend = Boolean(
-    (input.trim() || attachments.length > 0) &&
+    (draft.input.trim() || draft.attachments.length > 0) &&
     model &&
     catalogReady &&
     !streaming &&
@@ -1116,9 +1045,9 @@ export function ChatPage() {
                   key={chip.en}
                   chip={chip}
                   onPick={(text) => {
-                    setInput(text);
-                    bumpDraftRevision(); // chip pick replaces the draft
-                    textareaRef.current?.focus();
+                    draft.setInput(text);
+                    draft.bump(); // chip pick replaces the draft
+                    draft.focus();
                   }}
                 />
               ))}
@@ -1187,155 +1116,20 @@ export function ChatPage() {
               </p>
             </div>
           )}
-          {/* File drag-and-drop on the whole composer. Dragover is only
-              cancelled for a Files payload so dragging text between editor
-              spots keeps the native drop-to-insert behaviour. */}
-          <div
-            className="relative rounded-2xl border border-border bg-card p-2 shadow-sm"
-            onDragOver={(e) => {
-              if (e.dataTransfer.types.includes("Files")) e.preventDefault();
-            }}
-            onDrop={(e) => {
-              if (e.dataTransfer.files.length > 0) {
-                e.preventDefault();
-                handleFiles(e.dataTransfer.files);
-              }
-            }}
-          >
-            {(attachments.length > 0 || attachError || readingFiles) && (
-              <div className="space-y-1 px-1 pb-1">
-                {readingFiles && (
-                  <p className="text-xs text-muted-foreground" role="status">
-                    {t("readingFile")}
-                  </p>
-                )}
-                {attachments.length > 0 && (
-                  <ul className="flex flex-wrap gap-1.5">
-                    {attachments.map((a) => (
-                      <li
-                        key={a.id}
-                        className="flex max-w-full items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs"
-                      >
-                        <span className="min-w-0 truncate">{a.name}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            bumpDraftRevision(); // user-initiated remove
-                            applyAttachments(removeAttachment(attachmentsRef.current, a.id));
-                            setAttachError(null);
-                          }}
-                          aria-label={t("removeAttachment", { name: a.name })}
-                          title={t("removeTitle", { name: a.name })}
-                          className="shrink-0 rounded-sm text-muted-foreground hover:text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        >
-                          <X className="size-3.5" aria-hidden />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {attachError && (
-                  <Alert
-                    variant="destructive"
-                    autoDismissMs={6000}
-                    onDismiss={() => setAttachError(null)}
-                    dismissLabel={t("dismissAlert")}
-                  >
-                    {attachError instanceof AttachError
-                      ? t(
-                          ATTACH_ERROR_COPY[attachError.code],
-                          attachError.name2 ? { name: attachError.name2 } : undefined,
-                        )
-                      : attachError}
-                  </Alert>
-                )}
-                <p className="text-xs text-muted-foreground">{t("attachHint")}</p>
-                <p className="text-xs text-muted-foreground">{ATTACHMENT_RETENTION_NOTICE}</p>
-              </div>
-            )}
-            <Textarea
-              aria-label={t("message")}
-              ref={textareaRef}
-              rows={1}
-              placeholder={
-                model
-                  ? t("placeholderSend")
-                  : modelsError
-                    ? t("placeholderModelsError")
-                    : t("placeholderChooseModel")
-              }
-              value={input}
-              onChange={(e) => {
-                setInput(e.target.value);
-                bumpDraftRevision(); // typing/paste: a USER draft mutation
-              }}
-              onKeyDown={(e) => {
-                // IME composition: Enter confirms the candidate, not the message.
-                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send();
-                }
-              }}
-              onPaste={(e) => {
-                // Clipboard files (e.g. a screenshot) attach like a pick;
-                // text-only pastes keep the native insert-into-draft path.
-                if (e.clipboardData.files.length > 0) {
-                  e.preventDefault();
-                  handleFiles(e.clipboardData.files);
-                }
-              }}
-              className="max-h-48 min-h-10 resize-none border-0 bg-transparent px-2 py-1 shadow-none field-sizing-content focus-visible:ring-0"
-            />
-            <div className="flex items-center justify-end gap-1">
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="image/png,image/jpeg,image/webp,image/gif,text/*,.md,.markdown,.csv,.json,.yaml,.yml,.toml,.log,.ts,.tsx,.js,.jsx,.mjs,.cjs,.css,.html,.py,.go,.rs,.java,.c,.h,.cpp,.sh,.sql"
-                className="hidden"
-                aria-hidden
-                tabIndex={-1}
-                onChange={(e) => {
-                  handleFiles(e.target.files);
-                  // Allow re-picking the same file after a removal.
-                  e.target.value = "";
-                }}
-              />
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={streaming}
-                aria-label={t("attachFiles")}
-                title={t("attachFilesTitle", { hint: t("attachHint") })}
-              >
-                <Paperclip className="size-4" aria-hidden />
-              </Button>
-              {streaming ? (
-                <Button
-                  size="icon"
-                  variant="outline"
-                  onClick={stop}
-                  aria-label={t("stopGenerating")}
-                >
-                  <Square className="size-4" aria-hidden />
-                </Button>
-              ) : (
-                <Button
-                  size="icon"
-                  onClick={() => void send()}
-                  disabled={!canSend}
-                  aria-label={t("sendMessage")}
-                >
-                  <Send className="size-4" aria-hidden />
-                </Button>
-              )}
-            </div>
-          </div>
-          <p className="py-2 text-center text-xs text-muted-foreground">
-            Usage is charged to your selected workspace.
-          </p>
+          <Composer
+            draft={draft}
+            placeholder={
+              model
+                ? t("placeholderSend")
+                : modelsError
+                  ? t("placeholderModelsError")
+                  : t("placeholderChooseModel")
+            }
+            streaming={streaming}
+            canSend={canSend}
+            onSend={() => void send()}
+            onStop={stop}
+          />
         </div>
       </div>
     </div>
