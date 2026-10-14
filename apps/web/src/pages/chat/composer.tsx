@@ -1,9 +1,10 @@
 import * as React from "react";
-import { Paperclip, Send, Square, X } from "lucide-react";
+import { Paperclip, Send, Settings2, Square, X } from "lucide-react";
 import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { Textarea } from "../../components/ui/textarea";
-import { ATTACH_ERROR_COPY, useChatT } from "./copy";
+import { ATTACH_ERROR_COPY } from "./copy";
+import { useComposerT } from "./composer-copy";
 import {
   ATTACHMENT_RETENTION_NOTICE,
   addAttachments,
@@ -125,9 +126,24 @@ export function useComposerDraft(deps: {
   };
 }
 
+/** Send-trigger keys: Enter (without Shift) or Cmd/Ctrl+Enter. IME
+ *  composition is handled by the caller; Shift+Enter keeps the newline. */
+export function isSendKeydown(e: {
+  key: string;
+  shiftKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+}): boolean {
+  if (e.key !== "Enter") return false;
+  if (e.metaKey || e.ctrlKey) return true;
+  return !e.shiftKey;
+}
+
 /** The message composer card: attachment chips, textarea, attach/send (or
- *  stop) controls. Rendering only — state lives in useComposerDraft, the
- *  send lifecycle in use-chat-send. */
+ *  stop) controls, and the always-available Advanced disclosure (scope,
+ *  billing and attachment copy — rendered outside the welcome wall).
+ *  Rendering only — state lives in useComposerDraft, the send lifecycle in
+ *  use-chat-send. */
 export function Composer(props: {
   draft: ComposerDraft;
   placeholder: string;
@@ -135,9 +151,40 @@ export function Composer(props: {
   canSend: boolean;
   onSend(): void;
   onStop(): void;
+  /** Disclosure content override; the default carries scope/billing and
+   *  attachment copy. The disclosure renders regardless of this prop. */
+  advanced?: React.ReactNode;
+  /** Controlled attachment chips (persistent-upload integration): when set,
+   *  rendered instead of the in-memory draft chips. Removal then goes
+   *  through onRemoveAttachment. */
+  attachments?: ChatAttachment[];
+  /** Controlled-chip removal; only consulted while `attachments` is set. */
+  onRemoveAttachment?(id: string): void;
+  /** Fired whenever the in-memory draft attachment list changes
+   *  (pick/remove/clear) so the page can mirror it (e.g. future upload
+   *  persistence). */
+  onAttachmentsChange?(next: ChatAttachment[]): void;
 }): React.ReactElement {
   const { draft, placeholder, streaming, canSend, onSend, onStop } = props;
-  const t = useChatT();
+  const t = useComposerT();
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  const advancedRef = React.useRef<HTMLDivElement | null>(null);
+  // Chips shown are the controlled list when provided, else the draft's.
+  const chips = props.attachments ?? draft.attachments;
+  const onAttachmentsChangeRef = React.useRef(props.onAttachmentsChange);
+  onAttachmentsChangeRef.current = props.onAttachmentsChange;
+  React.useEffect(() => {
+    onAttachmentsChangeRef.current?.(draft.attachments);
+  }, [draft.attachments]);
+  // Advanced disclosure focus: opening moves focus to the first control
+  // inside; closing (Escape below) returns it to the toggle.
+  const advancedToggleRef = React.useRef<HTMLButtonElement | null>(null);
+  React.useEffect(() => {
+    if (!advancedOpen) return;
+    advancedRef.current
+      ?.querySelector<HTMLElement>("button, [href], input, select, textarea")
+      ?.focus();
+  }, [advancedOpen]);
   // The hidden file input is rendered (and reset) entirely inside <Composer>.
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   return (
@@ -157,16 +204,16 @@ export function Composer(props: {
           }
         }}
       >
-        {(draft.attachments.length > 0 || draft.attachError || draft.readingFiles) && (
+        {(chips.length > 0 || draft.attachError || draft.readingFiles) && (
           <div className="space-y-1 px-1 pb-1">
             {draft.readingFiles && (
               <p className="text-xs text-muted-foreground" role="status">
                 {t("readingFile")}
               </p>
             )}
-            {draft.attachments.length > 0 && (
+            {chips.length > 0 && (
               <ul className="flex flex-wrap gap-1.5">
-                {draft.attachments.map((a) => (
+                {chips.map((a) => (
                   <li
                     key={a.id}
                     className="flex max-w-full items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs"
@@ -175,6 +222,10 @@ export function Composer(props: {
                     <button
                       type="button"
                       onClick={() => {
+                        if (props.attachments) {
+                          props.onRemoveAttachment?.(a.id);
+                          return;
+                        }
                         draft.bump(); // user-initiated remove
                         draft.applyAttachments(
                           removeAttachment(draft.attachmentsRef.current, a.id),
@@ -206,8 +257,6 @@ export function Composer(props: {
                   : draft.attachError}
               </Alert>
             )}
-            <p className="text-xs text-muted-foreground">{t("attachHint")}</p>
-            <p className="text-xs text-muted-foreground">{ATTACHMENT_RETENTION_NOTICE}</p>
           </div>
         )}
         <Textarea
@@ -223,7 +272,7 @@ export function Composer(props: {
           onKeyDown={(e) => {
             // IME composition: Enter confirms the candidate, not the message.
             if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (isSendKeydown(e)) {
               e.preventDefault();
               onSend();
             }
@@ -263,6 +312,25 @@ export function Composer(props: {
           >
             <Paperclip className="size-4" aria-hidden />
           </Button>
+          <Button
+            ref={advancedToggleRef}
+            size="icon"
+            variant="ghost"
+            aria-expanded={advancedOpen}
+            aria-controls="composer-advanced"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            onKeyDown={(e) => {
+              // Escape inside the open disclosure returns focus here.
+              if (advancedOpen && e.key === "Escape") {
+                e.preventDefault();
+                setAdvancedOpen(false);
+              }
+            }}
+            aria-label={t("advanced")}
+            title={t("advancedHint")}
+          >
+            <Settings2 className="size-4" aria-hidden />
+          </Button>
           {streaming ? (
             <Button size="icon" variant="outline" onClick={onStop} aria-label={t("stopGenerating")}>
               <Square className="size-4" aria-hidden />
@@ -273,10 +341,28 @@ export function Composer(props: {
             </Button>
           )}
         </div>
+        <div
+          id="composer-advanced"
+          ref={advancedRef}
+          hidden={!advancedOpen}
+          className="space-y-1 px-1 pb-1"
+          onKeyDown={(e) => {
+            if (advancedOpen && e.key === "Escape") {
+              e.preventDefault();
+              setAdvancedOpen(false);
+              advancedToggleRef.current?.focus();
+            }
+          }}
+        >
+          {props.advanced ?? (
+            <>
+              <p className="text-xs text-muted-foreground">{t("scopeBilling")}</p>
+              <p className="text-xs text-muted-foreground">{t("attachHint")}</p>
+              <p className="text-xs text-muted-foreground">{ATTACHMENT_RETENTION_NOTICE}</p>
+            </>
+          )}
+        </div>
       </div>
-      <p className="py-2 text-center text-xs text-muted-foreground">
-        Usage is charged to your selected workspace.
-      </p>
     </>
   );
 }
