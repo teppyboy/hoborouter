@@ -380,7 +380,19 @@ test("file selection uploads raw bytes and saved user turn contains only canonic
     "draft cleared",
   );
 
-  expect(calls.filter((c) => c.path === "/v1/chat/completions")).toHaveLength(1);
+  // Retry preserves in-session multimodal content without adding a duplicate upload.
+  await waitFor(() => buttonByText("Retry last reply") !== undefined, "retry button");
+  click(buttonByText("Retry last reply")!);
+  await waitFor(
+    () => calls.filter((c) => c.path === "/v1/chat/completions").length === 2,
+    "retry sent",
+  );
+  const retry = JSON.parse(
+    String(calls.filter((c) => c.path === "/v1/chat/completions")[1]?.init?.body),
+  ) as { messages: Array<{ role: string; content: unknown }> };
+  const retryLastUser = retry.messages.filter((m) => m.role === "user").at(-1);
+  expect(JSON.stringify(retryLastUser?.content)).toContain("image_url");
+  expect(calls.filter((c) => c.path === "/api/v1/workspaces/ws1/attachments")).toHaveLength(1);
 });
 
 test("failed upload adds no sendable chip", async () => {
