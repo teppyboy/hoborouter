@@ -17,6 +17,7 @@ import {
   FormMessage,
 } from "../../components/ui/form";
 import { useT } from "../../lib/i18n/t";
+import MemberChatPolicySection from "../../components/member-chat-policy";
 
 // General-tab copy: inline LocaleEntry set (see lib/i18n/common.ts). The zod
 // schema becomes a factory so validation messages follow the locale (same
@@ -112,6 +113,9 @@ export default function GeneralTab({ workspaceId }: { workspaceId: string }) {
           </div>
         </form>
       </Form>
+      <div className="mt-8">
+        <MemberChatPolicySection workspaceId={workspaceId} />
+      </div>
     </div>
   );
 }
