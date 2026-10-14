@@ -11,7 +11,7 @@ import { buildChatRequestBody, type ReasoningEffort } from "./reasoning";
 export const MAX_CHAT_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
 
 export type PreparedChatSend =
-  | { ok: true; bodyJson: string; conversationMessages: ConversationMessage[] }
+  | { ok: true; bodyJson: string; messages: ConversationMessage[] }
   | { ok: false; kind: "unavailable"; files: UnavailableAttachmentsError["unavailable"]; outgoingMessages: ConversationMessage[] }
   | { ok: false; kind: "tooLarge" | "failed"; error: Error };
 
@@ -51,7 +51,7 @@ export async function prepareChatSend(input: {
     if (new TextEncoder().encode(bodyJson).byteLength > MAX_CHAT_REQUEST_BODY_BYTES) {
       return { ok: false, kind: "tooLarge", error: new Error("Chat request body exceeds 16 MiB.") };
     }
-    return { ok: true, bodyJson, conversationMessages: copyMessages(outgoingMessages) };
+    return { ok: true, bodyJson, messages: copyMessages(outgoingMessages) };
   } catch (error) {
     if (error instanceof UnavailableAttachmentsError) {
       return {

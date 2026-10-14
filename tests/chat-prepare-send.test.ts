@@ -32,9 +32,9 @@ test("prepares all rehydrated refs without changing canonical messages", async (
   const result = await prepareChatSend({ workspaceId: "ws", model: "m", messages, effort: "high", fetch: remote.fetch });
   expect(result.ok).toBe(true);
   if (!result.ok) return;
-  expect(result.conversationMessages).toEqual(messages);
-  expect(result.conversationMessages).not.toBe(messages);
-  expect(result.conversationMessages[0]?.attachments).not.toBe(messages[0]?.attachments);
+  expect(result.messages).toEqual(messages);
+  expect(result.messages).not.toBe(messages);
+  expect(result.messages[0]?.attachments).not.toBe(messages[0]?.attachments);
   expect(JSON.parse(result.bodyJson).messages[0].content[0].text).toContain("hello");
   expect(JSON.stringify(messages)).toBe(original);
   expect(remote.calls()).toBe(1);
@@ -48,9 +48,9 @@ test("raw budget rejects before fetch", async () => {
   expect(remote.calls()).toBe(0);
 });
 
-test("404/410 returns unavailable with cloned outgoing refs and no body", async () => {
+test.each([404, 410])("HTTP %i returns unavailable with cloned outgoing refs and no body", async (status) => {
   const messages = msg([ref()]);
-  const remote = fakeFetch(410);
+  const remote = fakeFetch(status);
   const result = await prepareChatSend({ workspaceId: "ws", model: "m", messages, effort: "none", fetch: remote.fetch });
   expect(result).toMatchObject({ ok: false, kind: "unavailable", files: [{ name: "notes.txt" }] });
   if (result.ok || result.kind !== "unavailable") return;
