@@ -1,6 +1,73 @@
-import { Fragment, createElement, memo, useMemo } from "react";
+import { Fragment, createElement, memo, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { renderMarkdownHtml } from "../lib/chat-markdown";
+import { useT } from "../lib/i18n/t";
+
+// Copy affordance strings; en/vi both required by LocaleEntry typing.
+const COPY = {
+  copy: { en: "Copy code", vi: "Sao chép mã" },
+  copied: { en: "Copied", vi: "Đã sao chép" },
+  copyFailed: { en: "Copy failed", vi: "Sao chép thất bại" },
+} as const;
+
+// Fenced-block wrapper: header (language label + copy button) is React-owned
+// chrome — it is never part of the sanitized DOM produced by the engine, so
+// model output cannot forge or style it. The sanitized <pre> is rendered as
+// a child exactly as the sanitizer emitted it.
+function CodeBlock({ lang, text, children }: { lang: string; text: string; children: ReactNode }) {
+  const t = useT(COPY);
+  const [state, setState] = useState<"idle" | "ok" | "failed">("idle");
+  useEffect(() => {
+    if (state === "idle") return;
+    const id = setTimeout(() => setState("idle"), 2000);
+    return () => clearTimeout(id);
+  }, [state]);
+  const onCopy = () => {
+    const clipboard = navigator.clipboard;
+    if (!clipboard?.writeText) {
+      setState("failed");
+      return;
+    }
+    clipboard.writeText(text).then(
+      () => setState("ok"),
+      () => setState("failed"),
+    );
+  };
+  return (
+    <div className="relative my-2 [&_pre]:mt-0! [&_pre]:mb-0!" data-code-block={lang || undefined}>
+      <div className="flex items-center justify-end gap-1 pr-1">
+        <span data-code-lang className="mr-auto font-mono text-xs text-muted-foreground">
+          {lang}
+        </span>
+        <button
+          type="button"
+          onClick={onCopy}
+          aria-label={t("copy")}
+          className="flex h-11 min-w-11 items-center justify-center rounded px-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary"
+        >
+          {state === "ok" ? t("copied") : state === "failed" ? t("copyFailed") : t("copy")}
+        </button>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// Fenced/indented code block detector over the SANITIZED tree: only blocks the
+// engine kept survive here. text is the exact decoded code content (entities
+// already resolved by DOMParser); the single trailing newline comes from the
+// fence, not the code, so it is stripped like every mainstream markdown UI.
+function codeBlockInfo(node: Node): { lang: string; text: string } | null {
+  if (node.nodeType !== 1) return null;
+  const el = node as Element;
+  if (el.tagName !== "PRE") return null;
+  const code = el.querySelector("code");
+  if (!code) return null;
+  const raw = code.textContent ?? "";
+  const text = raw.endsWith("\n") ? raw.slice(0, -1) : raw;
+  const lang = /(?:^|\s)language-([\w+#.-]+)/.exec(code.className)?.[1] ?? "";
+  return { lang, text };
+}
 
 // Chat message body rendered by the full markdown engine
 // (lib/chat-markdown.ts: marked + DOMPurify). The sanitized HTML is parsed
@@ -59,7 +126,18 @@ export const ChatMarkdown = memo(function ChatMarkdown({
     const parsed = new DOMParser().parseFromString(html, "text/html");
     const tree: ReactNode[] = [];
     let i = 0;
-    for (const child of parsed.body.childNodes) tree.push(toReact(child, i++));
+    for (const child of parsed.body.childNodes) {
+      const block = codeBlockInfo(child);
+      if (block) {
+        tree.push(
+          <CodeBlock key={i++} lang={block.lang} text={block.text}>
+            {toReact(child, 0)}
+          </CodeBlock>,
+        );
+      } else {
+        tree.push(toReact(child, i++));
+      }
+    }
     return tree;
   }, [content]);
   return (
