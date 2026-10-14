@@ -38,6 +38,9 @@ export const REASONING_EFFORTS = [
 ] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 const MAX_BOUND = sql.raw(String(MAX_SAFE_INTEGER_MONEY));
+// DB-side mirror of shared CHAT_ATTACHMENT_MAX_IMAGE_BYTES (10 MiB) — schema
+// stays dependency-free, so the bound is duplicated with a comment tying it.
+const CHAT_ATTACHMENT_MAX_BYTES_BOUND = sql.raw(String(10 * 1024 * 1024));
 const intBounded = (col: AnyPgColumn) => sql`${col} >= 0 AND ${col} <= ${MAX_BOUND}`;
 
 const big = (name: string) => bigint(name, { mode: "number" });
@@ -49,6 +52,10 @@ export const workspaces = pgTable("workspaces", {
   status: text("status", { enum: ["active", "suspended"] })
     .notNull()
     .default("active"),
+  // Member chat policy (migration 0025). Toggling or recapping NEVER resets
+  // member_chat_usage rows or live holds — historical periods stay frozen.
+  member_chat_enabled: boolean("member_chat_enabled").notNull().default(false),
+  member_chat_daily_cap_vnd: big("member_chat_daily_cap_vnd"),
   created_at: big("created_at").notNull(),
 });
 
@@ -92,7 +99,7 @@ export const apiKeys = pgTable(
       .default("active"),
     // Server-owned key provenance: only the chat-key route writes 'chat';
     // the gateway resolves the 1 MiB vs 16 MiB body cap from this.
-    purpose: text("purpose", { enum: ["generic", "chat"] })
+    purpose: text("purpose", { enum: ["generic", "chat", "chat_member"] })
       .notNull()
       .default("generic"),
     created_at: big("created_at").notNull(),
@@ -109,11 +116,26 @@ export const apiKeys = pgTable(
     budget_period: text("budget_period", { enum: ["daily", "weekly", "monthly"] }),
     budget_used_vnd: big("budget_used_vnd").notNull().default(0),
     budget_period_start: big("budget_period_start"),
+    // Owner of a member chat key ('chat_member' purpose). NULL for generic
+    // and instance-issued chat keys. FK is NO ACTION by design: user identity
+    // removal must TOMBSTONE (soft-delete keys/rows referencing the user),
+    // never hard-delete the user row — enforced by the admin lane.
+    owner_user_id: text("owner_user_id").references(() => users.id),
   },
   (t) => [
     uniqueIndex("api_keys_key_hash").on(t.key_hash),
     check("api_keys_status", sql`${t.status} IN ('active','enabled','disabled','revoked')`),
-    check("api_keys_purpose", sql`${t.purpose} IN ('generic','chat')`),
+    check("api_keys_purpose", sql`${t.purpose} IN ('generic','chat','chat_member')`),
+    // A member chat key always names its owner.
+    check(
+      "api_keys_chat_member_owner",
+      sql`${t.purpose} != 'chat_member' OR ${t.owner_user_id} IS NOT NULL`,
+    ),
+    // Member keys are never workspace-wide ownerless keys.
+    check(
+      "api_keys_generic_ownerless",
+      sql`${t.purpose} = 'generic' OR ${t.owner_user_id} IS NULL OR ${t.purpose} = 'chat_member'`,
+    ),
     check(
       "api_keys_expires_at_bound",
       sql`${t.expires_at} IS NULL OR (${t.expires_at} >= 0 AND ${t.expires_at} <= ${MAX_BOUND})`,
@@ -1099,6 +1121,16 @@ export const billingReservations = pgTable(
     usd_vnd_exchange_rate: big("usd_vnd_exchange_rate").notNull(),
     markup_ppm: big("markup_ppm").notNull(),
     cap_vnd: big("cap_vnd").notNull(),
+    // Member daily-cap hold ticket (migration 0025): snapshots the policy
+    // counter this hold charged against (workspace member_chat_usage period
+    // key, UTC 'YYYY-MM-DD'). NULL for owner/admin/key-budget traffic. The
+    // persisted ticket lets late settlements modify the OLD period row only.
+    member_budget_user_id: text("member_budget_user_id").references(() => users.id),
+    member_budget_period_start: text("member_budget_period_start"),
+    // Key-budget hold ticket: api_keys.budget_period_start snapshot at hold
+    // time (epoch ms). Fixes the old-ticket bug where settlement re-read the
+    // live (possibly rolled-over) period start instead of the held one.
+    key_budget_period_start: big("key_budget_period_start"),
     status: text("status", {
       enum: ["held", "settled", "settled_full_hold", "released"],
     }).notNull(),
@@ -1113,6 +1145,15 @@ export const billingReservations = pgTable(
     check(
       "billing_reservations_status",
       sql`${t.status} IN ('held','settled','settled_full_hold','released')`,
+    ),
+    // Member hold tickets are complete or absent (period key rides the user).
+    check(
+      "billing_reservations_member_ticket_pair",
+      sql`(${t.member_budget_user_id} IS NULL) = (${t.member_budget_period_start} IS NULL)`,
+    ),
+    check(
+      "billing_reservations_key_period_start_bound",
+      sql`${t.key_budget_period_start} IS NULL OR (${t.key_budget_period_start} >= 0 AND ${t.key_budget_period_start} <= ${MAX_BOUND})`,
     ),
   ],
 );
@@ -1301,6 +1342,79 @@ export const chatConversations = pgTable(
     check(
       "chat_conversations_archived_at",
       sql`${t.archived_at} IS NULL OR ${intBounded(t.archived_at)}`,
+    ),
+  ],
+);
+
+// --- member chat policy usage (migration 0025) ---
+// Per-(workspace, user, UTC day) policy counter. used_vnd includes live
+// admission holds AND settled charges; rows are HISTORICAL — a policy update
+// or period rollover never deletes/resets them. UTC period key is the text
+// date 'YYYY-MM-DD' (same convention as subscription_daily_grants.grant_day).
+export const memberChatUsage = pgTable(
+  "member_chat_usage",
+  {
+    workspace_id: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    user_id: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    period_start: text("period_start").notNull(),
+    used_vnd: big("used_vnd").notNull().default(0),
+    created_at: big("created_at").notNull(),
+    updated_at: big("updated_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.workspace_id, t.user_id, t.period_start] }),
+    check("mcu_period_start", sql`${t.period_start} ~ '^\\d{4}-\\d{2}-\\d{2}$'`),
+    check("mcu_used_vnd", intBounded(t.used_vnd)),
+    check("mcu_created_at", intBounded(t.created_at)),
+    check("mcu_updated_at", intBounded(t.updated_at)),
+  ],
+);
+
+// --- chat attachments (migration 0024) ---
+// Metadata rows only: bytes live on the filesystem at
+// data/chat-attachments/<uuid> (server-generated from the row UUID — no
+// client path ever reaches the filename). TTL 30 days from upload; unreferenced
+// uploads are GC'd after 24h. Expired/deleted refs stay in history snapshots.
+// user_id FK is NO ACTION by design: user identity removal must TOMBSTONE
+// these rows (deleted_at) before removing the user — never hard-delete.
+export const chatAttachments = pgTable(
+  "chat_attachments",
+  {
+    id: text("id").primaryKey(), // UUIDv4 text; also the storage filename
+    user_id: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    workspace_id: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id),
+    kind: text("kind", { enum: ["image", "text"] }).notNull(),
+    name: text("name").notNull(),
+    mime: text("mime").notNull(),
+    bytes: big("bytes").notNull(),
+    created_at: big("created_at").notNull(),
+    expires_at: big("expires_at").notNull(),
+    deleted_at: big("deleted_at"),
+  },
+  (t) => [
+    // Live-bytes quota query (sum WHERE deleted_at IS NULL, per user).
+    index("chat_attachments_user_live_idx").on(t.user_id).where(sql`deleted_at IS NULL`),
+    // Per-workspace listing + GC sweeps by expiry.
+    index("chat_attachments_workspace_created_idx").on(t.workspace_id, t.created_at),
+    index("chat_attachments_expires_idx").on(t.expires_at),
+    check("chat_attachments_kind", sql`${t.kind} IN ('image','text')`),
+    check(
+      "chat_attachments_bytes",
+      sql`${t.bytes} > 0 AND ${t.bytes} <= ${CHAT_ATTACHMENT_MAX_BYTES_BOUND}`,
+    ),
+    check("chat_attachments_created_at", intBounded(t.created_at)),
+    check("chat_attachments_expires_at", intBounded(t.expires_at)),
+    check(
+      "chat_attachments_deleted_at",
+      sql`${t.deleted_at} IS NULL OR ${intBounded(t.deleted_at)}`,
     ),
   ],
 );

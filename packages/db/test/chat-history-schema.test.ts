@@ -13,7 +13,6 @@ import {
   payments,
   users,
   wallets,
-  workspaces,
 } from "../src/schema";
 
 const DEFAULT_TEST_URL = "postgres://postgres:postgres@127.0.0.1:55432/postgres";
@@ -75,10 +74,11 @@ async function seedChatOwner(db: Db): Promise<void> {
       updatedAt: new Date(1),
     })
     .onConflictDoNothing();
-  await db
-    .insert(workspaces)
-    .values({ id: "ws-chat", name: "ws", status: "active", created_at: 1 })
-    .onConflictDoNothing();
+  // Raw SQL with explicit pre-0001 columns: the drizzle schema object now
+  // carries post-0025 workspace policy columns that the baseline table lacks.
+  await db.execute(
+    sql`INSERT INTO "workspaces" ("id", "name", "status", "created_at") VALUES ('ws-chat', 'ws', 'active', 1) ON CONFLICT DO NOTHING`,
+  );
 }
 
 describe("chat_conversations schema", () => {

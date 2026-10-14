@@ -169,6 +169,20 @@
       "when": 1792900000000,
       "tag": "0023_reasoning_route_sort_order",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793000000000,
+      "tag": "0024_chat_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1793100000000,
+      "tag": "0025_member_chat_policy",
+      "breakpoints": true
     }
   ]
 }
