@@ -403,9 +403,11 @@ function sseModelRewriteStream(
   const reader = source.getReader();
   let buf = "";
   const rewriteLine = (line: string): string => {
-    if (!line.startsWith("data: ")) return line;
+    // SSE allows the optional single space after "data:"; upstreams emit both
+    // forms, and a no-space event must still be scrubbed, never passed through.
+    if (!line.startsWith("data:")) return line;
     try {
-      const o = JSON.parse(line.slice(6)) as JsonValue;
+      const o = JSON.parse(line.slice(5)) as JsonValue;
       if (onFirstToken && isFirstTokenEvent(o, protocol)) onFirstToken(o);
       return `data: ${JSON.stringify(scrubJsonStrings(o, upstreamModel, publicModel, extra))}`;
     } catch {
@@ -951,6 +953,13 @@ function gatewayHandler(
     }
 
     const requestId = crypto.randomUUID();
+    // Every response after the request row exists carries the correlation id —
+    // including pre-dispatch releases, dispatch timeouts/aborts and stream
+    // setup failures — so a client can match any failure to its billed request.
+    const withRequestId = (res: Response): Response => {
+      res.headers.set("x-hbr-request-id", requestId);
+      return res;
+    };
     const stream = body.stream === true;
     // Key-policy admission BEFORE wallet reservation: expiry + per-period VND
     // budget, serialized on the api_keys row (FOR UPDATE) so concurrent
@@ -1088,7 +1097,7 @@ function gatewayHandler(
         // dispatching already? markDispatching happens right after; safe to ignore here.
       }
       void err;
-      return routeError(400, "INVALID", "Request could not be prepared");
+      return withRequestId(routeError(400, "INVALID", "Request could not be prepared"));
     };
 
     try {
@@ -1149,7 +1158,7 @@ function gatewayHandler(
       clearTimeout(headerTimeout);
       if (request.signal.aborted) {
         await settle(db, requestId, { kind: "full_hold", reason: "client_abort" }, done);
-        return routeError(499, "client_abort", "Client aborted the request");
+        return withRequestId(routeError(499, "client_abort", "Client aborted the request"));
       }
       await settle(
         db,
@@ -1157,7 +1166,7 @@ function gatewayHandler(
         { kind: "full_hold", reason: "upstream_error", metadata: err },
         done,
       );
-      return routeError(502, "upstream_error", "Upstream dispatch failed");
+      return withRequestId(routeError(502, "upstream_error", "Upstream dispatch failed"));
     }
     clearTimeout(headerTimeout);
 
@@ -1206,7 +1215,7 @@ function gatewayHandler(
         } else {
           await settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
         }
-        return routeError(502, "upstream_error", "Upstream body read failed");
+        return withRequestId(routeError(502, "upstream_error", "Upstream body read failed"));
       }
       const buf = new Uint8Array(ab);
       tap.push(buf);
@@ -1230,7 +1239,7 @@ function gatewayHandler(
     const source = upstream.body;
     if (!source) {
       await settle(db, requestId, { kind: "full_hold", reason: "upstream_error" }, done);
-      return routeError(502, "upstream_error", "Upstream returned no body");
+      return withRequestId(routeError(502, "upstream_error", "Upstream returned no body"));
     }
     // Pull-based passthrough: client cancel() triggers cancel() below.
     const reader = source.getReader();

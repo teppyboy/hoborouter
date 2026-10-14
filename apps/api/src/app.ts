@@ -313,7 +313,9 @@ async function boundaryResponse(
     if (name.toLowerCase() !== "set-cookie") headers.append(name, value);
   }
   for (const cookie of cookies) headers.append("set-cookie", cookie);
-  headers.set("x-hbr-request-id", requestId);
+  // A route-set correlation id (the gateway's, matching the requests row)
+  // wins; the boundary id is only a fallback for responses no route stamped.
+  headers.set("x-hbr-request-id", source.headers.get("x-hbr-request-id") ?? requestId);
   if (json) {
     headers.set("content-type", "application/json");
     headers.delete("content-length");
