@@ -13,7 +13,7 @@ import {
 } from "../authz";
 import { MockPaymentError, processMockPaymentEvent } from "@hoborouter/payments";
 import { checkPassword } from "@hoborouter/shared";
-import { and, asc, desc, eq, ne, notExists, sql, count, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, ne, notExists, or, sql, count, inArray } from "drizzle-orm";
 import { z } from "zod";
 import type { PgTable } from "drizzle-orm/pg-core";
 import {
@@ -41,6 +41,17 @@ const cpaBase = (env: Record<string, string | undefined> = process.env) =>
   env.CPA_BASE_URL || "http://cpa:8317";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Trust boundary for the optional users-list query: strict (unknown params
+// rejected). Absent query keeps the legacy whole-array response shape.
+const usersListQuerySchema = z.strictObject({
+  q: z.string().min(1).max(200).optional(),
+  role: z.enum(["admin", "member"]).optional(),
+  sort: z.enum(["created_at", "email", "name"]).optional(),
+  order: z.enum(["asc", "desc"]).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
 
 // Trust boundary for the optional DELETE body: strict (unknown keys rejected),
 // absent body stays the legacy unconfirmed remove.
@@ -269,25 +280,64 @@ export const adminExtraRoutes = (
       async ({ request }) => {
         const g = await guard(db, auth, request);
         if ("error" in g) return g.error;
+        const select = {
+          id: users.id,
+          email: users.email,
+          name: users.name,
+          email_verified: users.emailVerified,
+          // Raw bigint comes back as a STRING from Bun SQL/PG; mapWith(Number)
+          // keeps created_at a JSON epoch-ms number (web formatDate needs it).
+          created_at: sql<number>`${users.createdAt}`.mapWith(Number),
+          is_instance_admin: sql<number>`exists(select 1 from instance_admins ia where ia.user_id = ${users.id})`,
+          // count(*) is bigint → string on PG; same mapWith(Number) treatment.
+          workspace_count:
+            sql<number>`(select count(*) from workspace_members wm where wm.user_id = ${users.id})`.mapWith(
+              Number,
+            ),
+        };
+        // No query string: legacy whole-array response (unchanged shape).
+        const url = new URL(request.url);
+        if (url.search.length === 0) {
+          const rows = await db.select(select).from(users).orderBy(desc(users.createdAt));
+          return json({ data: rows });
+        }
+        const parsed = usersListQuerySchema.safeParse(Object.fromEntries(url.searchParams));
+        if (!parsed.success) {
+          return jsonError(
+            400,
+            "INVALID",
+            "Invalid query: q, role (admin|member), sort (created_at|email|name), order (asc|desc), limit (1..200), offset (>=0)",
+          );
+        }
+        const { q: term, role, sort = "created_at", order = "desc", limit = 200, offset = 0 } =
+          parsed.data;
+        const conds = [];
+        if (term !== undefined) {
+          conds.push(
+            or(ilike(users.email, `%${term}%`), ilike(users.name, `%${term}%`), eq(users.id, term)),
+          );
+        }
+        if (role !== undefined) {
+          conds.push(
+            role === "admin"
+              ? sql`exists(select 1 from instance_admins ia where ia.user_id = ${users.id})`
+              : sql`not exists(select 1 from instance_admins ia where ia.user_id = ${users.id})`,
+          );
+        }
+        const where = conds.length > 0 ? and(...conds) : undefined;
+        const totalRows = await db.select({ n: count() }).from(users).where(where);
+        // Whitelisted column switch only — user input never reaches SQL text.
+        const sortCol =
+          sort === "email" ? users.email : sort === "name" ? users.name : users.createdAt;
         const rows = await db
-          .select({
-            id: users.id,
-            email: users.email,
-            name: users.name,
-            email_verified: users.emailVerified,
-            // Raw bigint comes back as a STRING from Bun SQL/PG; mapWith(Number)
-            // keeps created_at a JSON epoch-ms number (web formatDate needs it).
-            created_at: sql<number>`${users.createdAt}`.mapWith(Number),
-            is_instance_admin: sql<number>`exists(select 1 from instance_admins ia where ia.user_id = ${users.id})`,
-            // count(*) is bigint → string on PG; same mapWith(Number) treatment.
-            workspace_count:
-              sql<number>`(select count(*) from workspace_members wm where wm.user_id = ${users.id})`.mapWith(
-                Number,
-              ),
-          })
+          .select(select)
           .from(users)
-          .orderBy(desc(users.createdAt));
-        return json({ data: rows });
+          .where(where)
+          // id tiebreak keeps the page order stable across paged fetches.
+          .orderBy(order === "asc" ? asc(sortCol) : desc(sortCol), asc(users.id))
+          .limit(limit)
+          .offset(offset);
+        return json({ data: rows, total: Number(totalRows[0]?.n ?? 0), limit, offset });
       },
     )
     .get(
@@ -684,6 +734,7 @@ export const adminExtraRoutes = (
               .select({
                 id: wallets.id,
                 workspace_id: wallets.workspace_id,
+                kind: wallets.kind,
                 balance: wallets.balance,
                 reserved: wallets.reserved,
               })
@@ -699,16 +750,32 @@ export const adminExtraRoutes = (
             // HARD MONEY GUARD — validated before ANY mutation: a funded or
             // reserved wallet means the workspace holds customer money, so
             // nothing may be deleted or transferred around it.
-            const funded = new Set(
-              lockedWallets
-                .filter((w) => w.balance > 0 || w.reserved > 0)
-                .map((w) => w.workspace_id),
-            );
+            const fundedWallets = lockedWallets.filter((w) => w.balance > 0 || w.reserved > 0);
+            const funded = new Set(fundedWallets.map((w) => w.workspace_id));
             if (funded.size > 0) {
+              // Same locked transaction computed the snapshot: no second read,
+              // no TOCTOU. Server-locked exact wallet figures so the admin UI
+              // can link straight to the resolution routes without guessing.
               violation = conflict(
                 "WORKSPACE_FUNDED",
                 "Workspace wallet holds funds or reservations; money history cannot be deleted",
-                { workspaces: sole.filter((w) => funded.has(w.id)) },
+                {
+                  workspaces: sole
+                    .filter((w) => funded.has(w.id))
+                    .map((w) => ({
+                      id: w.id,
+                      name: w.name,
+                      wallets: fundedWallets
+                        .filter((lw) => lw.workspace_id === w.id)
+                        .map((lw) => ({
+                          id: lw.id,
+                          kind: lw.kind,
+                          balance_vnd: Number(lw.balance),
+                          reserved_vnd: Number(lw.reserved),
+                          available_vnd: Number(lw.balance) - Number(lw.reserved),
+                        })),
+                    })),
+                },
               );
               return;
             }
