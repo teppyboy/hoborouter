@@ -102,6 +102,11 @@ interface DataTableProps<TData> {
    * overflow — it never stretches empty space below the last row.
    */
   scroll?: { label: string; fill?: boolean };
+  /** Row activation (click/Enter/Space): generic, opt-in per table. */
+  onRowActivate?: (row: TData) => void;
+  /** Row context menu (right-click / Shift+F10): receives pointer coordinates. */
+  onRowContextMenu?: (row: TData, pos: { x: number; y: number }) => void;
+  rowAriaLabel?: (row: TData) => string;
 }
 
 /** Generic TanStack Table wrapper: sorting + optional external global filter. */
@@ -112,6 +117,9 @@ export function DataTable<TData>({
   onGlobalFilterChange,
   empty,
   scroll,
+  onRowActivate,
+  onRowContextMenu,
+  rowAriaLabel,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
 
@@ -167,7 +175,44 @@ export function DataTable<TData>({
           </TableRow>
         ) : (
           table.getRowModel().rows.map((row) => (
-            <TableRow key={row.id}>
+            <TableRow
+              key={row.id}
+              tabIndex={onRowActivate ? 0 : undefined}
+              aria-label={rowAriaLabel ? rowAriaLabel(row.original) : undefined}
+              onClick={
+                onRowActivate
+                  ? (e) => {
+                      // Interactive children (buttons, links) keep their own
+                      // semantics; row activation only fires on the row itself.
+                      if ((e.target as HTMLElement).closest("button, a, input, select")) return;
+                      onRowActivate(row.original);
+                    }
+                  : undefined
+              }
+              onContextMenu={
+                onRowContextMenu
+                  ? (e) => {
+                      e.preventDefault();
+                      onRowContextMenu(row.original, { x: e.clientX, y: e.clientY });
+                    }
+                  : undefined
+              }
+              onKeyDown={
+                onRowActivate
+                  ? (e) => {
+                      if (e.target !== e.currentTarget) return;
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onRowActivate(row.original);
+                      } else if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") {
+                        e.preventDefault();
+                        const r = e.currentTarget.getBoundingClientRect();
+                        onRowContextMenu?.(row.original, { x: r.left, y: r.bottom });
+                      }
+                    }
+                  : undefined
+              }
+            >
               {row.getVisibleCells().map((cell) => (
                 <TableCell key={cell.id} className={cn(cell.column.columnDef.meta as string)}>
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}

@@ -46,26 +46,25 @@ function renderUsers(users: AdminUser[], currentUserId: string | null): string {
   );
 }
 
-test("rows render Edit and Reset password beside Remove; Role/Joined preserved", () => {
+test("rows have no action button wall; Role/Joined columns preserved", () => {
   const html = renderUsers([user({ is_instance_admin: true })], "u_self");
-  expect(html).toContain("Edit");
-  expect(html).toContain("Reset password");
-  expect(html).toContain("Remove");
+  // Actions moved into detail/context menu; rows carry only data columns.
+  expect(html).not.toContain('aria-label="Edit grace@example.com"');
+  expect(html).not.toContain('aria-label="Reset password for grace@example.com"');
+  expect(html).not.toContain('aria-label="Remove grace@example.com"');
   expect(html).toContain("admin"); // Role badge unchanged
   expect(html).toContain("2023"); // Joined date (Nov 2023 epoch) unchanged
-  expect(html).toContain('aria-label="Edit grace@example.com"');
-  expect(html).toContain('aria-label="Reset password for grace@example.com"');
+  // Rows are activatable (click/Enter -> detail) and labelled by email.
+  expect(html).toContain('aria-label="Details for grace@example.com"');
 });
 
-test("self row keeps Edit/Reset but never Remove", () => {
+test("self row renders identically (no Remove anywhere in the row markup)", () => {
   const html = renderUsers([user({ id: "u_self" })], "u_self");
-  expect(html).toContain("Edit");
-  expect(html).toContain("Reset password");
   expect(html).not.toContain(">Remove</button>");
   expect(html).not.toContain('aria-label="Remove grace@example.com"');
 });
 
-test("action buttons carry accessible labels built from the email", () => {
+test("rows carry accessible labels built from the email", () => {
   const html = renderUsers([user({ email: "ada@example.com", id: "u_other" })], "u_self");
-  expect(html).toContain('aria-label="Remove ada@example.com"');
+  expect(html).toContain('aria-label="Details for ada@example.com"');
 });

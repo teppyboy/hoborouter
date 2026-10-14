@@ -6,6 +6,7 @@
 //   and never renders a destructive retry.
 import { test, expect, afterAll, afterEach } from "bun:test";
 import { JSDOM } from "jsdom";
+import React from "react";
 import { act } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -127,10 +128,25 @@ function mount(user: AdminUser = adminUser()) {
     return handler(String(url), init);
   }) as typeof fetch;
 
+  class Boundary extends React.Component<
+    { children: React.ReactNode },
+    { err: Error | null }
+  > {
+    state = { err: null as Error | null };
+    static getDerivedStateFromError(err: Error) {
+      return { err };
+    }
+    render() {
+      if (this.state.err) return <div id="bnd">BOUNDARY: {this.state.err.message}</div>;
+      return this.props.children;
+    }
+  }
   act(() => {
     root.render(
       <QueryClientProvider client={qc}>
-        <UsersTable users={[user]} currentUserId="u_admin" />
+        <Boundary>
+          <UsersTable users={[user]} currentUserId="u_admin" />
+        </Boundary>
       </QueryClientProvider>,
     );
   });
@@ -151,6 +167,16 @@ function mount(user: AdminUser = adminUser()) {
         });
       }
       throw new Error(`waitFor miss: ${needle}`);
+    },
+    clickRow: async (email: string) => {
+      const row = [...document.querySelectorAll("tr[aria-label]")].find((r) =>
+        (r.getAttribute("aria-label") ?? "").includes(email),
+      );
+      if (!row) throw new Error(`no row for ${email}`);
+      await act(async () => {
+        row.dispatchEvent(new W.MouseEvent("click", { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 0));
+      });
     },
     clickButton: async (label: string, which: "first" | "last" = "first") => {
       const matches = [...document.querySelectorAll("button")].filter(
@@ -174,8 +200,13 @@ test("sole-owner confirm action resends DELETE with { confirm: true } and succee
   const delBodies: string[] = [];
   h.fetchCalls.length = 0;
   globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
-    attempts++;
+    // Only DELETEs count as removal attempts: the detail dialog now issues
+    // its own context/catalog reads through this same mock.
+    if (String(url).includes("/admin/users/u_1") && init?.method !== "DELETE") {
+      return DEFAULT_FETCH(String(url), init);
+    }
     if (String(url).includes("/admin/users/u_1") && init?.method === "DELETE") {
+      attempts++;
       delBodies.push(String(init?.body ?? ""));
       if (attempts === 1) {
         return jsonResponse(409, {
@@ -191,9 +222,18 @@ test("sole-owner confirm action resends DELETE with { confirm: true } and succee
     return DEFAULT_FETCH(String(url), init);
   }) as typeof fetch;
 
-  await h.clickButton("Remove"); // row action opens the confirm dialog
+  // New interaction: row click opens the detail dialog; its footer opens the
+  // remove confirm (no permanent per-row buttons).
+  await h.clickRow("grace@example.com");
+  await h.waitFor("User details");
+  await h.clickButton("Remove"); // detail footer opens the confirm dialog
   await h.waitFor("Remove user?");
   await h.clickButton("Remove", "last"); // dialog confirm (unconfirmed attempt)
+  await new Promise((r) => setTimeout(r, 300));
+  (await import("node:fs")).appendFileSync(
+    "/tmp/sole-probe.log",
+    `CLOSE=${(globalThis as unknown as { __removeClose?: string }).__removeClose ?? "never"}\n`,
+  );
   await h.waitFor("Delete workspaces and remove");
   const text = document.body.textContent ?? "";
   expect(text).toContain("Acme"); // named workspaces
@@ -211,8 +251,12 @@ test("confirmed attempt on a funded workspace shows the funds message, no retry"
   const delBodies: string[] = [];
   h.fetchCalls.length = 0;
   globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
-    attempts++;
+    // Only DELETEs count as removal attempts (see test above).
+    if (String(url).includes("/admin/users/u_1") && init?.method !== "DELETE") {
+      return DEFAULT_FETCH(String(url), init);
+    }
     if (String(url).includes("/admin/users/u_1") && init?.method === "DELETE") {
+      attempts++;
       delBodies.push(String(init?.body ?? ""));
       if (attempts === 1) {
         return jsonResponse(409, {
@@ -223,18 +267,36 @@ test("confirmed attempt on a funded workspace shows the funds message, no retry"
           },
         });
       }
+      // Attempt 2 (confirmed) hits the funded wallet: the exact server-locked
+      // snapshot DTO (wallet id/kind + integer VND trio) drives the UI.
       return jsonResponse(409, {
         error: {
           code: "WORKSPACE_FUNDED",
           message: "Workspace wallet holds funds or reservations",
-          workspaces: [{ id: "ws_1", name: "Acme" }],
+          workspaces: [
+            {
+              id: "ws_1",
+              name: "Acme",
+              wallets: [
+                {
+                  id: "wal_1",
+                  kind: "topup",
+                  balance_vnd: 50000,
+                  reserved_vnd: 12000,
+                  available_vnd: 38000,
+                },
+              ],
+            },
+          ],
         },
       });
     }
     return DEFAULT_FETCH(String(url), init);
   }) as typeof fetch;
 
-  await h.clickButton("Remove");
+  await h.clickRow("grace@example.com");
+  await h.waitFor("User details");
+  await h.clickButton("Remove"); // detail footer opens the confirm dialog
   await h.waitFor("Remove user?");
   await h.clickButton("Remove", "last");
   await h.waitFor("Delete workspaces and remove");
@@ -242,6 +304,16 @@ test("confirmed attempt on a funded workspace shows the funds message, no retry"
   await h.waitFor("holds funds or a reservation");
   const text = document.body.textContent ?? "";
   expect(text).not.toContain("Delete workspaces and remove"); // no destructive retry on money
+  // Exact locked figures for the blocking wallet, rendered from the DTO.
+  expect(text).toContain("50.000 ₫");
+  expect(text).toContain("12.000 ₫");
+  expect(text).toContain("38.000 ₫");
+  expect(text).toContain("topup");
+  // Deep link into the detail view carries the opaque user+workspace ids.
+  const link = document.querySelector<HTMLAnchorElement>(
+    'a[href="/admin/users?user=u_1&ws=ws_1"]',
+  );
+  expect(link).not.toBeNull();
   expect(delBodies).toHaveLength(2);
   expect(delBodies[1]).toBe(JSON.stringify({ confirm: true }));
 });

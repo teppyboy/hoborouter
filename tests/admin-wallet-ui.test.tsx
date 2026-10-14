@@ -203,6 +203,16 @@ function mount() {
       }
       throw new Error(`never rendered: ${text}`);
     },
+    async clickRow(email: string) {
+      const row = [...document.querySelectorAll("tr[aria-label]")].find((r) =>
+        (r.getAttribute("aria-label") ?? "").includes(email),
+      );
+      if (!row) throw new Error(`no row for ${email}`);
+      await act(async () => {
+        row.dispatchEvent(new W.MouseEvent("click", { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 0));
+      });
+    },
     async clickButton(label: string) {
       const btn = [...document.querySelectorAll("button")].find(
         (b) => b.textContent?.trim() === label,
@@ -262,6 +272,9 @@ afterAll(async () => {
 
 async function openWalletDialog() {
   const h = mount();
+  // Row click -> detail dialog footer (row action wall removed).
+  await h.clickRow("grace@example.com");
+  await h.waitFor("User details");
   await h.clickButton("Adjust wallet");
   // "Workspace" alone matches the table header; wait for the dialog body
   // AND the loaded membership options so selection is deterministic.
@@ -272,28 +285,28 @@ async function openWalletDialog() {
 
 // --- tests ----------------------------------------------------------------
 
-test("users row offers Adjust wallet; existing Edit/Reset/Remove actions untouched", async () => {
-  mount();
+test("no per-row button wall; row click opens detail offering every action", async () => {
+  const h = mount();
+  // The permanent actions column is gone: no row-level action buttons.
+  const labels = [
+    "Adjust wallet for grace@example.com",
+    "Edit grace@example.com",
+    "Reset password for grace@example.com",
+    "Manage keys for grace@example.com",
+    "Remove grace@example.com",
+  ];
   expect(
-    [...document.querySelectorAll("button")].some(
-      (b) => b.getAttribute("aria-label") === "Adjust wallet for grace@example.com",
-    ),
+    labels.every((l) => !document.querySelector(`button[aria-label="${l}"]`)),
   ).toBe(true);
-  expect(
-    [...document.querySelectorAll("button")].some(
-      (b) => b.getAttribute("aria-label") === "Edit grace@example.com",
-    ),
-  ).toBe(true);
-  expect(
-    [...document.querySelectorAll("button")].some(
-      (b) => b.getAttribute("aria-label") === "Reset password for grace@example.com",
-    ),
-  ).toBe(true);
-  expect(
-    [...document.querySelectorAll("button")].some(
-      (b) => b.getAttribute("aria-label") === "Remove grace@example.com",
-    ),
-  ).toBe(true);
+  // Row activation opens the detail dialog, whose footer offers every action.
+  await h.clickRow("grace@example.com");
+  await h.waitFor("User details");
+  const buttons = [...document.querySelectorAll("button")];
+  expect(buttons.some((b) => b.textContent?.trim() === "Adjust wallet")).toBe(true);
+  expect(buttons.some((b) => b.textContent?.trim() === "Manage keys")).toBe(true);
+  expect(buttons.some((b) => b.textContent?.trim() === "Edit")).toBe(true);
+  expect(buttons.some((b) => b.textContent?.trim() === "Reset password")).toBe(true);
+  expect(buttons.some((b) => b.textContent?.trim() === "Remove")).toBe(true);
 });
 
 test("dialog offers EVERY membership explicitly; no balance or submit until a workspace is picked", async () => {
@@ -451,6 +464,8 @@ test("a stale completion never overwrites the newer attempt's receipt", async ()
     if (url.includes("/admin/users/u_1/context")) return jsonResponse(200, context);
     return jsonResponse(200, {});
   });
+  await h.clickRow("grace@example.com");
+  await h.waitFor("User details");
   await h.clickButton("Adjust wallet");
   await h.waitFor("Select a workspace…");
   await h.waitFor("Acme");

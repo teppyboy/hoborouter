@@ -203,9 +203,14 @@ function mount(user: AdminUser = adminUser(), currentUserId = "u_admin") {
       });
     },
     async clickAria(label: string) {
-      const btn = [...document.querySelectorAll("button")].find(
-        (b) => b.getAttribute("aria-label") === label,
-      );
+      // Rows carry the detail aria-label now (row activation is the entry).
+      const btn =
+        ([...document.querySelectorAll("button")].find(
+          (b) => b.getAttribute("aria-label") === label,
+        )) ??
+        [...document.querySelectorAll("tr[aria-label]")].find(
+          (r) => r.getAttribute("aria-label") === label,
+        );
       if (!btn) throw new Error(`aria-labelled button not found: ${label}`);
       await act(async () => {
         btn.dispatchEvent(new W.MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -325,7 +330,8 @@ test("sole-owner removal 409 names the workspaces and points to Settings → Mem
     }
     return DEFAULT_FETCH(url, init);
   });
-  await h.clickButton("Remove"); // row action opens the confirm dialog
+  await openDetail(h);
+  await h.clickButton("Remove"); // detail footer opens the confirm dialog
   await h.waitFor("Remove user?");
   await h.clickButton("Remove", "last"); // dialog confirm
   await h.waitFor("Transfer ownership first");

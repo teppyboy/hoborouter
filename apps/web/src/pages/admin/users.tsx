@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -7,6 +7,14 @@ import { z } from "zod";
 import { toast } from "sonner";
 import { checkPassword } from "@hoborouter/shared";
 import { CopyButton, DataTable, PageHeader } from "../../components/page";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu";
+import { ArrowDown, ArrowUp } from "lucide-react";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import {
@@ -33,6 +41,7 @@ import { formatDate, formatVnd } from "../../lib/format";
 import { useWorkspaceStore } from "../../lib/workspace";
 import { AdminGate, useAdminQuery, type AdminModel } from "./shared";
 import { useT } from "../../lib/i18n/t";
+
 
 // Admin users copy: inline LocaleEntry set (see lib/i18n/common.ts). Names,
 // emails, identifiers and role values (admin/user badges) are never translated.
@@ -255,6 +264,32 @@ const usersCopy = {
     vi: "Không xem được key của workspace này",
   },
   close: { en: "Close", vi: "Đóng" },
+  searchPlaceholder: { en: "Search name, email or ID", vi: "Tìm theo tên, email hoặc ID" },
+  roleAll: { en: "All roles", vi: "Mọi vai trò" },
+  roleAdmin: { en: "Admins", vi: "Quản trị" },
+  roleMember: { en: "Members", vi: "Thành viên" },
+  showing: { en: "Showing {from}–{to} of {total}", vi: "Hiển thị {from}–{to} của {total}" },
+  prevPage: { en: "Previous", vi: "Trước" },
+  nextPage: { en: "Next", vi: "Sau" },
+  userActions: { en: "User actions", vi: "Thao tác người dùng" },
+  viewDetail: { en: "View detail", vi: "Xem chi tiết" },
+  moneyBlocking: { en: "Money blocking removal", vi: "Tiền đang chặn việc xóa" },
+  availableLabel: { en: "Available", vi: "Khả dụng" },
+  viewPending: { en: "View pending requests", vi: "Xem yêu cầu đang chờ" },
+  pendingHeading: { en: "Pending billing in {name}", vi: "Thanh toán đang chờ trong {name}" },
+  pendingOlder: { en: "…and {n} older pending records", vi: "…và {n} bản ghi chờ cũ hơn" },
+  noPending: { en: "No pending billing records.", vi: "Không có bản ghi thanh toán đang chờ." },
+  noFunds: { en: "No funds remain; retry removal.", vi: "Không còn tiền; thử xóa lại." },
+  requestState: { en: "State", vi: "Trạng thái" },
+  openRequestLog: { en: "Open in request log", vi: "Mở trong nhật ký yêu cầu" },
+  subscriptionWalletNote: {
+    en: "Subscription wallet: funded by the workspace subscription; no manual withdrawal.",
+    vi: "Ví gói cước: được cấp từ gói đăng ký của workspace; không rút thủ công.",
+  },
+  resolutionHint: {
+    en: "Resolution uses the existing audited controls only: adjust the wallet balance here, or review records in the request log. In-flight requests are never force-cancelled and money history is never deleted.",
+    vi: "Chỉ dùng các điều khiển đã được kiểm toán: điều chỉnh số dư ví tại đây hoặc xem lại bản ghi trong nhật ký yêu cầu. Không bao giờ ép hủy yêu cầu đang chạy và lịch sử tiền không bao giờ bị xóa.",
+  },
 } as const;
 
 type UsersT = (key: keyof typeof usersCopy, vars?: Record<string, string | number>) => string;
@@ -286,8 +321,53 @@ export interface AdminUser {
   workspace_count: number;
 }
 
+export interface BlockedWallet {
+  id: string;
+  kind: string;
+  balance_vnd: number;
+  reserved_vnd: number;
+  available_vnd: number;
+}
+
+export interface BlockedWorkspace {
+  id: string;
+  name: string;
+  wallets: BlockedWallet[];
+}
+
 interface SoleOwnerWorkspaces {
-  workspaces?: { id: string; name: string }[];
+  workspaces?: { id: string; name: string; wallets?: BlockedWallet[] }[];
+}
+
+/** Bounded pending-billing record from /admin/workspaces/:ws/pending-billing. */
+export interface PendingRecord {
+  request_id: string;
+  created_at: number;
+  status: string;
+  dispatch_state: string;
+  endpoint: string;
+  billing_reservation: { id: string; status: string; cap_vnd: number } | null;
+}
+
+export interface UsersPageData {
+  data: AdminUser[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface UsersServerControls {
+  q: string;
+  onQChange: (v: string) => void;
+  role: string;
+  onRoleChange: (v: string) => void;
+  sort: "created_at" | "email" | "name";
+  order: "asc" | "desc";
+  onSortChange: (sort: "created_at" | "email" | "name", order: "asc" | "desc") => void;
+  total: number;
+  limit: number;
+  offset: number;
+  onOffsetChange: (o: number) => void;
 }
 
 const makeCreateSchema = (t: UsersT) =>
@@ -345,11 +425,46 @@ async function removeUser(id: string, opts?: { confirm?: boolean }): Promise<voi
   throw err;
 }
 
+const USERS_LIMIT = 200;
+
 export default function AdminUsersPage() {
   const t = useT(usersCopy);
-  const query = useAdminQuery<{ data: AdminUser[] }>(["admin", "users"], "/api/v1/admin/users");
   const { data: session } = useSession();
   const [createOpen, setCreateOpen] = useState(false);
+  // Server-driven search/sort/pagination: the whole user set is never promised
+  // loaded — the server reports total for the pager.
+  const [qText, setQText] = useState("");
+  const [q, setQ] = useState("");
+  useEffect(() => {
+    const id = window.setTimeout(() => setQ(qText.trim()), 250);
+    return () => window.clearTimeout(id);
+  }, [qText]);
+  const [role, setRole] = useState("");
+  const [sort, setSort] = useState<"created_at" | "email" | "name">("created_at");
+  const [order, setOrder] = useState<"asc" | "desc">("desc");
+  const [offset, setOffset] = useState(0);
+  // Deep link ?user=<id>&ws=<id> (opaque IDs only, payments.tsx precedent):
+  // opens the user detail with the workspace's wallet context preselected.
+  const [deepUser, setDeepUser] = useState<string | null>(null);
+  const [deepWs, setDeepWs] = useState<string | null>(null);
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("user")) setDeepUser(sp.get("user"));
+    if (sp.get("ws")) setDeepWs(sp.get("ws"));
+  }, []);
+  const params = new URLSearchParams({ sort, order, limit: String(USERS_LIMIT), offset: String(offset) });
+  if (q) params.set("q", q);
+  if (role) params.set("role", role);
+  const query = useAdminQuery<UsersPageData>(
+    ["admin", "users", { q, role, sort, order, offset }],
+    `/api/v1/admin/users?${params.toString()}`,
+  );
+  const users = query.data?.data ?? [];
+  const total = query.data?.total ?? users.length;
+  // A shrunken filter result must not strand the pager past the last page.
+  useEffect(() => {
+    if (offset > 0 && offset >= total) setOffset(0);
+  }, [offset, total]);
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <PageHeader
@@ -362,7 +477,32 @@ export default function AdminUsersPage() {
         }
       />
       <AdminGate query={query}>
-        <UsersTable users={query.data?.data ?? []} currentUserId={session?.user?.id ?? null} />
+        <UsersTable
+          users={users}
+          currentUserId={session?.user?.id ?? null}
+          serverControls={{
+            q: qText,
+            onQChange: setQText,
+            role,
+            onRoleChange: (v) => {
+              setRole(v);
+              setOffset(0);
+            },
+            sort,
+            order,
+            onSortChange: (s, o) => {
+              setSort(s);
+              setOrder(o);
+              setOffset(0);
+            },
+            total,
+            limit: USERS_LIMIT,
+            offset,
+            onOffsetChange: setOffset,
+          }}
+          deepLinkUserId={deepUser}
+          deepLinkWorkspaceId={deepWs}
+        />
       </AdminGate>
       <CreateUserDialog open={createOpen} onOpenChange={setCreateOpen} />
     </div>
@@ -372,9 +512,17 @@ export default function AdminUsersPage() {
 export function UsersTable({
   users,
   currentUserId,
+  serverControls,
+  deepLinkUserId,
+  deepLinkWorkspaceId,
 }: {
   users: AdminUser[];
   currentUserId: string | null;
+  /** Present on the page (server-driven search/sort/pagination); absent in tests. */
+  serverControls?: UsersServerControls;
+  /** Deep link ?user=<id>&ws=<id>: open detail for this user once the list loads. */
+  deepLinkUserId?: string | null;
+  deepLinkWorkspaceId?: string | null;
 }) {
   const t = useT(usersCopy);
   const [toRemove, setToRemove] = useState<AdminUser | null>(null);
@@ -384,27 +532,62 @@ export function UsersTable({
   const [toReset, setToReset] = useState<AdminUser | null>(null);
   const [toWallet, setToWallet] = useState<AdminUser | null>(null);
   const [toKeys, setToKeys] = useState<AdminUser | null>(null);
+  const [blocked, setBlocked] = useState<BlockedWorkspace[] | null>(null);
+  const [openPendingWs, setOpenPendingWs] = useState<string | null>(null);
+  const [preselectWs, setPreselectWs] = useState<string | null>(deepLinkWorkspaceId ?? null);
+  // Row context menu: pointer coordinates + target (Radix dropdown in
+  // controlled mode with a virtual anchor — no context-menu dependency).
+  const [menu, setMenu] = useState<{ user: AdminUser; x: number; y: number } | null>(null);
+  const [deepOpened, setDeepOpened] = useState(false);
+  useEffect(() => {
+    if (deepOpened || !deepLinkUserId) return;
+    const found = users.find((u) => u.id === deepLinkUserId);
+    if (found) {
+      setDeepOpened(true);
+      setToDetail(found);
+    }
+  }, [deepOpened, deepLinkUserId, users]);
+  const openRemove = (u: AdminUser) => {
+    setRemoveError(null);
+    setBlocked(null);
+    setOpenPendingWs(null);
+    setToRemove(u);
+  };
+  // Server sort header: toggle asc/desc; click again flips (created_at first
+  // click = desc like the default list order).
+  const sortHeader = (key: "created_at" | "email" | "name", label: string) =>
+    serverControls ? (
+      <button
+        type="button"
+        className="-mx-1 -my-3 flex items-center gap-1 px-1 py-3 hover:text-foreground"
+        onClick={() =>
+          serverControls.onSortChange(
+            key,
+            serverControls.sort === key && serverControls.order === "asc" ? "desc" : "asc",
+          )
+        }
+      >
+        {label}
+        {serverControls.sort === key &&
+          (serverControls.order === "asc" ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />)}
+      </button>
+    ) : (
+      <>{label}</>
+    );
 
   const columns: ColumnDef<AdminUser, unknown>[] = [
     {
       accessorKey: "email",
-      header: t("email"),
-      // Clickable affordance into the read-only user detail dialog.
-      cell: (c) => (
-        <Button
-          variant="link"
-          size="sm"
-          className="h-auto p-0"
-          aria-label={t("viewAria", { email: c.row.original.email })}
-          onClick={() => setToDetail(c.row.original)}
-        >
-          {c.row.original.email}
-        </Button>
-      ),
+      header: () => sortHeader("email", t("email")),
+      // Row activation (click/Enter/context menu) is the single route into
+      // detail; cells stay passive. Client sorting is off (server sorts).
+      enableSorting: false,
+      cell: (c) => <span>{c.row.original.email}</span>,
     },
     {
       accessorKey: "email_verified",
       header: t("emailStatus"),
+      enableSorting: false,
       cell: (c) => {
         const verified = c.getValue() as boolean | undefined;
         // Undefined means the backend payload predates the flag: report
@@ -418,10 +601,11 @@ export function UsersTable({
         );
       },
     },
-    { accessorKey: "name", header: t("name") },
+    { accessorKey: "name", header: () => sortHeader("name", t("name")), enableSorting: false },
     {
       accessorKey: "created_at",
-      header: t("joined"),
+      header: () => sortHeader("created_at", t("joined")),
+      enableSorting: false,
       cell: (c) => (
         <span className="font-mono text-xs">{formatDate(new Date(c.getValue() as number))}</span>
       ),
@@ -429,6 +613,7 @@ export function UsersTable({
     {
       accessorKey: "is_instance_admin",
       header: t("role"),
+      enableSorting: false,
       cell: (c) =>
         c.getValue() ? (
           <Badge variant="default">admin</Badge>
@@ -436,82 +621,126 @@ export function UsersTable({
           <Badge variant="outline">user</Badge>
         ),
     },
-    { accessorKey: "workspace_count", header: t("workspaces") },
+    { accessorKey: "workspace_count", header: t("workspaces"), enableSorting: false },
     {
       accessorKey: "id",
       header: "ID",
-      cell: (c) => (
-        <span className="flex items-center gap-1">
-          <span className="font-mono text-xs">{(c.getValue() as string).slice(0, 8)}…</span>
-          <CopyButton value={c.getValue() as string} label={t("copyUserId")} />
-        </span>
-      ),
-    },
-    {
-      id: "actions",
-      header: "",
-      cell: (c) => {
-        const user = c.row.original;
-        // Removal stays self-hidden (server also rejects it); edit and reset
-        // are allowed on the admin's own account.
-        return (
-          <div className="flex flex-wrap items-center gap-1">
-            <Button
-              variant="outline"
-              size="sm"
-              aria-label={t("editAria", { email: user.email })}
-              onClick={() => setToEdit(user)}
-            >
-              {t("edit")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              aria-label={t("resetAria", { email: user.email })}
-              onClick={() => setToReset(user)}
-            >
-              {t("resetPassword")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              aria-label={t("walletAria", { email: user.email })}
-              onClick={() => setToWallet(user)}
-            >
-              {t("manageWallet")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              aria-label={t("keysAria", { email: user.email })}
-              onClick={() => setToKeys(user)}
-            >
-              {t("manageKeys")}
-            </Button>
-            {user.id !== currentUserId && (
-              <Button
-                variant="destructive"
-                size="sm"
-                aria-label={t("removeAria", { email: user.email })}
-                onClick={() => setToRemove(user)}
-              >
-                Remove
-              </Button>
-            )}
-          </div>
-        );
-      },
+      // Copy lives inside the detail dialog/context menu; no per-row button.
+      enableSorting: false,
+      cell: (c) => <span className="font-mono text-xs">{(c.getValue() as string).slice(0, 8)}…</span>,
     },
   ];
 
   return (
     <>
+      {serverControls && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            aria-label={t("searchPlaceholder")}
+            placeholder={t("searchPlaceholder")}
+            value={serverControls.q}
+            onChange={(e) => serverControls.onQChange(e.target.value)}
+            className="max-w-64"
+          />
+          <select
+            aria-label={t("role")}
+            value={serverControls.role}
+            onChange={(e) => serverControls.onRoleChange(e.target.value)}
+            className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+          >
+            <option value="">{t("roleAll")}</option>
+            <option value="admin">{t("roleAdmin")}</option>
+            <option value="member">{t("roleMember")}</option>
+          </select>
+        </div>
+      )}
       <DataTable
         columns={columns}
         data={users}
         empty={t("noUsers")}
         scroll={{ label: t("usersTable"), fill: true }}
+        onRowActivate={(u) => setToDetail(u)}
+        onRowContextMenu={(u, pos) => setMenu({ user: u, x: pos.x, y: pos.y })}
+        rowAriaLabel={(u) => t("viewAria", { email: u.email })}
       />
+      {serverControls && serverControls.total > serverControls.limit && (
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">
+            {t("showing", {
+              from: serverControls.offset + 1,
+              to: Math.min(serverControls.offset + serverControls.limit, serverControls.total),
+              total: serverControls.total,
+            })}
+          </span>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={serverControls.offset === 0}
+              onClick={() =>
+                serverControls.onOffsetChange(
+                  Math.max(0, serverControls.offset - serverControls.limit),
+                )
+              }
+            >
+              {t("prevPage")}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={serverControls.offset + serverControls.limit >= serverControls.total}
+              onClick={() => serverControls.onOffsetChange(serverControls.offset + serverControls.limit)}
+            >
+              {t("nextPage")}
+            </Button>
+          </div>
+        </div>
+      )}
+      {/* Row context menu: same actions as the detail footer, keyboard-operable
+          (Shift+F10 opens; Radix provides menu role/Escape/focus handling). */}
+      <DropdownMenu open={menu !== null} onOpenChange={(open) => !open && setMenu(null)}>
+        {/* Zero-size trigger anchored at the pointer: the installed Radix
+            dropdown-menu has no virtualRef, so the anchor is a real element. */}
+        <DropdownMenuTrigger
+          tabIndex={-1}
+          aria-label={t("userActions")}
+          style={{
+            position: "fixed",
+            left: menu?.x ?? 0,
+            top: menu?.y ?? 0,
+            width: 0,
+            height: 0,
+            padding: 0,
+            border: "none",
+          }}
+        />
+        <DropdownMenuContent align="start">
+          {menu && (
+            <>
+              <DropdownMenuItem onSelect={() => setToDetail(menu.user)}>{t("viewDetail")}</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setToEdit(menu.user)}>{t("edit")}</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setToReset(menu.user)}>{t("resetPassword")}</DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  setPreselectWs(null);
+                  setToWallet(menu.user);
+                }}
+              >
+                {t("manageWallet")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setToKeys(menu.user)}>{t("manageKeys")}</DropdownMenuItem>
+              {menu.user.id !== currentUserId && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onSelect={() => openRemove(menu.user)}>
+                    {t("remove")}
+                  </DropdownMenuItem>
+                </>
+              )}
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <Dialog
         open={toRemove !== null}
         onOpenChange={(open) => {
@@ -532,6 +761,63 @@ export function UsersTable({
             </DialogDescription>
           </DialogHeader>
           {removeError && <p className="text-destructive text-sm">{removeError}</p>}
+          {blocked && toRemove && (
+            <section aria-label={t("moneyBlocking")} className="space-y-2 rounded-md border p-3 text-sm">
+              <p className="font-medium">{t("moneyBlocking")}</p>
+              <p className="text-muted-foreground text-xs">{t("resolutionHint")}</p>
+              {blocked.map((ws) => (
+                <div key={ws.id} className="space-y-2 rounded border p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium">{ws.name}</p>
+                    <a
+                      href={`/admin/users?user=${toRemove.id}&ws=${ws.id}`}
+                      className="text-xs underline underline-offset-4"
+                    >
+                      {t("viewDetail")}
+                    </a>
+                  </div>
+                  {ws.wallets.length === 0 && (
+                    <p className="text-muted-foreground text-xs">{t("noFunds")}</p>
+                  )}
+                  {ws.wallets.map((w) => (
+                    <div key={w.id} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <Badge variant="outline">{w.kind}</Badge>
+                      {w.kind === "topup" ? (
+                        <button
+                          type="button"
+                          className="underline underline-offset-4"
+                          onClick={() => {
+                            setPreselectWs(ws.id);
+                            setToWallet(toRemove);
+                          }}
+                        >
+                          {t("balanceLabel")}: {formatVnd(w.balance_vnd)}
+                        </button>
+                      ) : (
+                        <span>
+                          {t("balanceLabel")}: {formatVnd(w.balance_vnd)} — {t("subscriptionWalletNote")}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        aria-expanded={openPendingWs === ws.id}
+                        className="underline underline-offset-4"
+                        onClick={() => setOpenPendingWs(openPendingWs === ws.id ? null : ws.id)}
+                      >
+                        {t("reservedLabel")}: {formatVnd(w.reserved_vnd)}
+                      </button>
+                      <span>
+                        {t("availableLabel")}: {formatVnd(w.available_vnd)}
+                      </span>
+                    </div>
+                  ))}
+                  {openPendingWs === ws.id && (
+                    <PendingList workspaceId={ws.id} workspaceName={ws.name} />
+                  )}
+                </div>
+              ))}
+            </section>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setToRemove(null)}>
               {t("cancel")}
@@ -541,6 +827,7 @@ export function UsersTable({
                 user={toRemove}
                 t={t}
                 onError={setRemoveError}
+                onBlocked={setBlocked}
                 onDone={() => setToRemove(null)}
               />
             )}
@@ -560,9 +847,20 @@ export function UsersTable({
             setToDetail(null);
             setToReset(u);
           }}
-          onRemove={(u) => {
+          onWallet={(u) => {
             setToDetail(null);
-            setToRemove(u);
+            setToWallet(u);
+          }}
+          onKeys={(u) => {
+            setToDetail(null);
+            setToKeys(u);
+          }}
+          onRemove={(u) => {
+            // Close detail first, THEN open the confirm dialog on a later
+            // tick: unmounting one Radix layer while mounting another in the
+            // same commit corrupts the dismissable-layer stack.
+            setToDetail(null);
+            window.setTimeout(() => openRemove(u), 0);
           }}
         />
       )}
@@ -574,7 +872,16 @@ export function UsersTable({
         />
       )}
       {toReset && <ResetPasswordDialog user={toReset} onClose={() => setToReset(null)} />}
-      {toWallet && <ManageWalletDialog user={toWallet} onClose={() => setToWallet(null)} />}
+      {toWallet && (
+        <ManageWalletDialog
+          user={toWallet}
+          initialWorkspaceId={preselectWs ?? undefined}
+          onClose={() => {
+            setToWallet(null);
+            setPreselectWs(null);
+          }}
+        />
+      )}
       {toKeys && <ManageKeysDialog user={toKeys} onClose={() => setToKeys(null)} />}
     </>
   );
@@ -796,11 +1103,14 @@ function RemoveButton({
   user,
   t,
   onError,
+  onBlocked,
   onDone,
 }: {
   user: AdminUser;
   t: UsersT;
   onError: (message: string) => void;
+  /** WORKSPACE_FUNDED 409: exact server-locked blocked wallets for the UI. */
+  onBlocked: (workspaces: BlockedWorkspace[]) => void;
   onDone: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -819,6 +1129,14 @@ function RemoveButton({
     },
     onError: (err) => {
       onError(removeErrorMessage(err, t));
+      if (err instanceof ApiError && err.code === "WORKSPACE_FUNDED") {
+        const funded = err as ApiError & SoleOwnerWorkspaces;
+        onBlocked(
+          (funded.workspaces ?? []).filter(
+            (w): w is BlockedWorkspace => Array.isArray((w as BlockedWorkspace).wallets),
+          ),
+        );
+      }
       if (err instanceof ApiError && err.code === "SOLE_OWNER") {
         const sole = err as ApiError & SoleOwnerWorkspaces;
         setSoleWorkspaces(sole.workspaces && sole.workspaces.length > 0 ? sole.workspaces : null);
@@ -1029,11 +1347,20 @@ interface WalletAttempt {
   gen: number;
 }
 
-function ManageWalletDialog({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+function ManageWalletDialog({
+  user,
+  onClose,
+  initialWorkspaceId,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+  /** Deep link / blocked-wallet flow: workspace preselected on open. */
+  initialWorkspaceId?: string;
+}) {
   const queryClient = useQueryClient();
   const t = useT(usersCopy);
   const contextQuery = useUserContext(user.id);
-  const [workspaceId, setWorkspaceId] = useState("");
+  const [workspaceId, setWorkspaceId] = useState(initialWorkspaceId ?? "");
   const [mode, setMode] = useState<"credit" | "debit">("credit");
   const [amountText, setAmountText] = useState("");
   const [reason, setReason] = useState("");
@@ -1390,7 +1717,10 @@ function ManageKeysDialog({ user, onClose }: { user: AdminUser; onClose: () => v
     retry: false,
   });
   const modelLabels = new Map(
-    (modelsQuery.data ?? []).map((m) => [m.id, m.display_name || m.public_id || m.id]),
+    (Array.isArray(modelsQuery.data) ? modelsQuery.data : []).map((m) => [
+      m.id,
+      m.display_name || m.public_id || m.id,
+    ]),
   );
 
   const grant = useMutation({
@@ -1485,7 +1815,7 @@ function ManageKeysDialog({ user, onClose }: { user: AdminUser; onClose: () => v
     });
   };
 
-  const keys = keysQuery.data ?? [];
+  const keys = Array.isArray(keysQuery.data) ? keysQuery.data : [];
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -1727,6 +2057,52 @@ function ManageKeysDialog({ user, onClose }: { user: AdminUser; onClose: () => v
   );
 }
 
+// --- Bounded pending-billing inspection (from the 409 blocked-wallet section) ---
+
+function PendingList({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
+  const t = useT(usersCopy);
+  const pendingQuery = useQuery<{ data: PendingRecord[]; total: number; limit: number }>({
+    queryKey: ["admin", "pending-billing", workspaceId],
+    queryFn: () => api(`/api/v1/admin/workspaces/${workspaceId}/pending-billing`),
+    retry: false,
+  });
+  const rows = pendingQuery.data?.data ?? [];
+  const older = Math.max(0, (pendingQuery.data?.total ?? 0) - rows.length);
+  return (
+    <div className="space-y-1 rounded border bg-muted/30 p-2 text-xs">
+      <p className="font-medium">{t("pendingHeading", { name: workspaceName })}</p>
+      {pendingQuery.isPending && <p className="text-muted-foreground">…</p>}
+      {pendingQuery.isError && (
+        <p className="text-destructive">
+          {pendingQuery.error instanceof Error ? pendingQuery.error.message : t("requestFailed")}
+        </p>
+      )}
+      {!pendingQuery.isPending && !pendingQuery.isError && rows.length === 0 && (
+        <p className="text-muted-foreground">{t("noPending")}</p>
+      )}
+      <ul className="space-y-1">
+        {rows.map((r) => (
+          <li key={r.request_id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <a
+              href={`/admin/request-log?request=${r.request_id}`}
+              className="font-mono underline underline-offset-4"
+            >
+              {r.request_id.slice(0, 8)}…
+            </a>
+            <Badge variant="outline">{r.dispatch_state}</Badge>
+            <span className="text-muted-foreground">
+              {t("statusLabel")}: {r.status} · {t("requestState")}:{" "}
+              {r.billing_reservation ? `${r.billing_reservation.status} · ${formatVnd(r.billing_reservation.cap_vnd)}` : "—"}
+            </span>
+            <span className="text-muted-foreground">{t("openRequestLog")}</span>
+          </li>
+        ))}
+      </ul>
+      {older > 0 && <p className="text-muted-foreground">{t("pendingOlder", { n: older })}</p>}
+    </div>
+  );
+}
+
 // --- Read-only user detail (clickable from the email column) ---
 
 /** Per-workspace key overview: null keys means the list failed to load. */
@@ -1741,6 +2117,8 @@ function UserDetailDialog({
   onClose,
   onEdit,
   onReset,
+  onWallet,
+  onKeys,
   onRemove,
 }: {
   user: AdminUser;
@@ -1748,6 +2126,8 @@ function UserDetailDialog({
   onClose: () => void;
   onEdit: (user: AdminUser) => void;
   onReset: (user: AdminUser) => void;
+  onWallet: (user: AdminUser) => void;
+  onKeys: (user: AdminUser) => void;
   onRemove: (user: AdminUser) => void;
 }) {
   const t = useT(usersCopy);
@@ -1787,7 +2167,10 @@ function UserDetailDialog({
     retry: false,
   });
   const modelLabels = new Map(
-    (modelsQuery.data ?? []).map((m) => [m.id, m.display_name || m.public_id || m.id]),
+    (Array.isArray(modelsQuery.data) ? modelsQuery.data : []).map((m) => [
+      m.id,
+      m.display_name || m.public_id || m.id,
+    ]),
   );
 
   const pending = contextQuery.isPending || keysOverviewQuery.isPending;
@@ -1942,6 +2325,12 @@ function UserDetailDialog({
           </Button>
           <Button type="button" variant="outline" onClick={() => onReset(user)}>
             {t("resetPassword")}
+          </Button>
+          <Button type="button" variant="outline" onClick={() => onWallet(user)}>
+            {t("manageWallet")}
+          </Button>
+          <Button type="button" variant="outline" onClick={() => onKeys(user)}>
+            {t("manageKeys")}
           </Button>
           {user.id !== currentUserId && (
             <Button type="button" variant="destructive" onClick={() => onRemove(user)}>

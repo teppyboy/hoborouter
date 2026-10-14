@@ -216,6 +216,16 @@ function mount() {
       }
       throw new Error(`never rendered: ${text}`);
     },
+    async clickRow(email: string) {
+      const row = [...document.querySelectorAll("tr[aria-label]")].find((r) =>
+        (r.getAttribute("aria-label") ?? "").includes(email),
+      );
+      if (!row) throw new Error(`no row for ${email}`);
+      await act(async () => {
+        row.dispatchEvent(new W.MouseEvent("click", { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 0));
+      });
+    },
     async clickButton(label: string) {
       const btn = [...document.querySelectorAll("button")].find(
         (b) => b.textContent?.trim() === label,
@@ -285,6 +295,9 @@ afterAll(async () => {
 
 async function openKeysDialog() {
   const h = mount();
+  // Row click -> detail dialog footer (row action wall removed).
+  await h.clickRow("grace@example.com");
+  await h.waitFor("User details");
   await h.clickButton("Manage keys");
   await h.waitFor("Select a workspace…");
   await h.waitFor("Acme");
@@ -300,11 +313,18 @@ async function openKeysForWs1() {
 
 // --- tests ----------------------------------------------------------------
 
-test("users row offers Manage keys with accessible label", () => {
+test("no row-level Manage keys button; reachable from detail footer instead", () => {
   mount();
+  // Row action wall removed: no per-row Manage keys button anywhere.
   expect(
     [...document.querySelectorAll("button")].some(
       (b) => b.getAttribute("aria-label") === "Manage keys for grace@example.com",
+    ),
+  ).toBe(false);
+  // Rows stay activatable into the detail dialog.
+  expect(
+    [...document.querySelectorAll("tr[aria-label]")].some((r) =>
+      (r.getAttribute("aria-label") ?? "").includes("grace@example.com"),
     ),
   ).toBe(true);
 });
