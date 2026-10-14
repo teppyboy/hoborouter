@@ -8,12 +8,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ConversationPage } from "../apps/web/src/pages/chat/conversations";
 
-// listKey in conversation-list.tsx.
+// listKey in conversation-list.tsx — the live query appends the debounced
+// search term q; seeded data must use the q="" variant the list starts on.
 const listKey = (userId: string, workspaceId: string) => [
   "chat-conversations",
   "list",
   userId,
   workspaceId,
+  "",
 ];
 
 function summary(id: string, title: string, updated_at: number) {

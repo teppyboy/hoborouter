@@ -3,13 +3,20 @@
 // responses are the only source of truth — a failure (including a 409 stale
 // version) rejects and the caller must reload; nothing is ever faked locally.
 // Framework-free so tests drive it with an injected fetch.
-export interface ChatMessage {
+import type { ChatAttachmentRef } from "@hoborouter/shared";
+
+/** Exact shared wire shape (packages/shared/src/chat.ts ConversationMessage). */
+export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   reasoning?: string;
   /** Assistant only: the public model ID actually used. */
   model?: string;
-}
+  /** User only: private attachment refs (metadata, never bytes). */
+  attachments?: ChatAttachmentRef[];
+  /** Assistant only: gateway request id for the billing receipt. */
+  request_id?: string;
+};
 
 export interface ConversationSummary {
   id: string;
@@ -42,12 +49,20 @@ export type ConversationFailure =
 export class ConversationError extends Error {
   kind: ConversationFailure;
   status?: number;
+  /** Parsed from a Retry-After header (seconds) when the server sent one. */
+  retryAfterMs?: number;
 
-  constructor(kind: ConversationFailure, message: string, status?: number) {
+  constructor(
+    kind: ConversationFailure,
+    message: string,
+    status?: number,
+    retryAfterMs?: number,
+  ) {
     super(message);
     this.name = "ConversationError";
     this.kind = kind;
     this.status = status;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -77,10 +92,14 @@ async function request<T>(path: string, init: RequestInit, opts?: ConversationsF
     );
   }
   if (!res.ok) {
+    // Unknown status codes still surface as a typed failure (never trusted as
+    // success); a Retry-After hint is preserved so callers can pace retries.
+    const retryAfter = Number(res.headers.get("retry-after"));
     throw new ConversationError(
       kindForStatus(res.status),
       `Chat request failed (${res.status})`,
       res.status,
+      Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter * 1000 : undefined,
     );
   }
   try {
@@ -88,6 +107,70 @@ async function request<T>(path: string, init: RequestInit, opts?: ConversationsF
   } catch {
     throw new ConversationError("invalid", "Chat service returned an unexpected response.");
   }
+}
+
+/** ChatAttachmentRef runtime check: metadata only, but still never trusted. */
+function parseAttachmentRef(v: unknown): ChatAttachmentRef | null {
+  if (typeof v !== "object" || v === null) return null;
+  const r = v as Record<string, unknown>;
+  if (
+    typeof r.id !== "string" ||
+    r.id === "" ||
+    typeof r.name !== "string" ||
+    (r.kind !== "image" && r.kind !== "text") ||
+    typeof r.bytes !== "number" ||
+    !Number.isInteger(r.bytes) ||
+    r.bytes < 0 ||
+    typeof r.mime !== "string" ||
+    typeof r.expires_at !== "number"
+  ) {
+    return null;
+  }
+  return {
+    id: r.id,
+    name: r.name,
+    kind: r.kind,
+    bytes: r.bytes,
+    mime: r.mime,
+    expires_at: r.expires_at,
+  };
+}
+
+/**
+ * Strict per-message parse of the shared ConversationMessage wire: role and
+ * content are required, reasoning/model/request_id/attachments are additive
+ * optionals with shape constraints, and unknown fields are dropped — a
+ * malformed message makes the whole snapshot invalid, never partially shown.
+ */
+function parseMessage(v: unknown): ChatMessage | null {
+  if (typeof v !== "object" || v === null) return null;
+  const m = v as Record<string, unknown>;
+  if (
+    (m.role !== "user" && m.role !== "assistant") ||
+    typeof m.content !== "string"
+  ) {
+    return null;
+  }
+  const msg: ChatMessage = { role: m.role, content: m.content };
+  if (typeof m.reasoning === "string") msg.reasoning = m.reasoning;
+  if (typeof m.model === "string") msg.model = m.model;
+  if (typeof m.request_id === "string") {
+    // request_id is assistant-only on the wire; ignore it on user turns.
+    if (m.role === "assistant") msg.request_id = m.request_id;
+  }
+  if (Array.isArray(m.attachments)) {
+    // attachments are user-only; every ref must validate or the snapshot is
+    // rejected (an expired ref still keeps its metadata per the contract).
+    if (m.role !== "user") return null;
+    const refs: ChatAttachmentRef[] = [];
+    for (const a of m.attachments) {
+      const ref = parseAttachmentRef(a);
+      if (!ref) return null;
+      refs.push(ref);
+    }
+    msg.attachments = refs;
+  }
+  return msg;
 }
 
 function parseSnapshot(body: unknown): ConversationSnapshot {
@@ -110,11 +193,19 @@ function parseSnapshot(body: unknown): ConversationSnapshot {
     typeof b?.updated_at === "number" &&
     Array.isArray(b?.messages)
   ) {
+    const messages: ChatMessage[] = [];
+    for (const raw of b.messages) {
+      const msg = parseMessage(raw);
+      if (!msg) {
+        throw new ConversationError("invalid", "Chat service returned an unexpected response.");
+      }
+      messages.push(msg);
+    }
     return {
       id: b.id,
       title: b.title,
       model: b.model === null ? null : (b.model as string),
-      messages: b.messages as ChatMessage[],
+      messages,
       version: b.version,
       created_at: b.created_at,
       updated_at: b.updated_at,
@@ -124,13 +215,21 @@ function parseSnapshot(body: unknown): ConversationSnapshot {
   throw new ConversationError("invalid", "Chat service returned an unexpected response.");
 }
 
+export interface ListConversationsOptions extends ConversationsFetch {
+  /** Server-side title filter (case-insensitive substring) — never a client filter. */
+  q?: string;
+}
+
 /** GET /api/v1/workspaces/:id/chats — active conversations, newest first. */
 export async function listConversations(
   workspaceId: string,
   cursor?: string | null,
-  opts?: ConversationsFetch,
+  opts?: ListConversationsOptions,
 ): Promise<ConversationPage> {
-  const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+  const params = new URLSearchParams();
+  if (cursor) params.set("cursor", cursor);
+  if (opts?.q) params.set("q", opts.q);
+  const qs = params.size > 0 ? `?${params.toString()}` : "";
   const body = await request<{ data?: unknown; nextCursor?: unknown }>(
     `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/chats${qs}`,
     { method: "GET" },
@@ -238,4 +337,65 @@ export async function archiveConversation(
     };
   }
   throw new ConversationError("invalid", "Chat service returned an unexpected response.");
+}
+
+/**
+ * PUT /api/v1/workspaces/:id/chats/:chatId/title — title-only rename guarded
+ * by the conversation version. Deliberately NOT a read-modify-write of the
+ * transcript: messages are never downloaded or re-sent, so a rename cannot
+ * clobber concurrent turns. A stale version still 409s (kind "conflict").
+ */
+export async function renameConversation(
+  workspaceId: string,
+  chatId: string,
+  input: { version: number; title: string },
+  opts?: ConversationsFetch,
+): Promise<{ id: string; version: number }> {
+  const body = await request<{ id?: unknown; version?: unknown }>(
+    `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/chats/${encodeURIComponent(chatId)}/title`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: input.version, title: input.title }),
+    },
+    opts,
+  );
+  if (
+    typeof body?.id === "string" &&
+    body.id !== "" &&
+    typeof body?.version === "number"
+  ) {
+    return { id: body.id, version: body.version };
+  }
+  throw new ConversationError("invalid", "Chat service returned an unexpected response.");
+}
+
+/**
+ * POST /api/v1/workspaces/:id/chats/:chatId/fork — server-side fork of the
+ * conversation up to message_index (optionally replacing that user turn's
+ * content). The server answers 201 with the full new snapshot (refs copied);
+ * nothing is ever fabricated locally because the server owns id/version.
+ */
+export async function forkConversation(
+  workspaceId: string,
+  chatId: string,
+  input: { version: number; message_index: number; content?: string },
+  opts?: ConversationsFetch,
+): Promise<ConversationSnapshot> {
+  const body: Record<string, unknown> = {
+    version: input.version,
+    message_index: input.message_index,
+  };
+  if (input.content !== undefined) body.content = input.content;
+  return parseSnapshot(
+    await request(
+      `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/chats/${encodeURIComponent(chatId)}/fork`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      opts,
+    ),
+  );
 }

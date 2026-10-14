@@ -25,9 +25,8 @@ import { formatDate } from "../../lib/format";
 import {
   archiveConversation,
   ConversationError,
-  getConversation,
   listConversations,
-  saveConversation,
+  renameConversation,
   type ConversationSummary,
 } from "./conversations";
 import { useT, translate } from "../../lib/i18n/t";
@@ -57,6 +56,14 @@ const listCopy = {
     vi: "Hội thoại này không còn tồn tại với bạn.",
   },
   actionFailed: { en: "The action failed. Try again.", vi: "Thao tác thất bại. Thử lại." },
+  searchLabel: { en: "Search history", vi: "Tìm trong lịch sử" },
+  searchPlaceholder: { en: "Search titles…", vi: "Tìm theo tiêu đề…" },
+  noMatches: {
+    en: "No conversations match your search.",
+    vi: "Không có hội thoại nào khớp tìm kiếm.",
+  },
+  today: { en: "Today", vi: "Hôm nay" },
+  yesterday: { en: "Yesterday", vi: "Hôm qua" },
   renameTitle: { en: "Rename conversation", vi: "Đổi tên hội thoại" },
   renameDesc: {
     en: "A short label for your history. At most 120 characters.",
@@ -112,13 +119,25 @@ export function ConversationList({
 }) {
   const t = useT(listCopy);
   const queryClient = useQueryClient();
+  const locale = useLocaleStore((s) => s.locale);
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [renaming, setRenaming] = React.useState<ConversationSummary | null>(null);
   const [renameTitle, setRenameTitle] = React.useState("");
+  // Search text and the debounced value actually sent to the server (120ms).
+  const [search, setSearch] = React.useState("");
+  const [q, setQ] = React.useState("");
+  React.useEffect(() => {
+    const id = setTimeout(() => setQ(search.trim()), 120);
+    return () => clearTimeout(id);
+  }, [search]);
 
   const list = useInfiniteQuery({
-    queryKey: conversationListKey(userId, workspaceId),
-    queryFn: ({ pageParam }) => listConversations(workspaceId, pageParam),
+    // q is part of the key: a new search starts a fresh first page (the old
+    // cursor never leaks across queries), and the parent page's prefix
+    // invalidation via conversationListKey still matches every variant.
+    queryKey: [...conversationListKey(userId, workspaceId), q],
+    queryFn: ({ pageParam, signal }) =>
+      listConversations(workspaceId, pageParam, { q: q || undefined, signal }),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextCursor,
     // Only fetch for a fully-resolved identity; avoids 401/403 noise during
@@ -130,22 +149,15 @@ export function ConversationList({
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: conversationListKey(userId, workspaceId) });
 
-  // Rename is a read-modify-write through the same optimistic-version PUT the
-  // chat page saves with: a concurrent change surfaces as an explicit 409,
-  // never a silent overwrite.
+  // Rename is a title-only PUT guarded by the tracked version: the transcript
+  // is never downloaded or re-sent, and a concurrent change surfaces as an
+  // explicit 409 instead of a silent overwrite.
   const rename = useMutation({
-    mutationFn: async ({ chatId, title }: { chatId: string; title: string }) => {
-      const snap = await getConversation(workspaceId, chatId);
-      return saveConversation(workspaceId, chatId, {
-        version: snap.version,
-        title,
-        model: snap.model,
-        messages: snap.messages,
-      });
-    },
-    onSuccess: (snap, { chatId }) => {
+    mutationFn: ({ chatId, version, title }: { chatId: string; version: number; title: string }) =>
+      renameConversation(workspaceId, chatId, { version, title }),
+    onSuccess: ({ id, version }) => {
       setRenaming(null);
-      onRenamed?.({ chatId, version: snap.version });
+      onRenamed?.({ chatId: id, version });
       void invalidate();
     },
     onError: (e) => setActionError(listActionErrorMessage(e)),
@@ -172,16 +184,50 @@ export function ConversationList({
     if (!renaming) return;
     const title = renameTitle.trim();
     if (!title) return;
-    rename.mutate({ chatId: renaming.id, title: title.slice(0, 120) });
+    rename.mutate({ chatId: renaming.id, version: renaming.version, title: title.slice(0, 120) });
   }
 
   const items = list.data?.pages.flatMap((p) => p.data) ?? [];
   const resolved = userId !== "" && workspaceId !== "";
   const idle = !list.isLoading && !list.isError;
 
+  // Day buckets for readable history grouping (local calendar days).
+  const dayFormatter = new Intl.DateTimeFormat(locale === "vi" ? "vi-VN" : "en-US", {
+    dateStyle: "medium",
+  });
+  const groups: { label: string; items: ConversationSummary[] }[] = [];
+  let currentDay = "";
+  for (const c of items) {
+    const d = new Date(c.updated_at);
+    const now = new Date();
+    const startOfDay = (x: Date) =>
+      new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
+    const label = dayDiff <= 0 ? t("today") : dayDiff === 1 ? t("yesterday") : dayFormatter.format(d);
+    if (label !== currentDay) {
+      groups.push({ label, items: [] });
+      currentDay = label;
+    }
+    groups[groups.length - 1]?.items.push(c);
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <h2 className="sr-only">{t("convHistory")}</h2>
+      {/* Server-side title search: typing is debounced 120ms; the query key
+          includes q so a new search always resets to the first page. */}
+      <div className="px-2 pb-2">
+        <Label className="sr-only" htmlFor="conversation-search">
+          {t("searchLabel")}
+        </Label>
+        <Input
+          id="conversation-search"
+          type="search"
+          value={search}
+          placeholder={t("searchPlaceholder")}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
       {list.isError ? (
         <p className="px-2 py-4 text-sm text-muted-foreground">
           {t("loadFailed")}{" "}
@@ -196,50 +242,69 @@ export function ConversationList({
         </p>
       ) : list.isLoading ? (
         <p className="px-2 py-4 text-sm text-muted-foreground">{t("loading")}</p>
-      ) : !resolved || items.length === 0 ? (
+      ) : (!resolved || items.length === 0) && q === "" ? (
         <p className="px-2 py-4 text-sm text-muted-foreground">{t("none")}</p>
+      ) : items.length === 0 ? (
+        // A resolved identity with an active search that found nothing is a
+        // distinct state from "no conversations yet" — never conflated.
+        <p className="px-2 py-4 text-sm text-muted-foreground">{t("noMatches")}</p>
       ) : (
         <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto" aria-label={t("conversations")}>
-          {items.map((c) => (
-            <li key={c.id} className="group relative">
-              <button
-                type="button"
-                aria-current={c.id === activeChatId ? "true" : undefined}
-                onClick={() => {
-                  onOpen(c.id);
-                  onClose?.();
-                }}
-                className="w-full rounded-md px-2 py-2 pr-14 text-left hover:bg-accent focus-visible:bg-accent"
+          {groups.map((g) => (
+            <li key={g.label} className="group relative">
+              <div
+                aria-hidden
+                className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground"
               >
-                <span className="block truncate text-sm font-medium">{c.title}</span>
-                <span className="block text-xs text-muted-foreground">
-                  {formatDate(c.updated_at)}
-                </span>
-              </button>
-              <div className="absolute top-1/2 right-1 flex -translate-y-1/2 gap-0.5">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-7"
-                  aria-label={t("renameAria", { title: c.title })}
-                  onClick={() => startRename(c)}
-                >
-                  <Pencil className="size-3.5" aria-hidden />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-7"
-                  aria-label={t("archiveAria", { title: c.title })}
-                  disabled={archive.isPending}
-                  onClick={() => {
-                    setActionError(null);
-                    archive.mutate(c.id);
-                  }}
-                >
-                  <Archive className="size-3.5" aria-hidden />
-                </Button>
+                {g.label}
               </div>
+              <ul>
+                {g.items.map((c) => (
+                  <li key={c.id} className="relative">
+                    <button
+                      type="button"
+                      aria-current={c.id === activeChatId ? "true" : undefined}
+                      onClick={() => {
+                        onOpen(c.id);
+                        onClose?.();
+                      }}
+                      className="w-full rounded-md px-2 py-2 pr-20 text-left hover:bg-accent focus-visible:bg-accent"
+                    >
+                      <span className="block truncate text-sm font-medium">{c.title}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {formatDate(c.updated_at)}
+                      </span>
+                    </button>
+                    {/* 44px touch targets: usable on phones without a row
+                        menu dependency; sibling of the row button so one
+                        click never fires two actions. */}
+                    <div className="absolute top-1/2 right-1 flex -translate-y-1/2 gap-0.5">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-11"
+                        aria-label={t("renameAria", { title: c.title })}
+                        onClick={() => startRename(c)}
+                      >
+                        <Pencil className="size-4" aria-hidden />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-11"
+                        aria-label={t("archiveAria", { title: c.title })}
+                        disabled={archive.isPending}
+                        onClick={() => {
+                          setActionError(null);
+                          archive.mutate(c.id);
+                        }}
+                      >
+                        <Archive className="size-4" aria-hidden />
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </li>
           ))}
         </ul>
