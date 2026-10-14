@@ -39,16 +39,16 @@ jobs:
   test:
     runs-on: ubuntu-latest
     # Service-container Postgres instead of a `docker run -p` host bind: the
-    # runner VM is ephemeral, so nothing can collide with a developer's
-    # hbr-test-pg on 55432 or a dev stack on 55433. The mapped 55432 only
-    # exists inside this job's VM.
+    # runner VM is ephemeral. Omitting the host port makes the runner assign a
+    # free one dynamically (job.services below), so even a same-VM collision
+    # with a fixed port is impossible.
     services:
       postgres:
         image: postgres:17-alpine
         env:
           POSTGRES_PASSWORD: postgres
         ports:
-          - 55432:5432
+          - 5432
         # TCP health check (matching scripts/wait-postgres.sh rationale: a
         # socket-only pg_isready can pass against the init-phase server).
         options: >-
@@ -56,10 +56,6 @@ jobs:
           --health-interval 2s
           --health-timeout 3s
           --health-retries 30
-    env:
-      # 80-col lint: URL split, shell re-joins as one word.
-      HBR_TEST_DATABASE_URL: >-
-        postgres://postgres:postgres@127.0.0.1:55432/postgres
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,6 +71,12 @@ jobs:
         # continue-on-error keeps the job alive so the marker-gated retry below
         # can decide; the job's final status is set by that step.
         continue-on-error: true
+        env:
+          # job-level env has no `job` context, so the dynamically assigned
+          # host port is bound per step; URL split for 80-col lint.
+          HBR_TEST_DATABASE_URL: >-
+            postgres://postgres:postgres@127.0.0.1:${{
+            job.services.postgres.ports['5432'] }}/postgres
         run: |
           set -o pipefail
           PORT=3998 bun run test:gate --timeout 20000 2>&1 | tee ci-test.log
