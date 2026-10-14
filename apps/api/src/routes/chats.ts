@@ -7,14 +7,26 @@
 import { Elysia, t } from "elysia";
 import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, jsonError, writeAudit } from "../authz";
+import type { ChatAttachmentRef } from "@hoborouter/shared";
 import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
-import { type Db, chatConversations, models } from "@hoborouter/db";
+import {
+  type Db,
+  type Tx,
+  chatAttachments,
+  chatConversations,
+  models,
+} from "@hoborouter/db";
 
 const MAX_BODY_BYTES = 512 * 1024; // 512 KiB inbound JSON body limit
 const MAX_MESSAGES = 500;
 const MAX_MESSAGE_CONTENT = 64 * 1024; // 64 KiB per message content
 const MAX_TITLE = 120;
 const LIST_LIMIT = 50;
+const MAX_Q = 120;
+// Bounded so the canonical-ref ownership check stays a single small IN query.
+const MAX_ATTACHMENTS_PER_MESSAGE = 32;
+const MAX_REF_ID = 64;
+const MAX_REQUEST_ID = 128;
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -23,6 +35,9 @@ type ChatMessage = {
   // Assistant-only public model ID (validated against enabled+published
   // models.public_id under the row lock); no DB column — lives in this JSONB.
   model?: string;
+  // User-only attachment refs; request_id below is assistant-only.
+  attachments?: { id: string }[];
+  request_id?: string;
 };
 
 /** Read the request body with a hard byte cap, canceling the stream on overflow. */
@@ -111,7 +126,122 @@ function validateMessages(raw: unknown): { messages?: ChatMessage[]; error?: Res
       }
       msg.model = rec.model;
     }
+    if (rec.attachments !== undefined) {
+      if (rec.role !== "user") {
+        return { error: jsonError(400, "INVALID", "attachments are only allowed on user messages") };
+      }
+      if (!Array.isArray(rec.attachments) || rec.attachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+        return {
+          error: jsonError(
+            400,
+            "INVALID",
+            `attachments must be an array of at most ${MAX_ATTACHMENTS_PER_MESSAGE} refs`,
+          ),
+        };
+      }
+      const refs: { id: string }[] = [];
+      for (const a of rec.attachments) {
+        if (typeof a !== "object" || a === null) {
+          return { error: jsonError(400, "INVALID", "each attachment must be an object") };
+        }
+        const id = (a as Record<string, unknown>).id;
+        // Only the ref id is read here; name/mime/bytes/expiry come from the
+        // canonical chat_attachments row, never the client.
+        if (typeof id !== "string" || !id || id.length > MAX_REF_ID) {
+          return { error: jsonError(400, "INVALID", "attachment id must be a short string") };
+        }
+        refs.push({ id });
+      }
+      msg.attachments = refs;
+    }
+    if (rec.request_id !== undefined) {
+      if (rec.role !== "assistant") {
+        return { error: jsonError(400, "INVALID", "request_id is only allowed on assistant messages") };
+      }
+      if (
+        typeof rec.request_id !== "string" ||
+        !rec.request_id ||
+        rec.request_id.length > MAX_REQUEST_ID
+      ) {
+        return { error: jsonError(400, "INVALID", "message request_id must be a short string") };
+      }
+      msg.request_id = rec.request_id;
+    }
     messages.push(msg);
+  }
+  return { messages };
+}
+
+/**
+ * Replace client-sent attachment refs with canonical chat_attachments metadata
+ * (name/mime/bytes/expiry NEVER trusted from the client). Refs already present
+ * in the stored snapshot are grandfathered verbatim — expired/tombstoned
+ * history is retained, never rewritten. NEW refs must resolve to a live,
+ * owner+workspace-matching, non-deleted, unexpired row; one bounded query.
+ * All-or-nothing: any dead/unowned ref fails the whole save before a write.
+ */
+async function canonicalizeRefs(
+  tx: Tx,
+  userId: string,
+  workspaceId: string,
+  stored: unknown,
+  messages: ChatMessage[],
+): Promise<{ messages?: ChatMessage[]; error?: Response }> {
+  const storedRefs = new Map<string, { id: string }>();
+  if (Array.isArray(stored)) {
+    for (const m of stored) {
+      const refs = (m as { attachments?: unknown } | null)?.attachments;
+      if (!Array.isArray(refs)) continue;
+      for (const r of refs) {
+        const id = (r as { id?: unknown } | null)?.id;
+        // Stored refs were canonicalized when written; trust the id key only.
+        if (typeof id === "string") storedRefs.set(id, r as { id: string });
+      }
+    }
+  }
+  const newIds = new Set<string>();
+  for (const m of messages) {
+    if (!m.attachments) continue;
+    for (const r of m.attachments) if (!storedRefs.has(r.id)) newIds.add(r.id);
+  }
+  const live = new Map<
+    string,
+    Pick<ChatAttachmentRef, "id" | "name" | "kind" | "bytes" | "mime" | "expires_at">
+  >();
+  if (newIds.size > 0) {
+    const rows = await tx
+      .select({
+        id: chatAttachments.id,
+        name: chatAttachments.name,
+        kind: chatAttachments.kind,
+        bytes: chatAttachments.bytes,
+        mime: chatAttachments.mime,
+        expires_at: chatAttachments.expires_at,
+        deleted_at: chatAttachments.deleted_at,
+      })
+      .from(chatAttachments)
+      .where(
+        and(
+          inArray(chatAttachments.id, [...newIds]),
+          eq(chatAttachments.user_id, userId),
+          eq(chatAttachments.workspace_id, workspaceId),
+        ),
+      );
+    for (const row of rows) {
+      if (row.deleted_at === null && row.expires_at > Date.now()) live.set(row.id, row);
+    }
+  }
+  for (const m of messages) {
+    if (!m.attachments) continue;
+    const refs: ChatMessage["attachments"] = [];
+    for (const r of m.attachments) {
+      const canonical = storedRefs.get(r.id) ?? live.get(r.id);
+      if (!canonical) {
+        return { error: jsonError(400, "INVALID", "attachment is not available") };
+      }
+      refs.push(canonical);
+    }
+    m.attachments = refs;
   }
   return { messages };
 }
@@ -153,6 +283,20 @@ export const chatsRoutes = (db: Db, auth: BetterAuthInstance) =>
           eq(chatConversations.workspace_id, params.id),
           sql`${chatConversations.archived_at} IS NULL`,
         ];
+        // Title search filters BEFORE the keyset cursor so pages stay stable
+        // and honest (every page is the filtered set, not the unfiltered one).
+        const qRaw = new URL(request.url).searchParams.get("q");
+        if (qRaw !== null) {
+          const q = qRaw.trim();
+          if (q.length > MAX_Q) {
+            return jsonError(400, "INVALID", "q must be at most 120 characters");
+          }
+          if (q) {
+            // Postgres LIKE default escape is backslash; neutralize % _ \\.
+            const pattern = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+            filters.push(sql`${chatConversations.title} ILIKE ${pattern}`);
+          }
+        }
         if (cursor.updatedAt !== undefined && cursor.id !== undefined) {
           filters.push(
             or(
@@ -326,6 +470,12 @@ export const chatsRoutes = (db: Db, auth: BetterAuthInstance) =>
           if (row.version !== version) {
             return jsonError(409, "CONFLICT", "Version conflict");
           }
+          // Canonical attachment refs (grandfathering stored history; new refs
+          // verified live+owned) — before model validation, so the whole save
+          // is all-or-nothing on any invalid ref.
+          const canon = await canonicalizeRefs(tx, userId, params.id, row.messages, messages.messages!);
+          if (canon.error) return canon.error;
+          const savedMessages = canon.messages!;
           // Historical-model retention, under the same row lock so a concurrent
           // save cannot change the stored snapshot mid-validation: model strings
           // already present on stored assistant messages pass even if now
@@ -348,7 +498,7 @@ export const chatsRoutes = (db: Db, auth: BetterAuthInstance) =>
             }
           }
           const fresh = new Set<string>();
-          for (const m of messages.messages!) {
+          for (const m of savedMessages) {
             if (m.role === "assistant" && m.model !== undefined && !retained.has(m.model)) {
               fresh.add(m.model);
             }
@@ -376,7 +526,7 @@ export const chatsRoutes = (db: Db, auth: BetterAuthInstance) =>
             .set({
               ...(title !== undefined ? { title } : {}),
               ...(model !== undefined ? { model } : {}),
-              messages: messages.messages!,
+              messages: savedMessages,
               version: version + 1,
               updated_at: now,
             })
@@ -396,6 +546,193 @@ export const chatsRoutes = (db: Db, auth: BetterAuthInstance) =>
           return saved[0]!;
         });
         return updated;
+      },
+    )
+    // Rename only: conditional version UPDATE returning {id, version} — no
+    // full transcript round-trip. Stale writers get 409 and change nothing.
+    .put(
+      "/api/v1/workspaces/:id/chats/:chatId/title",
+      {
+        params: t.Object({ id: t.String(), chatId: t.String() }),
+        detail: { tags: ["Chats"], summary: "Rename chat conversation" },
+      },
+      async ({ request, params }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const userId = gate.session.user.id;
+        const denied = await requireWsRole(db, params.id, userId, "member");
+        if (denied) return denied;
+        const read = await readBoundedBody(request);
+        if (read.error) return read.error;
+        const body = read.body!;
+        const version = body.version;
+        if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
+          return jsonError(400, "INVALID", "version must be a positive integer");
+        }
+        if (typeof body.title !== "string") {
+          return jsonError(400, "INVALID", "title must be a string");
+        }
+        const title = body.title.trim();
+        if (!title || title.length > MAX_TITLE) {
+          return jsonError(
+            400,
+            "INVALID",
+            `title must be non-empty and at most ${MAX_TITLE} characters`,
+          );
+        }
+        const now = Date.now();
+        const result = await db.transaction(async (tx) => {
+          const rows = await tx
+            .select({
+              id: chatConversations.id,
+              title: chatConversations.title,
+              version: chatConversations.version,
+              archived_at: chatConversations.archived_at,
+            })
+            .from(chatConversations)
+            .where(
+              and(
+                eq(chatConversations.id, params.chatId),
+                eq(chatConversations.user_id, userId),
+                eq(chatConversations.workspace_id, params.id),
+              ),
+            )
+            .limit(1)
+            .for("update");
+          const row = rows[0];
+          if (!row) return jsonError(404, "NOT_FOUND", "Conversation not found");
+          if (row.archived_at !== null) {
+            return jsonError(409, "ARCHIVED", "Conversation is archived");
+          }
+          if (row.version !== version) {
+            return jsonError(409, "CONFLICT", "Version conflict");
+          }
+          await tx
+            .update(chatConversations)
+            .set({ title, version: version + 1, updated_at: now })
+            .where(eq(chatConversations.id, params.chatId));
+          if (title !== row.title) {
+            await writeAudit(tx, {
+              actorUserId: userId,
+              workspaceId: params.id,
+              action: "chat.rename",
+              target: params.chatId,
+              detail: { fields: ["title"] },
+            });
+          }
+          return { id: row.id, version: version + 1 };
+        });
+        return result;
+      },
+    )
+    // Fork: new conversation holding the source prefix THROUGH the edited user
+    // turn (source messages 0..message_index, that turn's content replaced by
+    // `content` when provided). Source row is untouched; source version is
+    // checked under the row lock (stale → 409, no fork). Prefix attachment
+    // refs are grandfathered history (kept verbatim even if expired). Storage
+    // only — no wallet hold, no charge, no second billing request.
+    .post(
+      "/api/v1/workspaces/:id/chats/:chatId/fork",
+      {
+        params: t.Object({ id: t.String(), chatId: t.String() }),
+        detail: { tags: ["Chats"], summary: "Fork chat conversation" },
+      },
+      async ({ request, params }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const userId = gate.session.user.id;
+        const denied = await requireWsRole(db, params.id, userId, "member");
+        if (denied) return denied;
+        const read = await readBoundedBody(request);
+        if (read.error) return read.error;
+        const body = read.body!;
+        const version = body.version;
+        if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
+          return jsonError(400, "INVALID", "version must be a positive integer");
+        }
+        const messageIndex = body.message_index;
+        if (
+          typeof messageIndex !== "number" ||
+          !Number.isSafeInteger(messageIndex) ||
+          messageIndex < 0
+        ) {
+          return jsonError(400, "INVALID", "message_index must be a non-negative integer");
+        }
+        let content: string | undefined;
+        if (body.content !== undefined) {
+          if (
+            typeof body.content !== "string" ||
+            Buffer.byteLength(body.content, "utf8") > MAX_MESSAGE_CONTENT
+          ) {
+            return jsonError(
+              400,
+              "INVALID",
+              `content must be a string of at most ${MAX_MESSAGE_CONTENT} bytes`,
+            );
+          }
+          content = body.content;
+        }
+        const now = Date.now();
+        const forked = await db.transaction(async (tx) => {
+          const rows = await tx
+            .select()
+            .from(chatConversations)
+            .where(
+              and(
+                eq(chatConversations.id, params.chatId),
+                eq(chatConversations.user_id, userId),
+                eq(chatConversations.workspace_id, params.id),
+              ),
+            )
+            .limit(1)
+            .for("update");
+          const row = rows[0];
+          if (!row) return jsonError(404, "NOT_FOUND", "Conversation not found");
+          if (row.archived_at !== null) {
+            return jsonError(409, "ARCHIVED", "Conversation is archived");
+          }
+          if (row.version !== version) {
+            return jsonError(409, "CONFLICT", "Version conflict");
+          }
+          if (!Array.isArray(row.messages) || messageIndex >= row.messages.length) {
+            return jsonError(400, "INVALID", "message_index out of range");
+          }
+          const target = row.messages[messageIndex] as Record<string, unknown> | null;
+          if (!target || target.role !== "user") {
+            return jsonError(400, "INVALID", "message_index must point at a user message");
+          }
+          const prefix = JSON.parse(
+            JSON.stringify(row.messages.slice(0, messageIndex + 1)),
+          ) as ChatMessage[];
+          const last = prefix[prefix.length - 1]!;
+          if (content !== undefined) last.content = content;
+          const newRow = {
+            id: crypto.randomUUID(),
+            user_id: userId,
+            workspace_id: params.id,
+            title: row.title,
+            model: row.model,
+            messages: prefix,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+            archived_at: null,
+          };
+          await tx.insert(chatConversations).values(newRow);
+          await writeAudit(tx, {
+            actorUserId: userId,
+            workspaceId: params.id,
+            action: "chat.fork",
+            target: newRow.id,
+            detail: { source: params.chatId },
+          });
+          return newRow;
+        });
+        if (forked instanceof Response) return forked;
+        return new Response(JSON.stringify(forked), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
       },
     )
     // Soft archive only — there is deliberately no DELETE endpoint. Idempotent.

@@ -29,6 +29,8 @@ export function displayPrefix(plaintext: string): string {
   return PREFIX + secret.slice(0, 4) + "..." + secret.slice(-6);
 }
 
+// 'chat_member' keys authenticate like any key; policy enforcement happens
+// at admission (member lane), not in the lookup record.
 export interface ApiKeyRecord {
   api_key_id: string;
   workspace_id: string;
