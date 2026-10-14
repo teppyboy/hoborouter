@@ -387,6 +387,49 @@ describe("chat title / fork / search / attachment refs", () => {
       });
       expect(r.status).toBe(400);
     }
+    // Per-message cap: 5 refs → 400.
+    const five: { id: string }[] = [];
+    for (let i = 0; i < 5; i++) {
+      const id = `att-cap-${i}`;
+      await seedAttachment(ctx.db, { id, userId: alice, wsId: wsA });
+      five.push({ id });
+    }
+    expect(
+      (
+        await req(ctx.app, `/api/v1/workspaces/${wsA}/chats/${chatId}`, {
+          method: "PUT",
+          cookie: ac,
+          body: { version: 4, messages: [{ role: "user", content: "x", attachments: five }] },
+        })
+      ).status,
+    ).toBe(400);
+
+    // Total NEW bytes > 10 MiB → 400 (canonical server bytes, not client claims).
+    const big1 = "att-big-1";
+    const big2 = "att-big-2";
+    await seedAttachment(ctx.db, { id: big1, userId: alice, wsId: wsA, bytes: 6 * 1024 * 1024 });
+    await seedAttachment(ctx.db, { id: big2, userId: alice, wsId: wsA, bytes: 6 * 1024 * 1024 });
+    expect(
+      (
+        await req(ctx.app, `/api/v1/workspaces/${wsA}/chats/${chatId}`, {
+          method: "PUT",
+          cookie: ac,
+          body: {
+            version: 4,
+            messages: [
+              {
+                role: "user",
+                content: "x",
+                attachments: [
+                  { id: big1, bytes: 1 }, // client-forged tiny bytes must not bypass
+                  { id: big2 },
+                ],
+              },
+            ],
+          },
+        })
+      ).status,
+    ).toBe(400);
     const after = (await (
       await req(ctx.app, `/api/v1/workspaces/${wsA}/chats/${chatId}`, { cookie: ac })
     ).json()) as { version: number; messages: unknown[] };

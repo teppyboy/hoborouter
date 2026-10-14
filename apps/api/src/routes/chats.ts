@@ -23,10 +23,13 @@ const MAX_MESSAGE_CONTENT = 64 * 1024; // 64 KiB per message content
 const MAX_TITLE = 120;
 const LIST_LIMIT = 50;
 const MAX_Q = 120;
-// Bounded so the canonical-ref ownership check stays a single small IN query.
-const MAX_ATTACHMENTS_PER_MESSAGE = 32;
+// Small per-message ref cap; total NEW-ref bytes also capped at 10 MiB below.
+const MAX_ATTACHMENTS_PER_MESSAGE = 4;
 const MAX_REF_ID = 64;
 const MAX_REQUEST_ID = 128;
+// Upper bound on newly attached live bytes per save (grandfathered historic
+// refs are exempt — history is never pruned or re-billed).
+const MAX_NEW_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 type ChatMessage = {
   role: "user" | "assistant";
@@ -208,6 +211,7 @@ async function canonicalizeRefs(
     string,
     Pick<ChatAttachmentRef, "id" | "name" | "kind" | "bytes" | "mime" | "expires_at">
   >();
+  let newBytesTotal = 0;
   if (newIds.size > 0) {
     const rows = await tx
       .select({
@@ -228,7 +232,15 @@ async function canonicalizeRefs(
         ),
       );
     for (const row of rows) {
-      if (row.deleted_at === null && row.expires_at > Date.now()) live.set(row.id, row);
+      if (row.deleted_at === null && row.expires_at > Date.now()) {
+        live.set(row.id, row);
+        newBytesTotal += row.bytes;
+      }
+    }
+    // Total raw size of NEW refs is capped (canonical server bytes, not the
+    // client's claim). Existing history refs are exempt — no pruning.
+    if (newBytesTotal > MAX_NEW_ATTACHMENT_BYTES) {
+      return { error: jsonError(400, "INVALID", "attachments exceed the 10 MiB total size cap") };
     }
   }
   for (const m of messages) {
