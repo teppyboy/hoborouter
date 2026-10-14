@@ -1,5 +1,6 @@
 import { buildApp } from "./app";
 import { startPaymentExpirySweep } from "./payment-expiry";
+import { startAttachmentGc } from "./attachment-gc";
 import { bootstrapFirstInstanceAdmin } from "./instance-admin";
 import { createDb, migrate, closeDb } from "@hoborouter/db";
 import { loadConfig } from "./config/loader";
@@ -21,6 +22,7 @@ if (cfg.bootstrap.instanceAdminEmail) {
 }
 const app = await buildApp({ db, cfg });
 const stopPaymentExpirySweep = startPaymentExpirySweep(db);
+const stopAttachmentGc = startAttachmentGc(db);
 
 Bun.serve({
   port: cfg.server.port,
@@ -33,5 +35,6 @@ Bun.serve({
 console.log(`hoborouter api listening on :${cfg.server.port}`);
 process.on("SIGTERM", () => {
   stopPaymentExpirySweep();
+  stopAttachmentGc();
   closeDb(db).then(() => process.exit(0));
 });

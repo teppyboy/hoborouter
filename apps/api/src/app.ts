@@ -10,6 +10,10 @@ import { membersRoutes } from "./routes/members";
 import { auditRoutes } from "./routes/audit";
 import { keysRoutes } from "./routes/keys";
 import { chatsRoutes } from "./routes/chats";
+import { attachmentRoutes } from "./routes/attachments";
+import { memberChatPolicyRoutes } from "./routes/member-chat-policy";
+import { chatReceiptsRoutes } from "./routes/chat-receipts";
+import { adminWalletPendingRoutes } from "./routes/admin-wallet-pending";
 import { cpaManagementProxyRoutes } from "./cpa-management-core";
 import { cpaHealthRoutes } from "./routes/cpahealth";
 import { adminModelsRoutes } from "./routes/admin-models";
@@ -143,6 +147,10 @@ export const buildApp = async (deps: AppDeps = {}) => {
     auditRoutes(db, auth),
     keysRoutes(db, auth),
     chatsRoutes(db, auth),
+    attachmentRoutes(db, auth, env),
+    chatReceiptsRoutes(db, auth),
+    memberChatPolicyRoutes(db, auth, env),
+    adminWalletPendingRoutes(db, auth),
     paymentsRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(env), deps.payos?.fetch, env),
     bundlesRoutes(db, auth, deps.payos?.cfg ?? payosConfigFromEnv(env), deps.payos?.fetch),
     mockWebhookRoutes(db, mockPayments),
