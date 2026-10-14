@@ -6,7 +6,7 @@
 // POST/DELETE/PATCH/PUT + audit atomic.
 import { Elysia, t } from "elysia";
 import type { BetterAuthInstance } from "../auth-types";
-import { requireSession, requireWsRole, writeAudit, jsonError } from "../authz";
+import { requireSession, requireWsRole, wsRole, writeAudit, jsonError } from "../authz";
 import { generateApiKey, budgetWindow, type KeyBudgetPeriod } from "@hoborouter/keys";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import {
@@ -117,14 +117,16 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
     request: Request,
     params: { id: string },
     body: { name?: unknown } | null,
-    purpose: "generic" | "chat",
+    purpose: "generic" | "chat" | "chat_member",
     policyInput?: KeyPolicyInput,
+    opts: { minRole?: "admin" | "member"; ownerUserId?: string } = {},
   ) => {
     const gate = await requireSession(auth, request);
     if ("error" in gate) return gate.error;
     const userId = gate.session.user.id;
-    const denied = await requireWsRole(db, params.id, userId, "admin");
+    const denied = await requireWsRole(db, params.id, userId, opts.minRole ?? "admin");
     if (denied) return denied;
+    const ownerUserId = opts.ownerUserId ?? null;
     const wsExists = await db
       .select({ id: workspaces.id })
       .from(workspaces)
@@ -172,6 +174,7 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
         status: "enabled",
         created_at: now,
         purpose,
+        owner_user_id: ownerUserId,
         expires_at: policy.expires_at ?? null,
         budget_vnd: budgetVnd,
         budget_period: budgetPeriod,
@@ -188,6 +191,7 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
           name,
           key_prefix: prefix,
           purpose,
+          ...(ownerUserId !== null ? { owner_user_id: ownerUserId } : {}),
           ...(policy.expires_at !== undefined ? { expires_at: policy.expires_at } : {}),
           ...(budgetVnd !== null ? { budget_vnd: budgetVnd, budget_period: budgetPeriod } : {}),
         },
@@ -236,7 +240,31 @@ export const keysRoutes = (db: Db, auth: BetterAuthInstance) => {
           security: [{ cookieAuth: [] }],
         },
       },
-      async ({ request, params, body }) => createKey(request, params, body, "chat"),
+      async ({ request, params, body }) => {
+        const gate = await requireSession(auth, request);
+        if ("error" in gate) return gate.error;
+        const userId = gate.session.user.id;
+        const role = await wsRole(db, params.id, userId);
+        if (!role) return jsonError(403, "FORBIDDEN", "Not a workspace member");
+        const wsRows = await db
+          .select({ enabled: workspaces.member_chat_enabled })
+          .from(workspaces)
+          .where(eq(workspaces.id, params.id))
+          .limit(1);
+        if (!wsRows[0]) return jsonError(404, "NOT_FOUND", "Workspace not found");
+        // Member chat policy active: the chat-key route mints a personal
+        // 'chat_member' key — purpose and owner are server-forced (owner is
+        // ALWAYS the caller, never client input; members cannot mint generic
+        // keys or set their own policy). Policy off: admins keep the
+        // instance-wide 'chat' key, members get nothing.
+        if (wsRows[0].enabled) {
+          return createKey(request, params, body, "chat_member", undefined, {
+            minRole: "member",
+            ownerUserId: userId,
+          });
+        }
+        return createKey(request, params, body, "chat");
+      },
     )
     .get(
       "/api/v1/workspaces/:id/keys",

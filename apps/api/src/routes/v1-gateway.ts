@@ -31,7 +31,9 @@ import {
   settleRequest,
   utcDay,
   WalletError,
+  MemberBudgetError,
 } from "@hoborouter/wallet";
+import { getMemberChatContext } from "@hoborouter/keys";
 import { injectChatUsageOption, createUsageTap, resolveBillableUsage } from "@hoborouter/usage";
 import { transitionThroughputAllowances } from "@hoborouter/payments";
 import { and, eq, gt, lte } from "drizzle-orm";
@@ -536,11 +538,23 @@ function gatewayHandler(
         ? anthropicError(401, "Invalid API key provided.")
         : openAiError(401, "Invalid API key provided.", "invalid_api_key");
 
+    // 2b. Member chat keys ('chat_member' purpose) are restricted to the
+    // chat completions path only — no responses/messages access.
+    const isMemberKey = key.purpose === "chat_member";
+    if (isMemberKey && path !== "/v1/chat/completions") {
+      return routeError(
+        403,
+        "member_key_restricted",
+        "Member chat keys are restricted to /v1/chat/completions",
+      );
+    }
+
     // 3. Body validation — size-limited BEFORE buffering (memory DoS guard).
     // Cap resolution: chat-purpose provenance lifts the cap only on the exact
-    // chat path; /v1/responses and every generic key stay at 1 MiB.
+    // chat path; /v1/responses and every generic key stay at 1 MiB. Member
+    // chat keys carry raw attachments too, so they share the lifted cap.
     const bodyLimit =
-      path === "/v1/chat/completions" && key.purpose === "chat"
+      path === "/v1/chat/completions" && (key.purpose === "chat" || isMemberKey)
         ? CHAT_MAX_BODY_BYTES
         : MAX_BODY_BYTES;
     const limitLabel = `${Math.floor(bodyLimit / (1024 * 1024))} MiB`;
@@ -775,10 +789,30 @@ function gatewayHandler(
     // Key-period budget headroom (read-only; admission below re-checks it
     // under the api_keys row lock — the authoritative serialized gate).
     const keyBudget = await getKeyBudgetRemainingVnd(db, key.api_key_id, Date.now());
-    const availableCapVnd =
-      keyBudget.remaining === null
-        ? walletAvailable
-        : Math.min(walletAvailable, keyBudget.remaining);
+    // Member chat policy snapshot (advisory; reserveRequest re-checks policy,
+    // membership and the counter atomically inside its transaction).
+    const memberCtx = isMemberKey
+      ? await getMemberChatContext(db, {
+          workspaceId: key.workspace_id,
+          // Schema CHECK: a chat_member key always names its owner.
+          userId: key.owner_user_id!,
+          now: Date.now(),
+        })
+      : null;
+    if (memberCtx && (!memberCtx.isMember || !memberCtx.enabled)) {
+      return routeError(
+        403,
+        "member_chat_disabled",
+        memberCtx.isMember
+          ? "Member chat is disabled for this workspace"
+          : "Key owner is not a workspace member",
+      );
+    }
+    const memberRemaining = memberCtx?.remainingVnd ?? null;
+    const availableCapVnd = Math.min(
+      keyBudget.remaining === null ? walletAvailable : Math.min(walletAvailable, keyBudget.remaining),
+      memberRemaining ?? Number.MAX_SAFE_INTEGER,
+    );
 
     // Nothing has been written yet in this phase, so any exit here must hand
     // the tentatively-counted limiter slots back first.
@@ -860,6 +894,14 @@ function gatewayHandler(
         } catch {
           // Overflow here cannot happen for a 1-token probe; fall through.
         }
+      }
+      // Exhausted member daily cap: retryable at the UTC-day rollover.
+      if (memberRemaining !== null && memberRemaining <= 0) {
+        return rateLimited(
+          Math.max(1, Math.ceil(((memberCtx?.resetsAtMs ?? 0) - Date.now()) / 1000)),
+          "member_budget_exceeded",
+          "Member daily chat budget for the current period is exhausted. Retry after it resets.",
+        );
       }
       const res = routeError(402, "insufficient_balance", "Insufficient wallet balance");
       if (limiter) setRateLimitHeaders(res, limit!, limiter.remaining, limiter.windowStart, limNow);
@@ -953,6 +995,10 @@ function gatewayHandler(
         fxRate,
         capVnd,
         ...(limiter ? { funding: { underLimit: limiter.underLimit } } : {}),
+        ...(memberCtx && key.owner_user_id
+          ? { memberBudget: { userId: key.owner_user_id } }
+          : {}),
+        keyBudgetPeriodStart: budgetPeriodStart,
         now: Date.now(),
       });
       // Return the tentative slot ONLY when the ticket actually counted
@@ -978,6 +1024,21 @@ function gatewayHandler(
         } catch {
           // keep mapping the reserve error below
         }
+      }
+      if (err instanceof MemberBudgetError) {
+        if (err.memberCode === "exceeded") {
+          if (limiter?.underLimit)
+            uncountSubscriptionRateLimit(key.workspace_id, limiter.windowStart);
+          if (allowanceCheck?.underLimit)
+            uncountThroughputAllowanceLimit(key.workspace_id, allowanceCheck.windowStart);
+          return rateLimited(
+            Math.max(1, Math.ceil((err.retryAfterMs ?? 60_000) / 1000)),
+            "member_budget_exceeded",
+            err.message,
+          );
+        }
+        returnAdmissionSlots();
+        return routeError(403, "member_chat_denied", err.message);
       }
       if (err instanceof WalletError) {
         if (limiter?.underLimit)
