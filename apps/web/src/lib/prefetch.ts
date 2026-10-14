@@ -38,6 +38,12 @@ export const chunkByPath: Record<string, { preload: () => Promise<unknown> }> = 
   "/billing/bundles": bundles,
   "/billing/payments": payments,
   "/settings": settings,
+  // Chat page exports a named component; remap to default for lazyRoute.
+  // Same module promise as router.tsx's Chat route, so hover/idle preload
+  // warms the exact chunk the route will load (router may alias this later).
+  "/chat": lazyRoute(() =>
+    import("../pages/chat").then((m) => ({ default: m.ChatPage })),
+  ),
 };
 
 /** Preload the chunk for a nav path (called from Link onMouseEnter/onFocus). */
