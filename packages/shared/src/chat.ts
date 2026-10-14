@@ -49,16 +49,24 @@ export interface ConversationMessage {
   request_id?: string;
 }
 
-/** Fork request/response contract (POST /chats/:chatId/fork). */
+/** Fork request contract (POST /chats/:chatId/fork). */
 export interface ChatForkRequest {
   version: number;
   message_index: number;
   content?: string;
 }
-export interface ChatForkResponse {
+/** Full conversation snapshot (also the 201 fork body — no extra GET needed). */
+export interface ConversationSnapshot {
   id: string;
   version: number;
+  title: string;
+  model: string | null;
+  messages: ConversationMessage[];
+  created_at: EpochMs;
+  updated_at: EpochMs;
+  archived_at: EpochMs | null;
 }
+export type ChatForkResponse = ConversationSnapshot;
 
 /** Title rename contract (PUT /chats/:chatId/title). */
 export interface ChatTitleUpdateRequest {

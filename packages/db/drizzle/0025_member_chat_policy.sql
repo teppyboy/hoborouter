@@ -4,6 +4,7 @@
 ALTER TABLE "workspaces" ADD COLUMN "member_chat_enabled" boolean DEFAULT false NOT NULL;--> statement-breakpoint
 ALTER TABLE "workspaces" ADD COLUMN "member_chat_daily_cap_vnd" bigint;--> statement-breakpoint
 ALTER TABLE "workspaces" ADD CONSTRAINT "workspaces_member_chat_cap" CHECK ("workspaces"."member_chat_daily_cap_vnd" IS NULL OR ("workspaces"."member_chat_daily_cap_vnd" > 0 AND "workspaces"."member_chat_daily_cap_vnd" <= 9007199254740991));--> statement-breakpoint
+ALTER TABLE "workspaces" ADD CONSTRAINT "workspaces_member_chat_cap_required" CHECK ("workspaces"."member_chat_enabled" = false OR "workspaces"."member_chat_daily_cap_vnd" IS NOT NULL);--> statement-breakpoint
 
 ALTER TABLE "api_keys" ADD COLUMN "owner_user_id" text REFERENCES "users"("id");--> statement-breakpoint
 ALTER TABLE "api_keys" DROP CONSTRAINT "api_keys_purpose";--> statement-breakpoint

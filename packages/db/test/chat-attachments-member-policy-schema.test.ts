@@ -108,6 +108,14 @@ describe("0025 member chat policy row checks", () => {
     await expectReject(
       d.update(workspaces).set({ member_chat_daily_cap_vnd: -1 }).where(eq(workspaces.id, "ws-pol-u")),
     );
+    // Enabled policy requires an explicit positive cap.
+    await expectReject(
+      d.update(workspaces).set({ member_chat_enabled: true }).where(eq(workspaces.id, "ws-pol-u")),
+    );
+    await d
+      .update(workspaces)
+      .set({ member_chat_enabled: true, member_chat_daily_cap_vnd: 50000 })
+      .where(eq(workspaces.id, "ws-pol-u"));
   });
 
   test("chat_member key requires owner; usage PK dedupes UTC period", async () => {

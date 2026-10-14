@@ -57,7 +57,14 @@ export const workspaces = pgTable("workspaces", {
   member_chat_enabled: boolean("member_chat_enabled").notNull().default(false),
   member_chat_daily_cap_vnd: big("member_chat_daily_cap_vnd"),
   created_at: big("created_at").notNull(),
-});
+}, (t) => [
+  // Enabled policy always names an explicit positive per-user daily cap
+  // (user explicitly capped; disabled workspaces keep cap NULL).
+  check(
+    "workspaces_member_chat_cap_required",
+    sql`${t.member_chat_enabled} = false OR ${t.member_chat_daily_cap_vnd} IS NOT NULL`,
+  ),
+]);
 
 export const workspaceMembers = pgTable(
   "workspace_members",
