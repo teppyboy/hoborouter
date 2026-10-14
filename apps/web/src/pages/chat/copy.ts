@@ -198,6 +198,30 @@ export const chatCopy = {
   stopGenerating: { en: "Stop generating", vi: "Dừng tạo" },
   sendMessage: { en: "Send message", vi: "Gửi tin nhắn" },
   jumpToLatest: { en: "Jump to latest", vi: "Nhảy tới tin nhắn mới nhất" },
+  editTurn: { en: "Edit message", vi: "Sửa tin nhắn" },
+  saveEdit: { en: "Save", vi: "Lưu" },
+  cancelEdit: { en: "Cancel", vi: "Huỷ" },
+  editTurnHint: {
+    en: "Editing forks the conversation here — the next send starts a new PAID generation; the original stays unchanged.",
+    vi: "Sửa sẽ tách hội thoại từ đây — lần gửi tiếp theo bắt đầu một lượt tạo mới CÓ TÍNH PHÍ; bản gốc không đổi.",
+  },
+  forkTurn: { en: "Fork from here", vi: "Tách từ đây" },
+  forkTurnHint: {
+    en: "Creates a copy of the conversation up to this message — the next send starts a new PAID generation; the original stays unchanged.",
+    vi: "Tạo bản sao hội thoại tới tin nhắn này — lần gửi tiếp theo bắt đầu một lượt tạo mới CÓ TÍNH PHÍ; bản gốc không đổi.",
+  },
+  regenerateTurn: { en: "Regenerate reply", vi: "Tạo lại câu trả lời" },
+  regenerateTurnHint: {
+    en: "Regenerates this reply — a new PAID generation; the original stays unchanged.",
+    vi: "Tạo lại câu trả lời này — một lượt tạo mới CÓ TÍNH PHÍ; bản gốc không đổi.",
+  },
+  attachmentsLabel: { en: "Attachments", vi: "Tệp đính kèm" },
+  attachmentExpired: { en: "Expired", vi: "Đã hết hạn" },
+  previewAttachment: {
+    en: "Preview {name}",
+    vi: "Xem trước {name}",
+  },
+  replyComplete: { en: "Reply complete.", vi: "Đã trả lời xong." },
 } as const;
 
 /** Structured rejection code -> localized copy key (see AttachError in
