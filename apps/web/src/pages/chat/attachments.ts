@@ -7,6 +7,10 @@
 // prompt/history headroom), so per-file and total budgets keep the final
 // request body below that cap — attachment bytes never reach logs or error
 // messages, only filenames.
+// Persistence of the raw bytes is a separate, explicit upload step — see
+// ./attachment-client.ts (upload on pick) and ./persistent-attachments.ts
+// (rehydration of persisted refs on reload).
+import type { ChatAttachmentRef } from "@hoborouter/shared";
 export interface ChatAttachment {
   id: string;
   kind: "image" | "text";
@@ -16,6 +20,11 @@ export interface ChatAttachment {
   dataUrl?: string;
   /** Text files only: decoded file content. */
   text?: string;
+  /** Server-persisted reference (canonical ChatAttachmentRef DTO) when this
+   *  attachment was uploaded via POST /workspaces/:id/attachments. Optional
+   *  for backward compatibility: session-only attachments and history
+   *  snapshots written before persistent uploads have no ref. */
+  serverRef?: ChatAttachmentRef;
 }
 
 /** UTF-8 byte length (the gateway caps bytes, not UTF-16 chars). */
@@ -127,8 +136,9 @@ function tooLargeTextMessage(name: string, maxBytes: number): string {
 }
 
 /** Type and per-file size validation only — no reads. Thrown before any
- *  arrayBuffer()/text() so a budget-busting file is never read. */
-function validateFile(file: File): void {
+ *  arrayBuffer()/text() so a budget-busting file is never read. Shared by
+ *  the local-read path and the persistent-upload path (attachment-client). */
+export function validateFile(file: File): void {
   const { name, size } = file;
   if (isImageFile(file)) {
     if (size > ATTACHMENT_LIMITS.maxImageBytes) {
@@ -184,8 +194,8 @@ export async function createAttachment(file: File): Promise<ChatAttachment> {
 }
 
 /** data URL without FileReader: identical shape the gateway forwards. */
-function bytesToDataUrl(mime: string, buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
+export function bytesToDataUrl(mime: string, buf: ArrayBuffer | Uint8Array): string {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
   let binary = "";
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {
