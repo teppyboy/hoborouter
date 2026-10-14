@@ -52,6 +52,7 @@ interface FetchCall {
   init?: RequestInit;
 }
 let calls: FetchCall[] = [];
+let uploadStatus = 201;
 let responder: (call: FetchCall) => Promise<Response> = async () =>
   new Response("{}", { status: 500 });
 const mockFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -128,6 +129,7 @@ afterEach(async () => {
   await flush();
   document.body.innerHTML = "";
   calls = [];
+  uploadStatus = 201;
 });
 
 type EventCtor = new (type: string, init?: { bubbles?: boolean; cancelable?: boolean }) => Event;
@@ -189,6 +191,18 @@ async function mountPage(historyMessages: unknown[] = []) {
       return jsonRes(200, snapshot(1, historyMessages));
     if (path === "/api/v1/workspaces/ws1/chats/c1" && call.init?.method === "PUT")
       return jsonRes(200, snapshot(99, historyMessages));
+    if (path === "/api/v1/workspaces/ws1/attachments" && call.init?.method === "POST") {
+      const filename = String(new Headers(call.init.headers).get("X-Hbr-Filename"));
+      if (uploadStatus !== 201) return jsonRes(uploadStatus, {});
+      return jsonRes(201, {
+        id: "attachment-1",
+        name: decodeURIComponent(filename),
+        kind: "image",
+        bytes: 2048,
+        mime: "image/png",
+        expires_at: Date.now() + 86400000,
+      });
+    }
     if (path === "/api/v1/workspaces/ws1/chat-key")
       return jsonRes(200, {
         id: "k1",
@@ -325,13 +339,15 @@ test("oversized payload is rejected before any side effect and the draft survive
   ).toHaveLength(0);
 });
 
-test("attachments ride the request, persist in-session for follow-ups and retries", async () => {
+test("file selection uploads raw bytes and saved user turn contains only canonical server refs", async () => {
   await mountPage([{ role: "user", content: "hi" }]);
   await openConversation();
   await pickFiles([pngFile(2048)]);
   await waitFor(() => chipCount() === 1, "chip attached");
-  // Session-only retention disclosure is visible while attachments exist.
-  expect(bodyText()).toContain("not saved to your chat history");
+  const upload = calls.find((c) => c.path === "/api/v1/workspaces/ws1/attachments");
+  expect(upload?.init?.method).toBe("POST");
+  expect(upload?.init?.body).toBeInstanceOf(File);
+  expect(await (upload?.init?.body as File).arrayBuffer()).toEqual(await pngFile(2048).arrayBuffer());
   const textarea = document.querySelector('textarea[aria-label="Message"]')!;
   setInput(textarea, "look at this");
   click(buttonByLabel("Send message")!);
@@ -345,6 +361,17 @@ test("attachments ride the request, persist in-session for follow-ups and retrie
   expect(Array.isArray(lastUser?.content)).toBe(true);
   expect(JSON.stringify(lastUser?.content)).toContain("image_url");
   expect(JSON.stringify(lastUser?.content)).toContain("look at this");
+  const save = calls.find((c) => c.path === "/api/v1/workspaces/ws1/chats/c1" && c.init?.method === "PUT");
+  expect(save).toBeDefined();
+  const saved = JSON.parse(String(save?.init?.body)) as { messages: Array<{ role: string; attachments?: unknown[]; content: string }> };
+  const savedUser = saved.messages.findLast((m) => m.role === "user");
+  expect(savedUser?.attachments).toEqual([{
+    id: "attachment-1", name: "shot.png", kind: "image", bytes: 2048,
+    mime: "image/png", expires_at: expect.any(Number),
+  }]);
+  expect(JSON.stringify(savedUser)).not.toContain("data:image");
+  expect(JSON.stringify(savedUser)).not.toContain("base64");
+  expect(JSON.stringify(savedUser)).not.toContain("Hello");
   // The composer draft reset after a successful send.
   await waitFor(
     () =>
@@ -353,19 +380,16 @@ test("attachments ride the request, persist in-session for follow-ups and retrie
     "draft cleared",
   );
 
-  // Retry re-sends the retained multimodal content, and says so.
-  await waitFor(() => buttonByText("Retry last reply") !== undefined, "retry button");
-  expect(bodyText()).toContain("Retry re-sends this turn's attachments");
-  click(buttonByText("Retry last reply")!);
-  await waitFor(
-    () => calls.filter((c) => c.path === "/v1/chat/completions").length === 2,
-    "retry sent",
-  );
-  const retry = JSON.parse(
-    String(calls.filter((c) => c.path === "/v1/chat/completions")[1]?.init?.body),
-  ) as { messages: Array<{ role: string; content: unknown }> };
-  const retryLastUser = retry.messages.filter((m) => m.role === "user").at(-1);
-  expect(JSON.stringify(retryLastUser?.content)).toContain("image_url");
+  expect(calls.filter((c) => c.path === "/v1/chat/completions")).toHaveLength(1);
+});
+
+test("failed upload adds no sendable chip", async () => {
+  uploadStatus = 507;
+  await mountPage();
+  await pickFiles([pngFile(1024)]);
+  await waitFor(() => bodyText().includes("storage is full"), "upload failure message");
+  expect(chipCount()).toBe(0);
+  expect(buttonByLabel("Send message")?.disabled).toBe(true);
 });
 
 test("a pick in flight shows a Reading status that clears when reads finish", async () => {

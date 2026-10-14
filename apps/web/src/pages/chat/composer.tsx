@@ -7,11 +7,14 @@ import { ATTACH_ERROR_COPY } from "./copy";
 import { useComposerT } from "./composer-copy";
 import {
   ATTACHMENT_RETENTION_NOTICE,
-  addAttachments,
+  ATTACHMENT_LIMITS,
+  validateFile,
   removeAttachment,
   AttachError,
   type ChatAttachment,
 } from "./attachments";
+import { AttachmentUploadError, createPersistedAttachment } from "./attachment-client";
+import { useChatT } from "./copy";
 
 /** Draft state owned by the composer: text, per-message attachments and the
  *  user-mutation revision counter. The send lifecycle (use-chat-send) reads
@@ -41,8 +44,10 @@ export interface ComposerDraft {
 export function useComposerDraft(deps: {
   identityRef: React.RefObject<string>;
   seqRef: React.RefObject<number>;
+  workspaceId: string | null;
 }): ComposerDraft {
-  const { identityRef, seqRef } = deps;
+  const { identityRef, seqRef, workspaceId } = deps;
+  const t = useChatT();
   const [input, setInput] = React.useState("");
   // Draft revision counter: increments on USER draft mutations only — typing,
   // paste (both via onChange), prompt-chip pick, attachment pick/remove. The
@@ -52,7 +57,7 @@ export function useComposerDraft(deps: {
   const draftRevisionRef = React.useRef(0);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   // Per-message attachments (images as multimodal parts, text/code inlined).
-  // Held in memory only; cleared when the message is sent or the view resets.
+  // Local previews are paired with server refs for conversation persistence.
   const [attachments, setAttachments] = React.useState<ChatAttachment[]>([]);
   const attachmentsRef = React.useRef<ChatAttachment[]>([]);
   const [attachError, setAttachError] = React.useState<AttachError | string | null>(null);
@@ -91,15 +96,40 @@ export function useComposerDraft(deps: {
   async function doAttachFiles(files: File[]) {
     const idAtPick = identityRef.current;
     const genAtPick = seqRef.current;
-    const res = await addAttachments(attachmentsRef.current, files);
-    if (identityRef.current !== idAtPick || seqRef.current !== genAtPick) return;
-    if (res.error) {
-      setAttachError(res.error);
-      return;
+    try {
+      if (attachmentsRef.current.length + files.length > ATTACHMENT_LIMITS.maxCount) {
+        throw new AttachError("tooMany", "You can attach at most 4 files per message.");
+      }
+      if (
+        attachmentsRef.current.reduce((sum, a) => sum + a.bytes, 0) +
+          files.reduce((sum, file) => sum + file.size, 0) >
+        ATTACHMENT_LIMITS.maxTotalBytes
+      ) {
+        throw new AttachError("totalTooLarge", "Attachments exceed the 10 MB total limit.");
+      }
+      for (const file of files) validateFile(file);
+      if (!workspaceId) throw new AttachmentUploadError("unauthorized", "Sign in to upload files.");
+      const added = await Promise.all(files.map((file) => createPersistedAttachment(workspaceId, file)));
+      if (identityRef.current !== idAtPick || seqRef.current !== genAtPick) return;
+      setAttachError(null);
+      draftRevisionRef.current += 1;
+      applyAttachments([...attachmentsRef.current, ...added]);
+    } catch (e) {
+      if (identityRef.current !== idAtPick || seqRef.current !== genAtPick) return;
+      if (e instanceof AttachError) setAttachError(e);
+      else if (e instanceof AttachmentUploadError) {
+        const key = ({
+          unauthorized: "attachmentUploadUnauthorized",
+          forbidden: "attachmentUploadForbidden",
+          tooLarge: "attachmentUploadTooLarge",
+          unsupported: "attachmentUploadUnsupported",
+          quota: "attachmentUploadQuota",
+          network: "attachmentUploadNetwork",
+          invalid: "attachmentUploadInvalid",
+        } as const)[e.kind];
+        setAttachError(t(key));
+      } else setAttachError(e instanceof Error ? e.message : t("attachReadFailed"));
     }
-    setAttachError(null);
-    draftRevisionRef.current += 1; // user-initiated pick: counts as a draft mutation
-    applyAttachments([...attachmentsRef.current, ...res.added]);
   }
 
   return {

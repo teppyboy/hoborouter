@@ -270,7 +270,7 @@ export function ChatPage() {
   const busyRef = React.useRef(false);
   // Composer-owned draft (text, attachments, revision counter). identityRef
   // and seqRef guard late attachment reads; seqRef moves with the send seam.
-  const draft = useComposerDraft({ identityRef, seqRef });
+  const draft = useComposerDraft({ identityRef, seqRef, workspaceId });
 
   // Session text-draft persistence (hbr-chat-draft: keys; cleared on logout by
   // lib/logout.ts). Scope includes the active chat id so drafts never cross
@@ -618,6 +618,7 @@ export function ChatPage() {
     idAtSend: string;
     chatId: string;
     baseMessages: ChatMessage[];
+    attachments: ChatAttachment[];
     userText: string;
     isFirstTurn: boolean;
     model: string;
@@ -644,7 +645,14 @@ export function ChatPage() {
     partial: { content: string; reasoning: string },
   ): Promise<void> {
     if (!userId || !workspaceId) return;
-    const msgs = buildPersistMessages(turn.baseMessages, turn.userText, partial);
+    const refs = turn.attachments.flatMap((attachment) =>
+      attachment.serverRef ? [attachment.serverRef] : [],
+    );
+    const msgs = buildPersistMessages(turn.baseMessages, turn.userText, partial).map((message, index) =>
+      message.role === "user" && index === turn.baseMessages.length && refs.length > 0
+        ? { ...message, attachments: refs }
+        : message,
+    );
     const knownVersion = versionsRef.current.get(turn.chatId);
     try {
       const snap = await saveConversation(workspaceId, turn.chatId, {
@@ -712,16 +720,24 @@ export function ChatPage() {
     const text = (isRetry ? retryTurn?.userText : (textOverride ?? draft.input))?.trim() ?? "";
     // Fresh sends carry the pending chips; a retry re-uses the RETAINED full
     // content of the last user turn (below) so attachments survive a retry.
-    const turnAttachments = isRetry ? [] : draft.attachmentsRef.current;
     // Attachment-only retry: only meaningful while the retained multimodal
     // content for that turn is still in this session's memory.
     const retryTurnIndex = isRetry
       ? retryTurn!.baseMessages.filter((m) => m.role === "user").length
       : 0;
+    const retryUserMessage = isRetry
+      ? messages.filter((message) => message.role === "user")[retryTurnIndex]
+      : undefined;
+    const turnAttachments = isRetry
+      ? (retryUserMessage?.attachments ?? []).map((serverRef) => ({
+          id: serverRef.id, kind: serverRef.kind, name: serverRef.name, bytes: serverRef.bytes, serverRef,
+        } as ChatAttachment))
+      : draft.attachmentsRef.current;
     const retryRetained =
       isRetry && activeChatIdRef.current
         ? multimodalRef.current.get(activeChatIdRef.current)?.get(retryTurnIndex)
         : undefined;
+    if (turnAttachments.some((attachment) => !attachment.serverRef)) return;
     if (!text && turnAttachments.length === 0 && !retryRetained) return;
     // Busy + generation BEFORE the first await: a slow key creation can never
     // double-send, and a later stop/identity change owns the whole lifecycle.
@@ -790,7 +806,7 @@ export function ChatPage() {
     const saveTurn = (partial: { content: string; reasoning: string; model?: string }) => {
       if (!canPersist || !chatId || !ws) return Promise.resolve();
       return persistTurn(
-        { seq, idAtSend, chatId, baseMessages, userText: text, isFirstTurn, model },
+        { seq, idAtSend, chatId, baseMessages, attachments: turnAttachments, userText: text, isFirstTurn, model },
         partial,
       );
     };
@@ -864,7 +880,7 @@ export function ChatPage() {
       // it to role+content.
       setMessages([
         ...baseMessages,
-        { role: "user", content: text, reasoning: "" },
+        { role: "user", content: text, reasoning: "", attachments: isRetry ? retryUserMessage?.attachments : turnAttachments.flatMap((attachment) => attachment.serverRef ? [attachment.serverRef] : []) },
         { role: "assistant", content: "", reasoning: "" },
       ]);
       lastUserRef.current = text;
@@ -1007,6 +1023,7 @@ export function ChatPage() {
   const autoEligible = Boolean(userId && workspaceId);
   const canSend = Boolean(
     (draft.input.trim() || draft.attachments.length > 0) &&
+      draft.attachments.every((attachment) => attachment.serverRef) &&
       model &&
       catalogReady &&
       !streaming &&
