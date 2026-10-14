@@ -85,6 +85,10 @@ jobs:
       # failures — deterministic regressions must fail fast.
       - name: Retry only on transient Postgres connection loss
         if: steps.tests.outcome == 'failure'
+        env:
+          HBR_TEST_DATABASE_URL: >-
+            postgres://postgres:postgres@127.0.0.1:${{
+            job.services.postgres.ports['5432'] }}/postgres
         run: |
           if ! grep -q 'PostgresError: Connection closed' ci-test.log; then
             echo "No transient 'Connection closed' error in log; failing as-is."
