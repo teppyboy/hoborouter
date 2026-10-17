@@ -51,8 +51,7 @@ export async function runAttachmentGc(
     .orderBy(asc(chatAttachments.expires_at))
     .limit(limit);
   for (const row of expiredRows) {
-    await tombstone(row.id);
-    expired++;
+    if (await tombstone(row.id)) expired++;
   }
 
   // 2) Orphan uploads: older than 24h and absent from every current chat

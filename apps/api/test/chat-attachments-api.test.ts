@@ -299,6 +299,35 @@ describe("download + delete lifecycle", () => {
     expect(row!.deleted_at).toBeNull(); // expired != deleted; GC will tombstone
   });
 
+  test("DELETE leaves a live row when unlink fails so GC can retry", async () => {
+    const { body } = await uploadText(undefined, undefined, "retry-delete");
+    const id = String(body.id);
+    const path = attachmentPath(attachmentDir(env), id);
+    rmSync(path);
+    mkdirSync(path);
+
+    const response = await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, {
+      method: "DELETE",
+      cookie: ownerCookie,
+    });
+    expect(response).toMatchObject({ status: 200 });
+    const afterFailure = (
+      await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)
+    )[0]!;
+    expect(afterFailure.deleted_at).toBeNull();
+
+    rmSync(path, { recursive: true });
+    writeFileSync(path, "retry bytes");
+    await db.update(chatAttachments).set({ expires_at: Date.now() - 1 }).where(eq(chatAttachments.id, id));
+    const result = await runAttachmentGc(db, env);
+    const afterRetry = (
+      await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)
+    )[0]!;
+    expect(result.expired).toBeGreaterThanOrEqual(1);
+    expect(afterRetry.deleted_at).not.toBeNull();
+    expect(existsSync(path)).toBe(false);
+  });
+
   test("DELETE is idempotent: tombstones once, unlinks bytes, always 200 for the owner", async () => {
     const { body } = await uploadText(undefined, undefined, "deleteme");
     const id = String(body.id);
@@ -470,6 +499,32 @@ describe("GC", () => {
       ).at(0);
       expect(!!r!.deleted_at).toBe(wantDeleted);
     }
+  });
+
+  test("failed expiry unlink stays live and does not count as cleaned", async () => {
+    const dir = attachmentDir(env);
+    const id = crypto.randomUUID();
+    await db.insert(chatAttachments).values({
+      id,
+      user_id: ownerId,
+      workspace_id: wsId,
+      kind: "text",
+      name: "failed-expiry.txt",
+      mime: "text/plain",
+      bytes: 10,
+      created_at: Date.now(),
+      expires_at: Date.now() - 1,
+    });
+    mkdirSync(attachmentPath(dir, id));
+
+    const result = await runAttachmentGc(db, env);
+    const row = (
+      await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)
+    )[0]!;
+    expect(result.expired).toBe(0);
+    expect(row.deleted_at).toBeNull();
+
+    rmSync(attachmentPath(dir, id), { recursive: true });
   });
 
   test("failed unlink stays live and is retried by the next sweep", async () => {

@@ -371,17 +371,17 @@ export const attachmentRoutes = (
         const row = rows[0];
         if (!row || row.user_id !== userId)
           return jsonError(404, "NOT_FOUND", "Not found");
-        // Idempotent tombstone: history snapshots keep the metadata forever.
+        try {
+          removeAttachmentFile(attachmentDir(env), row.id);
+        } catch {
+          /* GC retries unlink; delete stays idempotent */
+          return { id: row.id, deleted: true };
+        }
         if (row.deleted_at === null) {
           await db
             .update(chatAttachments)
             .set({ deleted_at: Date.now() })
             .where(and(eq(chatAttachments.id, row.id), isNull(chatAttachments.deleted_at)));
-        }
-        try {
-          removeAttachmentFile(attachmentDir(env), row.id);
-        } catch {
-          /* GC sweep retries unlink; delete stays idempotent */
         }
         return { id: row.id, deleted: true };
       },
