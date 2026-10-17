@@ -239,6 +239,20 @@ export const chatCopy = {
     en: "Attachments are saved with your message. Their files may expire after the retention period.",
     vi: "Tệp đính kèm được lưu cùng tin nhắn. Tệp có thể hết hạn sau thời gian lưu trữ.",
   },
+  attachmentUnavailableTitle: {
+    en: "Some attached files are unavailable.",
+    vi: "Một số tệp đính kèm không còn khả dụng.",
+  },
+  attachmentUnavailableBody: {
+    en: "Nothing was sent. Omit these files for this send only? Your saved conversation will remain unchanged.",
+    vi: "Chưa gửi nội dung nào. Bỏ các tệp này chỉ trong lần gửi này? Hội thoại đã lưu sẽ không thay đổi.",
+  },
+  omitUnavailable: {
+    en: "Omit unavailable files for this send",
+    vi: "Bỏ tệp không khả dụng trong lần gửi này",
+  },
+  cancelOmit: { en: "Cancel", vi: "Huỷ" },
+
   attachmentUploadUnauthorized: { en: "Sign in again to upload this file.", vi: "Đăng nhập lại để tải tệp này lên." },
   attachmentUploadForbidden: { en: "You cannot upload files to this workspace.", vi: "Bạn không thể tải tệp lên workspace này." },
   attachmentUploadTooLarge: { en: "This file is too large to upload.", vi: "Tệp này quá lớn để tải lên." },

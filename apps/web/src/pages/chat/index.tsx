@@ -20,6 +20,9 @@ import { api } from "../../lib/api";
 import { formatDate } from "../../lib/format";
 import { ConversationList, conversationListKey } from "./conversation-list";
 import { buildPersistMessages, createRenderCoalescer, findRetryTurn, isEmptyAssistant, type ChatAttachmentRef, type TurnMessage } from "./turn";
+import { prepareChatSend } from "./prepare-send";
+import { stripAttachments } from "./persistent-attachments";
+import type { ConversationMessage } from "@hoborouter/shared";
 import {
   ConversationError,
   createConversation,
@@ -40,22 +43,11 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../../components/
 import { useSession } from "../../lib/auth";
 import { useCurrentWorkspaceId } from "../../lib/workspace-queries";
 import { useCatalogModels } from "../models/data";
-import {
-  buildUserContent,
-  utf8ByteLength,
-  withMultimodalContent,
-  type ChatAttachment,
-  type UserContent,
-} from "./attachments";
+import { buildUserContent, type ChatAttachment, type UserContent } from "./attachments";
 import { Composer, useComposerDraft } from "./composer";
 import { useLocaleEntry, type LocaleEntry } from "../../lib/i18n/t";
 import { PROMPT_CHIPS, readableError, useChatT } from "./copy";
-import {
-  buildChatRequestBody,
-  EFFORT_UNSET,
-  supportedEffortOptions,
-  type ReasoningEffort,
-} from "./reasoning";
+import { EFFORT_UNSET, supportedEffortOptions, type ReasoningEffort } from "./reasoning";
 import { useComposerT } from "./composer-copy";
 // Chat page copy lives in ./copy.ts (see lib/i18n/common.ts). Model
 // names, message content and API errors stay verbatim — only chrome, notices
@@ -63,13 +55,6 @@ import { useComposerT } from "./composer-copy";
 
 // Turn message shape shared with the pure helpers in ./turn.
 type ChatMessage = TurnMessage;
-
-// Gateway caps the request body in UTF-8 BYTES — 1 MiB for generic keys,
-// 16 MiB for chat-purpose keys (approved attachment budget). Keep the
-// client-side pre-check at the same 16 MiB ceiling: byte-accurate, measured
-// with TextEncoder, not UTF-16 .length. The guard runs BEFORE any side
-// effect (key mint, conversation create, draft reset).
-const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
 
 // Desktop conversation-list collapse is a device UI preference — persisted
 // in localStorage, independent of the signed-in identity.
@@ -184,6 +169,12 @@ export function ChatPage() {
     keyPurpose: ManagedKeyPurpose;
   } | null>(null);
   const [restoreConfirm, setRestoreConfirm] = React.useState(false);
+  const [unavailableSend, setUnavailableSend] = React.useState<{
+    files: Array<{ id: string; name: string }>;
+    textOverride?: string;
+    isRetry: boolean;
+    omitIds: ReadonlySet<string>;
+  } | null>(null);
   const [keyError, setKeyError] = React.useState<ManagedKeyError | null>(null);
   // Saved conversation identity. null = a new, unsaved chat: it is blank until
   // the first send, which creates the server conversation exactly once. The
@@ -415,6 +406,7 @@ export function ChatPage() {
     setDraftScope(userId && workspaceId ? { userId, workspaceId, chatId: null } : null);
     setMessages([]);
     setError(null);
+    setUnavailableSend(null);
     setKeyError(null);
     setConflict(false);
     setSaveNotice(null);
@@ -489,6 +481,7 @@ export function ChatPage() {
     if (userId && ws) setDraftScope({ userId, workspaceId: ws, chatId });
     setMessages([]);
     setError(null);
+    setUnavailableSend(null);
     setConflict(false);
     setSaveNotice(null);
     setSend413(null);
@@ -705,7 +698,7 @@ export function ChatPage() {
     }
   }
 
-  async function send(textOverride?: string, isRetry = false) {
+  async function send(textOverride?: string, isRetry = false, omitIds: ReadonlySet<string> = new Set()) {
     // Also block while a conversation snapshot is still loading: a send that
     // starts before openChat's response lands would be wiped by the snapshot
     // overwriting optimistic state when it resolves.
@@ -764,42 +757,14 @@ export function ChatPage() {
     // frame; end() flushes everything queued on done/abort/error so the
     // terminal transcript equals the sequential stream with nothing dropped.
     let coalescer: ReturnType<typeof createRenderCoalescer> | null = null;
-    // Session-only multimodal retention: an attachment-bearing turn keeps its
-    // full request content in memory (conversation id + user-turn index) so
-    // follow-ups AND retries still carry the attachments until reload.
-    // Persistence stays string-only — no DB, no history schema change.
-    const storedTurns = chatId ? multimodalRef.current.get(chatId) : undefined;
-    const history: Array<{
-      role: "user" | "assistant";
-      content: string | UserContent;
-    }> = [
-      ...withMultimodalContent(
-        baseMessages.map(({ role, content }) => ({ role, content })),
-        storedTurns,
-      ),
-    ];
     const turnIndex = baseMessages.filter((m) => m.role === "user").length;
-    const turnContent: UserContent = isRetry
-      ? (storedTurns?.get(turnIndex) ?? text)
-      : buildUserContent(text, turnAttachments);
-    history.push({ role: "user", content: turnContent });
-    // Gateway caps the body in UTF-8 BYTES (1 MiB), not UTF-16 chars: measure
-    // the exact payload BEFORE any side effect (conversation create, key
-    // mint, draft reset) so a rejection leaves the draft fully untouched.
-    // Reasoning carrier (see ./reasoning): only when the selected model
-    // explicitly advertises the "reasoning" capability — an effort picked
-    // for a different model is dropped, never leaked into another model's
-    // request.
-    const bodyJson = JSON.stringify(
-      buildChatRequestBody({ model, messages: history, effort: effortForSend }),
-    );
-    if (utf8ByteLength(bodyJson) > MAX_REQUEST_BODY_BYTES) {
-      setError(t("tooLarge"));
-      busyRef.current = false;
-      setStreaming(false);
-      abortRef.current = null;
-      return;
-    }
+    const turnRefs = isRetry ? (retryUserMessage?.attachments ?? []) : turnAttachments.flatMap((attachment) => attachment.serverRef ? [attachment.serverRef] : []);
+    const outgoing: ConversationMessage[] = [
+      ...baseMessages.map(({ role, content, attachments }) => ({ role, content, ...(role === "user" && attachments ? { attachments } : {}) })),
+      { role: "user", content: text, ...(turnRefs.length ? { attachments: turnRefs } : {}) },
+    ];
+    const preparedMessages = omitIds.size > 0 ? stripAttachments(outgoing, omitIds) : outgoing;
+    let bodyJson = "";
     // Terminal save, AWAITED while busy: the next send cannot start until the
     // server version has been tracked, so a back-to-back send never saves on
     // a stale version and loses its turn to a 409.
@@ -818,7 +783,24 @@ export function ChatPage() {
     let snapshotAttachments: ChatAttachment[] = [];
     let revisionBaseline = 0;
     let rollback413: (() => void) | null = null;
+    let dispatched = false;
     try {
+      if (!ws) return;
+      const prepared = await prepareChatSend({
+        workspaceId: ws,
+        model,
+        messages: preparedMessages,
+        effort: effortForSend as ReasoningEffort,
+        signal: ac.signal,
+      });
+      if (!isCurrent() || ac.signal.aborted) return;
+      if (!prepared.ok) {
+        if (prepared.kind === "unavailable") setUnavailableSend({ files: prepared.files, textOverride, isRetry, omitIds });
+        else setError(prepared.kind === "tooLarge" ? t("tooLarge") : prepared.error.message);
+        return;
+      }
+      bodyJson = prepared.bodyJson;
+      setUnavailableSend(null);
       // Create the server conversation exactly once, on the first send of a
       // new chat — storage only, no key needed, never per token. If storage
       // fails the (paid) generation still proceeds; the chat just stays
@@ -837,7 +819,7 @@ export function ChatPage() {
         }
       }
       const key = await resolveKey(seq, ac.signal);
-      if (!key || !isCurrent()) return;
+      if (!key || !isCurrent() || ac.signal.aborted) return;
       const keyPurpose = key.purpose;
       setError(null);
       // The request is now certain to go out: commit the draft reset, the
@@ -868,7 +850,7 @@ export function ChatPage() {
           turns = new Map();
           multimodalRef.current.set(chatId, turns);
         }
-        turns.set(turnIndex, turnContent);
+        turns.set(turnIndex, buildUserContent(text, turnAttachments));
       }
       // A deliberate send (fresh or retry) always re-engages sticky-bottom
       // follow: the user must see their own message and the streaming reply,
@@ -884,6 +866,7 @@ export function ChatPage() {
         { role: "assistant", content: "", reasoning: "" },
       ]);
       lastUserRef.current = text;
+      dispatched = true;
       const res = await fetch("/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -990,6 +973,7 @@ export function ChatPage() {
     } catch (e) {
       coalescer?.end(); // exact final flush (abort/error path)
       if (!isCurrent()) return;
+      if (e instanceof DOMException && e.name === "AbortError" && !dispatched) return;
       if (e instanceof DOMException && e.name === "AbortError") {
         // Explicit stop: keep whatever streamed so far and persist it.
       } else {
@@ -1215,6 +1199,20 @@ export function ChatPage() {
               {t("reloadSaved")}
             </Button>
           </div>
+        )}
+        {unavailableSend && (
+          <Alert variant="destructive" className="mx-auto max-w-3xl" title={t("attachmentUnavailableTitle")}>
+            <p>{t("attachmentUnavailableBody")}</p>
+            <ul className="list-disc pl-5">{unavailableSend.files.map((file) => <li key={file.id}>{file.name}</li>)}</ul>
+            <div className="mt-2 flex gap-2">
+              <Button variant="destructive" size="sm" onClick={() => {
+                const ids = new Set([...unavailableSend.omitIds, ...unavailableSend.files.map((file) => file.id)]);
+                setUnavailableSend(null);
+                void send(unavailableSend.textOverride, unavailableSend.isRetry, ids);
+              }}>{t("omitUnavailable")}</Button>
+              <Button variant="outline" size="sm" onClick={() => setUnavailableSend(null)}>{t("cancelOmit")}</Button>
+            </div>
+          </Alert>
         )}
         {saveNotice && (
           <p className="px-4 py-1 text-xs text-amber-600" role="status">
