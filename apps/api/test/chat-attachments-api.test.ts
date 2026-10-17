@@ -192,7 +192,15 @@ describe("auth boundary", () => {
     expect((await attReq(`/api/v1/workspaces/${otherWsId}/attachments/${id}`, { cookie: otherCookie })).status).toBe(404);
   });
 
-  test("unsafe cookie methods reject missing, malformed, and untrusted Origin; trusted origin works", async () => {
+  test("unsafe cookie methods reject absent, empty, malformed, and untrusted Origin; trusted origin works", async () => {
+    const absentUpload = await attachmentApp.handle(
+      new Request(`http://localhost:3000/api/v1/workspaces/${wsId}/attachments`, {
+        method: "POST",
+        headers: { cookie: ownerCookie, "content-type": "text/plain", "x-hbr-filename": "file.txt" },
+        body: "x",
+      }),
+    );
+    expect(absentUpload.status).toBe(403);
     const missingUpload = await attReq(`/api/v1/workspaces/${wsId}/attachments`, {
       method: "POST",
       cookie: ownerCookie,
@@ -221,6 +229,13 @@ describe("auth boundary", () => {
       headers: { origin: "https://evil.example" },
     });
     expect(evilDelete.status).toBe(403);
+    const absentDelete = await attachmentApp.handle(
+      new Request(`http://localhost:3000/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`, {
+        method: "DELETE",
+        headers: { cookie: ownerCookie },
+      }),
+    );
+    expect(absentDelete.status).toBe(403);
     const missingDelete = await attReq(`/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`, {
       method: "DELETE",
       cookie: ownerCookie,
