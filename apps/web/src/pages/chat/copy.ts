@@ -60,8 +60,8 @@ export const chatCopy = {
     vi: "Không tạo được chat key. Thử lại.",
   },
   tooLarge: {
-    en: "This message is too large to send — attachments plus history exceed the 16 MB request limit. Remove some attachments and try again.",
-    vi: "Tin nhắn quá lớn để gửi — tệp đính kèm cộng lịch sử vượt giới hạn 16 MB. Hãy bớt tệp đính kèm và thử lại.",
+    en: "This message is too large to send — attachments plus history exceed the 16 MB request limit. Remove attachments, or edit or fork from an earlier turn to continue without older attachments.",
+    vi: "Tin nhắn quá lớn để gửi — tệp đính kèm cộng lịch sử vượt giới hạn 16 MB. Hãy gỡ tệp đính kèm, hoặc sửa hay tách từ lượt trước đó để tiếp tục mà không kèm các tệp cũ.",
   },
   attachHint: {
     en: "PNG, JPEG, WebP or GIF images and text/code files up to 64 KB; up to 4 files, 10 MB total per message.",

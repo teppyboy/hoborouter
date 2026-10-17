@@ -329,6 +329,23 @@ test("overlapping picks serialize against the live list: budget cannot be bypass
   }
 });
 
+test("over-budget attachment history explains how to continue without older attachments", async () => {
+  const largeRefs = [
+    { ...persistedRef, id: "large-1", bytes: 6 * 1024 * 1024 },
+    { ...persistedRef, id: "large-2", bytes: 6 * 1024 * 1024 },
+  ];
+  await mountPage([{ role: "user", content: "look", attachments: largeRefs }]);
+  await openConversation();
+  setInput(document.querySelector('textarea[aria-label="Message"]')!, "follow up");
+  click(buttonByLabel("Send message")!);
+  await waitFor(() => bodyText().includes("too large to send"), "history size rejection");
+  expect(bodyText()).toContain("Remove attachments");
+  expect(bodyText()).toContain("edit or fork from an earlier turn");
+  expect(calls.filter((call) => call.path.includes("/attachments/")).filter((call) => /\/attachments\/[^/]+$/.test(call.path))).toHaveLength(0);
+  expect(calls.filter((call) => call.path === "/v1/chat/completions")).toHaveLength(0);
+  expect(calls.filter((call) => call.path.endsWith("/chat-key"))).toHaveLength(0);
+});
+
 test("oversized payload is rejected before any side effect and the draft survives", async () => {
   // The chat-purpose cap is 16 MiB: a ~0.5 MiB data URL plus ~16.3 MB of
   // history pushes the JSON body over the client-side pre-send guard.
