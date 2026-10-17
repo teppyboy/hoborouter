@@ -360,14 +360,14 @@ export const chatsRoutes = (db: Db, auth: BetterAuthInstance) =>
           workspace_id: params.id,
           title: "New chat",
           model: null,
-          messages: [],
+          messages: sql`'[]'::jsonb`,
           version: 1,
           created_at: now,
           updated_at: now,
           archived_at: null,
         };
         await db.insert(chatConversations).values(row);
-        return new Response(JSON.stringify(row), {
+        return new Response(JSON.stringify({ ...row, messages: [] }), {
           status: 201,
           headers: { "content-type": "application/json" },
         });
@@ -542,7 +542,7 @@ export const chatsRoutes = (db: Db, auth: BetterAuthInstance) =>
             .set({
               ...(title !== undefined ? { title } : {}),
               ...(model !== undefined ? { model } : {}),
-              messages: savedMessages,
+              messages: sql`${JSON.stringify(savedMessages)}::text::jsonb`,
               version: version + 1,
               updated_at: now,
             })
@@ -559,7 +559,7 @@ export const chatsRoutes = (db: Db, auth: BetterAuthInstance) =>
               detail: { fields: ["title"] },
             });
           }
-          return saved[0]!;
+          return { ...saved[0]!, messages: savedMessages };
         });
         return updated;
       },

@@ -372,8 +372,8 @@ export const attachmentRoutes = (
         try {
           removeAttachmentFile(attachmentDir(env), row.id);
         } catch {
-          /* GC retries unlink; delete stays idempotent */
-          return { id: row.id, deleted: true };
+          /* Keep the live row so a retry can remove the file. */
+          return jsonError(500, "INTERNAL", "Delete failed; retry the request");
         }
         if (row.deleted_at === null) {
           await db

@@ -69,7 +69,11 @@ export async function runAttachmentGc(
             .select({ one: sql<number>`1` })
             .from(chatConversations)
             .where(
-              sql`${chatConversations.messages}::text LIKE ${"%"} || ${chatAttachments.id} || ${"%"}`,
+              sql`${chatConversations.messages} @> jsonb_build_array(
+                jsonb_build_object('attachments', jsonb_build_array(
+                  jsonb_build_object('id', ${chatAttachments.id}::text)
+                ))
+              )`,
             ),
         ),
       ),

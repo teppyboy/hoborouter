@@ -16,8 +16,8 @@ import {
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
-import { chatAttachments, chatConversations } from "@hoborouter/db";
+import { eq, sql } from "drizzle-orm";
+import { chatAttachments } from "@hoborouter/db";
 import { CHAT_ATTACHMENT_QUOTA_BYTES, CHAT_ATTACHMENT_TTL_MS } from "@hoborouter/shared";
 import { makeApp, signUp, createWorkspace, addMember, userIdByEmail, q } from "./helpers";
 import { attachmentRoutes, decodeFilename } from "../src/routes/attachments";
@@ -363,7 +363,7 @@ describe("download + delete lifecycle", () => {
       method: "DELETE",
       cookie: ownerCookie,
     });
-    expect(response).toMatchObject({ status: 200 });
+    expect(response.status).toBe(500);
     const afterFailure = (
       await q<{ deleted_at: number | null }>(
         db,
@@ -518,9 +518,79 @@ describe("quota", () => {
   });
 });
 
+describe("chat message JSONB storage", () => {
+  test("POST + PUT store conversation messages as a JSONB array", async () => {
+    const created = await app.handle(
+      new Request(`http://localhost/api/v1/workspaces/${wsId}/chats`, {
+        method: "POST",
+        headers: { cookie: ownerCookie, origin: "http://localhost:3000" },
+      }),
+    );
+    expect(created.status).toBe(201);
+    const chat = (await created.json()) as { id: string; messages: unknown };
+    expect(chat.messages).toEqual([]);
+    const saved = await app.handle(
+      new Request(`http://localhost/api/v1/workspaces/${wsId}/chats/${chat.id}`, {
+        method: "PUT",
+        headers: {
+          cookie: ownerCookie,
+          origin: "http://localhost:3000",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          version: 1,
+          messages: [{ role: "user", content: "stored by route" }],
+        }),
+      }),
+    );
+    expect(saved.status).toBe(200);
+    const savedBody = (await saved.json()) as { messages: unknown };
+    expect(savedBody.messages).toEqual([{ role: "user", content: "stored by route" }]);
+    const [row] = await q<{ kind: string; messages: unknown }>(
+      db,
+      "SELECT jsonb_typeof(messages) AS kind, messages FROM chat_conversations WHERE id = ?",
+      chat.id,
+    );
+    expect(row?.kind).toBe("array");
+    expect(row?.messages).toEqual([{ role: "user", content: "stored by route" }]);
+  });
+});
+
 describe("GC", () => {
+  test("raw Bun JSONB fixture binds a string; Drizzle cast preserves an array", async () => {
+    const rawId = crypto.randomUUID();
+    const drizzleId = crypto.randomUUID();
+    const messages = [{ role: "user", content: "fixture" }];
+    const now = Date.now();
+    await q(
+      db,
+      `INSERT INTO chat_conversations (id, user_id, workspace_id, title, messages, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?::jsonb, ?, ?, ?)`,
+      rawId,
+      ownerId,
+      wsId,
+      "raw JSONB fixture",
+      JSON.stringify(messages),
+      1,
+      now,
+      now,
+    );
+    await db.execute(sql`INSERT INTO chat_conversations
+      (id, user_id, workspace_id, title, messages, version, created_at, updated_at)
+      VALUES (${drizzleId}, ${ownerId}, ${wsId}, ${"Drizzle JSONB fixture"},
+        ${sql`${JSON.stringify(messages)}::text::jsonb`}, ${1}, ${now}, ${now})`);
+    const kinds = await q<{ id: string; kind: string }>(
+      db,
+      "SELECT id, jsonb_typeof(messages) AS kind FROM chat_conversations WHERE id IN (?, ?)",
+      rawId,
+      drizzleId,
+    );
+    expect(kinds.find((row) => row.id === rawId)?.kind).toBe("string");
+    expect(kinds.find((row) => row.id === drizzleId)?.kind).toBe("array");
+  });
   test("orphans older than 24h are tombstoned + unlinked; referenced rows are kept; expired rows always die", async () => {
     const dir = attachmentDir(env);
+    mkdirSync(dir, { recursive: true });
     const old = Date.now() - 25 * 60 * 60 * 1000;
     const orphanId = crypto.randomUUID();
     await db.insert(chatAttachments).values({
@@ -535,12 +605,24 @@ describe("GC", () => {
       expires_at: Date.now() + CHAT_ATTACHMENT_TTL_MS,
     });
     const referencedId = crypto.randomUUID();
+    const mentionedOnlyId = crypto.randomUUID();
     await db.insert(chatAttachments).values({
       id: referencedId,
       user_id: ownerId,
       workspace_id: wsId,
       kind: "text",
       name: "kept.txt",
+      mime: "text/plain",
+      bytes: 10,
+      created_at: old,
+      expires_at: Date.now() + CHAT_ATTACHMENT_TTL_MS,
+    });
+    await db.insert(chatAttachments).values({
+      id: mentionedOnlyId,
+      user_id: ownerId,
+      workspace_id: wsId,
+      kind: "text",
+      name: "mentioned-only.txt",
       mime: "text/plain",
       bytes: 10,
       created_at: old,
@@ -558,46 +640,62 @@ describe("GC", () => {
       created_at: old,
       expires_at: Date.now() - 1,
     });
-    for (const id of [orphanId, referencedId, expiredId])
+    for (const id of [orphanId, referencedId, mentionedOnlyId, expiredId])
       writeFileSync(attachmentPath(dir, id), "bytes");
+
+    // Plain user content containing a UUID is not an attachment reference.
+    await db.execute(sql`INSERT INTO chat_conversations
+      (id, user_id, workspace_id, title, messages, version, created_at, updated_at)
+      VALUES (${crypto.randomUUID()}, ${ownerId}, ${wsId}, ${"mention only"},
+        ${sql`${JSON.stringify([{ role: "user", content: `message mentions ${mentionedOnlyId}` }])}::text::jsonb`},
+        ${1}, ${Date.now()}, ${Date.now()})`);
 
     // A current conversation jsonb references kept.txt (reference truth = the
     // conversation store, not a client claim).
-    await db.insert(chatConversations).values({
-      id: crypto.randomUUID(),
-      user_id: ownerId,
-      workspace_id: wsId,
-      title: "t",
-      messages: [
-        {
-          role: "user",
-          content: "see file",
-          attachments: [
-            {
-              id: referencedId,
-              name: "kept.txt",
-              kind: "text",
-              bytes: 10,
-              mime: "text/plain",
-              expires_at: Date.now() + 1000,
-            },
-          ],
-        },
-      ],
-      version: 1,
-      created_at: Date.now(),
-      updated_at: Date.now(),
-    });
-
+    const referencedMessages = [
+      {
+        role: "user",
+        content: "see file",
+        attachments: [
+          {
+            id: referencedId,
+            name: "kept.txt",
+            kind: "text",
+            bytes: 10,
+            mime: "text/plain",
+            expires_at: Date.now() + 1000,
+          },
+        ],
+      },
+    ];
+    await db.execute(sql`INSERT INTO chat_conversations
+      (id, user_id, workspace_id, title, messages, version, created_at, updated_at)
+      VALUES (${crypto.randomUUID()}, ${ownerId}, ${wsId}, ${"t"},
+        ${sql`${JSON.stringify(referencedMessages)}::text::jsonb`},
+        ${1}, ${Date.now()}, ${Date.now()})`);
+    const match = await q<{ match: boolean; plain_text_match: boolean }>(
+      db,
+      `SELECT
+        messages @> jsonb_build_array(jsonb_build_object('attachments', jsonb_build_array(jsonb_build_object('id', ?::text)))) AS match,
+        messages @> jsonb_build_array(jsonb_build_object('content', ?::text)) AS plain_text_match,
+        messages
+       FROM chat_conversations WHERE title = 't' ORDER BY created_at DESC LIMIT 1`,
+      referencedId,
+      mentionedOnlyId,
+    );
+    expect(match[0]?.match).toBe(true);
+    expect(match[0]?.plain_text_match).toBe(false);
     const result = await runAttachmentGc(db, env);
     expect(result.orphaned).toBeGreaterThanOrEqual(1);
     expect(result.expired).toBeGreaterThanOrEqual(1);
     expect(existsSync(attachmentPath(dir, orphanId))).toBe(false);
+    expect(existsSync(attachmentPath(dir, mentionedOnlyId))).toBe(false);
     expect(existsSync(attachmentPath(dir, referencedId))).toBe(true);
     expect(existsSync(attachmentPath(dir, expiredId))).toBe(false);
     // Tombstones: orphans/expired are deleted_at-set; the referenced row stays live.
     for (const [id, wantDeleted] of [
       [orphanId, true],
+      [mentionedOnlyId, true],
       [referencedId, false],
       [expiredId, true],
     ] as const) {
@@ -706,22 +804,18 @@ describe("GC", () => {
       });
       writeFileSync(attachmentPath(dir, id), "bytes");
     }
-    await db.insert(chatConversations).values({
-      id: crypto.randomUUID(),
-      user_id: ownerId,
-      workspace_id: wsId,
-      title: "limit reference",
-      messages: [
-        {
-          role: "user",
-          content: "see file",
-          attachments: [{ id: referencedId, name: "limited-ref.txt" }],
-        },
-      ],
-      version: 1,
-      created_at: Date.now(),
-      updated_at: Date.now(),
-    });
+    const referencedMessages = [
+      {
+        role: "user",
+        content: "see file",
+        attachments: [{ id: referencedId, name: "limited-ref.txt" }],
+      },
+    ];
+    await db.execute(sql`INSERT INTO chat_conversations
+      (id, user_id, workspace_id, title, messages, version, created_at, updated_at)
+      VALUES (${crypto.randomUUID()}, ${ownerId}, ${wsId}, ${"limit reference"},
+        ${sql`${JSON.stringify(referencedMessages)}::text::jsonb`},
+        ${1}, ${Date.now()}, ${Date.now()})`);
 
     const result = await runAttachmentGc(db, env, Date.now(), 1);
     const rows = await q<{ id: string; deleted_at: number | null }>(
