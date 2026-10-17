@@ -4,7 +4,7 @@
 // supplies any path component. Quota (500 MiB live per user) is enforced
 // under a per-user in-process lock so concurrent uploads cannot double-spend.
 import { Elysia } from "elysia";
-import { lstatSync, readFileSync } from "node:fs";
+import { closeSync, constants, openSync, readFileSync } from "node:fs";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@hoborouter/db";
 import { chatAttachments } from "@hoborouter/db";
@@ -327,8 +327,12 @@ export const attachmentRoutes = (
         let bytes: Buffer;
         try {
           const path = attachmentPath(attachmentDir(env), row.id);
-          if (lstatSync(path).isSymbolicLink()) return jsonError(410, "GONE", "Attachment expired");
-          bytes = readFileSync(path);
+          const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+          try {
+            bytes = readFileSync(fd);
+          } finally {
+            closeSync(fd);
+          }
         } catch {
           return jsonError(410, "GONE", "Attachment expired");
         }
