@@ -3,7 +3,7 @@
 // orphan/expired GC, and DB-failure cleanup. Focused lane tests only.
 import { test, expect, describe, afterAll } from "bun:test";
 import { Elysia } from "elysia";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,7 @@ import {
   attachmentPath,
   persistAttachmentFile,
   withUserLock,
+  userLockCount,
 } from "../src/chat-attachment-store";
 import { runAttachmentGc } from "../src/attachment-gc";
 
@@ -212,6 +213,20 @@ describe("auth boundary", () => {
 });
 
 describe("download + delete lifecycle", () => {
+  test("GET refuses an owned attachment path that is a symlink", async () => {
+    const { body } = await uploadText(undefined, undefined, "original");
+    const id = String(body.id);
+    const target = join(storageRoot, "outside.txt");
+    writeFileSync(target, "secret target bytes");
+    const path = attachmentPath(attachmentDir(env), id);
+    rmSync(path);
+    symlinkSync(target, path);
+
+    const res = await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, { cookie: ownerCookie });
+    expect(res.status).toBe(410);
+    expect(await res.text()).not.toContain("secret target bytes");
+  });
+
   test("GET returns the exact bytes with no-store/nosniff/safe disposition", async () => {
     const { body } = await uploadText(undefined, undefined, "roundtrip");
     const res = await attReq(`/api/v1/workspaces/${wsId}/attachments/${String(body.id)}`, {
@@ -401,6 +416,49 @@ describe("store internals", () => {
     expect(existsSync(attachmentPath(dir, id))).toBe(false);
   });
 
+  test("temp file is mode 0600 and created exclusively", async () => {
+    const dir = attachmentDir(env);
+    const id = crypto.randomUUID();
+    await persistAttachmentFile(dir, id, new Uint8Array([1]), async (finalize) => {
+      finalize();
+      return "ok";
+    });
+    expect(statSync(attachmentPath(dir, id)).mode & 0o777).toBe(0o600);
+
+    const collision = crypto.randomUUID();
+    const tempPath = join(dir, `${collision}.tmp`);
+    writeFileSync(tempPath, "do not overwrite");
+    await expect(persistAttachmentFile(dir, collision, new Uint8Array([2]), async () => "ok")).rejects.toThrow();
+    expect(readFileSync(tempPath, "utf8")).toBe("do not overwrite");
+    expect(existsSync(attachmentPath(dir, collision))).toBe(false);
+  });
+
+  test("cleans temp and final paths when commit or rename fails", async () => {
+    const dir = attachmentDir(env);
+    const commitId = crypto.randomUUID();
+    await expect(persistAttachmentFile(dir, commitId, new Uint8Array([1]), async () => {
+      throw new Error("commit failed");
+    })).rejects.toThrow("commit failed");
+    expect(existsSync(join(dir, `${commitId}.tmp`))).toBe(false);
+    expect(existsSync(attachmentPath(dir, commitId))).toBe(false);
+
+    const renameId = crypto.randomUUID();
+    mkdirSync(attachmentPath(dir, renameId));
+    await expect(persistAttachmentFile(dir, renameId, new Uint8Array([1]), async (finalize) => {
+      finalize();
+      return "ok";
+    })).rejects.toThrow();
+    expect(existsSync(join(dir, `${renameId}.tmp`))).toBe(false);
+
+    const rollbackId = crypto.randomUUID();
+    await expect(persistAttachmentFile(dir, rollbackId, new Uint8Array([1]), async (finalize) => {
+      finalize();
+      throw new Error("transaction commit failed");
+    })).rejects.toThrow("transaction commit failed");
+    expect(existsSync(join(dir, `${rollbackId}.tmp`))).toBe(false);
+    expect(existsSync(attachmentPath(dir, rollbackId))).toBe(false);
+  });
+
   test("withUserLock serializes per user", async () => {
     const order: string[] = [];
     await Promise.all([
@@ -413,6 +471,14 @@ describe("store internals", () => {
       }),
     ]);
     expect(order).toEqual(["a", "b"]);
+    expect(userLockCount()).toBe(0);
+  });
+
+  test("withUserLock drains tails after rejection and permits reuse", async () => {
+    await expect(withUserLock("rejecting", async () => { throw new Error("failed"); })).rejects.toThrow("failed");
+    expect(userLockCount()).toBe(0);
+    await expect(withUserLock("rejecting", async () => "reused")).resolves.toBe("reused");
+    expect(userLockCount()).toBe(0);
   });
 });
 

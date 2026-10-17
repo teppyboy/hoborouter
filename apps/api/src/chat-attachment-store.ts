@@ -25,44 +25,53 @@ export function attachmentPath(dir: string, id: string): string {
  */
 const userLocks = new Map<string, Promise<unknown>>();
 
+export function userLockCount(): number {
+  return userLocks.size;
+}
+
 export async function withUserLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
   const prev = userLocks.get(userId) ?? Promise.resolve();
-  const run = prev.catch(() => {}).then(fn);
-  userLocks.set(
-    userId,
-    run.catch(() => {}),
-  );
-  // Drop the tail entry once settled so the map cannot grow unbounded.
-  void run.finally(() => {
-    if (userLocks.get(userId) === run) userLocks.delete(userId);
+  const run = prev.then(fn);
+  const tail = run.then(() => undefined, () => undefined);
+  userLocks.set(userId, tail);
+  void tail.then(() => {
+    if (userLocks.get(userId) === tail) userLocks.delete(userId);
   });
   return run;
 }
 
 /**
- * Write bytes to a temp file, let `commit` (the DB insert) run, then rename
- * into place. Any DB failure unlinks the temp file; a rename failure removes
- * the partially renamed file so no orphan bytes survive the failed upload.
+ * Write to a restrictive temp file, let `commit` finish its database transaction
+ * around `finalize`, then atomically rename into place.
  */
 export function persistAttachmentFile<T>(
   dir: string,
   id: string,
   bytes: Uint8Array,
-  commit: () => Promise<T>,
+  commit: (finalize: () => void) => Promise<T>,
 ): Promise<T> {
   const tmp = `${attachmentPath(dir, id)}.tmp`;
   return (async () => {
     mkdirSync(dir, { recursive: true });
-    writeFileSync(tmp, bytes);
+    writeFileSync(tmp, bytes, { mode: 0o600, flag: "wx" });
+    let renamed = false;
     try {
-      const result = await commit();
-      renameSync(tmp, attachmentPath(dir, id));
+      const result = await commit(() => {
+        renameSync(tmp, attachmentPath(dir, id));
+        renamed = true;
+      });
+      if (!renamed) {
+        renameSync(tmp, attachmentPath(dir, id));
+        renamed = true;
+      }
       return result;
     } catch (e) {
-      try {
-        unlinkSync(tmp);
-      } catch {
-        /* temp already gone */
+      for (const path of [tmp, ...(renamed ? [attachmentPath(dir, id)] : [])]) {
+        try {
+          unlinkSync(path);
+        } catch (cleanupError) {
+          if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") throw cleanupError;
+        }
       }
       throw e;
     }

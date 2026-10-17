@@ -4,7 +4,7 @@
 // supplies any path component. Quota (500 MiB live per user) is enforced
 // under a per-user in-process lock so concurrent uploads cannot double-spend.
 import { Elysia } from "elysia";
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@hoborouter/db";
 import { chatAttachments } from "@hoborouter/db";
@@ -248,34 +248,37 @@ export const attachmentRoutes = (
         try {
           // Quota check + insert serialize per user: no concurrent double-spend.
           const row = await withUserLock(userId, () =>
-            persistAttachmentFile(dir, id, bytes, async () => {
-              const [sum] = await db
-                .select({ total: sql<string | null>`coalesce(sum(${chatAttachments.bytes}), 0)` })
-                .from(chatAttachments)
-                .where(
-                  and(eq(chatAttachments.user_id, userId), isNull(chatAttachments.deleted_at)),
-                );
-              if (Number(sum?.total ?? 0) + bytes.byteLength > CHAT_ATTACHMENT_QUOTA_BYTES) {
-                return { quotaExceeded: true as const };
-              }
-              const inserted = (
-                await db
-                  .insert(chatAttachments)
-                  .values({
-                    id,
-                    user_id: userId,
-                    workspace_id: params.workspaceId,
-                    kind,
-                    name,
-                    mime,
-                    bytes: bytes.byteLength,
-                    created_at: now,
-                    expires_at: now + CHAT_ATTACHMENT_TTL_MS,
-                  })
-                  .returning()
-              )[0];
-              if (!inserted) throw new Error("chat attachment insert returned no row");
-              return { row: inserted };
+            persistAttachmentFile(dir, id, bytes, async (finalize) => {
+              return db.transaction(async (tx) => {
+                const [sum] = await tx
+                  .select({ total: sql<string | null>`coalesce(sum(${chatAttachments.bytes}), 0)` })
+                  .from(chatAttachments)
+                  .where(
+                    and(eq(chatAttachments.user_id, userId), isNull(chatAttachments.deleted_at)),
+                  );
+                if (Number(sum?.total ?? 0) + bytes.byteLength > CHAT_ATTACHMENT_QUOTA_BYTES) {
+                  return { quotaExceeded: true as const };
+                }
+                const inserted = (
+                  await tx
+                    .insert(chatAttachments)
+                    .values({
+                      id,
+                      user_id: userId,
+                      workspace_id: params.workspaceId,
+                      kind,
+                      name,
+                      mime,
+                      bytes: bytes.byteLength,
+                      created_at: now,
+                      expires_at: now + CHAT_ATTACHMENT_TTL_MS,
+                    })
+                    .returning()
+                )[0];
+                if (!inserted) throw new Error("chat attachment insert returned no row");
+                finalize();
+                return { row: inserted };
+              });
             }),
           );
           if ("quotaExceeded" in row && row.quotaExceeded) {
@@ -320,13 +323,15 @@ export const attachmentRoutes = (
         );
         if ("error" in owned) return owned.error;
         const row = owned.row;
-        // Row is live but the bytes are gone (partial GC crash): same answer.
+        // Row is live but the bytes are gone or replaced by a symlink: same answer.
+        let bytes: Buffer;
         try {
-          readFileSync(attachmentPath(attachmentDir(env), row.id));
+          const path = attachmentPath(attachmentDir(env), row.id);
+          if (lstatSync(path).isSymbolicLink()) return jsonError(410, "GONE", "Attachment expired");
+          bytes = readFileSync(path);
         } catch {
           return jsonError(410, "GONE", "Attachment expired");
         }
-        const bytes = readFileSync(attachmentPath(attachmentDir(env), row.id));
         return new Response(new Uint8Array(bytes), {
           headers: {
             "content-type": row.kind === "text" ? "text/plain; charset=utf-8" : row.mime,
