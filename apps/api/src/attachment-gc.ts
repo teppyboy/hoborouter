@@ -5,7 +5,7 @@
 //  2. orphans: uploaded >24h ago, never referenced by any CURRENT chat
 //     conversation jsonb (reference truth is the conversation store, never a
 //     client claim) -> tombstone + unlink, freeing the user's live quota.
-import { and, asc, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, lt, notExists, sql } from "drizzle-orm";
 import type { Db } from "@hoborouter/db";
 import { chatAttachments, chatConversations } from "@hoborouter/db";
 import { attachmentDir, removeAttachmentFile } from "./chat-attachment-store";
@@ -17,8 +17,8 @@ const DEFAULT_BATCH = 100;
 
 /**
  * One bounded GC pass. `nowMs`/`limit` are injectable for tests. Returns the
- * number of rows tombstoned in this run. A failed unlink is retried by the
- * next sweep (rows are already tombstoned, so quota is freed immediately).
+ * number of rows tombstoned in this run. Failed unlinks remain live so a later
+ * sweep can retry them.
  */
 export async function runAttachmentGc(
   db: Db,
@@ -31,15 +31,16 @@ export async function runAttachmentGc(
   let orphaned = 0;
 
   const tombstone = async (id: string) => {
+    try {
+      removeAttachmentFile(dir, id);
+    } catch {
+      return false;
+    }
     await db
       .update(chatAttachments)
       .set({ deleted_at: nowMs })
       .where(and(eq(chatAttachments.id, id), isNull(chatAttachments.deleted_at)));
-    try {
-      removeAttachmentFile(dir, id);
-    } catch {
-      /* next sweep retries the unlink; tombstone is already durable */
-    }
+    return true;
   };
 
   // 1) 30-day TTL expiry, oldest first, bounded batch.
@@ -55,8 +56,7 @@ export async function runAttachmentGc(
   }
 
   // 2) Orphan uploads: older than 24h and absent from every current chat
-  //    conversation's messages jsonb. jsonb text containment is exact for a
-  //    UUID (36 chars, no escaping ambiguity in serialized jsonb).
+  //    conversation's messages jsonb before the bounded limit is applied.
   const orphanRows = await db
     .select({ id: chatAttachments.id })
     .from(chatAttachments)
@@ -64,19 +64,18 @@ export async function runAttachmentGc(
       and(
         lt(chatAttachments.created_at, nowMs - CHAT_ATTACHMENT_ORPHAN_TTL_MS),
         isNull(chatAttachments.deleted_at),
+        notExists(
+          db
+            .select({ one: sql<number>`1` })
+            .from(chatConversations)
+            .where(sql`${chatConversations.messages}::text LIKE ${"%"} || ${chatAttachments.id} || ${"%"}`),
+        ),
       ),
     )
     .orderBy(asc(chatAttachments.created_at))
     .limit(limit);
   for (const row of orphanRows) {
-    const [ref] = await db
-      .select({ one: sql<number>`1` })
-      .from(chatConversations)
-      .where(sql`${chatConversations.messages}::text LIKE ${"%" + row.id + "%"}`)
-      .limit(1);
-    if (ref) continue; // referenced by current history: keep live
-    await tombstone(row.id);
-    orphaned++;
+    if (await tombstone(row.id)) orphaned++;
   }
 
   return { expired, orphaned };

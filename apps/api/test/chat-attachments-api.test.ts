@@ -471,6 +471,85 @@ describe("GC", () => {
       expect(!!r!.deleted_at).toBe(wantDeleted);
     }
   });
+
+  test("failed unlink stays live and is retried by the next sweep", async () => {
+    const dir = attachmentDir(env);
+    const id = crypto.randomUUID();
+    const createdAt = Date.now() - 25 * 60 * 60 * 1000;
+    await db.insert(chatAttachments).values({
+      id,
+      user_id: ownerId,
+      workspace_id: wsId,
+      kind: "text",
+      name: "retry.txt",
+      mime: "text/plain",
+      bytes: 10,
+      created_at: createdAt,
+      expires_at: Date.now() + CHAT_ATTACHMENT_TTL_MS,
+    });
+    mkdirSync(attachmentPath(dir, id));
+
+    await runAttachmentGc(db, env);
+    const afterFailure = (
+      await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)
+    )[0]!;
+    expect(afterFailure.deleted_at).toBeNull();
+
+    rmSync(attachmentPath(dir, id), { recursive: true });
+    writeFileSync(attachmentPath(dir, id), "bytes");
+    const result = await runAttachmentGc(db, env);
+    const afterRetry = (
+      await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)
+    )[0]!;
+    expect(result.orphaned).toBeGreaterThanOrEqual(1);
+    expect(afterRetry.deleted_at).not.toBeNull();
+    expect(existsSync(attachmentPath(dir, id))).toBe(false);
+  });
+
+  test("referenced rows do not fill the orphan limit ahead of true orphans", async () => {
+    const dir = attachmentDir(env);
+    const createdAt = Date.now() - 25 * 60 * 60 * 1000;
+    const referencedId = crypto.randomUUID();
+    const orphanId = crypto.randomUUID();
+    for (const [id, name, rowCreatedAt] of [
+      [referencedId, "limited-ref.txt", createdAt],
+      [orphanId, "after-limit.txt", createdAt + 1],
+    ] as const) {
+      await db.insert(chatAttachments).values({
+        id,
+        user_id: ownerId,
+        workspace_id: wsId,
+        kind: "text",
+        name,
+        mime: "text/plain",
+        bytes: 10,
+        created_at: rowCreatedAt,
+        expires_at: Date.now() + CHAT_ATTACHMENT_TTL_MS,
+      });
+      writeFileSync(attachmentPath(dir, id), "bytes");
+    }
+    await db.insert(chatConversations).values({
+      id: crypto.randomUUID(),
+      user_id: ownerId,
+      workspace_id: wsId,
+      title: "limit reference",
+      messages: [{ role: "user", content: "see file", attachments: [{ id: referencedId, name: "limited-ref.txt" }] }],
+      version: 1,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    });
+
+    const result = await runAttachmentGc(db, env, Date.now(), 1);
+    const rows = await q<{ id: string; deleted_at: number | null }>(
+      db,
+      "SELECT id, deleted_at FROM chat_attachments WHERE id IN (?, ?)",
+      referencedId,
+      orphanId,
+    );
+    expect(result.orphaned).toBe(1);
+    expect(rows.find((row) => row.id === referencedId)?.deleted_at).toBeNull();
+    expect(rows.find((row) => row.id === orphanId)?.deleted_at).not.toBeNull();
+  });
 });
 
 describe("store internals", () => {
