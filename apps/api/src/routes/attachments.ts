@@ -81,12 +81,7 @@ function contentDisposition(name: string, inline: boolean): string {
   return `${inline ? "inline" : "attachment"}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
-/**
- * CSRF boundary for unsafe methods: when a browser sends an Origin header it
- * must match the configured trusted origins (base URL + HBR_TRUSTED_ORIGINS).
- * The Host header is never reflected. Absent Origin (server-to-server, tests)
- * relies on SameSite session cookies.
- */
+/** CSRF boundary for unsafe session-cookie methods. */
 function originAllowed(env: Record<string, string | undefined>, origin: string): boolean {
   const allowed = new Set<string>();
   const base = env.BETTER_AUTH_URL || env.HBR_BASE_URL || "http://localhost:3000";
@@ -112,12 +107,15 @@ function originAllowed(env: Record<string, string | undefined>, origin: string):
 }
 
 function csrfGate(env: Record<string, string | undefined>, request: Request): Response | null {
+  if (!request.headers.has("cookie")) return null;
   const origin = request.headers.get("origin");
-  if (origin && !originAllowed(env, origin)) {
+  if (!origin || !originAllowed(env, origin)) {
     return jsonError(403, "UNTRUSTED_ORIGIN", "Origin is not a trusted origin");
   }
   return null;
 }
+
+class AttachmentQuotaExceededError extends Error {}
 
 /** Read the request body with a hard byte cap (stream-counted; rejects before
  *  buffering on a lying-or-oversized Content-Length). */
@@ -257,7 +255,7 @@ export const attachmentRoutes = (
                     and(eq(chatAttachments.user_id, userId), isNull(chatAttachments.deleted_at)),
                   );
                 if (Number(sum?.total ?? 0) + bytes.byteLength > CHAT_ATTACHMENT_QUOTA_BYTES) {
-                  return { quotaExceeded: true as const };
+                  throw new AttachmentQuotaExceededError();
                 }
                 const inserted = (
                   await tx
@@ -281,9 +279,6 @@ export const attachmentRoutes = (
               });
             }),
           );
-          if ("quotaExceeded" in row && row.quotaExceeded) {
-            return jsonError(413, "QUOTA_EXCEEDED", "Attachment storage quota exceeded");
-          }
           set.status = 201;
           return dto(row.row);
         } catch (e) {
@@ -294,7 +289,7 @@ export const attachmentRoutes = (
           } catch {
             /* GC orphan sweep reaps it; nothing else to do */
           }
-          if (e instanceof Error && e.message.includes("quota")) {
+          if (e instanceof AttachmentQuotaExceededError) {
             return jsonError(413, "QUOTA_EXCEEDED", "Attachment storage quota exceeded");
           }
           return jsonError(500, "INTERNAL", "Upload failed");

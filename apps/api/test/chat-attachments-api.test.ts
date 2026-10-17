@@ -3,7 +3,7 @@
 // orphan/expired GC, and DB-failure cleanup. Focused lane tests only.
 import { test, expect, describe, afterAll } from "bun:test";
 import { Elysia } from "elysia";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,7 +51,7 @@ function attReq(
     headers?: Record<string, string>;
   } = {},
 ) {
-  const headers = { ...opts.headers };
+  const headers: Record<string, string> = { ...(opts.cookie ? { origin: "http://localhost:3000" } : {}), ...opts.headers };
   if (opts.cookie) headers.cookie = opts.cookie;
   return attachmentApp.handle(
     new Request("http://localhost:3000" + path, {
@@ -67,7 +67,7 @@ async function upload(cookie: string, wsId: string, body: BodyInit, headers: Rec
     method: "POST",
     cookie,
     body,
-    headers: { "x-hbr-filename": "file.txt", ...headers },
+    headers: { origin: "http://localhost:3000", "x-hbr-filename": "file.txt", ...headers },
   });
 }
 
@@ -192,7 +192,19 @@ describe("auth boundary", () => {
     expect((await attReq(`/api/v1/workspaces/${otherWsId}/attachments/${id}`, { cookie: otherCookie })).status).toBe(404);
   });
 
-  test("unsafe methods reject cross-site Origin but accept the configured trusted origin", async () => {
+  test("unsafe cookie methods reject missing, malformed, and untrusted Origin; trusted origin works", async () => {
+    const missingUpload = await attReq(`/api/v1/workspaces/${wsId}/attachments`, {
+      method: "POST",
+      cookie: ownerCookie,
+      headers: { origin: "", "content-type": "text/plain", "x-hbr-filename": "file.txt" },
+      body: "x",
+    });
+    expect(missingUpload.status).toBe(403);
+    const malformedUpload = await upload(ownerCookie, wsId, "x", {
+      "content-type": "text/plain",
+      origin: "not a url",
+    });
+    expect(malformedUpload.status).toBe(403);
     const evil = await upload(ownerCookie, wsId, "x", {
       "content-type": "text/plain",
       origin: "https://evil.example",
@@ -209,6 +221,24 @@ describe("auth boundary", () => {
       headers: { origin: "https://evil.example" },
     });
     expect(evilDelete.status).toBe(403);
+    const missingDelete = await attReq(`/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`, {
+      method: "DELETE",
+      cookie: ownerCookie,
+      headers: { origin: "" },
+    });
+    expect(missingDelete.status).toBe(403);
+    const malformedDelete = await attReq(`/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`, {
+      method: "DELETE",
+      cookie: ownerCookie,
+      headers: { origin: "not a url" },
+    });
+    expect(malformedDelete.status).toBe(403);
+    const trustedDelete = await attReq(`/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`, {
+      method: "DELETE",
+      cookie: ownerCookie,
+      headers: { origin: "http://localhost:3000" },
+    });
+    expect(trustedDelete.status).toBe(404);
   });
 });
 
@@ -281,6 +311,36 @@ describe("download + delete lifecycle", () => {
 });
 
 describe("quota", () => {
+  test("quota rejection leaves no metadata row or temp/final file", async () => {
+    const seedBytes = 10 * 1024 * 1024;
+    await db.update(chatAttachments).set({ deleted_at: Date.now() }).where(eq(chatAttachments.user_id, ownerId));
+    const now = Date.now();
+    for (let i = 0; i < 50; i++) {
+      const id = crypto.randomUUID();
+      await db.insert(chatAttachments).values({
+        id,
+        user_id: ownerId,
+        workspace_id: wsId,
+        kind: "text",
+        name: `quota-${i}.txt`,
+        mime: "text/plain",
+        bytes: seedBytes,
+        created_at: now,
+        expires_at: now + CHAT_ATTACHMENT_TTL_MS,
+      });
+    }
+    const beforeRows = await q<{ count: number }>(db, "SELECT count(*)::int as count FROM chat_attachments WHERE user_id = ? AND deleted_at IS NULL", ownerId);
+    const dir = attachmentDir(env);
+    const filesBefore = readdirSync(dir).sort();
+    const res = await uploadText(ownerCookie, undefined, "quota-full");
+    expect(res.res.status).toBe(413);
+    expect((res.body.error as Record<string, unknown>).code).toBe("QUOTA_EXCEEDED");
+    const afterRows = await q<{ count: number }>(db, "SELECT count(*)::int as count FROM chat_attachments WHERE user_id = ? AND deleted_at IS NULL", ownerId);
+    expect(afterRows[0]!.count).toBe(beforeRows[0]!.count);
+    expect(readdirSync(dir).sort()).toEqual(filesBefore);
+    await db.update(chatAttachments).set({ deleted_at: Date.now() }).where(eq(chatAttachments.user_id, ownerId));
+  });
+
   test("concurrent uploads that together exceed 500 MiB cannot both succeed", async () => {
     // Seed live usage to QUOTA - 9000 via rows (DB caps each row at 10 MiB,
     // so the total is built from 49 full rows + one filler row). Only one
@@ -314,6 +374,7 @@ describe("quota", () => {
       ownerId,
     );
     expect(live[0]!.total).toBeLessThanOrEqual(CHAT_ATTACHMENT_QUOTA_BYTES);
+    await db.update(chatAttachments).set({ deleted_at: Date.now() }).where(eq(chatAttachments.user_id, ownerId));
   });
 });
 
