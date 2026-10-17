@@ -267,7 +267,10 @@ describe("chat title / fork / search / attachment refs", () => {
       if (cursor) qs.set("cursor", cursor);
       const res = await req(ctx.app, `/api/v1/workspaces/${wsA}/chats?${qs}`, { cookie: ac });
       expect(res.status).toBe(200);
-      return (await res.json()) as { data: { id: string; title: string }[]; nextCursor: string | null };
+      return (await res.json()) as {
+        data: { id: string; title: string }[];
+        nextCursor: string | null;
+      };
     };
     const titles = (r: { data: { title: string }[] }) => r.data.map((c) => c.title).sort();
 
@@ -366,7 +369,10 @@ describe("chat title / fork / search / attachment refs", () => {
       { version: 4, messages: [{ role: "user", content: "x", attachments: [{ id: "att-nope" }] }] },
       { version: 4, messages: [{ role: "user", content: "x", attachments: [{ id: expiredId }] }] },
       { version: 4, messages: [{ role: "user", content: "x", attachments: [{ id: deadId }] }] },
-      { version: 4, messages: [{ role: "user", content: "x", attachments: [{ id: "att-bob-1" }] }] },
+      {
+        version: 4,
+        messages: [{ role: "user", content: "x", attachments: [{ id: "att-bob-1" }] }],
+      },
       // All-or-nothing: one good ref + one dead ref rejects the whole save.
       {
         version: 4,
@@ -376,7 +382,10 @@ describe("chat title / fork / search / attachment refs", () => {
         ],
       },
       // Role restrictions.
-      { version: 4, messages: [{ role: "assistant", content: "x", attachments: [{ id: liveId }] }] },
+      {
+        version: 4,
+        messages: [{ role: "assistant", content: "x", attachments: [{ id: liveId }] }],
+      },
       { version: 4, messages: [{ role: "user", content: "x", request_id: "req_x" }] },
     ];
     for (const body of badBodies) {
@@ -569,9 +578,11 @@ describe("chat title / fork / search / attachment refs", () => {
       method: "PUT",
       cookie: ac,
       body: {
-        version: ((await (
-          await req(ctx.app, `/api/v1/workspaces/${wsA}/chats/${chatId}`, { cookie: ac })
-        ).json()) as { version: number }).version,
+        version: (
+          (await (
+            await req(ctx.app, `/api/v1/workspaces/${wsA}/chats/${chatId}`, { cookie: ac })
+          ).json()) as { version: number }
+        ).version,
         messages: [{ role: "user", content: "has file", attachments: [{ id: attId }] }],
       },
     });

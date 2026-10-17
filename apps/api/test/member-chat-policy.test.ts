@@ -81,7 +81,12 @@ beforeAll(async () => {
   outsiderCookie = await signUp(app, "mcp-out@test.dev", "O");
   ws = "ws-mcp";
   await createWorkspace(db, ws, await userIdByEmail(db, "mcp-admin@test.dev"));
-  await q(db, "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?,?, 'member')", ws, await userIdByEmail(db, memberEmail));
+  await q(
+    db,
+    "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?,?, 'member')",
+    ws,
+    await userIdByEmail(db, memberEmail),
+  );
   await q(
     db,
     "INSERT INTO wallets (id, workspace_id, kind, currency, balance, reserved, version, created_at) VALUES (?,?, 'topup', 'VND', 0, 0, 0, ?)",
@@ -108,13 +113,12 @@ describe("member chat policy GET/PUT", () => {
 
   test("PUT rejects cross-site Origin and non-JSON content types", async () => {
     expect(
-      (
-        await putPolicy(ws, { enabled: true, daily_cap_vnd: 100 }, { origin: "https://evil.test" })
-      ).status,
+      (await putPolicy(ws, { enabled: true, daily_cap_vnd: 100 }, { origin: "https://evil.test" }))
+        .status,
     ).toBe(403);
-    expect((await putPolicy(ws, { enabled: true, daily_cap_vnd: 100 }, { origin: null })).status).toBe(
-      403,
-    );
+    expect(
+      (await putPolicy(ws, { enabled: true, daily_cap_vnd: 100 }, { origin: null })).status,
+    ).toBe(403);
     expect(
       (await putPolicy(ws, { enabled: true, daily_cap_vnd: 100 }, { contentType: "text/plain" }))
         .status,
@@ -143,7 +147,10 @@ describe("member chat policy GET/PUT", () => {
     expect(
       (
         await db
-          .select({ enabled: workspaces.member_chat_enabled, cap: workspaces.member_chat_daily_cap_vnd })
+          .select({
+            enabled: workspaces.member_chat_enabled,
+            cap: workspaces.member_chat_daily_cap_vnd,
+          })
           .from(workspaces)
           .where(eq(workspaces.id, ws))
       )[0],
@@ -201,10 +208,7 @@ describe("chat-key lane", () => {
     const body = (await adminRes.json()) as { purpose: string; id: string };
     expect(body.purpose).toBe("chat");
     const row = (
-      await db
-        .select({ owner: apiKeys.owner_user_id })
-        .from(apiKeys)
-        .where(eq(apiKeys.id, body.id))
+      await db.select({ owner: apiKeys.owner_user_id }).from(apiKeys).where(eq(apiKeys.id, body.id))
     )[0];
     expect(row?.owner).toBeNull();
   });
@@ -230,8 +234,13 @@ describe("chat-key lane", () => {
 
   test("members can never mint generic keys", async () => {
     expect(
-      (await req(app, `/api/v1/workspaces/${ws}/keys`, { method: "POST", cookie: memberCookie, body: { name: "g" } }))
-        .status,
+      (
+        await req(app, `/api/v1/workspaces/${ws}/keys`, {
+          method: "POST",
+          cookie: memberCookie,
+          body: { name: "g" },
+        })
+      ).status,
     ).toBe(403);
   });
 
@@ -244,9 +253,22 @@ describe("chat-key lane", () => {
     const keys = await db
       .select({ id: apiKeys.id })
       .from(apiKeys)
-      .where(and(eq(apiKeys.workspace_id, ws), eq(apiKeys.purpose, "chat_member"), eq(apiKeys.owner_user_id, await userIdByEmail(db, memberEmail))));
+      .where(
+        and(
+          eq(apiKeys.workspace_id, ws),
+          eq(apiKeys.purpose, "chat_member"),
+          eq(apiKeys.owner_user_id, await userIdByEmail(db, memberEmail)),
+        ),
+      );
     const oldId = keys[0]!.id;
-    expect((await req(app, `/api/v1/workspaces/${ws}/keys/${oldId}`, { method: "DELETE", cookie: adminCookie })).status).toBe(200);
+    expect(
+      (
+        await req(app, `/api/v1/workspaces/${ws}/keys/${oldId}`, {
+          method: "DELETE",
+          cookie: adminCookie,
+        })
+      ).status,
+    ).toBe(200);
     const fresh = await post(chatKeyUrl(ws), memberCookie);
     expect(fresh.status).toBe(201);
     expect(((await fresh.json()) as { id: string }).id).not.toBe(oldId);

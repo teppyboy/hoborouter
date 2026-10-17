@@ -101,7 +101,10 @@ describe("GET /api/v1/admin/users", () => {
     await mkUser(app, cookie, `a-${tag}@example.com`, "Ada");
     await mkUser(app, cookie, `b-${tag}@example.com`, "Ben");
     const admins = await req(app, "/api/v1/admin/users?role=admin", { cookie });
-    const aBody = (await admins.json()) as { data: { is_instance_admin: boolean }[]; total: number };
+    const aBody = (await admins.json()) as {
+      data: { is_instance_admin: boolean }[];
+      total: number;
+    };
     expect(aBody.total).toBe(1);
     expect(aBody.data.every((u) => u.is_instance_admin)).toBe(true);
     const members = await req(app, `/api/v1/admin/users?role=member&sort=email&order=asc&limit=2`, {
@@ -119,16 +122,24 @@ describe("GET /api/v1/admin/users", () => {
     const emails = mBody.data.map((u) => u.email);
     expect([...emails].sort()).toEqual(emails); // asc
     // Stable pagination: same page repeats, next window continues.
-    const page2 = await req(app, `/api/v1/admin/users?role=member&sort=email&order=asc&limit=2&offset=2`, {
-      cookie,
-    });
+    const page2 = await req(
+      app,
+      `/api/v1/admin/users?role=member&sort=email&order=asc&limit=2&offset=2`,
+      {
+        cookie,
+      },
+    );
     const p2 = (await page2.json()) as { data: { id: string }[] };
     const ids1 = new Set(mBody.data.map((u) => u.id));
     expect(p2.data.every((u) => !ids1.has(u.id))).toBe(true);
     // desc reverses the same window.
-    const descRes = await req(app, `/api/v1/admin/users?role=member&sort=email&order=desc&limit=2`, {
-      cookie,
-    });
+    const descRes = await req(
+      app,
+      `/api/v1/admin/users?role=member&sort=email&order=desc&limit=2`,
+      {
+        cookie,
+      },
+    );
     const dBody = (await descRes.json()) as { data: { email: string }[] };
     expect(dBody.data.map((u) => u.email)).toEqual([...emails].reverse());
   });

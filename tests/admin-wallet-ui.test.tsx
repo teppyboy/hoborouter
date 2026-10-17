@@ -295,9 +295,7 @@ test("no per-row button wall; row click opens detail offering every action", asy
     "Manage keys for grace@example.com",
     "Remove grace@example.com",
   ];
-  expect(
-    labels.every((l) => !document.querySelector(`button[aria-label="${l}"]`)),
-  ).toBe(true);
+  expect(labels.every((l) => !document.querySelector(`button[aria-label="${l}"]`))).toBe(true);
   // Row activation opens the detail dialog, whose footer offers every action.
   await h.clickRow("grace@example.com");
   await h.waitFor("User details");

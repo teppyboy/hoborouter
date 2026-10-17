@@ -39,10 +39,10 @@ class MapStorage implements KeyStorage {
 }
 
 const mintResponse = (purpose: string) =>
-  new Response(
-    JSON.stringify({ id: "key-1", plaintext: "sk-hbr-membersecret123456", purpose }),
-    { status: 200, headers: { "content-type": "application/json" } },
-  );
+  new Response(JSON.stringify({ id: "key-1", plaintext: "sk-hbr-membersecret123456", purpose }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
 
 function fetchReturning(res: Response): { fetch: typeof fetch; bodies: unknown[] } {
   const bodies: unknown[] = [];
@@ -89,9 +89,7 @@ test("a chat_member key found in the persistent slot is dropped, never restored"
     purpose: "chat_member",
   });
   persistent.setItem("hbr-managed-key:" + U1 + ":" + W1, record);
-  const { fetch } = fetchReturning(
-    mintResponse("chat_member"),
-  );
+  const { fetch } = fetchReturning(mintResponse("chat_member"));
   const key = await startManagedChatKey({
     userId: U1,
     workspaceId: W1,

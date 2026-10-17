@@ -128,10 +128,7 @@ function mount(user: AdminUser = adminUser()) {
     return handler(String(url), init);
   }) as typeof fetch;
 
-  class Boundary extends React.Component<
-    { children: React.ReactNode },
-    { err: Error | null }
-  > {
+  class Boundary extends React.Component<{ children: React.ReactNode }, { err: Error | null }> {
     state = { err: null as Error | null };
     static getDerivedStateFromError(err: Error) {
       return { err };
@@ -310,9 +307,7 @@ test("confirmed attempt on a funded workspace shows the funds message, no retry"
   expect(text).toContain("38.000 ₫");
   expect(text).toContain("topup");
   // Deep link into the detail view carries the opaque user+workspace ids.
-  const link = document.querySelector<HTMLAnchorElement>(
-    'a[href="/admin/users?user=u_1&ws=ws_1"]',
-  );
+  const link = document.querySelector<HTMLAnchorElement>('a[href="/admin/users?user=u_1&ws=ws_1"]');
   expect(link).not.toBeNull();
   expect(delBodies).toHaveLength(2);
   expect(delBodies[1]).toBe(JSON.stringify({ confirm: true }));

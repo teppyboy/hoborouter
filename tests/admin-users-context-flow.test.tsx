@@ -190,7 +190,12 @@ function mount(serverControlsSetup?: () => UsersServerControls) {
       if (!row) throw new Error(`no row for ${email}`);
       await act(async () => {
         row.dispatchEvent(
-          new W.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 60 }),
+          new W.MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: 40,
+            clientY: 60,
+          }),
         );
         await new Promise((r) => setTimeout(r, 0));
       });
@@ -208,7 +213,10 @@ function mount(serverControlsSetup?: () => UsersServerControls) {
     clickMenuItem: async (label: string) => {
       const items = [...document.querySelectorAll('[role="menuitem"]')];
       const item = items.find((el) => el.textContent?.trim() === label);
-      if (!item) throw new Error(`no menu item "${label}" (have: ${items.map((i) => i.textContent?.trim()).join(",")})`);
+      if (!item)
+        throw new Error(
+          `no menu item "${label}" (have: ${items.map((i) => i.textContent?.trim()).join(",")})`,
+        );
       await act(async () => {
         item.dispatchEvent(new W.MouseEvent("click", { bubbles: true }));
         await new Promise((r) => setTimeout(r, 0));
@@ -433,17 +441,17 @@ test("reserved amount click fetches the bounded pending list with request-log li
   // Reserved amount opens the bounded pending read.
   await h.clickButtonContaining("12.000 ₫");
   await h.waitFor("req_abc");
-  const link = document.querySelector<HTMLAnchorElement>('a[href="/admin/request-log?request=req_abc"]');
+  const link = document.querySelector<HTMLAnchorElement>(
+    'a[href="/admin/request-log?request=req_abc"]',
+  );
   expect(link).not.toBeNull();
   await h.waitFor("older pending records"); // honest "…and N older" hint
   // No invented money controls: the hint names settle/withdraw but no
   // actionable control offers them.
-  const actionables = [
-    ...document.querySelectorAll("button, [role=menuitem], a"),
-  ].map((el) => (el.textContent ?? "").trim());
+  const actionables = [...document.querySelectorAll("button, [role=menuitem], a")].map((el) =>
+    (el.textContent ?? "").trim(),
+  );
   for (const banned of ["Settle", "Force cancel", "Withdraw"]) {
-    expect(
-      actionables.some((t) => t.includes(banned) && !t.startsWith("…and")),
-    ).toBe(false);
+    expect(actionables.some((t) => t.includes(banned) && !t.startsWith("…and"))).toBe(false);
   }
 });

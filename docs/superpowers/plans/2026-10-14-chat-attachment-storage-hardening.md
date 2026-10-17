@@ -32,6 +32,7 @@
 ### Task 1: Safe per-user lock and atomic filesystem persistence
 
 **Files:**
+
 - Modify: `apps/api/src/chat-attachment-store.ts`
 - Modify: `apps/api/test/chat-attachments-api.test.ts` (or existing direct store tests if separated)
 
@@ -46,6 +47,7 @@
 ### Task 2: Quota transaction and Origin boundary
 
 **Files:**
+
 - Modify: `apps/api/src/routes/attachments.ts`
 - Modify: `apps/api/src/chat-attachment-store.ts` only if required by the existing commit callback seam.
 - Test: `apps/api/test/chat-attachments-api.test.ts`
@@ -61,6 +63,7 @@
 ### Task 3: GC retry and starvation-free orphan selection
 
 **Files:**
+
 - Modify: `apps/api/src/attachment-gc.ts`
 - Test: `apps/api/test/chat-attachments-api.test.ts`
 

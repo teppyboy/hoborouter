@@ -32,7 +32,10 @@ export function userLockCount(): number {
 export async function withUserLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
   const prev = userLocks.get(userId) ?? Promise.resolve();
   const run = prev.then(fn);
-  const tail = run.then(() => undefined, () => undefined);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
   userLocks.set(userId, tail);
   void tail.then(() => {
     if (userLocks.get(userId) === tail) userLocks.delete(userId);

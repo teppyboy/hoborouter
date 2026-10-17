@@ -195,14 +195,15 @@ async function mountPage(historyMessages: unknown[] = []) {
       return jsonRes(200, snapshot(99, historyMessages));
     if (path === "/api/v1/workspaces/ws1/attachments/attachment-1")
       return new Response(new Uint8Array(uploadedBytes), { status: 200 });
-    if (path === "/api/v1/workspaces/ws1/attachments/missing")
-      return jsonRes(404, {});
+    if (path === "/api/v1/workspaces/ws1/attachments/missing") return jsonRes(404, {});
     if (path === "/api/v1/workspaces/ws1/attachments" && call.init?.method === "POST") {
       const filename = String(new Headers(call.init.headers).get("X-Hbr-Filename"));
       if (uploadStatus !== 201)
         return jsonRes(
           uploadStatus,
-          uploadStatus === 413 ? { error: { code: "QUOTA_EXCEEDED", message: "Attachment storage quota exceeded" } } : {},
+          uploadStatus === 413
+            ? { error: { code: "QUOTA_EXCEEDED", message: "Attachment storage quota exceeded" } }
+            : {},
         );
       uploadedBytes = (call.init?.body as File).size;
       return jsonRes(201, {
@@ -341,7 +342,11 @@ test("over-budget attachment history explains how to continue without older atta
   await waitFor(() => bodyText().includes("too large to send"), "history size rejection");
   expect(bodyText()).toContain("Remove attachments");
   expect(bodyText()).toContain("edit or fork from an earlier turn");
-  expect(calls.filter((call) => call.path.includes("/attachments/")).filter((call) => /\/attachments\/[^/]+$/.test(call.path))).toHaveLength(0);
+  expect(
+    calls
+      .filter((call) => call.path.includes("/attachments/"))
+      .filter((call) => /\/attachments\/[^/]+$/.test(call.path)),
+  ).toHaveLength(0);
   expect(calls.filter((call) => call.path === "/v1/chat/completions")).toHaveLength(0);
   expect(calls.filter((call) => call.path.endsWith("/chat-key"))).toHaveLength(0);
 });
@@ -375,7 +380,9 @@ test("file selection uploads raw bytes and saved user turn contains only canonic
   const upload = calls.find((c) => c.path === "/api/v1/workspaces/ws1/attachments");
   expect(upload?.init?.method).toBe("POST");
   expect(upload?.init?.body).toBeInstanceOf(File);
-  expect(await (upload?.init?.body as File).arrayBuffer()).toEqual(await pngFile(2048).arrayBuffer());
+  expect(await (upload?.init?.body as File).arrayBuffer()).toEqual(
+    await pngFile(2048).arrayBuffer(),
+  );
   const textarea = document.querySelector('textarea[aria-label="Message"]')!;
   setInput(textarea, "look at this");
   click(buttonByLabel("Send message")!);
@@ -394,14 +401,24 @@ test("file selection uploads raw bytes and saved user turn contains only canonic
   expect(Array.isArray(lastUser?.content)).toBe(true);
   expect(JSON.stringify(lastUser?.content)).toContain("image_url");
   expect(JSON.stringify(lastUser?.content)).toContain("look at this");
-  const save = calls.find((c) => c.path === "/api/v1/workspaces/ws1/chats/c1" && c.init?.method === "PUT");
+  const save = calls.find(
+    (c) => c.path === "/api/v1/workspaces/ws1/chats/c1" && c.init?.method === "PUT",
+  );
   expect(save).toBeDefined();
-  const saved = JSON.parse(String(save?.init?.body)) as { messages: Array<{ role: string; attachments?: unknown[]; content: string }> };
+  const saved = JSON.parse(String(save?.init?.body)) as {
+    messages: Array<{ role: string; attachments?: unknown[]; content: string }>;
+  };
   const savedUser = saved.messages.findLast((m) => m.role === "user");
-  expect(savedUser?.attachments).toEqual([{
-    id: "attachment-1", name: "shot.png", kind: "image", bytes: 2048,
-    mime: "image/png", expires_at: expect.any(Number),
-  }]);
+  expect(savedUser?.attachments).toEqual([
+    {
+      id: "attachment-1",
+      name: "shot.png",
+      kind: "image",
+      bytes: 2048,
+      mime: "image/png",
+      expires_at: expect.any(Number),
+    },
+  ]);
   expect(JSON.stringify(savedUser)).not.toContain("data:image");
   expect(JSON.stringify(savedUser)).not.toContain("base64");
   expect(JSON.stringify(savedUser)).not.toContain("Hello");
@@ -425,11 +442,19 @@ test("file selection uploads raw bytes and saved user turn contains only canonic
   ) as { messages: Array<{ role: string; content: unknown }> };
   const retryLastUser = retry.messages.filter((m) => m.role === "user").at(-1);
   expect(JSON.stringify(retryLastUser?.content)).toContain("image_url");
-  const postIndices = calls.flatMap((call, index) => call.path === "/v1/chat/completions" ? [index] : []);
-  const retryDownload = calls.findIndex((call, index) => index > postIndices[0]! && call.path.endsWith("/attachments/attachment-1"));
+  const postIndices = calls.flatMap((call, index) =>
+    call.path === "/v1/chat/completions" ? [index] : [],
+  );
+  const retryDownload = calls.findIndex(
+    (call, index) => index > postIndices[0]! && call.path.endsWith("/attachments/attachment-1"),
+  );
   expect(retryDownload).toBeGreaterThan(postIndices[0]!);
   expect(retryDownload).toBeLessThan(postIndices[1]!);
-  expect(calls.filter((c) => c.path === "/api/v1/workspaces/ws1/attachments" && c.init?.method === "POST")).toHaveLength(1);
+  expect(
+    calls.filter(
+      (c) => c.path === "/api/v1/workspaces/ws1/attachments" && c.init?.method === "POST",
+    ),
+  ).toHaveLength(1);
 });
 
 const persistedRef = {
@@ -444,8 +469,14 @@ const persistedRef = {
 test("reloaded refs render chips without fetching bytes until send", async () => {
   await mountPage([{ role: "user", content: "look", attachments: [persistedRef] }]);
   await openConversation();
-  expect(document.querySelector('[role="list"][aria-label="Attachments"]')?.textContent).toContain("gone.png");
-  expect(calls.filter((call) => call.path.includes("/attachments/")).filter((call) => /\/attachments\/[^/]+$/.test(call.path))).toHaveLength(0);
+  expect(document.querySelector('[role="list"][aria-label="Attachments"]')?.textContent).toContain(
+    "gone.png",
+  );
+  expect(
+    calls
+      .filter((call) => call.path.includes("/attachments/"))
+      .filter((call) => /\/attachments\/[^/]+$/.test(call.path)),
+  ).toHaveLength(0);
 });
 
 test("unavailable persisted attachment blocks dispatch and offers explicit omission", async () => {
@@ -453,19 +484,37 @@ test("unavailable persisted attachment blocks dispatch and offers explicit omiss
   await openConversation();
   setInput(document.querySelector('textarea[aria-label="Message"]')!, "follow up");
   click(buttonByLabel("Send message")!);
-  await waitFor(() => calls.some((call) => call.path.endsWith("/attachments/missing")), "rehydration fetch");
+  await waitFor(
+    () => calls.some((call) => call.path.endsWith("/attachments/missing")),
+    "rehydration fetch",
+  );
   await flush();
   expect(calls.filter((call) => call.path === "/v1/chat/completions")).toHaveLength(0);
   expect(calls.filter((call) => call.path.endsWith("/chat-key"))).toHaveLength(0);
-  expect(calls.filter((call) => call.path === "/api/v1/workspaces/ws1/chats" && call.init?.method === "POST")).toHaveLength(0);
-  expect((document.querySelector('textarea[aria-label="Message"]') as HTMLTextAreaElement).value).toBe("follow up");
+  expect(
+    calls.filter(
+      (call) => call.path === "/api/v1/workspaces/ws1/chats" && call.init?.method === "POST",
+    ),
+  ).toHaveLength(0);
+  expect(
+    (document.querySelector('textarea[aria-label="Message"]') as HTMLTextAreaElement).value,
+  ).toBe("follow up");
   expect(bodyText()).toContain("gone.png");
   expect(buttonByText("Omit unavailable files for this send")).toBeDefined();
   click(buttonByText("Omit unavailable files for this send")!);
-  await waitFor(() => calls.filter((call) => call.path === "/v1/chat/completions").length === 1, "explicit omit dispatch");
-  const sent = JSON.parse(String(calls.find((call) => call.path === "/v1/chat/completions")?.init?.body)) as { messages: Array<{ role: string; content: unknown }> };
-  expect(sent.messages.filter((message) => message.role === "user").map((message) => message.content)).toEqual(["look", "follow up"]);
-  const saved = calls.filter((call) => call.path === "/api/v1/workspaces/ws1/chats/c1" && call.init?.method === "PUT");
+  await waitFor(
+    () => calls.filter((call) => call.path === "/v1/chat/completions").length === 1,
+    "explicit omit dispatch",
+  );
+  const sent = JSON.parse(
+    String(calls.find((call) => call.path === "/v1/chat/completions")?.init?.body),
+  ) as { messages: Array<{ role: string; content: unknown }> };
+  expect(
+    sent.messages.filter((message) => message.role === "user").map((message) => message.content),
+  ).toEqual(["look", "follow up"]);
+  const saved = calls.filter(
+    (call) => call.path === "/api/v1/workspaces/ws1/chats/c1" && call.init?.method === "PUT",
+  );
   expect(saved).toHaveLength(1);
   expect(String(saved[0]?.init?.body)).toContain('"id":"missing"');
 });
@@ -474,12 +523,17 @@ test("switching chats during rehydration prevents late dispatch", async () => {
   await mountPage([{ role: "user", content: "look", attachments: [persistedRef] }]);
   await openConversation();
   let release!: (response: Response) => void;
-  const pending = new Promise<Response>((resolve) => { release = resolve; });
+  const pending = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
   const previous = responder;
-  responder = (call) => call.path.endsWith("/attachments/missing") ? pending : previous(call);
+  responder = (call) => (call.path.endsWith("/attachments/missing") ? pending : previous(call));
   setInput(document.querySelector('textarea[aria-label="Message"]')!, "follow up");
   click(buttonByLabel("Send message")!);
-  await waitFor(() => calls.some((call) => call.path.endsWith("/attachments/missing")), "rehydration started");
+  await waitFor(
+    () => calls.some((call) => call.path.endsWith("/attachments/missing")),
+    "rehydration started",
+  );
   click(buttonByLabel("New chat")!);
   release(new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
   await flush();

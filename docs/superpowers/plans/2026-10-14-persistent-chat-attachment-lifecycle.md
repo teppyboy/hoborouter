@@ -33,11 +33,13 @@
 ### Task 1: Pure send-preparation seam
 
 **Files:**
+
 - Create: `apps/web/src/pages/chat/prepare-send.ts`
 - Test: `tests/chat-prepare-send.test.ts`
 - Reuse: `apps/web/src/pages/chat/persistent-attachments.ts`, `attachments.ts`, `turn.ts`, and the existing `buildChatRequestBody` request shape.
 
 **Interfaces:**
+
 - Produces `prepareChatSend(input: { workspaceId: string; model: string; messages: ConversationMessage[]; effort: ReasoningEffort; signal?: AbortSignal; fetch?: typeof fetch }): Promise<PreparedChatSend>` in `prepare-send.ts`.
 - `PreparedChatSend` is either `{ ok: true; bodyJson: string; messages: ConversationMessage[] }`, `{ ok: false; kind: "unavailable"; files: UnavailableAttachment[]; outgoingMessages: ConversationMessage[] }`, or `{ ok: false; kind: "tooLarge" | "failed"; error: Error }`.
 - `outgoingMessages` is a fresh copy, never an alias to supplied snapshots. On unavailable results it retains all refs until caller explicitly confirms omit. Import `ConversationMessage` from `@hoborouter/shared` and `ReasoningEffort` from `./reasoning`.
@@ -51,12 +53,14 @@
 ### Task 2: Persisted upload references in ChatPage
 
 **Files:**
+
 - Modify: `apps/web/src/pages/chat/index.tsx`
 - Modify: `apps/web/src/pages/chat/composer.tsx` only if current file-pick callback requires a prop/interface adjustment.
 - Modify: `apps/web/src/pages/chat/copy.ts`
 - Test: `tests/chat-page-attachments.test.tsx`
 
 **Interfaces:**
+
 - Composer attachment values remain `ChatAttachment`; persistent picks require `serverRef` before send.
 - A user `ChatMessage.attachments` stores only `serverRef` values.
 
@@ -69,12 +73,14 @@
 ### Task 3: Send/retry/fork rehydration and explicit omission
 
 **Files:**
+
 - Modify: `apps/web/src/pages/chat/index.tsx`
 - Modify: `apps/web/src/pages/chat/copy.ts`
 - Modify: `apps/web/src/pages/chat/transcript.tsx` only if attachment-reference UI needs a callback.
 - Test: `tests/chat-page-attachments.test.tsx`, `tests/chat-page-wave3-wiring.test.tsx`, and conversation API tests only if fork ref behavior is missing.
 
 **Interfaces:**
+
 - Consume Task 1 `prepareChatSend`.
 - Blocking UI state is typed: unavailable filenames+refs; other errors remain retry/cancel errors.
 - Omit confirmation stores only an outgoing copy for that explicit send; no source snapshot mutation.

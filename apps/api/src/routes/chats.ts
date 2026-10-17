@@ -9,13 +9,7 @@ import type { BetterAuthInstance } from "../auth-types";
 import { requireSession, requireWsRole, jsonError, writeAudit } from "../authz";
 import type { ChatAttachmentRef } from "@hoborouter/shared";
 import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
-import {
-  type Db,
-  type Tx,
-  chatAttachments,
-  chatConversations,
-  models,
-} from "@hoborouter/db";
+import { type Db, type Tx, chatAttachments, chatConversations, models } from "@hoborouter/db";
 
 const MAX_BODY_BYTES = 512 * 1024; // 512 KiB inbound JSON body limit
 const MAX_MESSAGES = 500;
@@ -131,7 +125,9 @@ function validateMessages(raw: unknown): { messages?: ChatMessage[]; error?: Res
     }
     if (rec.attachments !== undefined) {
       if (rec.role !== "user") {
-        return { error: jsonError(400, "INVALID", "attachments are only allowed on user messages") };
+        return {
+          error: jsonError(400, "INVALID", "attachments are only allowed on user messages"),
+        };
       }
       if (!Array.isArray(rec.attachments) || rec.attachments.length > MAX_ATTACHMENTS_PER_MESSAGE) {
         return {
@@ -159,7 +155,9 @@ function validateMessages(raw: unknown): { messages?: ChatMessage[]; error?: Res
     }
     if (rec.request_id !== undefined) {
       if (rec.role !== "assistant") {
-        return { error: jsonError(400, "INVALID", "request_id is only allowed on assistant messages") };
+        return {
+          error: jsonError(400, "INVALID", "request_id is only allowed on assistant messages"),
+        };
       }
       if (
         typeof rec.request_id !== "string" ||
@@ -485,7 +483,13 @@ export const chatsRoutes = (db: Db, auth: BetterAuthInstance) =>
           // Canonical attachment refs (grandfathering stored history; new refs
           // verified live+owned) — before model validation, so the whole save
           // is all-or-nothing on any invalid ref.
-          const canon = await canonicalizeRefs(tx, userId, params.id, row.messages, messages.messages!);
+          const canon = await canonicalizeRefs(
+            tx,
+            userId,
+            params.id,
+            row.messages,
+            messages.messages!,
+          );
           if (canon.error) return canon.error;
           const savedMessages = canon.messages!;
           // Historical-model retention, under the same row lock so a concurrent

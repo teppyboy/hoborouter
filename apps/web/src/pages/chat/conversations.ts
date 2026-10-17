@@ -52,12 +52,7 @@ export class ConversationError extends Error {
   /** Parsed from a Retry-After header (seconds) when the server sent one. */
   retryAfterMs?: number;
 
-  constructor(
-    kind: ConversationFailure,
-    message: string,
-    status?: number,
-    retryAfterMs?: number,
-  ) {
+  constructor(kind: ConversationFailure, message: string, status?: number, retryAfterMs?: number) {
     super(message);
     this.name = "ConversationError";
     this.kind = kind;
@@ -145,10 +140,7 @@ function parseAttachmentRef(v: unknown): ChatAttachmentRef | null {
 function parseMessage(v: unknown): ChatMessage | null {
   if (typeof v !== "object" || v === null) return null;
   const m = v as Record<string, unknown>;
-  if (
-    (m.role !== "user" && m.role !== "assistant") ||
-    typeof m.content !== "string"
-  ) {
+  if ((m.role !== "user" && m.role !== "assistant") || typeof m.content !== "string") {
     return null;
   }
   const msg: ChatMessage = { role: m.role, content: m.content };
@@ -360,11 +352,7 @@ export async function renameConversation(
     },
     opts,
   );
-  if (
-    typeof body?.id === "string" &&
-    body.id !== "" &&
-    typeof body?.version === "number"
-  ) {
+  if (typeof body?.id === "string" && body.id !== "" && typeof body?.version === "number") {
     return { id: body.id, version: body.version };
   }
   throw new ConversationError("invalid", "Chat service returned an unexpected response.");

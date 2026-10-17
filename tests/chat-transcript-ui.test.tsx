@@ -114,12 +114,33 @@ test("attachment chips: live refs preview via callback, expired refs never inter
   const now = Date.now();
   const msgs = [
     user("with files", [
-      { id: "a1", name: "photo.png", kind: "image", bytes: 2048, mime: "image/png", expires_at: now + 60_000 },
-      { id: "a2", name: "notes.txt", kind: "text", bytes: 12, mime: "text/plain", expires_at: now - 1 },
+      {
+        id: "a1",
+        name: "photo.png",
+        kind: "image",
+        bytes: 2048,
+        mime: "image/png",
+        expires_at: now + 60_000,
+      },
+      {
+        id: "a2",
+        name: "notes.txt",
+        kind: "text",
+        bytes: 12,
+        mime: "text/plain",
+        expires_at: now - 1,
+      },
     ]),
   ] as TurnMessage[];
   const withPreview = renderToStaticMarkup(
-    <Transcript {...base({ messages: msgs, onForkTurn: undefined, onEditTurn: undefined, onRegenerateTurn: undefined })} />,
+    <Transcript
+      {...base({
+        messages: msgs,
+        onForkTurn: undefined,
+        onEditTurn: undefined,
+        onRegenerateTurn: undefined,
+      })}
+    />,
   );
   expect(withPreview).toContain("photo.png");
   expect(withPreview).toContain("2 KB");
@@ -145,7 +166,9 @@ test("attachment chips: live refs preview via callback, expired refs never inter
 test("live stream beyond 64 KiB renders exact plain text; terminal restores markdown", () => {
   const big = "# Heading\n\n" + "x".repeat(70 * 1024);
   const live = renderToStaticMarkup(
-    <Transcript {...base({ messages: [user("q"), assistant(big)] as TurnMessage[], streaming: true })} />,
+    <Transcript
+      {...base({ messages: [user("q"), assistant(big)] as TurnMessage[], streaming: true })}
+    />,
   );
   // Exact text preserved (no markdown engine rewrite), no parsed heading tag.
   expect(live).toContain("# Heading");

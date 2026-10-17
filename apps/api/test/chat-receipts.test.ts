@@ -240,17 +240,17 @@ describe("chat receipts route", () => {
       (await req(ctx.app, `/api/v1/workspaces/${ws}/chat-receipts/req-settled`, dc)).status,
     ).toBe(404);
     // Bob's own receipt is visible to Bob.
-    expect(
-      (await req(ctx.app, `/api/v1/workspaces/${ws}/chat-receipts/req-bob`, bc)).status,
-    ).toBe(200);
+    expect((await req(ctx.app, `/api/v1/workspaces/${ws}/chat-receipts/req-bob`, bc)).status).toBe(
+      200,
+    );
     // Bob cannot see Alice's receipts.
     expect(
       (await req(ctx.app, `/api/v1/workspaces/${ws}/chat-receipts/req-settled`, bc)).status,
     ).toBe(404);
     // Unknown request id → 404.
-    expect(
-      (await req(ctx.app, `/api/v1/workspaces/${ws}/chat-receipts/req-nope`, ac)).status,
-    ).toBe(404);
+    expect((await req(ctx.app, `/api/v1/workspaces/${ws}/chat-receipts/req-nope`, ac)).status).toBe(
+      404,
+    );
     // Request known in ws but queried via alice's other workspace → 404.
     expect(
       (await req(ctx.app, `/api/v1/workspaces/ws-other/chat-receipts/req-settled`, ac)).status,

@@ -23,9 +23,7 @@ g.window ??= { location: { origin: "http://localhost" } };
 g.localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 g.sessionStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 
-const { isSendKeydown, Composer } = await import(
-  "../apps/web/src/pages/chat/composer"
-);
+const { isSendKeydown, Composer } = await import("../apps/web/src/pages/chat/composer");
 
 afterAll(() => {
   for (const [key, prev] of [
@@ -38,12 +36,12 @@ afterAll(() => {
   }
 });
 
-function key(input: {
+function key(input: { key: string; shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean }): {
   key: string;
   shiftKey?: boolean;
   metaKey?: boolean;
   ctrlKey?: boolean;
-}): { key: string; shiftKey?: boolean; metaKey?: boolean; ctrlKey?: boolean } {
+} {
   return input;
 }
 

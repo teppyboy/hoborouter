@@ -119,8 +119,7 @@ export async function uploadChatAttachment(
   let kind = kindByStatus[res.status] ?? "invalid";
   if (res.status === 413) {
     const body: unknown = await res.json().catch(() => null);
-    const error =
-      typeof body === "object" && body !== null && "error" in body ? body.error : null;
+    const error = typeof body === "object" && body !== null && "error" in body ? body.error : null;
     if (
       typeof error === "object" &&
       error !== null &&
@@ -130,11 +129,7 @@ export async function uploadChatAttachment(
       kind = "quota";
     }
   }
-  throw new AttachmentUploadError(
-    kind,
-    `Attachment upload failed (${res.status}).`,
-    res.status,
-  );
+  throw new AttachmentUploadError(kind, `Attachment upload failed (${res.status}).`, res.status);
 }
 
 /** Pick → validate → read locally → upload: one call for the composer

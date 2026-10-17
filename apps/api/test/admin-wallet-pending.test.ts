@@ -75,10 +75,32 @@ describe("GET /api/v1/admin/workspaces/:ws/pending-billing", () => {
   test("returns non-terminal + terminal-with-held, excludes resolved terminal; reservation snapshot exact", async () => {
     const { db, cookie } = await makeAdmin();
     await seedBillingCanvas(db, "ws-p");
-    await seedRequest(db, { id: "r-old", dispatch_state: "dispatching", status: "pending", created_at: NOW });
-    await seedRequest(db, { id: "r-held", dispatch_state: "terminal", status: "unknown", created_at: NOW + 1, reservation: { status: "held" } });
-    await seedRequest(db, { id: "r-done", dispatch_state: "terminal", status: "ok", created_at: NOW + 2, reservation: { status: "settled" } });
-    await seedRequest(db, { id: "r-plain", dispatch_state: "terminal", status: "ok", created_at: NOW + 3 });
+    await seedRequest(db, {
+      id: "r-old",
+      dispatch_state: "dispatching",
+      status: "pending",
+      created_at: NOW,
+    });
+    await seedRequest(db, {
+      id: "r-held",
+      dispatch_state: "terminal",
+      status: "unknown",
+      created_at: NOW + 1,
+      reservation: { status: "held" },
+    });
+    await seedRequest(db, {
+      id: "r-done",
+      dispatch_state: "terminal",
+      status: "ok",
+      created_at: NOW + 2,
+      reservation: { status: "settled" },
+    });
+    await seedRequest(db, {
+      id: "r-plain",
+      dispatch_state: "terminal",
+      status: "ok",
+      created_at: NOW + 3,
+    });
     const plugin = adminWalletPendingRoutes(db, createAuth(db));
     const res = await plugin.handle(
       new Request("http://t/api/v1/admin/workspaces/ws-p/pending-billing", {
@@ -168,7 +190,13 @@ describe("GET /api/v1/admin/workspaces/:ws/pending-billing", () => {
   test("read-only: no wallet/reservation mutation on the read path", async () => {
     const { db, cookie } = await makeAdmin();
     await seedBillingCanvas(db, "ws-p");
-    await seedRequest(db, { id: "r-1", dispatch_state: "reserved", status: "pending", created_at: NOW, reservation: { status: "held" } });
+    await seedRequest(db, {
+      id: "r-1",
+      dispatch_state: "reserved",
+      status: "pending",
+      created_at: NOW,
+      reservation: { status: "held" },
+    });
     const plugin = adminWalletPendingRoutes(db, createAuth(db));
     await plugin.handle(
       new Request("http://t/api/v1/admin/workspaces/ws-p/pending-billing", { headers: { cookie } }),

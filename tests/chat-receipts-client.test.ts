@@ -6,10 +6,7 @@
 //   as 0; settled/failed show the ACTUAL charged VND via the shared formatter.
 // - Malformed bodies are never trusted (invalid), statuses map to errors.
 import { describe, test, expect, beforeEach } from "bun:test";
-import {
-  chargedVndLabel,
-  fetchChatReceipt,
-} from "../apps/web/src/pages/chat/receipts";
+import { chargedVndLabel, fetchChatReceipt } from "../apps/web/src/pages/chat/receipts";
 import { ConversationError } from "../apps/web/src/pages/chat/conversations";
 
 let calls: Array<{ url: string; init: RequestInit }>;
@@ -65,7 +62,8 @@ describe("fetchChatReceipt", () => {
         charged_vnd: null,
         public_model: null,
         created_at: 1730000000000,
-      }));
+      }),
+    );
     const r = await fetchChatReceipt("ws1", "req_2");
     expect(r.status).toBe("pending");
     expect(r.charged_vnd).toBeNull();
@@ -80,7 +78,8 @@ describe("fetchChatReceipt", () => {
         charged_vnd: 50000,
         public_model: "m",
         created_at: 1730000000000,
-      }));
+      }),
+    );
     const r = await fetchChatReceipt("ws1", "req_3");
     expect(chargedVndLabel(r)).toContain("50.000");
   });

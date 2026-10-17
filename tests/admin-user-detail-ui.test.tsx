@@ -205,9 +205,9 @@ function mount(user: AdminUser = adminUser(), currentUserId = "u_admin") {
     async clickAria(label: string) {
       // Rows carry the detail aria-label now (row activation is the entry).
       const btn =
-        ([...document.querySelectorAll("button")].find(
+        [...document.querySelectorAll("button")].find(
           (b) => b.getAttribute("aria-label") === label,
-        )) ??
+        ) ??
         [...document.querySelectorAll("tr[aria-label]")].find(
           (r) => r.getAttribute("aria-label") === label,
         );

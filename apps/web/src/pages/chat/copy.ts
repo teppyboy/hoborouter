@@ -253,13 +253,34 @@ export const chatCopy = {
   },
   cancelOmit: { en: "Cancel", vi: "Huỷ" },
 
-  attachmentUploadUnauthorized: { en: "Sign in again to upload this file.", vi: "Đăng nhập lại để tải tệp này lên." },
-  attachmentUploadForbidden: { en: "You cannot upload files to this workspace.", vi: "Bạn không thể tải tệp lên workspace này." },
-  attachmentUploadTooLarge: { en: "This file is too large to upload.", vi: "Tệp này quá lớn để tải lên." },
-  attachmentUploadUnsupported: { en: "This file type cannot be uploaded.", vi: "Không thể tải lên loại tệp này." },
-  attachmentUploadQuota: { en: "Workspace attachment storage is full.", vi: "Dung lượng lưu tệp đính kèm của workspace đã đầy." },
-  attachmentUploadNetwork: { en: "Could not upload the file. Check your connection and retry.", vi: "Không tải được tệp lên. Kiểm tra kết nối rồi thử lại." },
-  attachmentUploadInvalid: { en: "Upload failed. Try selecting the file again.", vi: "Tải tệp lên thất bại. Hãy chọn lại tệp." },
+  attachmentUploadUnauthorized: {
+    en: "Sign in again to upload this file.",
+    vi: "Đăng nhập lại để tải tệp này lên.",
+  },
+  attachmentUploadForbidden: {
+    en: "You cannot upload files to this workspace.",
+    vi: "Bạn không thể tải tệp lên workspace này.",
+  },
+  attachmentUploadTooLarge: {
+    en: "This file is too large to upload.",
+    vi: "Tệp này quá lớn để tải lên.",
+  },
+  attachmentUploadUnsupported: {
+    en: "This file type cannot be uploaded.",
+    vi: "Không thể tải lên loại tệp này.",
+  },
+  attachmentUploadQuota: {
+    en: "Workspace attachment storage is full.",
+    vi: "Dung lượng lưu tệp đính kèm của workspace đã đầy.",
+  },
+  attachmentUploadNetwork: {
+    en: "Could not upload the file. Check your connection and retry.",
+    vi: "Không tải được tệp lên. Kiểm tra kết nối rồi thử lại.",
+  },
+  attachmentUploadInvalid: {
+    en: "Upload failed. Try selecting the file again.",
+    vi: "Tải tệp lên thất bại. Hãy chọn lại tệp.",
+  },
   memberChatBlocked: {
     en: "Chat is not enabled for this workspace. Ask a workspace admin to enable member chat.",
     vi: "Chat chưa được bật cho workspace này. Hãy nhờ quản trị viên workspace bật chat cho thành viên.",

@@ -234,9 +234,7 @@ describe("member chat budget admission", () => {
 
   test("policy update never resets usage rows", async () => {
     const day = utcDay(NOW);
-    await db.execute(
-      sql`UPDATE workspaces SET member_chat_daily_cap_vnd = 9000 WHERE id = ${ws}`,
-    );
+    await db.execute(sql`UPDATE workspaces SET member_chat_daily_cap_vnd = 9000 WHERE id = ${ws}`);
     expect(await memberUsed("u1", day)).toBe(800);
   });
 });

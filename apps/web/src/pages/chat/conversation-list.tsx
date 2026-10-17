@@ -200,10 +200,10 @@ export function ConversationList({
   for (const c of items) {
     const d = new Date(c.updated_at);
     const now = new Date();
-    const startOfDay = (x: Date) =>
-      new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
     const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
-    const label = dayDiff <= 0 ? t("today") : dayDiff === 1 ? t("yesterday") : dayFormatter.format(d);
+    const label =
+      dayDiff <= 0 ? t("today") : dayDiff === 1 ? t("yesterday") : dayFormatter.format(d);
     if (label !== currentDay) {
       groups.push({ label, items: [] });
       currentDay = label;
@@ -252,10 +252,7 @@ export function ConversationList({
         <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto" aria-label={t("conversations")}>
           {groups.map((g) => (
             <li key={g.label} className="group relative">
-              <div
-                aria-hidden
-                className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground"
-              >
+              <div aria-hidden className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">
                 {g.label}
               </div>
               <ul>

@@ -167,9 +167,7 @@ export async function loadOwnedAttachment(
   const rows = await db
     .select()
     .from(chatAttachments)
-    .where(
-      and(eq(chatAttachments.id, attachmentId), eq(chatAttachments.workspace_id, workspaceId)),
-    )
+    .where(and(eq(chatAttachments.id, attachmentId), eq(chatAttachments.workspace_id, workspaceId)))
     .limit(1);
   const row = rows[0];
   if (!row || row.user_id !== userId) return { error: jsonError(404, "NOT_FOUND", "Not found") };
@@ -203,7 +201,8 @@ export const attachmentRoutes = (
         const roleErr = await requireWsRole(db, params.workspaceId, userId, "member");
         if (roleErr) return roleErr;
 
-        const declaredMime = (request.headers.get("content-type") ?? "").split(";")[0]?.trim() ?? "";
+        const declaredMime =
+          (request.headers.get("content-type") ?? "").split(";")[0]?.trim() ?? "";
         const isImage = IMAGE_MIMES.has(declaredMime);
         const isText = declaredMime === "text/plain";
         if (!isImage && !isText)
@@ -369,8 +368,7 @@ export const attachmentRoutes = (
           )
           .limit(1);
         const row = rows[0];
-        if (!row || row.user_id !== userId)
-          return jsonError(404, "NOT_FOUND", "Not found");
+        if (!row || row.user_id !== userId) return jsonError(404, "NOT_FOUND", "Not found");
         try {
           removeAttachmentFile(attachmentDir(env), row.id);
         } catch {

@@ -68,7 +68,9 @@ export async function runAttachmentGc(
           db
             .select({ one: sql<number>`1` })
             .from(chatConversations)
-            .where(sql`${chatConversations.messages}::text LIKE ${"%"} || ${chatAttachments.id} || ${"%"}`),
+            .where(
+              sql`${chatConversations.messages}::text LIKE ${"%"} || ${chatAttachments.id} || ${"%"}`,
+            ),
         ),
       ),
     )

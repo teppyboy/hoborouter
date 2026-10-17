@@ -47,10 +47,7 @@ export const adminWalletPendingRoutes = (db: Db, auth: BetterAuthInstance) =>
       // with the hold not yet resolved (settled/released).
       const where = and(
         eq(requestsTable.workspace_id, params.workspaceId),
-        or(
-          ne(requestsTable.dispatch_state, "terminal"),
-          eq(billingReservations.status, "held"),
-        ),
+        or(ne(requestsTable.dispatch_state, "terminal"), eq(billingReservations.status, "held")),
       );
       const totalRows = await db
         .select({ n: count() })

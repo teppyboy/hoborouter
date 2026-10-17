@@ -812,7 +812,9 @@ function gatewayHandler(
     }
     const memberRemaining = memberCtx?.remainingVnd ?? null;
     const availableCapVnd = Math.min(
-      keyBudget.remaining === null ? walletAvailable : Math.min(walletAvailable, keyBudget.remaining),
+      keyBudget.remaining === null
+        ? walletAvailable
+        : Math.min(walletAvailable, keyBudget.remaining),
       memberRemaining ?? Number.MAX_SAFE_INTEGER,
     );
 
@@ -1004,9 +1006,7 @@ function gatewayHandler(
         fxRate,
         capVnd,
         ...(limiter ? { funding: { underLimit: limiter.underLimit } } : {}),
-        ...(memberCtx && key.owner_user_id
-          ? { memberBudget: { userId: key.owner_user_id } }
-          : {}),
+        ...(memberCtx && key.owner_user_id ? { memberBudget: { userId: key.owner_user_id } } : {}),
         keyBudgetPeriodStart: budgetPeriodStart,
         now: Date.now(),
       });

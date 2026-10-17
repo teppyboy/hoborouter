@@ -147,7 +147,12 @@ const mockFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<
       nextCursor: null,
     });
   if (path === "/api/v1/workspaces/ws1/chat-key" && method === "POST")
-    return jsonRes(200, { id: "k1", plaintext: "sk-hbr-TESTKEY123", name: "Chat", purpose: "chat" });
+    return jsonRes(200, {
+      id: "k1",
+      plaintext: "sk-hbr-TESTKEY123",
+      name: "Chat",
+      purpose: "chat",
+    });
   if (/\/chats\/[^/]+$/.test(path) && method === "PUT")
     return jsonRes(200, snapshot(path.split("/").at(-1)!, 99, []));
   return jsonRes(200, {});
@@ -171,8 +176,11 @@ const catalogFixture = {
 };
 
 mock.module("@tanstack/react-router", () => ({
-  Link: ({ to, className, children }: { to: string; className?: string; children: ReactNode }) =>
-    <a href={to} className={className}>{children}</a>,
+  Link: ({ to, className, children }: { to: string; className?: string; children: ReactNode }) => (
+    <a href={to} className={className}>
+      {children}
+    </a>
+  ),
 }));
 mock.module("../apps/web/src/lib/auth", () => ({
   useSession: () => ({ data: { user: { id: sessionUserId } }, isPending: false }),
@@ -194,16 +202,19 @@ async function waitFor(cond: () => boolean, label: string, timeoutMs = 4000) {
   const start = Date.now();
   while (!cond()) {
     if (Date.now() - start > timeoutMs)
-      throw new Error(`waitFor timeout: ${label} | BODY=${document.body.textContent?.slice(0, 200)}`);
+      throw new Error(
+        `waitFor timeout: ${label} | BODY=${document.body.textContent?.slice(0, 200)}`,
+      );
     await flush();
   }
 }
 
 beforeAll(async () => {
-  const win = new JSDOM("", { url: "http://localhost:5173", pretendToBeVisual: true }).window as unknown as Record<string, unknown>;
+  const win = new JSDOM("", { url: "http://localhost:5173", pretendToBeVisual: true })
+    .window as unknown as Record<string, unknown>;
   for (const k of GLOBAL_KEYS) originals[k] = Object.getOwnPropertyDescriptor(globalThis, k);
   for (const k of GLOBAL_KEYS) (globalThis as Record<string, unknown>)[k] = win[k];
-  jsdomWindow = (win as { close: () => void });
+  jsdomWindow = win as { close: () => void };
   globalThis.fetch = mockFetch as typeof fetch;
   ({ createRoot } = await import("react-dom/client"));
   ({ ChatPage } = await import("../apps/web/src/pages/chat"));
@@ -315,8 +326,8 @@ test("editing a user turn forks with the new content and never auto-fires the pa
   resetResponder();
   await mountPage();
   await openConversation();
-  const editButton = Array.from(document.querySelectorAll("button")).find((b) =>
-    b.textContent?.trim() === "Edit message",
+  const editButton = Array.from(document.querySelectorAll("button")).find(
+    (b) => b.textContent?.trim() === "Edit message",
   );
   expect(editButton).toBeDefined();
   click(editButton!);
@@ -324,7 +335,9 @@ test("editing a user turn forks with the new content and never auto-fires the pa
     () => document.querySelector('textarea[aria-label="Edit message"]') !== null,
     "edit field rendered",
   );
-  const editor = document.querySelector('textarea[aria-label="Edit message"]') as HTMLTextAreaElement;
+  const editor = document.querySelector(
+    'textarea[aria-label="Edit message"]',
+  ) as HTMLTextAreaElement;
   setInput(editor, "edited question");
   click(buttonByText("Save")!);
   await waitFor(() => forkBodies.length === 1, "fork dispatched");
@@ -353,10 +366,7 @@ test("402 keeps the transcript and offers the top-up link", async () => {
   await openConversation();
   setInput(textarea(), "hello");
   click(buttonByLabel("Send message")!);
-  await waitFor(
-    () => bodyText().includes("Insufficient wallet balance"),
-    "wallet error shown",
-  );
+  await waitFor(() => bodyText().includes("Insufficient wallet balance"), "wallet error shown");
   const link = document.querySelector('a[href="/billing/credits"]');
   expect(link).toBeDefined();
   // Partial-failure semantics: the user turn stays visible and is persisted.

@@ -170,11 +170,21 @@ describe("checkAndReserveKeyBudget", () => {
     const { key } = await seedKey(db, { budgetVnd: 1000, period: "daily" });
     await checkAndReserveKeyBudget(db, { apiKeyId: key, capVnd: 400, now: T0 });
     await db.transaction(async (tx) => {
-      await settleKeyBudgetHold(tx, { apiKeyId: key, holdVnd: 400, chargedVnd: 150, periodStart: null });
+      await settleKeyBudgetHold(tx, {
+        apiKeyId: key,
+        holdVnd: 400,
+        chargedVnd: 150,
+        periodStart: null,
+      });
     });
     expect(await usedOf(db, key)).toBe(150);
     await db.transaction(async (tx) => {
-      await settleKeyBudgetHold(tx, { apiKeyId: key, holdVnd: 400, chargedVnd: 400, periodStart: null });
+      await settleKeyBudgetHold(tx, {
+        apiKeyId: key,
+        holdVnd: 400,
+        chargedVnd: 400,
+        periodStart: null,
+      });
     });
     expect(await usedOf(db, key)).toBe(400); // 150 - 400 clamped to 0, + 400
   });

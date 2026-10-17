@@ -1,12 +1,5 @@
 import * as React from "react";
-import {
-  ArrowDown,
-  FileText,
-  ImageIcon,
-  Pencil,
-  RefreshCw,
-  GitFork,
-} from "lucide-react";
+import { ArrowDown, FileText, ImageIcon, Pencil, RefreshCw, GitFork } from "lucide-react";
 import { ChatMarkdown } from "../../components/chat-markdown";
 import { CopyButton } from "../../components/page";
 import { Button } from "../../components/ui/button";

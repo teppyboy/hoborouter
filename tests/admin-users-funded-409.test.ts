@@ -40,16 +40,20 @@ const removeUser = (userId: string, body?: unknown) =>
   );
 
 async function addUser(id: string, email: string, instanceAdmin = false) {
-  await q(`insert into users (id, name, email, created_at, updated_at) values ($1, $1, $2, $3, $3)`, [
-    id,
-    email,
-    NOW,
-  ]);
+  await q(
+    `insert into users (id, name, email, created_at, updated_at) values ($1, $1, $2, $3, $3)`,
+    [id, email, NOW],
+  );
   if (instanceAdmin)
     await q(`insert into instance_admins (user_id, created_at) values ($1, $2)`, [id, NOW]);
 }
 
-async function addFundedWorkspace(wsId: string, ownerId: string, balance: number, reserved: number) {
+async function addFundedWorkspace(
+  wsId: string,
+  ownerId: string,
+  balance: number,
+  reserved: number,
+) {
   await q(`insert into workspaces (id, name, status, created_at) values ($1, $1, 'active', $2)`, [
     wsId,
     NOW,
@@ -117,7 +121,11 @@ describe("WORKSPACE_FUNDED 409 wallet snapshot", () => {
         available_vnd: 38000,
       },
     ]);
-    for (const v of [ws?.wallets[0]?.balance_vnd, ws?.wallets[0]?.reserved_vnd, ws?.wallets[0]?.available_vnd]) {
+    for (const v of [
+      ws?.wallets[0]?.balance_vnd,
+      ws?.wallets[0]?.reserved_vnd,
+      ws?.wallets[0]?.available_vnd,
+    ]) {
       expect(Number.isSafeInteger(v)).toBe(true);
     }
     // Guard fired before any mutation: money rows intact.

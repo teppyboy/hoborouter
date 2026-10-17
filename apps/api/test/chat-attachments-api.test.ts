@@ -3,16 +3,22 @@
 // orphan/expired GC, and DB-failure cleanup. Focused lane tests only.
 import { test, expect, describe, afterAll } from "bun:test";
 import { Elysia } from "elysia";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { chatAttachments, chatConversations } from "@hoborouter/db";
-import {
-  CHAT_ATTACHMENT_QUOTA_BYTES,
-  CHAT_ATTACHMENT_TTL_MS,
-} from "@hoborouter/shared";
+import { CHAT_ATTACHMENT_QUOTA_BYTES, CHAT_ATTACHMENT_TTL_MS } from "@hoborouter/shared";
 import { makeApp, signUp, createWorkspace, addMember, userIdByEmail, q } from "./helpers";
 import { attachmentRoutes, decodeFilename } from "../src/routes/attachments";
 
@@ -51,7 +57,10 @@ function attReq(
     headers?: Record<string, string>;
   } = {},
 ) {
-  const headers: Record<string, string> = { ...(opts.cookie ? { origin: "http://localhost:3000" } : {}), ...opts.headers };
+  const headers: Record<string, string> = {
+    ...(opts.cookie ? { origin: "http://localhost:3000" } : {}),
+    ...opts.headers,
+  };
   if (opts.cookie) headers.cookie = opts.cookie;
   return attachmentApp.handle(
     new Request("http://localhost:3000" + path, {
@@ -62,7 +71,12 @@ function attReq(
   );
 }
 
-async function upload(cookie: string, wsId: string, body: BodyInit, headers: Record<string, string>) {
+async function upload(
+  cookie: string,
+  wsId: string,
+  body: BodyInit,
+  headers: Record<string, string>,
+) {
   return attReq(`/api/v1/workspaces/${wsId}/attachments`, {
     method: "POST",
     cookie,
@@ -184,19 +198,32 @@ describe("auth boundary", () => {
   test("GET/DELETE of another member's attachment is 404, even in the same workspace", async () => {
     const { body } = await uploadText();
     const id = String(body.id);
-    expect((await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, { cookie: otherCookie })).status).toBe(404);
     expect(
-      await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, { method: "DELETE", cookie: otherCookie }),
+      (await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, { cookie: otherCookie }))
+        .status,
+    ).toBe(404);
+    expect(
+      await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, {
+        method: "DELETE",
+        cookie: otherCookie,
+      }),
     ).toMatchObject({ status: 404 });
     // A different workspace the requester belongs to: still 404 (not a leak).
-    expect((await attReq(`/api/v1/workspaces/${otherWsId}/attachments/${id}`, { cookie: otherCookie })).status).toBe(404);
+    expect(
+      (await attReq(`/api/v1/workspaces/${otherWsId}/attachments/${id}`, { cookie: otherCookie }))
+        .status,
+    ).toBe(404);
   });
 
   test("unsafe cookie methods reject absent, empty, malformed, and untrusted Origin; trusted origin works", async () => {
     const absentUpload = await attachmentApp.handle(
       new Request(`http://localhost:3000/api/v1/workspaces/${wsId}/attachments`, {
         method: "POST",
-        headers: { cookie: ownerCookie, "content-type": "text/plain", "x-hbr-filename": "file.txt" },
+        headers: {
+          cookie: ownerCookie,
+          "content-type": "text/plain",
+          "x-hbr-filename": "file.txt",
+        },
         body: "x",
       }),
     );
@@ -223,36 +250,51 @@ describe("auth boundary", () => {
       origin: "http://localhost:3000",
     });
     expect(trusted.status).toBe(201);
-    const evilDelete = await attReq(`/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`, {
-      method: "DELETE",
-      cookie: ownerCookie,
-      headers: { origin: "https://evil.example" },
-    });
+    const evilDelete = await attReq(
+      `/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`,
+      {
+        method: "DELETE",
+        cookie: ownerCookie,
+        headers: { origin: "https://evil.example" },
+      },
+    );
     expect(evilDelete.status).toBe(403);
     const absentDelete = await attachmentApp.handle(
-      new Request(`http://localhost:3000/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`, {
-        method: "DELETE",
-        headers: { cookie: ownerCookie },
-      }),
+      new Request(
+        `http://localhost:3000/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`,
+        {
+          method: "DELETE",
+          headers: { cookie: ownerCookie },
+        },
+      ),
     );
     expect(absentDelete.status).toBe(403);
-    const missingDelete = await attReq(`/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`, {
-      method: "DELETE",
-      cookie: ownerCookie,
-      headers: { origin: "" },
-    });
+    const missingDelete = await attReq(
+      `/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`,
+      {
+        method: "DELETE",
+        cookie: ownerCookie,
+        headers: { origin: "" },
+      },
+    );
     expect(missingDelete.status).toBe(403);
-    const malformedDelete = await attReq(`/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`, {
-      method: "DELETE",
-      cookie: ownerCookie,
-      headers: { origin: "not a url" },
-    });
+    const malformedDelete = await attReq(
+      `/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`,
+      {
+        method: "DELETE",
+        cookie: ownerCookie,
+        headers: { origin: "not a url" },
+      },
+    );
     expect(malformedDelete.status).toBe(403);
-    const trustedDelete = await attReq(`/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`, {
-      method: "DELETE",
-      cookie: ownerCookie,
-      headers: { origin: "http://localhost:3000" },
-    });
+    const trustedDelete = await attReq(
+      `/api/v1/workspaces/${wsId}/attachments/00000000-0000-4000-8000-000000000000`,
+      {
+        method: "DELETE",
+        cookie: ownerCookie,
+        headers: { origin: "http://localhost:3000" },
+      },
+    );
     expect(trustedDelete.status).toBe(404);
   });
 });
@@ -267,7 +309,9 @@ describe("download + delete lifecycle", () => {
     rmSync(path);
     symlinkSync(target, path);
 
-    const res = await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, { cookie: ownerCookie });
+    const res = await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, {
+      cookie: ownerCookie,
+    });
     expect(res.status).toBe(410);
     expect(await res.text()).not.toContain("secret target bytes");
   });
@@ -293,8 +337,17 @@ describe("download + delete lifecycle", () => {
       .update(chatAttachments)
       .set({ expires_at: Date.now() - 1 })
       .where(eq(chatAttachments.id, id));
-    expect((await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, { cookie: ownerCookie })).status).toBe(410);
-    const row = (await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)).at(0);
+    expect(
+      (await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, { cookie: ownerCookie }))
+        .status,
+    ).toBe(410);
+    const row = (
+      await q<{ deleted_at: number | null }>(
+        db,
+        "SELECT deleted_at FROM chat_attachments WHERE id = ?",
+        id,
+      )
+    ).at(0);
     expect(row).toBeDefined();
     expect(row!.deleted_at).toBeNull(); // expired != deleted; GC will tombstone
   });
@@ -312,16 +365,27 @@ describe("download + delete lifecycle", () => {
     });
     expect(response).toMatchObject({ status: 200 });
     const afterFailure = (
-      await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)
+      await q<{ deleted_at: number | null }>(
+        db,
+        "SELECT deleted_at FROM chat_attachments WHERE id = ?",
+        id,
+      )
     )[0]!;
     expect(afterFailure.deleted_at).toBeNull();
 
     rmSync(path, { recursive: true });
     writeFileSync(path, "retry bytes");
-    await db.update(chatAttachments).set({ expires_at: Date.now() - 1 }).where(eq(chatAttachments.id, id));
+    await db
+      .update(chatAttachments)
+      .set({ expires_at: Date.now() - 1 })
+      .where(eq(chatAttachments.id, id));
     const result = await runAttachmentGc(db, env);
     const afterRetry = (
-      await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)
+      await q<{ deleted_at: number | null }>(
+        db,
+        "SELECT deleted_at FROM chat_attachments WHERE id = ?",
+        id,
+      )
     )[0]!;
     expect(result.expired).toBeGreaterThanOrEqual(1);
     expect(afterRetry.deleted_at).not.toBeNull();
@@ -334,15 +398,30 @@ describe("download + delete lifecycle", () => {
     const file = attachmentPath(attachmentDir(env), id);
     expect(existsSync(file)).toBe(true);
     expect(
-      await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, { method: "DELETE", cookie: ownerCookie }),
+      await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, {
+        method: "DELETE",
+        cookie: ownerCookie,
+      }),
     ).toMatchObject({ status: 200 });
     expect(existsSync(file)).toBe(false);
     // Idempotent retry after the file is already gone.
     expect(
-      await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, { method: "DELETE", cookie: ownerCookie }),
+      await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, {
+        method: "DELETE",
+        cookie: ownerCookie,
+      }),
     ).toMatchObject({ status: 200 });
-    expect((await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, { cookie: ownerCookie })).status).toBe(410);
-    const row2 = (await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)).at(0);
+    expect(
+      (await attReq(`/api/v1/workspaces/${wsId}/attachments/${id}`, { cookie: ownerCookie }))
+        .status,
+    ).toBe(410);
+    const row2 = (
+      await q<{ deleted_at: number | null }>(
+        db,
+        "SELECT deleted_at FROM chat_attachments WHERE id = ?",
+        id,
+      )
+    ).at(0);
     expect(row2!.deleted_at).not.toBeNull();
   });
 
@@ -357,7 +436,10 @@ describe("download + delete lifecycle", () => {
 describe("quota", () => {
   test("quota rejection leaves no metadata row or temp/final file", async () => {
     const seedBytes = 10 * 1024 * 1024;
-    await db.update(chatAttachments).set({ deleted_at: Date.now() }).where(eq(chatAttachments.user_id, ownerId));
+    await db
+      .update(chatAttachments)
+      .set({ deleted_at: Date.now() })
+      .where(eq(chatAttachments.user_id, ownerId));
     const now = Date.now();
     for (let i = 0; i < 50; i++) {
       const id = crypto.randomUUID();
@@ -373,16 +455,27 @@ describe("quota", () => {
         expires_at: now + CHAT_ATTACHMENT_TTL_MS,
       });
     }
-    const beforeRows = await q<{ count: number }>(db, "SELECT count(*)::int as count FROM chat_attachments WHERE user_id = ? AND deleted_at IS NULL", ownerId);
+    const beforeRows = await q<{ count: number }>(
+      db,
+      "SELECT count(*)::int as count FROM chat_attachments WHERE user_id = ? AND deleted_at IS NULL",
+      ownerId,
+    );
     const dir = attachmentDir(env);
     const filesBefore = readdirSync(dir).sort();
     const res = await uploadText(ownerCookie, undefined, "quota-full");
     expect(res.res.status).toBe(413);
     expect((res.body.error as Record<string, unknown>).code).toBe("QUOTA_EXCEEDED");
-    const afterRows = await q<{ count: number }>(db, "SELECT count(*)::int as count FROM chat_attachments WHERE user_id = ? AND deleted_at IS NULL", ownerId);
+    const afterRows = await q<{ count: number }>(
+      db,
+      "SELECT count(*)::int as count FROM chat_attachments WHERE user_id = ? AND deleted_at IS NULL",
+      ownerId,
+    );
     expect(afterRows[0]!.count).toBe(beforeRows[0]!.count);
     expect(readdirSync(dir).sort()).toEqual(filesBefore);
-    await db.update(chatAttachments).set({ deleted_at: Date.now() }).where(eq(chatAttachments.user_id, ownerId));
+    await db
+      .update(chatAttachments)
+      .set({ deleted_at: Date.now() })
+      .where(eq(chatAttachments.user_id, ownerId));
   });
 
   test("concurrent uploads that together exceed 500 MiB cannot both succeed", async () => {
@@ -418,7 +511,10 @@ describe("quota", () => {
       ownerId,
     );
     expect(live[0]!.total).toBeLessThanOrEqual(CHAT_ATTACHMENT_QUOTA_BYTES);
-    await db.update(chatAttachments).set({ deleted_at: Date.now() }).where(eq(chatAttachments.user_id, ownerId));
+    await db
+      .update(chatAttachments)
+      .set({ deleted_at: Date.now() })
+      .where(eq(chatAttachments.user_id, ownerId));
   });
 });
 
@@ -472,7 +568,22 @@ describe("GC", () => {
       user_id: ownerId,
       workspace_id: wsId,
       title: "t",
-      messages: [{ role: "user", content: "see file", attachments: [{ id: referencedId, name: "kept.txt", kind: "text", bytes: 10, mime: "text/plain", expires_at: Date.now() + 1000 }] }],
+      messages: [
+        {
+          role: "user",
+          content: "see file",
+          attachments: [
+            {
+              id: referencedId,
+              name: "kept.txt",
+              kind: "text",
+              bytes: 10,
+              mime: "text/plain",
+              expires_at: Date.now() + 1000,
+            },
+          ],
+        },
+      ],
       version: 1,
       created_at: Date.now(),
       updated_at: Date.now(),
@@ -519,7 +630,11 @@ describe("GC", () => {
 
     const result = await runAttachmentGc(db, env);
     const row = (
-      await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)
+      await q<{ deleted_at: number | null }>(
+        db,
+        "SELECT deleted_at FROM chat_attachments WHERE id = ?",
+        id,
+      )
     )[0]!;
     expect(result.expired).toBe(0);
     expect(row.deleted_at).toBeNull();
@@ -546,7 +661,11 @@ describe("GC", () => {
 
     await runAttachmentGc(db, env);
     const afterFailure = (
-      await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)
+      await q<{ deleted_at: number | null }>(
+        db,
+        "SELECT deleted_at FROM chat_attachments WHERE id = ?",
+        id,
+      )
     )[0]!;
     expect(afterFailure.deleted_at).toBeNull();
 
@@ -554,7 +673,11 @@ describe("GC", () => {
     writeFileSync(attachmentPath(dir, id), "bytes");
     const result = await runAttachmentGc(db, env);
     const afterRetry = (
-      await q<{ deleted_at: number | null }>(db, "SELECT deleted_at FROM chat_attachments WHERE id = ?", id)
+      await q<{ deleted_at: number | null }>(
+        db,
+        "SELECT deleted_at FROM chat_attachments WHERE id = ?",
+        id,
+      )
     )[0]!;
     expect(result.orphaned).toBeGreaterThanOrEqual(1);
     expect(afterRetry.deleted_at).not.toBeNull();
@@ -588,7 +711,13 @@ describe("GC", () => {
       user_id: ownerId,
       workspace_id: wsId,
       title: "limit reference",
-      messages: [{ role: "user", content: "see file", attachments: [{ id: referencedId, name: "limited-ref.txt" }] }],
+      messages: [
+        {
+          role: "user",
+          content: "see file",
+          attachments: [{ id: referencedId, name: "limited-ref.txt" }],
+        },
+      ],
       version: 1,
       created_at: Date.now(),
       updated_at: Date.now(),
@@ -638,7 +767,9 @@ describe("store internals", () => {
     const collision = crypto.randomUUID();
     const tempPath = join(dir, `${collision}.tmp`);
     writeFileSync(tempPath, "do not overwrite");
-    await expect(persistAttachmentFile(dir, collision, new Uint8Array([2]), async () => "ok")).rejects.toThrow();
+    await expect(
+      persistAttachmentFile(dir, collision, new Uint8Array([2]), async () => "ok"),
+    ).rejects.toThrow();
     expect(readFileSync(tempPath, "utf8")).toBe("do not overwrite");
     expect(existsSync(attachmentPath(dir, collision))).toBe(false);
   });
@@ -646,25 +777,31 @@ describe("store internals", () => {
   test("cleans temp and final paths when commit or rename fails", async () => {
     const dir = attachmentDir(env);
     const commitId = crypto.randomUUID();
-    await expect(persistAttachmentFile(dir, commitId, new Uint8Array([1]), async () => {
-      throw new Error("commit failed");
-    })).rejects.toThrow("commit failed");
+    await expect(
+      persistAttachmentFile(dir, commitId, new Uint8Array([1]), async () => {
+        throw new Error("commit failed");
+      }),
+    ).rejects.toThrow("commit failed");
     expect(existsSync(join(dir, `${commitId}.tmp`))).toBe(false);
     expect(existsSync(attachmentPath(dir, commitId))).toBe(false);
 
     const renameId = crypto.randomUUID();
     mkdirSync(attachmentPath(dir, renameId));
-    await expect(persistAttachmentFile(dir, renameId, new Uint8Array([1]), async (finalize) => {
-      finalize();
-      return "ok";
-    })).rejects.toThrow();
+    await expect(
+      persistAttachmentFile(dir, renameId, new Uint8Array([1]), async (finalize) => {
+        finalize();
+        return "ok";
+      }),
+    ).rejects.toThrow();
     expect(existsSync(join(dir, `${renameId}.tmp`))).toBe(false);
 
     const rollbackId = crypto.randomUUID();
-    await expect(persistAttachmentFile(dir, rollbackId, new Uint8Array([1]), async (finalize) => {
-      finalize();
-      throw new Error("transaction commit failed");
-    })).rejects.toThrow("transaction commit failed");
+    await expect(
+      persistAttachmentFile(dir, rollbackId, new Uint8Array([1]), async (finalize) => {
+        finalize();
+        throw new Error("transaction commit failed");
+      }),
+    ).rejects.toThrow("transaction commit failed");
     expect(existsSync(join(dir, `${rollbackId}.tmp`))).toBe(false);
     expect(existsSync(attachmentPath(dir, rollbackId))).toBe(false);
   });
@@ -685,7 +822,11 @@ describe("store internals", () => {
   });
 
   test("withUserLock drains tails after rejection and permits reuse", async () => {
-    await expect(withUserLock("rejecting", async () => { throw new Error("failed"); })).rejects.toThrow("failed");
+    await expect(
+      withUserLock("rejecting", async () => {
+        throw new Error("failed");
+      }),
+    ).rejects.toThrow("failed");
     expect(userLockCount()).toBe(0);
     await expect(withUserLock("rejecting", async () => "reused")).resolves.toBe("reused");
     expect(userLockCount()).toBe(0);

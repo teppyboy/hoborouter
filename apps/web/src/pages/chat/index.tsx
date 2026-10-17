@@ -19,7 +19,14 @@ import type { MemberChatAccess } from "@hoborouter/shared";
 import { api } from "../../lib/api";
 import { formatDate } from "../../lib/format";
 import { ConversationList, conversationListKey } from "./conversation-list";
-import { buildPersistMessages, createRenderCoalescer, findRetryTurn, isEmptyAssistant, type ChatAttachmentRef, type TurnMessage } from "./turn";
+import {
+  buildPersistMessages,
+  createRenderCoalescer,
+  findRetryTurn,
+  isEmptyAssistant,
+  type ChatAttachmentRef,
+  type TurnMessage,
+} from "./turn";
 import { prepareChatSend } from "./prepare-send";
 import { stripAttachments } from "./persistent-attachments";
 import type { ConversationMessage } from "@hoborouter/shared";
@@ -303,10 +310,7 @@ export function ChatPage() {
   const access = useQuery({
     queryKey: ["member-chat-access", workspaceId],
     queryFn: ({ signal }) =>
-      api<MemberChatAccess>(
-        `/api/v1/workspaces/${workspaceId}/member-chat-access`,
-        { signal },
-      ),
+      api<MemberChatAccess>(`/api/v1/workspaces/${workspaceId}/member-chat-access`, { signal }),
     enabled: Boolean(userId && workspaceId),
     retry: false,
   });
@@ -641,10 +645,11 @@ export function ChatPage() {
     const refs = turn.attachments.flatMap((attachment) =>
       attachment.serverRef ? [attachment.serverRef] : [],
     );
-    const msgs = buildPersistMessages(turn.baseMessages, turn.userText, partial).map((message, index) =>
-      message.role === "user" && index === turn.baseMessages.length && refs.length > 0
-        ? { ...message, attachments: refs }
-        : message,
+    const msgs = buildPersistMessages(turn.baseMessages, turn.userText, partial).map(
+      (message, index) =>
+        message.role === "user" && index === turn.baseMessages.length && refs.length > 0
+          ? { ...message, attachments: refs }
+          : message,
     );
     const knownVersion = versionsRef.current.get(turn.chatId);
     try {
@@ -698,7 +703,11 @@ export function ChatPage() {
     }
   }
 
-  async function send(textOverride?: string, isRetry = false, omitIds: ReadonlySet<string> = new Set()) {
+  async function send(
+    textOverride?: string,
+    isRetry = false,
+    omitIds: ReadonlySet<string> = new Set(),
+  ) {
     // Also block while a conversation snapshot is still loading: a send that
     // starts before openChat's response lands would be wiped by the snapshot
     // overwriting optimistic state when it resolves.
@@ -722,9 +731,16 @@ export function ChatPage() {
       ? messages.filter((message) => message.role === "user")[retryTurnIndex]
       : undefined;
     const turnAttachments = isRetry
-      ? (retryUserMessage?.attachments ?? []).map((serverRef) => ({
-          id: serverRef.id, kind: serverRef.kind, name: serverRef.name, bytes: serverRef.bytes, serverRef,
-        } as ChatAttachment))
+      ? (retryUserMessage?.attachments ?? []).map(
+          (serverRef) =>
+            ({
+              id: serverRef.id,
+              kind: serverRef.kind,
+              name: serverRef.name,
+              bytes: serverRef.bytes,
+              serverRef,
+            }) as ChatAttachment,
+        )
       : draft.attachmentsRef.current;
     const retryRetained =
       isRetry && activeChatIdRef.current
@@ -758,9 +774,17 @@ export function ChatPage() {
     // terminal transcript equals the sequential stream with nothing dropped.
     let coalescer: ReturnType<typeof createRenderCoalescer> | null = null;
     const turnIndex = baseMessages.filter((m) => m.role === "user").length;
-    const turnRefs = isRetry ? (retryUserMessage?.attachments ?? []) : turnAttachments.flatMap((attachment) => attachment.serverRef ? [attachment.serverRef] : []);
+    const turnRefs = isRetry
+      ? (retryUserMessage?.attachments ?? [])
+      : turnAttachments.flatMap((attachment) =>
+          attachment.serverRef ? [attachment.serverRef] : [],
+        );
     const outgoing: ConversationMessage[] = [
-      ...baseMessages.map(({ role, content, attachments }) => ({ role, content, ...(role === "user" && attachments ? { attachments } : {}) })),
+      ...baseMessages.map(({ role, content, attachments }) => ({
+        role,
+        content,
+        ...(role === "user" && attachments ? { attachments } : {}),
+      })),
       { role: "user", content: text, ...(turnRefs.length ? { attachments: turnRefs } : {}) },
     ];
     const preparedMessages = omitIds.size > 0 ? stripAttachments(outgoing, omitIds) : outgoing;
@@ -771,7 +795,16 @@ export function ChatPage() {
     const saveTurn = (partial: { content: string; reasoning: string; model?: string }) => {
       if (!canPersist || !chatId || !ws) return Promise.resolve();
       return persistTurn(
-        { seq, idAtSend, chatId, baseMessages, attachments: turnAttachments, userText: text, isFirstTurn, model },
+        {
+          seq,
+          idAtSend,
+          chatId,
+          baseMessages,
+          attachments: turnAttachments,
+          userText: text,
+          isFirstTurn,
+          model,
+        },
         partial,
       );
     };
@@ -795,7 +828,8 @@ export function ChatPage() {
       });
       if (!isCurrent() || ac.signal.aborted) return;
       if (!prepared.ok) {
-        if (prepared.kind === "unavailable") setUnavailableSend({ files: prepared.files, textOverride, isRetry, omitIds });
+        if (prepared.kind === "unavailable")
+          setUnavailableSend({ files: prepared.files, textOverride, isRetry, omitIds });
         else setError(prepared.kind === "tooLarge" ? t("tooLarge") : prepared.error.message);
         return;
       }
@@ -862,7 +896,16 @@ export function ChatPage() {
       // it to role+content.
       setMessages([
         ...baseMessages,
-        { role: "user", content: text, reasoning: "", attachments: isRetry ? retryUserMessage?.attachments : turnAttachments.flatMap((attachment) => attachment.serverRef ? [attachment.serverRef] : []) },
+        {
+          role: "user",
+          content: text,
+          reasoning: "",
+          attachments: isRetry
+            ? retryUserMessage?.attachments
+            : turnAttachments.flatMap((attachment) =>
+                attachment.serverRef ? [attachment.serverRef] : [],
+              ),
+        },
         { role: "assistant", content: "", reasoning: "" },
       ]);
       lastUserRef.current = text;
@@ -1007,15 +1050,15 @@ export function ChatPage() {
   const autoEligible = Boolean(userId && workspaceId);
   const canSend = Boolean(
     (draft.input.trim() || draft.attachments.length > 0) &&
-      draft.attachments.every((attachment) => attachment.serverRef) &&
-      model &&
-      catalogReady &&
-      !streaming &&
-      !conflict &&
-      !loadingChat &&
-      autoEligible &&
-      !memberBlocked &&
-      !memberLimited,
+    draft.attachments.every((attachment) => attachment.serverRef) &&
+    model &&
+    catalogReady &&
+    !streaming &&
+    !conflict &&
+    !loadingChat &&
+    autoEligible &&
+    !memberBlocked &&
+    !memberLimited,
   );
   const showRetry = !streaming && lastUserRef.current !== null;
 
@@ -1201,16 +1244,35 @@ export function ChatPage() {
           </div>
         )}
         {unavailableSend && (
-          <Alert variant="destructive" className="mx-auto max-w-3xl" title={t("attachmentUnavailableTitle")}>
+          <Alert
+            variant="destructive"
+            className="mx-auto max-w-3xl"
+            title={t("attachmentUnavailableTitle")}
+          >
             <p>{t("attachmentUnavailableBody")}</p>
-            <ul className="list-disc pl-5">{unavailableSend.files.map((file) => <li key={file.id}>{file.name}</li>)}</ul>
+            <ul className="list-disc pl-5">
+              {unavailableSend.files.map((file) => (
+                <li key={file.id}>{file.name}</li>
+              ))}
+            </ul>
             <div className="mt-2 flex gap-2">
-              <Button variant="destructive" size="sm" onClick={() => {
-                const ids = new Set([...unavailableSend.omitIds, ...unavailableSend.files.map((file) => file.id)]);
-                setUnavailableSend(null);
-                void send(unavailableSend.textOverride, unavailableSend.isRetry, ids);
-              }}>{t("omitUnavailable")}</Button>
-              <Button variant="outline" size="sm" onClick={() => setUnavailableSend(null)}>{t("cancelOmit")}</Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  const ids = new Set([
+                    ...unavailableSend.omitIds,
+                    ...unavailableSend.files.map((file) => file.id),
+                  ]);
+                  setUnavailableSend(null);
+                  void send(unavailableSend.textOverride, unavailableSend.isRetry, ids);
+                }}
+              >
+                {t("omitUnavailable")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setUnavailableSend(null)}>
+                {t("cancelOmit")}
+              </Button>
             </div>
           </Alert>
         )}
@@ -1301,7 +1363,11 @@ export function ChatPage() {
             <Alert
               variant="destructive"
               className="mx-auto max-w-3xl"
-              onDismiss={() => void queryClient.invalidateQueries({ queryKey: ["member-chat-access", workspaceId] })}
+              onDismiss={() =>
+                void queryClient.invalidateQueries({
+                  queryKey: ["member-chat-access", workspaceId],
+                })
+              }
               dismissLabel={t("dismissAlert")}
             >
               {t("memberChatBlocked")}

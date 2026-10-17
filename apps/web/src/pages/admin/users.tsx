@@ -42,7 +42,6 @@ import { useWorkspaceStore } from "../../lib/workspace";
 import { AdminGate, useAdminQuery, type AdminModel } from "./shared";
 import { useT } from "../../lib/i18n/t";
 
-
 // Admin users copy: inline LocaleEntry set (see lib/i18n/common.ts). Names,
 // emails, identifiers and role values (admin/user badges) are never translated.
 const usersCopy = {
@@ -452,7 +451,12 @@ export default function AdminUsersPage() {
     if (sp.get("user")) setDeepUser(sp.get("user"));
     if (sp.get("ws")) setDeepWs(sp.get("ws"));
   }, []);
-  const params = new URLSearchParams({ sort, order, limit: String(USERS_LIMIT), offset: String(offset) });
+  const params = new URLSearchParams({
+    sort,
+    order,
+    limit: String(USERS_LIMIT),
+    offset: String(offset),
+  });
   if (q) params.set("q", q);
   if (role) params.set("role", role);
   const query = useAdminQuery<UsersPageData>(
@@ -569,7 +573,11 @@ export function UsersTable({
       >
         {label}
         {serverControls.sort === key &&
-          (serverControls.order === "asc" ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />)}
+          (serverControls.order === "asc" ? (
+            <ArrowUp className="size-3" />
+          ) : (
+            <ArrowDown className="size-3" />
+          ))}
       </button>
     ) : (
       <>{label}</>
@@ -627,7 +635,9 @@ export function UsersTable({
       header: "ID",
       // Copy lives inside the detail dialog/context menu; no per-row button.
       enableSorting: false,
-      cell: (c) => <span className="font-mono text-xs">{(c.getValue() as string).slice(0, 8)}…</span>,
+      cell: (c) => (
+        <span className="font-mono text-xs">{(c.getValue() as string).slice(0, 8)}…</span>
+      ),
     },
   ];
 
@@ -689,7 +699,9 @@ export function UsersTable({
               variant="outline"
               size="sm"
               disabled={serverControls.offset + serverControls.limit >= serverControls.total}
-              onClick={() => serverControls.onOffsetChange(serverControls.offset + serverControls.limit)}
+              onClick={() =>
+                serverControls.onOffsetChange(serverControls.offset + serverControls.limit)
+              }
             >
               {t("nextPage")}
             </Button>
@@ -717,9 +729,13 @@ export function UsersTable({
         <DropdownMenuContent align="start">
           {menu && (
             <>
-              <DropdownMenuItem onSelect={() => setToDetail(menu.user)}>{t("viewDetail")}</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setToDetail(menu.user)}>
+                {t("viewDetail")}
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setToEdit(menu.user)}>{t("edit")}</DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setToReset(menu.user)}>{t("resetPassword")}</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setToReset(menu.user)}>
+                {t("resetPassword")}
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
                   setPreselectWs(null);
@@ -728,7 +744,9 @@ export function UsersTable({
               >
                 {t("manageWallet")}
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setToKeys(menu.user)}>{t("manageKeys")}</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setToKeys(menu.user)}>
+                {t("manageKeys")}
+              </DropdownMenuItem>
               {menu.user.id !== currentUserId && (
                 <>
                   <DropdownMenuSeparator />
@@ -762,7 +780,10 @@ export function UsersTable({
           </DialogHeader>
           {removeError && <p className="text-destructive text-sm">{removeError}</p>}
           {blocked && toRemove && (
-            <section aria-label={t("moneyBlocking")} className="space-y-2 rounded-md border p-3 text-sm">
+            <section
+              aria-label={t("moneyBlocking")}
+              className="space-y-2 rounded-md border p-3 text-sm"
+            >
               <p className="font-medium">{t("moneyBlocking")}</p>
               <p className="text-muted-foreground text-xs">{t("resolutionHint")}</p>
               {blocked.map((ws) => (
@@ -795,7 +816,8 @@ export function UsersTable({
                         </button>
                       ) : (
                         <span>
-                          {t("balanceLabel")}: {formatVnd(w.balance_vnd)} — {t("subscriptionWalletNote")}
+                          {t("balanceLabel")}: {formatVnd(w.balance_vnd)} —{" "}
+                          {t("subscriptionWalletNote")}
                         </span>
                       )}
                       <button
@@ -1132,8 +1154,8 @@ function RemoveButton({
       if (err instanceof ApiError && err.code === "WORKSPACE_FUNDED") {
         const funded = err as ApiError & SoleOwnerWorkspaces;
         onBlocked(
-          (funded.workspaces ?? []).filter(
-            (w): w is BlockedWorkspace => Array.isArray((w as BlockedWorkspace).wallets),
+          (funded.workspaces ?? []).filter((w): w is BlockedWorkspace =>
+            Array.isArray((w as BlockedWorkspace).wallets),
           ),
         );
       }
@@ -2059,7 +2081,13 @@ function ManageKeysDialog({ user, onClose }: { user: AdminUser; onClose: () => v
 
 // --- Bounded pending-billing inspection (from the 409 blocked-wallet section) ---
 
-function PendingList({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
+function PendingList({
+  workspaceId,
+  workspaceName,
+}: {
+  workspaceId: string;
+  workspaceName: string;
+}) {
   const t = useT(usersCopy);
   const pendingQuery = useQuery<{ data: PendingRecord[]; total: number; limit: number }>({
     queryKey: ["admin", "pending-billing", workspaceId],
@@ -2092,7 +2120,9 @@ function PendingList({ workspaceId, workspaceName }: { workspaceId: string; work
             <Badge variant="outline">{r.dispatch_state}</Badge>
             <span className="text-muted-foreground">
               {t("statusLabel")}: {r.status} · {t("requestState")}:{" "}
-              {r.billing_reservation ? `${r.billing_reservation.status} · ${formatVnd(r.billing_reservation.cap_vnd)}` : "—"}
+              {r.billing_reservation
+                ? `${r.billing_reservation.status} · ${formatVnd(r.billing_reservation.cap_vnd)}`
+                : "—"}
             </span>
             <span className="text-muted-foreground">{t("openRequestLog")}</span>
           </li>

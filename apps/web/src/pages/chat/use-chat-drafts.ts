@@ -1,10 +1,5 @@
 import * as React from "react";
-import {
-  clearChatDraft,
-  readChatDraft,
-  writeChatDraft,
-  type ChatDraftScope,
-} from "./draft";
+import { clearChatDraft, readChatDraft, writeChatDraft, type ChatDraftScope } from "./draft";
 
 const DRAFT_DEBOUNCE_MS = 200;
 

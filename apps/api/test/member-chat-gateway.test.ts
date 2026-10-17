@@ -26,9 +26,23 @@ const NOW = Date.now();
 let db: Awaited<ReturnType<typeof createTestDb>>["db"];
 
 async function seedMemberGateway(cap: number | null, enabled: boolean) {
-  await q(db, "INSERT INTO users (id, name, email, created_at, updated_at) VALUES ('u-mc','M','u-mc@t.local',?,?)", NOW, NOW);
-  await q(db, "INSERT INTO workspaces (id, name, status, created_at, member_chat_enabled, member_chat_daily_cap_vnd) VALUES ('ws-mc','mc','active',?,?,?)", NOW, enabled, cap);
-  await q(db, "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ('ws-mc','u-mc','member')");
+  await q(
+    db,
+    "INSERT INTO users (id, name, email, created_at, updated_at) VALUES ('u-mc','M','u-mc@t.local',?,?)",
+    NOW,
+    NOW,
+  );
+  await q(
+    db,
+    "INSERT INTO workspaces (id, name, status, created_at, member_chat_enabled, member_chat_daily_cap_vnd) VALUES ('ws-mc','mc','active',?,?,?)",
+    NOW,
+    enabled,
+    cap,
+  );
+  await q(
+    db,
+    "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ('ws-mc','u-mc','member')",
+  );
   await q(
     db,
     "INSERT INTO api_keys (id, workspace_id, key_hash, key_prefix, name, status, created_at, purpose, owner_user_id) VALUES ('key-mc','ws-mc',?,?,'member','active',?,'chat_member','u-mc')",
@@ -73,7 +87,12 @@ async function seedMemberGateway(cap: number | null, enabled: boolean) {
 }
 
 let gw: (req: Request) => Promise<Response>;
-const gwr = (path: string, body: unknown, key = MEMBER_KEY, extraHeaders: Record<string, string> = {}) =>
+const gwr = (
+  path: string,
+  body: unknown,
+  key = MEMBER_KEY,
+  extraHeaders: Record<string, string> = {},
+) =>
   gw(
     new Request("http://localhost" + path, {
       method: "POST",
@@ -105,8 +124,15 @@ function startFakeCpa() {
           id: "chatcmpl-1",
           object: "chat.completion",
           model: UPSTREAM_MODEL,
-          choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
-          usage: { prompt_tokens: 10, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 0 } },
+          choices: [
+            { index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" },
+          ],
+          usage: {
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            prompt_tokens_details: { cached_tokens: 0 },
+            completion_tokens_details: { reasoning_tokens: 0 },
+          },
         }),
         { headers: { "content-type": "application/json" } },
       );
@@ -147,13 +173,23 @@ describe("chat_member gateway restriction", () => {
   test("chat_member keys are rejected on /v1/responses and /v1/messages", async () => {
     const res1 = await gwr("/v1/responses", { model: PUBLIC_MODEL, input: "hi" });
     expect(res1.status).toBe(403);
-    expect(((await res1.json()) as { error: { code: string } }).error.code).toBe("member_key_restricted");
-    const res2 = await gwr("/v1/messages", { model: PUBLIC_MODEL, max_tokens: 10, messages: [{ role: "user", content: "hi" }] });
+    expect(((await res1.json()) as { error: { code: string } }).error.code).toBe(
+      "member_key_restricted",
+    );
+    const res2 = await gwr("/v1/messages", {
+      model: PUBLIC_MODEL,
+      max_tokens: 10,
+      messages: [{ role: "user", content: "hi" }],
+    });
     expect(res2.status).toBe(403);
   });
 
   test("member chat keys carry the 16MiB body cap; generic keys stay at 1MiB", async () => {
-    const big = { model: PUBLIC_MODEL, max_tokens: 10, messages: [{ role: "user", content: "x".repeat(1_200_000) }] };
+    const big = {
+      model: PUBLIC_MODEL,
+      max_tokens: 10,
+      messages: [{ role: "user", content: "x".repeat(1_200_000) }],
+    };
     // 1.2MiB body: under the member/chat cap (16MiB) -> proceeds past the size gate.
     const memberRes = await gwr(CHAT_PATH, big, MEMBER_KEY);
     expect(memberRes.status).not.toBe(413);
@@ -165,10 +201,15 @@ describe("chat_member gateway restriction", () => {
   test("affordable member cap: small daily cap CLAMPS the forwarded output instead of 402", async () => {
     // Cap 25000 VND: input ~26 + output tokens at 1.3 VND -> thousands of
     // output tokens affordable, far below the 1M-token context request.
-    const res = await gwr(CHAT_PATH, { model: PUBLIC_MODEL, max_tokens: 1_000_000, messages: [{ role: "user", content: "hi" }] });
+    const res = await gwr(CHAT_PATH, {
+      model: PUBLIC_MODEL,
+      max_tokens: 1_000_000,
+      messages: [{ role: "user", content: "hi" }],
+    });
     expect(res.status).toBe(200);
     expect(captured.length).toBeGreaterThan(0);
-    const forwarded = (JSON.parse(captured[captured.length - 1]!.body) as { max_tokens: number }).max_tokens;
+    const forwarded = (JSON.parse(captured[captured.length - 1]!.body) as { max_tokens: number })
+      .max_tokens;
     expect(forwarded).toBeGreaterThan(0);
     expect(forwarded).toBeLessThan(1_000_000);
     // The hold sits on the member counter and settles into it (charged actual).
@@ -182,24 +223,46 @@ describe("chat_member gateway restriction", () => {
     await db
       .update(memberChatUsage)
       .set({ used_vnd: 25000 })
-      .where(and(eq(memberChatUsage.workspace_id, "ws-mc"), eq(memberChatUsage.period_start, utcDay(Date.now()))));
-    const res = await gwr(CHAT_PATH, { model: PUBLIC_MODEL, max_tokens: 10, messages: [{ role: "user", content: "hi" }] });
+      .where(
+        and(
+          eq(memberChatUsage.workspace_id, "ws-mc"),
+          eq(memberChatUsage.period_start, utcDay(Date.now())),
+        ),
+      );
+    const res = await gwr(CHAT_PATH, {
+      model: PUBLIC_MODEL,
+      max_tokens: 10,
+      messages: [{ role: "user", content: "hi" }],
+    });
     expect(res.status).toBe(429);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("member_budget_exceeded");
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "member_budget_exceeded",
+    );
     expect(res.headers.get("retry-after")).toBeTruthy();
     // Restore an empty counter for the policy-off test.
     await db
       .update(memberChatUsage)
       .set({ used_vnd: 0 })
-      .where(and(eq(memberChatUsage.workspace_id, "ws-mc"), eq(memberChatUsage.period_start, utcDay(Date.now()))));
+      .where(
+        and(
+          eq(memberChatUsage.workspace_id, "ws-mc"),
+          eq(memberChatUsage.period_start, utcDay(Date.now())),
+        ),
+      );
   });
 
   test("policy off: new member generations denied; the settled period row is history, not reset", async () => {
     const usedBefore = await memberUsed();
     await q(db, "UPDATE workspaces SET member_chat_enabled = false WHERE id = 'ws-mc'");
-    const res = await gwr(CHAT_PATH, { model: PUBLIC_MODEL, max_tokens: 10, messages: [{ role: "user", content: "hi" }] });
+    const res = await gwr(CHAT_PATH, {
+      model: PUBLIC_MODEL,
+      max_tokens: 10,
+      messages: [{ role: "user", content: "hi" }],
+    });
     expect(res.status).toBe(403);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("member_chat_disabled");
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "member_chat_disabled",
+    );
     expect(await memberUsed()).toBe(usedBefore);
     await q(db, "UPDATE workspaces SET member_chat_enabled = true WHERE id = 'ws-mc'");
   });
@@ -208,9 +271,15 @@ describe("chat_member gateway restriction", () => {
     await db
       .delete(workspaceMembers)
       .where(and(eq(workspaceMembers.workspace_id, "ws-mc"), eq(workspaceMembers.user_id, "u-mc")));
-    const res = await gwr(CHAT_PATH, { model: PUBLIC_MODEL, max_tokens: 10, messages: [{ role: "user", content: "hi" }] });
+    const res = await gwr(CHAT_PATH, {
+      model: PUBLIC_MODEL,
+      max_tokens: 10,
+      messages: [{ role: "user", content: "hi" }],
+    });
     expect(res.status).toBe(403);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("member_chat_disabled");
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "member_chat_disabled",
+    );
     const used = await memberUsed();
     await db
       .insert(workspaceMembers)
@@ -247,6 +316,8 @@ describe("chat_member gateway restriction", () => {
       .where(and(eq(memberChatUsage.workspace_id, "ws-mc"), eq(memberChatUsage.user_id, "u-mc")));
     expect(usedRows.length).toBeGreaterThan(0);
     expect(usedRows[0]!.used).toBeGreaterThan(0);
-    await db.insert(workspaceMembers).values({ workspace_id: "ws-mc", user_id: "u-mc", role: "member" });
+    await db
+      .insert(workspaceMembers)
+      .values({ workspace_id: "ws-mc", user_id: "u-mc", role: "member" });
   });
 });

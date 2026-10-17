@@ -228,7 +228,9 @@ test("list: q search filter goes in the query string, encoded", async () => {
   await listConversations("ws-1", "c1", { q: "truy v\u1ea5n & h\u00e4ck" });
   // URLSearchParams form-encoding (+ for spaces) — the server's URL parser
   // decodes it back to the same string.
-  expect(call(0).url).toBe("/api/v1/workspaces/ws-1/chats?cursor=c1&q=truy+v%E1%BA%A5n+%26+h%C3%A4ck");
+  expect(call(0).url).toBe(
+    "/api/v1/workspaces/ws-1/chats?cursor=c1&q=truy+v%E1%BA%A5n+%26+h%C3%A4ck",
+  );
 });
 
 test("rename: PUT /title sends {version,title}, never the transcript, returns {id,version}", async () => {
@@ -236,7 +238,10 @@ test("rename: PUT /title sends {version,title}, never the transcript, returns {i
     calls.push({ url: String(input), init: init ?? {} });
     return respond(200, { id: "chat-1", version: 9 });
   }) as unknown as typeof fetch;
-  const res = await renameConversation("ws-1", "chat-1", { version: 8, title: "Nuevo t\u00edtulo" });
+  const res = await renameConversation("ws-1", "chat-1", {
+    version: 8,
+    title: "Nuevo t\u00edtulo",
+  });
   expect(res).toEqual({ id: "chat-1", version: 9 });
   expect(call(0).url).toBe("/api/v1/workspaces/ws-1/chats/chat-1/title");
   expect(call(0).init.method).toBe("PUT");

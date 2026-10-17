@@ -110,16 +110,19 @@ interface StorageSlot {
 function resolveStorages(preferred?: KeyStorage | KeyStorage[]): StorageSlot[] {
   if (preferred) {
     const list = Array.isArray(preferred) ? preferred : [preferred];
-    return list.map((store, i) => ({ store, persistent: i !== list.length - 1 || list.length === 1 }));
+    return list.map((store, i) => ({
+      store,
+      persistent: i !== list.length - 1 || list.length === 1,
+    }));
   }
-// localStorage persists across browser sessions (so the same user+workspace
-// reuses its chat key), sessionStorage is the fallback when localStorage is
-// unavailable (private mode, quota errors). MEMBER keys (purpose
-// "chat_member") are sessionStorage-ONLY — they never touch localStorage and
-// are never restored from it — because a member key is a delegated,
-// quota-metered credential that must die with the tab session; the server
-// remains the only quota authority either way. Any access is best-effort:
-// total storage failure degrades to the in-memory cache for this tab only.
+  // localStorage persists across browser sessions (so the same user+workspace
+  // reuses its chat key), sessionStorage is the fallback when localStorage is
+  // unavailable (private mode, quota errors). MEMBER keys (purpose
+  // "chat_member") are sessionStorage-ONLY — they never touch localStorage and
+  // are never restored from it — because a member key is a delegated,
+  // quota-metered credential that must die with the tab session; the server
+  // remains the only quota authority either way. Any access is best-effort:
+  // total storage failure degrades to the in-memory cache for this tab only.
   const slots: StorageSlot[] = [];
   for (const s of [globalThis.localStorage, globalThis.sessionStorage])
     if (s) slots.push({ store: s, persistent: s === globalThis.localStorage });
@@ -335,9 +338,7 @@ export function clearManagedChatKey(
 ): void {
   // Storage is best-effort: the in-memory cache is the primary clearing target
   // and the stores may not exist (tests, non-browser contexts).
-  const slots: StorageSlot[] = storage
-    ? [{ store: storage, persistent: true }]
-    : resolveStorages();
+  const slots: StorageSlot[] = storage ? [{ store: storage, persistent: true }] : resolveStorages();
   if (identity) {
     const ck = cacheKey(identity.userId, identity.workspaceId);
     cache.delete(ck);

@@ -109,7 +109,9 @@ export function useComposerDraft(deps: {
       }
       for (const file of files) validateFile(file);
       if (!workspaceId) throw new AttachmentUploadError("unauthorized", "Sign in to upload files.");
-      const added = await Promise.all(files.map((file) => createPersistedAttachment(workspaceId, file)));
+      const added = await Promise.all(
+        files.map((file) => createPersistedAttachment(workspaceId, file)),
+      );
       if (identityRef.current !== idAtPick || seqRef.current !== genAtPick) return;
       setAttachError(null);
       draftRevisionRef.current += 1;
@@ -118,15 +120,17 @@ export function useComposerDraft(deps: {
       if (identityRef.current !== idAtPick || seqRef.current !== genAtPick) return;
       if (e instanceof AttachError) setAttachError(e);
       else if (e instanceof AttachmentUploadError) {
-        const key = ({
-          unauthorized: "attachmentUploadUnauthorized",
-          forbidden: "attachmentUploadForbidden",
-          tooLarge: "attachmentUploadTooLarge",
-          unsupported: "attachmentUploadUnsupported",
-          quota: "attachmentUploadQuota",
-          network: "attachmentUploadNetwork",
-          invalid: "attachmentUploadInvalid",
-        } as const)[e.kind];
+        const key = (
+          {
+            unauthorized: "attachmentUploadUnauthorized",
+            forbidden: "attachmentUploadForbidden",
+            tooLarge: "attachmentUploadTooLarge",
+            unsupported: "attachmentUploadUnsupported",
+            quota: "attachmentUploadQuota",
+            network: "attachmentUploadNetwork",
+            invalid: "attachmentUploadInvalid",
+          } as const
+        )[e.kind];
         setAttachError(t(key));
       } else setAttachError(e instanceof Error ? e.message : t("attachReadFailed"));
     }

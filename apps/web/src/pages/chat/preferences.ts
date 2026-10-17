@@ -33,7 +33,11 @@ function getPref(key: string): string | null {
   }
 }
 
-export function rememberChatModel(userId: string, workspaceId: string, publicId: string | null): void {
+export function rememberChatModel(
+  userId: string,
+  workspaceId: string,
+  publicId: string | null,
+): void {
   setPref(`${MODEL_PREFIX}${userId}.${workspaceId}`, publicId || null);
 }
 
@@ -41,7 +45,11 @@ export function recallChatModel(userId: string, workspaceId: string): string | n
   return getPref(`${MODEL_PREFIX}${userId}.${workspaceId}`);
 }
 
-export function rememberChatEffort(userId: string, workspaceId: string, effort: string | null): void {
+export function rememberChatEffort(
+  userId: string,
+  workspaceId: string,
+  effort: string | null,
+): void {
   setPref(`${EFFORT_PREFIX}${userId}.${workspaceId}`, effort || null);
 }
 

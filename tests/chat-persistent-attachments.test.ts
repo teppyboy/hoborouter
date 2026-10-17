@@ -33,9 +33,10 @@ const PNG = new Uint8Array([
 ]);
 
 /** Fake fetch mapping attachment ids → bytes or statuses. */
-function fakeFetch(
-  byId: Map<string, { bytes?: Uint8Array; status?: number }>,
-): { fetch: typeof fetch; requested: string[] } {
+function fakeFetch(byId: Map<string, { bytes?: Uint8Array; status?: number }>): {
+  fetch: typeof fetch;
+  requested: string[];
+} {
   const requested: string[] = [];
   const fn = (async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -52,7 +53,12 @@ function fakeFetch(
 const messagesWith = (...msgs: ConversationMessage[]): ConversationMessage[] => msgs;
 
 test("rehydration rebuilds per-user-turn content with indices matching withMultimodalContent", async () => {
-  const imageRef = ref({ kind: "image", mime: "image/png", name: "shot.png", bytes: PNG.byteLength });
+  const imageRef = ref({
+    kind: "image",
+    mime: "image/png",
+    name: "shot.png",
+    bytes: PNG.byteLength,
+  });
   const textRef = ref({ kind: "text", name: "notes.txt", bytes: 5 });
   const messages = messagesWith(
     { role: "user", content: "look", attachments: [imageRef] },
@@ -77,7 +83,9 @@ test("rehydration rebuilds per-user-turn content with indices matching withMulti
   const first = history[0]?.content as unknown as Exclude<UserContent, string>;
   expect(Array.isArray(first)).toBe(true);
   expect(first[0]).toEqual({ type: "text", text: "look" });
-  expect((first[1] as { image_url: { url: string } }).image_url.url).toStartWith("data:image/png;base64,");
+  expect((first[1] as { image_url: { url: string } }).image_url.url).toStartWith(
+    "data:image/png;base64,",
+  );
   // Text turn: fenced inline through buildUserContent. history is the full
   // message array — the second USER turn sits at array index 2.
   const second = history[2]?.content as unknown as Exclude<UserContent, string>;
@@ -149,9 +157,7 @@ test("budget accounting sums across all historical turns (messageRefBytes)", () 
     { role: "user", content: "c", attachments: [ref({ bytes: half + 1 })] },
   ]);
   expect(total).toBe(REHYDRATION_MAX_TOTAL_RAW_BYTES + 1);
-  expect(
-    messageRefBytes([{ role: "assistant", content: "no refs here" }]),
-  ).toBe(0);
+  expect(messageRefBytes([{ role: "assistant", content: "no refs here" }])).toBe(0);
 });
 
 test("estimateEncodedAttachmentBytes applies the 4/3 base64 upper bound", () => {

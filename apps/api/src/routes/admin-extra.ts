@@ -309,8 +309,14 @@ export const adminExtraRoutes = (
             "Invalid query: q, role (admin|member), sort (created_at|email|name), order (asc|desc), limit (1..200), offset (>=0)",
           );
         }
-        const { q: term, role, sort = "created_at", order = "desc", limit = 200, offset = 0 } =
-          parsed.data;
+        const {
+          q: term,
+          role,
+          sort = "created_at",
+          order = "desc",
+          limit = 200,
+          offset = 0,
+        } = parsed.data;
         const conds = [];
         if (term !== undefined) {
           conds.push(

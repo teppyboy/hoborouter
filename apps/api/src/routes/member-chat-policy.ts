@@ -38,8 +38,7 @@ export const memberChatPolicyRoutes = (
 ) => {
   // The actual configured origin (never a permissive wildcard): cookie-session
   // mutations must come from this exact app origin with a JSON content type.
-  const origin = new URL(env.BETTER_AUTH_URL || env.HBR_BASE_URL || "http://localhost:3000")
-    .origin;
+  const origin = new URL(env.BETTER_AUTH_URL || env.HBR_BASE_URL || "http://localhost:3000").origin;
 
   return new Elysia({ name: "member-chat-policy" })
     .get(
@@ -166,10 +165,7 @@ export const memberChatPolicyRoutes = (
           .select({ role: workspaceMembers.role })
           .from(workspaceMembers)
           .where(
-            and(
-              eq(workspaceMembers.workspace_id, params.id),
-              eq(workspaceMembers.user_id, userId),
-            ),
+            and(eq(workspaceMembers.workspace_id, params.id), eq(workspaceMembers.user_id, userId)),
           )
           .limit(1);
         // Any workspace role (owner/admin/member) counts as an authorized

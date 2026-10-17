@@ -30,9 +30,11 @@ const dto = () => ({
   deleted_at: null,
 });
 
-function spyFetch(
-  handler: (url: string, init: RequestInit) => Response | Promise<Response>,
-): { fetch: typeof fetch; urls: string[]; inits: RequestInit[] } {
+function spyFetch(handler: (url: string, init: RequestInit) => Response | Promise<Response>): {
+  fetch: typeof fetch;
+  urls: string[];
+  inits: RequestInit[];
+} {
   const urls: string[] = [];
   const inits: RequestInit[] = [];
   const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
