@@ -224,7 +224,8 @@ const HELPERS = `
       if (els.length === 0) throw new Error('option not found: "' + text + '"');
       const el = els[els.length - 1];
       if (!el.isConnected) throw new Error('option not found: "' + text + '"');
-      el.click();
+      const target = el.matches('button') ? el : el.querySelector('button') ?? el;
+      target.click();
       return els.length;
     },
     // Click a button by text inside an open Radix dialog (avoids matching
@@ -533,7 +534,9 @@ async function setTheme(theme: "dark" | "light") {
     evaluate<boolean>(`document.documentElement.classList.contains('dark') === ${want}`);
   for (let i = 0; i < 4; i++) {
     if (await check()) return;
-    await evaluate(`document.querySelector('button[aria-label^="Theme:"]').click()`);
+    await evaluate(
+      `document.querySelector('button[aria-label="Switch to ${want ? "light" : "dark"} mode"]').click()`,
+    );
     await page.waitForText("Overview");
   }
   if (!(await check())) throw new Error(`could not set theme ${theme}`);
@@ -1200,7 +1203,7 @@ async function main() {
       const inner = log?.firstElementChild; // bubbles render inside the centered column
       if (!inner) return null;
       return { n: inner.children.length,
-        first: inner.children[0]?.textContent,
+        first: inner.children[0]?.querySelector('.wrap-anywhere')?.textContent,
         last: inner.children[inner.children.length - 1]?.textContent };
     })()`);
   // Reply text renders mid-stream; the Send button only returns once the
@@ -1262,7 +1265,7 @@ async function main() {
     const conv = await convLog();
     assert(!!conv, "conversation log rendered");
     assert(conv!.n === 2, `two bubbles (user + assistant), got ${conv!.n}`);
-    assert(conv!.first === "hi", "user bubble shows the sent message");
+    assert(conv!.first === "hi", `user bubble shows the sent message; got ${JSON.stringify(conv)}`);
     assert(
       conv!.last!.includes("Hello from fake/test-model: hi"),
       `assistant bubble has streamed reply, got "${conv!.last!.slice(0, 120)}"`,
@@ -1907,15 +1910,19 @@ async function main() {
     await page.click("Create");
     await page.waitForText(email);
     // Edit name + email via the Edit dialog; table must reflect the change.
-    await page.clickAria(`[aria-label="Edit ${email}"]`);
+    await page.clickAria(`[aria-label="Details for ${email}"]`);
+    await page.waitForText("User details");
+    await page.clickDialog("Edit");
     await page.waitForText("Edit user");
     await page.setInput("Name", newName);
     await page.setInput("Email", newEmail);
     await page.click("Save");
     await page.waitForText(`Updated ${newName}`);
     await page.waitForText(newEmail);
-    // Reset password through the UI's two password fields.
-    await page.clickAria(`[aria-label="Reset password for ${newEmail}"]`);
+    // Reset password through the user detail dialog's action.
+    await page.clickAria(`[aria-label="Details for ${newEmail}"]`);
+    await page.waitForText("User details");
+    await page.clickDialog("Reset password");
     await page.waitForText("Set a new password");
     await page.setInput("New password", newPassword);
     await page.setInput("Confirm new password", newPassword);
@@ -1946,7 +1953,9 @@ async function main() {
       `admin browser session intact after isolated sign-ins, got ${session?.user?.email ?? "null"}`,
     );
     // Remove: throwaway owns no workspaces, so removal must succeed cleanly.
-    await page.clickAria(`[aria-label="Remove ${newEmail}"]`);
+    await page.clickAria(`[aria-label="Details for ${newEmail}"]`);
+    await page.waitForText("User details");
+    await page.clickDialog("Remove");
     await page.waitForText("Remove user?");
     await page.clickDialog("Remove");
     await page.waitForGone(newEmail);
@@ -2095,6 +2104,13 @@ async function main() {
         await goto("/chat");
         await page.waitForText("What would you like to build?");
         await assertNoPageHScroll("chat 390x844");
+        const modelTargetHeight = await evaluate<number>(
+          `document.getElementById('chat-model')?.getBoundingClientRect().height ?? 0`,
+        );
+        assert(
+          modelTargetHeight >= 44,
+          `chat model picker touch target is at least 44px, got ${modelTargetHeight}px`,
+        );
       });
     },
   );
@@ -2552,12 +2568,12 @@ async function main() {
     await goto("/");
     await page.waitForText("Overview");
     const before = await evaluate<string>(
-      `window.__hbr.attr('button[aria-label^="Theme:"]','aria-label')`,
+      `window.__hbr.attr('button[aria-label="Light theme"], button[aria-label="Dark theme"], button[aria-label="System theme"]','aria-label')`,
     );
-    await evaluate(`document.querySelector('button[aria-label^="Theme:"]').click()`);
+    await evaluate(`document.querySelector('button[aria-label="${before}"]').click()`);
     await sleep(200);
     const after = await evaluate<string>(
-      `window.__hbr.attr('button[aria-label^="Theme:"]','aria-label')`,
+      `window.__hbr.attr('button[aria-label="Light theme"], button[aria-label="Dark theme"], button[aria-label="System theme"]','aria-label')`,
     );
     assert(before !== after, `theme changed from ${before} to ${after}`);
     // Persistence: reload and confirm the toggled theme class survives.

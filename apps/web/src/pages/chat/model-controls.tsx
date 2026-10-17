@@ -104,7 +104,7 @@ export function ModelControls(props: ModelControlsProps): React.ReactElement {
           aria-haspopup="listbox"
           aria-controls={panelId}
           aria-label={t("model")}
-          className="flex h-9 w-full min-w-0 max-w-56 items-center justify-between gap-1 rounded-md bg-muted/50 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-9 w-full min-w-0 max-w-56 items-center justify-between gap-1 rounded-md bg-muted/50 px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:h-11"
         >
           <span className="min-w-0 truncate">{pillLabel}</span>
           <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" aria-hidden />
