@@ -114,6 +114,22 @@ const mockFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<
     return Promise.resolve(
       jsonRes(200, { id: "k1", plaintext: "sk-hbr-TESTKEY123", name: "Chat", purpose: "chat" }),
     );
+  if (path === "/api/v1/workspaces/ws1/attachments" && method === "POST") {
+    const file = call.init?.body as File;
+    return Promise.resolve(
+      jsonRes(201, {
+        id: "attachment-1",
+        name: decodeURIComponent(String(new Headers(call.init?.headers).get("X-Hbr-Filename"))),
+        kind: "text",
+        bytes: file.size,
+        mime: "text/plain",
+        expires_at: now + 30 * 24 * 60 * 60 * 1000,
+        workspace_id: "ws1",
+        created_at: now,
+        deleted_at: null,
+      }),
+    );
+  }
   if (/^\/api\/v1\/workspaces\/ws1\/chats\/[^/]+$/.test(path) && method === "PUT") {
     // The server returns exactly what was stored: echo the PUT messages.
     const body = JSON.parse(String(call.init?.body)) as { messages?: unknown[] };
