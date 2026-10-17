@@ -502,8 +502,7 @@ async function selectOption(triggerSelector: string, optionText: string) {
   await evaluateWhenPresent(
     `window.__hbr.press(document.querySelector(${JSON.stringify(triggerSelector)}) ?? (()=>{throw new Error('trigger not found: ${triggerSelector}')})())`,
   );
-  // Let a possible onOpenChange refetch re-render options before clicking.
-  await sleep(150);
+  await waitForExpr(`!!document.querySelector('[role="listbox"]')`, "picker opened");
   await evaluateWhenPresent(`window.__hbr.clickOption(${JSON.stringify(optionText)})`);
   await sleep(100);
 }
@@ -2185,6 +2184,11 @@ async function main() {
         assert(
           toolbar.docH <= toolbar.innerH + 1,
           `document does not scroll: ${toolbar.docH} vs ${toolbar.innerH}`,
+        );
+        // Catalog loading is asynchronous; wait before opening the custom picker.
+        await waitForExpr(
+          `document.getElementById('chat-model')?.disabled === false`,
+          "chat model catalog loaded",
         );
         // A long unbroken bubble must wrap inside the log, never scroll the page.
         await selectOption("#chat-model", "Fake Test");
