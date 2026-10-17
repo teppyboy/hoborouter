@@ -36,11 +36,12 @@ export async function runAttachmentGc(
     } catch {
       return false;
     }
-    await db
+    const rows = await db
       .update(chatAttachments)
       .set({ deleted_at: nowMs })
-      .where(and(eq(chatAttachments.id, id), isNull(chatAttachments.deleted_at)));
-    return true;
+      .where(and(eq(chatAttachments.id, id), isNull(chatAttachments.deleted_at)))
+      .returning({ id: chatAttachments.id });
+    return rows.length > 0;
   };
 
   // 1) 30-day TTL expiry, oldest first, bounded batch.
