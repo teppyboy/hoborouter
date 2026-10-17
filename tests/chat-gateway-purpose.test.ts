@@ -296,7 +296,7 @@ describe("chat-purpose gateway cap", () => {
     expect(ok.status).toBe(200);
   });
 
-  test("overflow is a function of bounded tokens x price, not body size: no dispatch, no ledger", async () => {
+  test("unaffordable overflow estimate is rejected before dispatch or ledger writes", async () => {
     // Isolated workspace: the rate-limit test above consumed its slot; overflow
     // must be measured before any limiter/reservation activity.
     const now = Date.now();
@@ -355,8 +355,8 @@ describe("chat-purpose gateway cap", () => {
       "sk-hbr-gw-of-key",
     );
     const text = await res2.text();
-    expect(text, text).toContain("maxStoredMoney");
-    expect(res2.status, text).toBe(400);
+    expect(text, text).toContain("insufficient_balance");
+    expect(res2.status, text).toBe(402);
     expect(captured.length).toBe(capturedBefore);
     expect(await ledgerCount()).toBe(ledgerBefore);
     const after = (
