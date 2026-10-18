@@ -299,6 +299,19 @@ test("a failed per-workspace key list degrades to an honest unavailable note", a
   expect(text).toContain("Globex"); // other workspace unaffected
 });
 
+test("a malformed per-workspace key list degrades to an honest unavailable note", async () => {
+  const h = mount();
+  h.setFetch((url) => {
+    if (url.includes("/admin/workspaces/ws_1/keys")) return jsonResponse(200, { data: [] });
+    return DEFAULT_FETCH(url, undefined);
+  });
+  await openDetail(h);
+  await h.waitFor("Keys for this workspace are unavailable");
+  const text = document.body.textContent ?? "";
+  expect(text).toContain("User details");
+  expect(text).toContain("Globex");
+});
+
 test("detail footer hands off to Edit/Reset/Remove; Remove hidden on the self row", async () => {
   const h = mount(adminUser(), "u_admin");
   await openDetail(h);

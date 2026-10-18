@@ -2175,11 +2175,10 @@ function UserDetailDialog({
       Promise.all(
         memberships.map(async (m): Promise<WorkspaceKeysOverview> => {
           try {
+            const keys = await api<unknown>(`/api/v1/admin/workspaces/${m.workspaceId}/keys`);
             return {
               workspaceId: m.workspaceId,
-              keys: await api<AdminWorkspaceKey[]>(
-                `/api/v1/admin/workspaces/${m.workspaceId}/keys`,
-              ),
+              keys: Array.isArray(keys) ? (keys as AdminWorkspaceKey[]) : null,
             };
           } catch {
             return { workspaceId: m.workspaceId, keys: null };
