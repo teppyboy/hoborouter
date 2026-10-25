@@ -1094,7 +1094,13 @@ export function ChatPage() {
       setConflict(false);
       setSaveNotice(null);
       invalidateConversationList();
-      multimodalRef.current.delete(chatId);
+      const retainedTurns = multimodalRef.current.get(chatId);
+      if (retainedTurns) {
+        const retainedUserTurns = base.filter((m) => m.role === "user").length;
+        for (const turnIndex of retainedTurns.keys()) {
+          if (turnIndex >= retainedUserTurns) retainedTurns.delete(turnIndex);
+        }
+      }
       lastUserRef.current = null;
       setLastTurnAttached(false);
       setSend413(null);
