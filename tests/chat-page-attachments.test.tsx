@@ -420,11 +420,7 @@ test("dropping a file on the composer attaches it like a pick", async () => {
   expect(document.body.textContent).toContain("dropped.txt");
 });
 
-test("clicking a prompt chip focuses the composer", async () => {
+test("empty state has no suggestion prompt controls", async () => {
   await mountPage();
-  const chip = buttonByText("Help me write a debounce function in TypeScript.");
-  expect(chip).toBeDefined();
-  click(chip!);
-  await flush();
-  expect(document.activeElement?.getAttribute("aria-label")).toBe("Message");
+  expect(buttonByText("Help me write a debounce function in TypeScript.")).toBeUndefined();
 });

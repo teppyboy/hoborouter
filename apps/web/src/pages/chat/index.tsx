@@ -54,7 +54,7 @@ import {
   type ChatAttachment,
   type UserContent,
 } from "./attachments";
-import { useT, useLocaleEntry, translate, type LocaleEntry } from "../../lib/i18n/t";
+import { useT, translate } from "../../lib/i18n/t";
 import { useLocaleStore } from "../../lib/i18n/locale";
 import { useCapabilityLabel } from "../../lib/capabilities";
 import {
@@ -69,18 +69,6 @@ import {
 // and controls are translated. Module-level helpers read the live locale via
 // useLocaleStore.getState() (see translate() in lib/i18n/t.ts).
 const chatCopy = {
-  chip1: {
-    en: "Help me write a debounce function in TypeScript.",
-    vi: "Giúp tôi viết một hàm debounce bằng TypeScript.",
-  },
-  chip2: {
-    en: "Explain how HTTP streaming works, end to end.",
-    vi: "Giải thích cách HTTP streaming hoạt động từ đầu đến cuối.",
-  },
-  chip3: {
-    en: "Debug why my React component renders twice.",
-    vi: "Tìm lỗi vì sao component React của tôi render hai lần.",
-  },
   errKeyReconnect: {
     en: "Your chat key is no longer valid. Try reconnecting.",
     vi: "Chat key của bạn không còn hợp lệ. Hãy kết nối lại.",
@@ -278,9 +266,6 @@ const useChatT = () => useT(chatCopy);
 // Turn message shape shared with the pure helpers in ./turn.
 type ChatMessage = TurnMessage;
 
-// Actionable starters: each is a real prompt a user can send or edit.
-const PROMPT_CHIPS: LocaleEntry[] = [chatCopy.chip1, chatCopy.chip2, chatCopy.chip3];
-
 // Gateway caps the request body in UTF-8 BYTES — 1 MiB for generic keys,
 // 16 MiB for chat-purpose keys (approved attachment budget). Keep the
 // client-side pre-check at the same 16 MiB ceiling: byte-accurate, measured
@@ -318,22 +303,6 @@ function appendDelta(msg: ChatMessage, delta: StreamDelta, model: string | null)
     reasoning: msg.reasoning + delta.reasoning,
     model: msg.model ?? model ?? undefined,
   };
-}
-
-/** One suggestion chip; component boundary keeps useLocaleEntry per-element. */
-function PromptChip({ chip, onPick }: { chip: LocaleEntry; onPick: (text: string) => void }) {
-  const text = useLocaleEntry(chip);
-  return (
-    <Button
-      key={chip.en}
-      variant="outline"
-      size="sm"
-      onClick={() => onPick(text)}
-      className="h-auto max-w-full min-h-9 py-2 text-left whitespace-normal"
-    >
-      {text}
-    </Button>
-  );
 }
 
 export function ChatPage() {
@@ -1242,7 +1211,7 @@ export function ChatPage() {
         <div
           role="group"
           aria-label={t("chatControls")}
-          className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2"
+          className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2 lg:hidden"
         >
           {/* Phone: history opens in a sheet owned by this page, not the app
             nav drawer. */}
@@ -1264,67 +1233,6 @@ export function ChatPage() {
               {historyList}
             </SheetContent>
           </Sheet>
-          <Select value={model} onValueChange={setModel} disabled={models.length === 0}>
-            <SelectTrigger
-              id="chat-model"
-              aria-label={t("model")}
-              className="h-9 min-w-0 max-w-56 flex-1 gap-1 border-0 bg-muted/50 shadow-none"
-            >
-              {/* Explicit trigger label: the selected item's children also
-                carry the capability hint, which must stay dropdown-only. */}
-              <SelectValue
-                className="min-w-0 truncate"
-                placeholder={
-                  modelsLoading
-                    ? t("loadingModels")
-                    : modelsError
-                      ? t("modelsUnavailable")
-                      : t("chooseModel")
-                }
-              >
-                {models.find((m) => m.publicId === model)?.displayName ?? (model || undefined)}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {models.map((m) => (
-                <SelectItem
-                  key={m.publicId}
-                  value={m.publicId}
-                  textValue={m.displayName ?? m.publicId}
-                >
-                  {m.displayName ?? m.publicId}
-                  {/* Server-published capability metadata inline in the
-                    picker only, via the shared capability label helper:
-                    known keys get localized EN/VI labels, unknown stored
-                    values stay verbatim (no inferred capabilities). */}
-                  {m.capabilities.length > 0 && (
-                    <span className="ml-2 text-xs font-normal text-muted-foreground">
-                      {m.capabilities.map((c) => capabilityLabelFor(c)).join(", ")}
-                    </span>
-                  )}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {showEffort && (
-            <Select value={effort} onValueChange={setEffort}>
-              <SelectTrigger
-                id="chat-effort"
-                aria-label={t("effort")}
-                className="h-9 w-36 gap-1 border-0 bg-muted/50 shadow-none"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={EFFORT_UNSET}>{t("effortDefault")}</SelectItem>
-                {effortOptions.map((e: ReasoningEffort) => (
-                  <SelectItem key={e} value={e}>
-                    {EFFORT_LABELS[e][locale]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
             <Button
               variant="outline"
@@ -1368,19 +1276,6 @@ export function ChatPage() {
         {messages.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 py-16 text-center">
             <h2 className="text-2xl font-semibold tracking-tight">{t("whatBuild")}</h2>
-            <div className="flex flex-wrap justify-center gap-2">
-              {PROMPT_CHIPS.map((chip) => (
-                <PromptChip
-                  key={chip.en}
-                  chip={chip}
-                  onPick={(text) => {
-                    setInput(text);
-                    bumpDraftRevision(); // chip pick replaces the draft
-                    textareaRef.current?.focus();
-                  }}
-                />
-              ))}
-            </div>
             <p className="max-w-md text-sm text-muted-foreground">{t("reuseNotice")}</p>
             {!userId && <p className="text-sm text-muted-foreground">{t("signInStart")}</p>}
           </div>
@@ -1471,6 +1366,59 @@ export function ChatPage() {
         )}
 
         <div className="mx-auto w-full max-w-3xl px-4 pb-safe">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <Select value={model} onValueChange={setModel} disabled={models.length === 0}>
+              <SelectTrigger
+                id="chat-model"
+                aria-label={t("model")}
+                className="h-9 min-w-0 max-w-56 flex-1 gap-1 border-0 bg-muted/50 shadow-none"
+              >
+                <SelectValue
+                  className="min-w-0 truncate"
+                  placeholder={
+                    modelsLoading
+                      ? t("loadingModels")
+                      : modelsError
+                        ? t("modelsUnavailable")
+                        : t("chooseModel")
+                  }
+                >
+                  {models.find((m) => m.publicId === model)?.displayName ?? (model || undefined)}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {models.map((m) => (
+                  <SelectItem
+                    key={m.publicId}
+                    value={m.publicId}
+                    textValue={m.displayName ?? m.publicId}
+                  >
+                    {m.displayName ?? m.publicId}
+                    {m.capabilities.length > 0 && (
+                      <span className="ml-2 text-xs font-normal text-muted-foreground">
+                        {m.capabilities.map((c) => capabilityLabelFor(c)).join(", ")}
+                      </span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {showEffort && (
+              <Select value={effort} onValueChange={setEffort}>
+                <SelectTrigger id="chat-effort" aria-label={t("effort")} className="h-9 w-36">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={EFFORT_UNSET}>{t("effortDefault")}</SelectItem>
+                  {effortOptions.map((e: ReasoningEffort) => (
+                    <SelectItem key={e} value={e}>
+                      {EFFORT_LABELS[e][locale]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
           {error && (
             <Alert
               variant="destructive"

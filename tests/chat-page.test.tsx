@@ -1,9 +1,5 @@
-// Chat page SSR regression: the redesigned empty state must render
-// server-side (no window beyond the module-load stub, no fetch) and carry the
-// ChatGPT-style welcome contract: centered headline, the three real prompt
-// chips, the managed-key reuse notice (device-named browser key), and the
-// collapsed Advanced manual-key section (native <details>, so its summary is
-// assertable without grepping CSS).
+// Chat page SSR regression: empty state renders without suggestion chips and
+// keeps the workspace usage notice, composer, and history affordance.
 import { test, expect, afterAll } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -41,16 +37,14 @@ function render(): string {
   );
 }
 
-test("ChatPage SSR renders the centered welcome with headline and prompt chips", () => {
+test("ChatPage SSR renders a centered empty state without suggestion chips", () => {
   const html = render();
   expect(html).toContain("What would you like to build?");
-  for (const chip of [
-    "Help me write a debounce function in TypeScript.",
-    "Explain how HTTP streaming works, end to end.",
-    "Debug why my React component renders twice.",
-  ]) {
-    expect(html).toContain(chip);
-  }
+  expect(html).not.toContain("Help me write a debounce function");
+  expect(html).not.toContain("Explain how HTTP streaming works");
+  expect(html).not.toContain("Debug why my React component renders twice");
+  expect(html).toContain('aria-label="Model"');
+  expect(html).toContain('aria-label="Message"');
 });
 
 test("ChatPage SSR carries the managed-key reuse notice", () => {
