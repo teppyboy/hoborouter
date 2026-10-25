@@ -1647,7 +1647,7 @@ export function ChatPage() {
                 <Textarea aria-label={t("editMessage")} value={editText} onChange={(e) => setEditText(e.target.value)} />
                 {!editConfirm ? (
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => { setEditing(null); setEditConfirm(false); applyAttachments([]); }}>{t("cancelEdit")}</Button>
+                    <Button variant="outline" size="sm" onClick={() => { setEditing(null); setEditConfirm(false); }}>{t("cancelEdit")}</Button>
                     <Button size="sm" onClick={() => setEditConfirm(true)}>{t("confirmEdit")}</Button>
                   </div>
                 ) : (

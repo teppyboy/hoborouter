@@ -435,15 +435,18 @@ test("edit is prefilled, cancel leaves transcript unchanged, and confirmation tr
     { role: "assistant", content: "later reply" },
   ]);
   await openConversation();
+  await pickFiles([pngFile(32)]);
+  expect(chipCount()).toBe(1);
   const initialEdits = Array.from(document.querySelectorAll('button[aria-label="Edit"]'));
   expect(initialEdits).toHaveLength(2);
   click(initialEdits[0]!);
   await flush();
   const editor = document.querySelector('textarea[aria-label="Edit"]') as HTMLTextAreaElement;
   expect(editor.value).toBe("first");
-  expect(chipCount()).toBe(0);
+  expect(chipCount()).toBe(1);
   click(buttonByText("Cancel edit")!);
   expect(bodyText()).toContain("later reply");
+  expect(chipCount()).toBe(1);
 
   click(document.querySelectorAll('button[aria-label="Edit"]')[0]!);
   await flush();
