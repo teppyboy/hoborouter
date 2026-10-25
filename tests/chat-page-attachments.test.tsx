@@ -540,6 +540,22 @@ test("reattached edit files are sent and saved as attachment-bearing metadata", 
   expect(JSON.stringify(JSON.parse(String(calls.find((c) => c.path === "/v1/chat/completions")?.init?.body)))).toContain("image_url");
 });
 
+test("attachment-only edit sends the reattached file and persists its marker", async () => {
+  await mountPage([{ role: "user", content: "inspect", hadAttachments: true }, { role: "assistant", content: "reply" }]);
+  await openConversation();
+  click(buttonByLabel("Edit")!);
+  await flush();
+  setInput(document.querySelector('textarea[aria-label="Edit"]')!, "");
+  await pickFiles([pngFile(32)]);
+  click(buttonByText("Confirm and regenerate")!);
+  await flush();
+  click(buttonByText("Confirm and regenerate")!);
+  await waitFor(() => calls.some((c) => c.path === "/v1/chat/completions"), "attachment-only replacement request");
+  const put = calls.find((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT");
+  expect(String(put?.init?.body)).toContain('"hadAttachments":true');
+  expect(JSON.stringify(JSON.parse(String(calls.find((c) => c.path === "/v1/chat/completions")?.init?.body)))).toContain("image_url");
+});
+
 test("unknown attachment metadata warns but permits confirmed edit", async () => {
   await mountPage([{ role: "user", content: "inspect" }, { role: "assistant", content: "reply" }]);
   await openConversation();
