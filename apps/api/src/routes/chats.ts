@@ -19,6 +19,7 @@ const LIST_LIMIT = 50;
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
+  hadAttachments?: boolean;
   reasoning?: string;
   // Assistant-only public model ID (validated against enabled+published
   // models.public_id under the row lock); no DB column — lives in this JSONB.
@@ -94,6 +95,17 @@ function validateMessages(raw: unknown): { messages?: ChatMessage[]; error?: Res
       };
     }
     const msg: ChatMessage = { role: rec.role, content: rec.content };
+    if (rec.hadAttachments !== undefined) {
+      if (rec.role !== "user") {
+        return {
+          error: jsonError(400, "INVALID", "hadAttachments is only allowed on user messages"),
+        };
+      }
+      if (typeof rec.hadAttachments !== "boolean") {
+        return { error: jsonError(400, "INVALID", "message hadAttachments must be a boolean") };
+      }
+      msg.hadAttachments = rec.hadAttachments;
+    }
     if (rec.reasoning !== undefined) {
       if (typeof rec.reasoning !== "string") {
         return { error: jsonError(400, "INVALID", "message reasoning must be a string") };

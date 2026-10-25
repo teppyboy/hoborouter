@@ -102,6 +102,30 @@ test("create: POST, no request body, returns server snapshot as-is", async () =>
   expect(call(0).init.body).toBeUndefined();
 });
 
+test("load and save preserve hadAttachments while legacy messages stay absent", async () => {
+  const marked = { role: "user" as const, content: "file prompt", hadAttachments: true };
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(input), init: init ?? {} });
+    if (init?.method === "GET") return respond(200, snapshot({ messages: [marked] }));
+    return respond(200, snapshot({ version: 2, messages: [marked] }));
+  }) as unknown as typeof fetch;
+
+  const loaded = await getConversation("ws-1", "chat-1");
+  expect(loaded.messages).toEqual([marked]);
+  const saved = await saveConversation("ws-1", "chat-1", { version: 1, messages: loaded.messages });
+  expect(JSON.parse(String(call(1).init.body)).messages).toEqual([marked]);
+  expect(saved.messages).toEqual([marked]);
+
+  globalThis.fetch = (async () =>
+    respond(
+      200,
+      snapshot({ messages: [{ role: "user", content: "old" }] }),
+    )) as unknown as typeof fetch;
+  const legacy = await getConversation("ws-1", "chat-legacy");
+  expect(legacy.messages).toEqual([{ role: "user", content: "old" }]);
+  expect("hadAttachments" in legacy.messages[0]!).toBe(false);
+});
+
 test("save: PUT carries the client version and returns the server snapshot", async () => {
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     calls.push({ url: String(input), init: init ?? {} });
@@ -111,14 +135,14 @@ test("save: PUT carries the client version and returns the server snapshot", asy
   const conv = await saveConversation("ws-1", "chat-1", {
     version: 7,
     title: "Renamed",
-    messages: [{ role: "user", content: "hi" }],
+    messages: [{ role: "user", content: "hi", hadAttachments: true }],
   });
   expect(conv.version).toBe(8);
   expect(call(0).url).toBe("/api/v1/workspaces/ws-1/chats/chat-1");
   expect(call(0).init.method).toBe("PUT");
   const sent = JSON.parse(String(call(0).init.body));
   expect(sent.version).toBe(7);
-  expect(sent.messages).toEqual([{ role: "user", content: "hi" }]);
+  expect(sent.messages).toEqual([{ role: "user", content: "hi", hadAttachments: true }]);
 });
 
 test("save: 409 stale version rejects with a readable conflict, no fake success", async () => {
