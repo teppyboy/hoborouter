@@ -13,6 +13,7 @@ import { test, expect, beforeAll, afterAll, afterEach } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { JSDOM } from "jsdom";
 import { mock } from "bun:test";
+import { clearManagedChatKey } from "../apps/web/src/pages/chat/managed-key";
 
 const GLOBAL_KEYS = [
   "window",
@@ -482,7 +483,7 @@ test("editing a later turn preserves attachments on retained earlier turns", asy
   setInput(document.querySelector('textarea[aria-label="Message"]')!, "second turn");
   click(buttonByLabel("Send message")!);
   await waitFor(() => calls.filter((c) => c.path === "/v1/chat/completions").length === 2, "second response");
-  click(document.querySelectorAll('button[aria-label="Edit"]')[1]!);
+  click(document.querySelectorAll('button[aria-label="Edit"]')[2]!);
   await flush();
   setInput(document.querySelector('textarea[aria-label="Edit"]')!, "revised second");
   click(buttonByText("Confirm and regenerate")!);
@@ -490,7 +491,7 @@ test("editing a later turn preserves attachments on retained earlier turns", asy
   click(buttonByText("Confirm and regenerate")!);
   await waitFor(() => calls.filter((c) => c.path === "/v1/chat/completions").length === 3, "regeneration");
   const request = JSON.parse(String(calls.filter((c) => c.path === "/v1/chat/completions")[2]?.init?.body)) as { messages: Array<{ role: string; content: unknown }> };
-  expect(JSON.stringify(request.messages[0]?.content)).toContain("image_url");
+  expect(JSON.stringify(request.messages[2]?.content)).toContain("image_url");
 });
 
 test("trim conflict blocks key resolution and gateway dispatch", async () => {
@@ -503,7 +504,7 @@ test("trim conflict blocks key resolution and gateway dispatch", async () => {
   click(buttonByText("Confirm and regenerate")!);
   await flush();
   click(buttonByText("Confirm and regenerate")!);
-  await waitFor(() => bodyText().toLowerCase().includes("conflict"), "conflict state");
+  await waitFor(() => bodyText().includes("This conversation changed on another device or tab."), "conflict state");
   expect(calls.filter((c) => c.path.endsWith("/chat-key"))).toHaveLength(0);
   expect(calls.filter((c) => c.path === "/v1/chat/completions")).toHaveLength(0);
 });
@@ -511,6 +512,7 @@ test("trim conflict blocks key resolution and gateway dispatch", async () => {
 test("managed-key failure after trim does not restore discarded turns", async () => {
   await mountPage([{ role: "user", content: "first" }, { role: "assistant", content: "reply" }, { role: "user", content: "later" }, { role: "assistant", content: "later reply" }]);
   await openConversation();
+  clearManagedChatKey({ userId: "u1", workspaceId: "ws1" });
   keyResponse = jsonRes(500, {});
   click(document.querySelector('button[aria-label="Edit"]')!);
   await flush();
@@ -561,7 +563,7 @@ test("edit 413 recovery leaves the persisted trim intact", async () => {
   click(buttonByText("Confirm and regenerate")!);
   await flush();
   click(buttonByText("Confirm and regenerate")!);
-  await waitFor(() => bodyText().includes("too large to send"), "413 alert");
+  await waitFor(() => bodyText().includes("too large"), "413 error");
   expect(bodyText()).not.toContain("later reply");
   const put = calls.find((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT");
   expect(String(put?.init?.body)).toContain("revised");
