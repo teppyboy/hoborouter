@@ -11,6 +11,8 @@ export interface TurnMessage {
   /** Assistant only: the public model ID actually used (SSE top-level
    *  `model`). Optional so user messages and legacy history compile. */
   model?: string;
+  /** User only: files were attached in the original session. */
+  hadAttachments?: boolean;
 }
 
 export const isEmptyAssistant = (m: { role: string; content: string; reasoning: string }) =>
@@ -22,13 +24,24 @@ export function buildPersistMessages(
   baseMessages: TurnMessage[],
   userText: string,
   partial: { content: string; reasoning: string; model?: string },
-): Array<{ role: "user" | "assistant"; content: string; reasoning?: string; model?: string }> {
+  hadAttachments = false,
+): Array<{
+  role: "user" | "assistant";
+  content: string;
+  reasoning?: string;
+  model?: string;
+  hadAttachments?: boolean;
+}> {
   const msgs: Array<{
     role: "user" | "assistant";
     content: string;
     reasoning?: string;
     model?: string;
-  }> = [...baseMessages, { role: "user", content: userText, reasoning: "" }];
+    hadAttachments?: boolean;
+  }> = [
+    ...baseMessages,
+    { role: "user", content: userText, reasoning: "", ...(hadAttachments ? { hadAttachments: true } : {}) },
+  ];
   if (partial.content !== "" || partial.reasoning !== "") {
     msgs.push({
       role: "assistant",

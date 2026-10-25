@@ -248,6 +248,13 @@ const chatCopy = {
   stopGenerating: { en: "Stop generating", vi: "Dừng tạo" },
   sendMessage: { en: "Send message", vi: "Gửi tin nhắn" },
   jumpToLatest: { en: "Jump to latest", vi: "Nhảy tới tin nhắn mới nhất" },
+  editMessage: { en: "Edit", vi: "Chỉnh sửa" },
+  cancelEdit: { en: "Cancel edit", vi: "Hủy chỉnh sửa" },
+  confirmEdit: { en: "Confirm and regenerate", vi: "Xác nhận và tạo lại" },
+  editWarning: { en: "This will remove the old reply and all later turns. Regenerating sends a new request and usage will be charged again.", vi: "Thao tác này sẽ xóa câu trả lời cũ và các lượt sau. Tạo lại sẽ gửi yêu cầu mới và tính phí sử dụng lần nữa." },
+  editAttachmentRequired: { en: "This message had attachments. Reattach the files needed before regenerating.", vi: "Tin nhắn này có tệp đính kèm. Hãy đính kèm lại các tệp cần thiết trước khi tạo lại." },
+  editAttachmentUnknown: { en: "Attachment history is unknown. Reattach any files needed; old file content is unavailable.", vi: "Không rõ lịch sử tệp đính kèm. Hãy đính kèm lại các tệp cần thiết; nội dung tệp cũ không có sẵn." },
+  editSaveFailed: { en: "Could not save the trimmed conversation. Regeneration was not sent.", vi: "Không thể lưu hội thoại đã rút gọn. Yêu cầu tạo lại chưa được gửi." },
 } as const;
 
 /** Structured rejection code -> localized copy key (see AttachError in
@@ -353,6 +360,9 @@ export function ChatPage() {
 
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [input, setInput] = React.useState("");
+  const [editing, setEditing] = React.useState<number | null>(null);
+  const [editText, setEditText] = React.useState("");
+  const [editConfirm, setEditConfirm] = React.useState(false);
   // Draft revision counter: increments on USER draft mutations only — typing,
   // paste (both via onChange), prompt-chip pick, attachment pick/remove. The
   // send flow's own programmatic pre-fetch clear must NOT bump it: the 413
@@ -513,6 +523,8 @@ export function ChatPage() {
     activeChatIdRef.current = null;
     versionsRef.current = new Map();
     setMessages([]);
+    setEditing(null);
+    setEditConfirm(false);
     setActiveChatId(null);
     setConflict(false);
     setSaveNotice(null);
@@ -587,6 +599,8 @@ export function ChatPage() {
     activeChatIdRef.current = null;
     setActiveChatId(null);
     setMessages([]);
+    setEditing(null);
+    setEditConfirm(false);
     setError(null);
     setKeyError(null);
     setConflict(false);
@@ -659,6 +673,8 @@ export function ChatPage() {
     activeChatIdRef.current = chatId;
     setActiveChatId(chatId);
     setMessages([]);
+    setEditing(null);
+    setEditConfirm(false);
     setError(null);
     setConflict(false);
     setSaveNotice(null);
@@ -682,6 +698,7 @@ export function ChatPage() {
           content: m.content,
           reasoning: m.reasoning ?? "",
           model: m.role === "assistant" ? m.model : undefined,
+          hadAttachments: m.role === "user" ? m.hadAttachments : undefined,
         })),
       );
       if (snap.model) setModel(snap.model);
@@ -714,6 +731,7 @@ export function ChatPage() {
     userText: string;
     isFirstTurn: boolean;
     model: string;
+    hadAttachments: boolean;
   }
 
   /** A save may only update the VIEW it belongs to: same identity, same
@@ -737,7 +755,7 @@ export function ChatPage() {
     partial: { content: string; reasoning: string },
   ): Promise<void> {
     if (!userId || !workspaceId) return;
-    const msgs = buildPersistMessages(turn.baseMessages, turn.userText, partial);
+    const msgs = buildPersistMessages(turn.baseMessages, turn.userText, partial, turn.hadAttachments);
     const knownVersion = versionsRef.current.get(turn.chatId);
     try {
       const snap = await saveConversation(workspaceId, turn.chatId, {
@@ -790,7 +808,7 @@ export function ChatPage() {
     }
   }
 
-  async function send(textOverride?: string, isRetry = false) {
+  async function send(textOverride?: string, isRetry = false, sendBase?: ChatMessage[], sendAttachments?: ChatAttachment[]) {
     // Also block while a conversation snapshot is still loading: a send that
     // starts before openChat's response lands would be wiped by the snapshot
     // overwriting optimistic state when it resolves.
@@ -802,7 +820,7 @@ export function ChatPage() {
     const text = (isRetry ? retryTurn?.userText : (textOverride ?? input))?.trim() ?? "";
     // Fresh sends carry the pending chips; a retry re-uses the RETAINED full
     // content of the last user turn (below) so attachments survive a retry.
-    const turnAttachments = isRetry ? [] : attachmentsRef.current;
+    const turnAttachments = isRetry ? [] : (sendAttachments ?? attachmentsRef.current);
     // Attachment-only retry: only meaningful while the retained multimodal
     // content for that turn is still in this session's memory.
     const retryTurnIndex = isRetry
@@ -828,7 +846,7 @@ export function ChatPage() {
     // The transcript before this turn, copied as an immutable persistence
     // snapshot (reasoning is stripped only for the paid API call below).
     const baseMessages: ChatMessage[] = (
-      isRetry ? retryTurn!.baseMessages : messages.filter((m) => !isEmptyAssistant(m))
+      isRetry ? retryTurn!.baseMessages : (sendBase ?? messages).filter((m) => !isEmptyAssistant(m))
     ).map((m) => ({ ...m }));
     const ac = new AbortController();
     abortRef.current = ac;
@@ -876,7 +894,7 @@ export function ChatPage() {
     const saveTurn = (partial: { content: string; reasoning: string; model?: string }) => {
       if (!canPersist || !chatId || !ws) return Promise.resolve();
       return persistTurn(
-        { seq, idAtSend, chatId, baseMessages, userText: text, isFirstTurn, model },
+        { seq, idAtSend, chatId, baseMessages, userText: text, isFirstTurn, model, hadAttachments: turnAttachments.length > 0 || Boolean(isRetry && retryTurn && messages.findLast((m) => m.role === "user")?.hadAttachments) },
         partial,
       );
     };
@@ -913,6 +931,11 @@ export function ChatPage() {
       // The request is now certain to go out: commit the draft reset, the
       // retention entry and the retry disclosure together. The snapshot is
       // taken before the clear; the baseline after it.
+      if (textOverride !== undefined && !isRetry) {
+        setInput("");
+        applyAttachments([]);
+        setAttachError(null);
+      }
       if (!isRetry && textOverride === undefined) {
         preSendText = input;
         snapshotAttachments = [...turnAttachments];
@@ -950,7 +973,7 @@ export function ChatPage() {
       // it to role+content.
       setMessages([
         ...baseMessages,
-        { role: "user", content: text, reasoning: "" },
+        { role: "user", content: text, reasoning: "", ...(turnAttachments.length > 0 ? { hadAttachments: true } : {}) },
         { role: "assistant", content: "", reasoning: "" },
       ]);
       lastUserRef.current = text;
@@ -1033,6 +1056,56 @@ export function ChatPage() {
         setStreaming(false);
         abortRef.current = null;
       }
+    }
+  }
+
+  async function confirmEditAndRegenerate() {
+    if (editing === null || busyRef.current || streaming || !model || !catalogReady) return;
+    busyRef.current = true;
+    const text = editText.trim();
+    const selected = messages[editing];
+    if (!selected || selected.role !== "user" || (!text && attachmentsRef.current.length === 0)) {
+      busyRef.current = false;
+      return;
+    }
+    if (selected.hadAttachments === true && attachmentsRef.current.length === 0) {
+      busyRef.current = false;
+      return;
+    }
+    const base = messages.slice(0, editing).filter((m) => !isEmptyAssistant(m));
+    const trimmed: ChatMessage[] = [
+      ...base,
+      { role: "user", content: text, reasoning: "", ...(attachmentsRef.current.length ? { hadAttachments: true } : {}) },
+    ];
+    const chatId = activeChatIdRef.current;
+    if (!chatId || !workspaceId || !userId) {
+      busyRef.current = false;
+      return;
+    }
+    try {
+      const snap = await saveConversation(workspaceId, chatId, {
+        version: versionsRef.current.get(chatId) ?? 1,
+        model,
+        messages: trimmed,
+      });
+      if (activeChatIdRef.current !== chatId) return;
+      versionsRef.current.set(chatId, snap.version);
+      setMessages(trimmed);
+      setConflict(false);
+      setSaveNotice(null);
+      invalidateConversationList();
+      multimodalRef.current.delete(chatId);
+      lastUserRef.current = null;
+      setLastTurnAttached(false);
+      setSend413(null);
+      setEditing(null);
+      setEditConfirm(false);
+      busyRef.current = false;
+      await send(text, false, base, [...attachmentsRef.current]);
+    } catch (e) {
+      busyRef.current = false;
+      if (e instanceof ConversationError && e.kind === "conflict") setConflict(true);
+      else setSaveNotice(t("editSaveFailed"));
     }
   }
 
@@ -1298,9 +1371,12 @@ export function ChatPage() {
               <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-4">
                 {messages.map((m, i) =>
                   m.role === "user" ? (
-                    <div key={i} className="flex justify-end">
-                      <div className="max-w-[85%] wrap-anywhere whitespace-pre-wrap rounded-2xl bg-muted px-4 py-2 text-sm">
-                        {m.content}
+                    <div key={i} className="flex justify-end gap-2">
+                      <div className="max-w-[85%]">
+                        <div className="wrap-anywhere whitespace-pre-wrap rounded-2xl bg-muted px-4 py-2 text-sm">
+                          {m.content}
+                        </div>
+                        {!streaming && <Button variant="ghost" size="sm" onClick={() => { setEditing(i); setEditText(m.content); setEditConfirm(false); applyAttachments([]); }} aria-label={t("editMessage")}>{t("editMessage")}</Button>}
                       </div>
                     </div>
                   ) : (
@@ -1539,6 +1615,28 @@ export function ChatPage() {
                 )}
                 <p className="text-xs text-muted-foreground">{t("attachHint")}</p>
                 <p className="text-xs text-muted-foreground">{ATTACHMENT_RETENTION_NOTICE}</p>
+              </div>
+            )}
+            {editing !== null && (
+              <div className="mb-2 space-y-2" role="group" aria-label={t("editMessage")}>
+                <p className="text-sm text-muted-foreground">{t("editWarning")}</p>
+                {messages[editing]?.hadAttachments === true ? (
+                  <p role="alert" className="text-sm text-destructive">{t("editAttachmentRequired")}</p>
+                ) : messages[editing]?.hadAttachments === undefined ? (
+                  <p role="status" className="text-sm text-amber-600">{t("editAttachmentUnknown")}</p>
+                ) : null}
+                <Textarea aria-label={t("editMessage")} value={editText} onChange={(e) => setEditText(e.target.value)} />
+                {!editConfirm ? (
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => { setEditing(null); setEditConfirm(false); applyAttachments([]); }}>{t("cancelEdit")}</Button>
+                    <Button size="sm" onClick={() => setEditConfirm(true)}>{t("confirmEdit")}</Button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <Button variant="destructive" size="sm" disabled={(messages[editing]?.hadAttachments === true && attachments.length === 0) || (!editText.trim() && attachments.length === 0)} onClick={() => void confirmEditAndRegenerate()}>{t("confirmEdit")}</Button>
+                    <Button variant="outline" size="sm" onClick={() => setEditConfirm(false)}>{t("cancelEdit")}</Button>
+                  </div>
+                )}
               </div>
             )}
             <Textarea

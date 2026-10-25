@@ -420,6 +420,52 @@ test("dropping a file on the composer attaches it like a pick", async () => {
   expect(document.body.textContent).toContain("dropped.txt");
 });
 
+test("edit is prefilled, cancel leaves transcript unchanged, and confirmation trims before regeneration", async () => {
+  await mountPage([
+    { role: "user", content: "first" },
+    { role: "assistant", content: "reply" },
+    { role: "user", content: "later" },
+    { role: "assistant", content: "later reply" },
+  ]);
+  await openConversation();
+  const initialEdits = Array.from(document.querySelectorAll('button[aria-label="Edit"]'));
+  expect(initialEdits).toHaveLength(2);
+  click(initialEdits[0]!);
+  await flush();
+  const editor = document.querySelector('textarea[aria-label="Edit"]') as HTMLTextAreaElement;
+  expect(editor.value).toBe("first");
+  click(buttonByText("Cancel edit")!);
+  expect(bodyText()).toContain("later reply");
+
+  click(document.querySelectorAll('button[aria-label="Edit"]')[0]!);
+  await flush();
+  setInput(document.querySelector('textarea[aria-label="Edit"]')!, "revised");
+  expect(bodyText()).toContain("old reply and all later turns");
+  expect(calls.filter((c) => c.path === "/v1/chat/completions")).toHaveLength(0);
+  click(buttonByText("Confirm and regenerate")!);
+  await flush();
+  click(buttonByText("Confirm and regenerate")!);
+  await waitFor(() => calls.some((c) => c.path === "/v1/chat/completions"), "replacement request");
+  const puts = calls.filter((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT");
+  expect(puts.length).toBeGreaterThanOrEqual(1);
+  expect(calls.findIndex((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT")).toBeLessThan(calls.findIndex((c) => c.path === "/v1/chat/completions"));
+  const saved = JSON.parse(String(puts[0]?.init?.body)) as { messages: Array<{ content: string }> };
+  expect(saved.messages.map((m) => m.content)).toEqual(["revised"]);
+  const request = calls.find((c) => c.path === "/v1/chat/completions");
+  expect(JSON.parse(String(request?.init?.body)).model).toBe("test/model");
+});
+
+test("edit blocks a known attachment turn until a file is reattached", async () => {
+  await mountPage([{ role: "user", content: "inspect", hadAttachments: true }, { role: "assistant", content: "reply" }]);
+  await openConversation();
+  click(document.querySelector('button[aria-label="Edit"]')!);
+  await flush();
+  expect(bodyText()).toContain("had attachments");
+  click(buttonByText("Confirm and regenerate")!);
+  expect(calls.filter((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT")).toHaveLength(0);
+  expect(calls.filter((c) => c.path === "/v1/chat/completions")).toHaveLength(0);
+});
+
 test("empty state has no suggestion prompt controls", async () => {
   await mountPage();
   expect(buttonByText("Help me write a debounce function in TypeScript.")).toBeUndefined();
