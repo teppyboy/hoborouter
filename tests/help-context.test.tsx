@@ -248,6 +248,30 @@ async function clickHelpLink(href: string) {
 
 const h1Texts = () => [...document.querySelectorAll("h1")].map((h) => (h.textContent ?? "").trim());
 
+test("signed-in: Chat route selects Chat shell and other protected routes keep default shell", async () => {
+  state.authenticated = true;
+  const chat = await mountApp("/chat");
+  try {
+    await waitFor(() => !!document.querySelector('[aria-label="App destinations"]'), "Chat shell");
+    expect(document.querySelector('[aria-label="Account menu"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Switch to Vietnamese"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label^="Theme:"]')).not.toBeNull();
+  } finally {
+    await unmount(chat);
+  }
+
+  const other = await mountApp("/models");
+  try {
+    await waitFor(() => !!document.querySelector("aside"), "default protected shell");
+    expect(document.querySelector('[aria-label="App destinations"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Account menu"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Switch to Vietnamese"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label^="Theme:"]')).not.toBeNull();
+  } finally {
+    await unmount(other);
+  }
+});
+
 test("signed-in: About stays inside the same mounted AppShell with one heading", async () => {
   state.authenticated = true;
   const mounted = await mountApp("/");

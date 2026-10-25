@@ -1371,7 +1371,7 @@ export function ChatPage() {
               <SelectTrigger
                 id="chat-model"
                 aria-label={t("model")}
-                className="h-9 min-w-0 max-w-56 flex-1 gap-1 border-0 bg-muted/50 shadow-none"
+                className="pointer-coarse:h-11 h-9 min-w-0 max-w-56 flex-1 gap-1 border-0 bg-muted/50 shadow-none"
               >
                 <SelectValue
                   className="min-w-0 truncate"
@@ -1405,7 +1405,7 @@ export function ChatPage() {
             </Select>
             {showEffort && (
               <Select value={effort} onValueChange={setEffort}>
-                <SelectTrigger id="chat-effort" aria-label={t("effort")} className="h-9 w-36">
+                <SelectTrigger id="chat-effort" aria-label={t("effort")} className="pointer-coarse:h-11 h-9 w-36">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
