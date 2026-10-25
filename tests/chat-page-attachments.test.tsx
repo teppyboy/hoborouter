@@ -441,6 +441,7 @@ test("edit is prefilled, cancel leaves transcript unchanged, and confirmation tr
   await flush();
   const editor = document.querySelector('textarea[aria-label="Edit"]') as HTMLTextAreaElement;
   expect(editor.value).toBe("first");
+  expect(chipCount()).toBe(0);
   click(buttonByText("Cancel edit")!);
   expect(bodyText()).toContain("later reply");
 

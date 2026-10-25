@@ -1382,7 +1382,20 @@ export function ChatPage() {
                         <div className="wrap-anywhere whitespace-pre-wrap rounded-2xl bg-muted px-4 py-2 text-sm">
                           {m.content}
                         </div>
-                        {!streaming && <Button variant="ghost" size="sm" onClick={() => { setEditing(i); setEditText(m.content); setEditConfirm(false); applyAttachments([]); }} aria-label={t("editMessage")}>{t("editMessage")}</Button>}
+                        {!streaming && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setEditing(i);
+                              setEditText(m.content);
+                              setEditConfirm(false);
+                            }}
+                            aria-label={t("editMessage")}
+                          >
+                            {t("editMessage")}
+                          </Button>
+                        )}
                       </div>
                     </div>
                   ) : (
