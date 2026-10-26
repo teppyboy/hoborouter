@@ -54,7 +54,7 @@ import {
   type ChatAttachment,
   type UserContent,
 } from "./attachments";
-import { useT, useLocaleEntry, translate, type LocaleEntry } from "../../lib/i18n/t";
+import { useT, translate } from "../../lib/i18n/t";
 import { useLocaleStore } from "../../lib/i18n/locale";
 import { useCapabilityLabel } from "../../lib/capabilities";
 import {
@@ -69,18 +69,6 @@ import {
 // and controls are translated. Module-level helpers read the live locale via
 // useLocaleStore.getState() (see translate() in lib/i18n/t.ts).
 const chatCopy = {
-  chip1: {
-    en: "Help me write a debounce function in TypeScript.",
-    vi: "Giúp tôi viết một hàm debounce bằng TypeScript.",
-  },
-  chip2: {
-    en: "Explain how HTTP streaming works, end to end.",
-    vi: "Giải thích cách HTTP streaming hoạt động từ đầu đến cuối.",
-  },
-  chip3: {
-    en: "Debug why my React component renders twice.",
-    vi: "Tìm lỗi vì sao component React của tôi render hai lần.",
-  },
   errKeyReconnect: {
     en: "Your chat key is no longer valid. Try reconnecting.",
     vi: "Chat key của bạn không còn hợp lệ. Hãy kết nối lại.",
@@ -260,6 +248,13 @@ const chatCopy = {
   stopGenerating: { en: "Stop generating", vi: "Dừng tạo" },
   sendMessage: { en: "Send message", vi: "Gửi tin nhắn" },
   jumpToLatest: { en: "Jump to latest", vi: "Nhảy tới tin nhắn mới nhất" },
+  editMessage: { en: "Edit", vi: "Chỉnh sửa" },
+  cancelEdit: { en: "Cancel edit", vi: "Hủy chỉnh sửa" },
+  confirmEdit: { en: "Confirm and regenerate", vi: "Xác nhận và tạo lại" },
+  editWarning: { en: "This will remove the old reply and all later turns. Regenerating sends a new request and usage will be charged again.", vi: "Thao tác này sẽ xóa câu trả lời cũ và các lượt sau. Tạo lại sẽ gửi yêu cầu mới và tính phí sử dụng lần nữa." },
+  editAttachmentRequired: { en: "This message had attachments. Reattach the files needed before regenerating.", vi: "Tin nhắn này có tệp đính kèm. Hãy đính kèm lại các tệp cần thiết trước khi tạo lại." },
+  editAttachmentUnknown: { en: "Attachment history is unknown. Reattach any files needed; old file content is unavailable.", vi: "Không rõ lịch sử tệp đính kèm. Hãy đính kèm lại các tệp cần thiết; nội dung tệp cũ không có sẵn." },
+  editSaveFailed: { en: "Could not save the trimmed conversation. Regeneration was not sent.", vi: "Không thể lưu hội thoại đã rút gọn. Yêu cầu tạo lại chưa được gửi." },
 } as const;
 
 /** Structured rejection code -> localized copy key (see AttachError in
@@ -277,9 +272,6 @@ const useChatT = () => useT(chatCopy);
 
 // Turn message shape shared with the pure helpers in ./turn.
 type ChatMessage = TurnMessage;
-
-// Actionable starters: each is a real prompt a user can send or edit.
-const PROMPT_CHIPS: LocaleEntry[] = [chatCopy.chip1, chatCopy.chip2, chatCopy.chip3];
 
 // Gateway caps the request body in UTF-8 BYTES — 1 MiB for generic keys,
 // 16 MiB for chat-purpose keys (approved attachment budget). Keep the
@@ -318,22 +310,6 @@ function appendDelta(msg: ChatMessage, delta: StreamDelta, model: string | null)
     reasoning: msg.reasoning + delta.reasoning,
     model: msg.model ?? model ?? undefined,
   };
-}
-
-/** One suggestion chip; component boundary keeps useLocaleEntry per-element. */
-function PromptChip({ chip, onPick }: { chip: LocaleEntry; onPick: (text: string) => void }) {
-  const text = useLocaleEntry(chip);
-  return (
-    <Button
-      key={chip.en}
-      variant="outline"
-      size="sm"
-      onClick={() => onPick(text)}
-      className="h-auto max-w-full min-h-9 py-2 text-left whitespace-normal"
-    >
-      {text}
-    </Button>
-  );
 }
 
 export function ChatPage() {
@@ -384,6 +360,9 @@ export function ChatPage() {
 
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [input, setInput] = React.useState("");
+  const [editing, setEditing] = React.useState<number | null>(null);
+  const [editText, setEditText] = React.useState("");
+  const [editConfirm, setEditConfirm] = React.useState(false);
   // Draft revision counter: increments on USER draft mutations only — typing,
   // paste (both via onChange), prompt-chip pick, attachment pick/remove. The
   // send flow's own programmatic pre-fetch clear must NOT bump it: the 413
@@ -544,6 +523,8 @@ export function ChatPage() {
     activeChatIdRef.current = null;
     versionsRef.current = new Map();
     setMessages([]);
+    setEditing(null);
+    setEditConfirm(false);
     setActiveChatId(null);
     setConflict(false);
     setSaveNotice(null);
@@ -618,6 +599,8 @@ export function ChatPage() {
     activeChatIdRef.current = null;
     setActiveChatId(null);
     setMessages([]);
+    setEditing(null);
+    setEditConfirm(false);
     setError(null);
     setKeyError(null);
     setConflict(false);
@@ -690,6 +673,8 @@ export function ChatPage() {
     activeChatIdRef.current = chatId;
     setActiveChatId(chatId);
     setMessages([]);
+    setEditing(null);
+    setEditConfirm(false);
     setError(null);
     setConflict(false);
     setSaveNotice(null);
@@ -713,6 +698,7 @@ export function ChatPage() {
           content: m.content,
           reasoning: m.reasoning ?? "",
           model: m.role === "assistant" ? m.model : undefined,
+          hadAttachments: m.role === "user" ? m.hadAttachments : undefined,
         })),
       );
       if (snap.model) setModel(snap.model);
@@ -745,6 +731,7 @@ export function ChatPage() {
     userText: string;
     isFirstTurn: boolean;
     model: string;
+    hadAttachments: boolean;
   }
 
   /** A save may only update the VIEW it belongs to: same identity, same
@@ -768,7 +755,7 @@ export function ChatPage() {
     partial: { content: string; reasoning: string },
   ): Promise<void> {
     if (!userId || !workspaceId) return;
-    const msgs = buildPersistMessages(turn.baseMessages, turn.userText, partial);
+    const msgs = buildPersistMessages(turn.baseMessages, turn.userText, partial, turn.hadAttachments);
     const knownVersion = versionsRef.current.get(turn.chatId);
     try {
       const snap = await saveConversation(workspaceId, turn.chatId, {
@@ -821,7 +808,7 @@ export function ChatPage() {
     }
   }
 
-  async function send(textOverride?: string, isRetry = false) {
+  async function send(textOverride?: string, isRetry = false, sendBase?: ChatMessage[], sendAttachments?: ChatAttachment[]) {
     // Also block while a conversation snapshot is still loading: a send that
     // starts before openChat's response lands would be wiped by the snapshot
     // overwriting optimistic state when it resolves.
@@ -833,7 +820,7 @@ export function ChatPage() {
     const text = (isRetry ? retryTurn?.userText : (textOverride ?? input))?.trim() ?? "";
     // Fresh sends carry the pending chips; a retry re-uses the RETAINED full
     // content of the last user turn (below) so attachments survive a retry.
-    const turnAttachments = isRetry ? [] : attachmentsRef.current;
+    const turnAttachments = isRetry ? [] : (sendAttachments ?? attachmentsRef.current);
     // Attachment-only retry: only meaningful while the retained multimodal
     // content for that turn is still in this session's memory.
     const retryTurnIndex = isRetry
@@ -859,7 +846,7 @@ export function ChatPage() {
     // The transcript before this turn, copied as an immutable persistence
     // snapshot (reasoning is stripped only for the paid API call below).
     const baseMessages: ChatMessage[] = (
-      isRetry ? retryTurn!.baseMessages : messages.filter((m) => !isEmptyAssistant(m))
+      isRetry ? retryTurn!.baseMessages : (sendBase ?? messages).filter((m) => !isEmptyAssistant(m))
     ).map((m) => ({ ...m }));
     const ac = new AbortController();
     abortRef.current = ac;
@@ -907,7 +894,7 @@ export function ChatPage() {
     const saveTurn = (partial: { content: string; reasoning: string; model?: string }) => {
       if (!canPersist || !chatId || !ws) return Promise.resolve();
       return persistTurn(
-        { seq, idAtSend, chatId, baseMessages, userText: text, isFirstTurn, model },
+        { seq, idAtSend, chatId, baseMessages, userText: text, isFirstTurn, model, hadAttachments: turnAttachments.length > 0 || Boolean(isRetry && retryTurn && messages.findLast((m) => m.role === "user")?.hadAttachments) },
         partial,
       );
     };
@@ -944,6 +931,11 @@ export function ChatPage() {
       // The request is now certain to go out: commit the draft reset, the
       // retention entry and the retry disclosure together. The snapshot is
       // taken before the clear; the baseline after it.
+      if (textOverride !== undefined && !isRetry) {
+        setInput("");
+        applyAttachments([]);
+        setAttachError(null);
+      }
       if (!isRetry && textOverride === undefined) {
         preSendText = input;
         snapshotAttachments = [...turnAttachments];
@@ -981,7 +973,7 @@ export function ChatPage() {
       // it to role+content.
       setMessages([
         ...baseMessages,
-        { role: "user", content: text, reasoning: "" },
+        { role: "user", content: text, reasoning: "", ...(turnAttachments.length > 0 ? { hadAttachments: true } : {}) },
         { role: "assistant", content: "", reasoning: "" },
       ]);
       lastUserRef.current = text;
@@ -1064,6 +1056,62 @@ export function ChatPage() {
         setStreaming(false);
         abortRef.current = null;
       }
+    }
+  }
+
+  async function confirmEditAndRegenerate() {
+    if (editing === null || busyRef.current || streaming || !model || !catalogReady) return;
+    busyRef.current = true;
+    const text = editText.trim();
+    const selected = messages[editing];
+    if (!selected || selected.role !== "user" || (!text && attachmentsRef.current.length === 0)) {
+      busyRef.current = false;
+      return;
+    }
+    if (selected.hadAttachments === true && attachmentsRef.current.length === 0) {
+      busyRef.current = false;
+      return;
+    }
+    const base = messages.slice(0, editing).filter((m) => !isEmptyAssistant(m));
+    const trimmed: ChatMessage[] = [
+      ...base,
+      { role: "user", content: text, reasoning: "", ...(attachmentsRef.current.length ? { hadAttachments: true } : {}) },
+    ];
+    const chatId = activeChatIdRef.current;
+    if (!chatId || !workspaceId || !userId) {
+      busyRef.current = false;
+      return;
+    }
+    try {
+      const snap = await saveConversation(workspaceId, chatId, {
+        version: versionsRef.current.get(chatId) ?? 1,
+        model,
+        messages: trimmed,
+      });
+      if (activeChatIdRef.current !== chatId) return;
+      versionsRef.current.set(chatId, snap.version);
+      setMessages(trimmed);
+      setConflict(false);
+      setSaveNotice(null);
+      invalidateConversationList();
+      const retainedTurns = multimodalRef.current.get(chatId);
+      if (retainedTurns) {
+        const retainedUserTurns = base.filter((m) => m.role === "user").length;
+        for (const turnIndex of retainedTurns.keys()) {
+          if (turnIndex >= retainedUserTurns) retainedTurns.delete(turnIndex);
+        }
+      }
+      lastUserRef.current = null;
+      setLastTurnAttached(false);
+      setSend413(null);
+      setEditing(null);
+      setEditConfirm(false);
+      busyRef.current = false;
+      await send(text, false, base, [...attachmentsRef.current]);
+    } catch (e) {
+      busyRef.current = false;
+      if (e instanceof ConversationError && e.kind === "conflict") setConflict(true);
+      else setSaveNotice(t("editSaveFailed"));
     }
   }
 
@@ -1242,7 +1290,7 @@ export function ChatPage() {
         <div
           role="group"
           aria-label={t("chatControls")}
-          className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2"
+          className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2 lg:hidden"
         >
           {/* Phone: history opens in a sheet owned by this page, not the app
             nav drawer. */}
@@ -1264,67 +1312,6 @@ export function ChatPage() {
               {historyList}
             </SheetContent>
           </Sheet>
-          <Select value={model} onValueChange={setModel} disabled={models.length === 0}>
-            <SelectTrigger
-              id="chat-model"
-              aria-label={t("model")}
-              className="h-9 min-w-0 max-w-56 flex-1 gap-1 border-0 bg-muted/50 shadow-none"
-            >
-              {/* Explicit trigger label: the selected item's children also
-                carry the capability hint, which must stay dropdown-only. */}
-              <SelectValue
-                className="min-w-0 truncate"
-                placeholder={
-                  modelsLoading
-                    ? t("loadingModels")
-                    : modelsError
-                      ? t("modelsUnavailable")
-                      : t("chooseModel")
-                }
-              >
-                {models.find((m) => m.publicId === model)?.displayName ?? (model || undefined)}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {models.map((m) => (
-                <SelectItem
-                  key={m.publicId}
-                  value={m.publicId}
-                  textValue={m.displayName ?? m.publicId}
-                >
-                  {m.displayName ?? m.publicId}
-                  {/* Server-published capability metadata inline in the
-                    picker only, via the shared capability label helper:
-                    known keys get localized EN/VI labels, unknown stored
-                    values stay verbatim (no inferred capabilities). */}
-                  {m.capabilities.length > 0 && (
-                    <span className="ml-2 text-xs font-normal text-muted-foreground">
-                      {m.capabilities.map((c) => capabilityLabelFor(c)).join(", ")}
-                    </span>
-                  )}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {showEffort && (
-            <Select value={effort} onValueChange={setEffort}>
-              <SelectTrigger
-                id="chat-effort"
-                aria-label={t("effort")}
-                className="h-9 w-36 gap-1 border-0 bg-muted/50 shadow-none"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={EFFORT_UNSET}>{t("effortDefault")}</SelectItem>
-                {effortOptions.map((e: ReasoningEffort) => (
-                  <SelectItem key={e} value={e}>
-                    {EFFORT_LABELS[e][locale]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
             <Button
               variant="outline"
@@ -1368,19 +1355,6 @@ export function ChatPage() {
         {messages.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 py-16 text-center">
             <h2 className="text-2xl font-semibold tracking-tight">{t("whatBuild")}</h2>
-            <div className="flex flex-wrap justify-center gap-2">
-              {PROMPT_CHIPS.map((chip) => (
-                <PromptChip
-                  key={chip.en}
-                  chip={chip}
-                  onPick={(text) => {
-                    setInput(text);
-                    bumpDraftRevision(); // chip pick replaces the draft
-                    textareaRef.current?.focus();
-                  }}
-                />
-              ))}
-            </div>
             <p className="max-w-md text-sm text-muted-foreground">{t("reuseNotice")}</p>
             {!userId && <p className="text-sm text-muted-foreground">{t("signInStart")}</p>}
           </div>
@@ -1403,9 +1377,25 @@ export function ChatPage() {
               <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-4">
                 {messages.map((m, i) =>
                   m.role === "user" ? (
-                    <div key={i} className="flex justify-end">
-                      <div className="max-w-[85%] wrap-anywhere whitespace-pre-wrap rounded-2xl bg-muted px-4 py-2 text-sm">
-                        {m.content}
+                    <div key={i} className="flex justify-end gap-2">
+                      <div className="max-w-[85%]">
+                        <div className="wrap-anywhere whitespace-pre-wrap rounded-2xl bg-muted px-4 py-2 text-sm">
+                          {m.content}
+                        </div>
+                        {!streaming && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setEditing(i);
+                              setEditText(m.content);
+                              setEditConfirm(false);
+                            }}
+                            aria-label={t("editMessage")}
+                          >
+                            {t("editMessage")}
+                          </Button>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -1471,6 +1461,59 @@ export function ChatPage() {
         )}
 
         <div className="mx-auto w-full max-w-3xl px-4 pb-safe">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <Select value={model} onValueChange={setModel} disabled={models.length === 0}>
+              <SelectTrigger
+                id="chat-model"
+                aria-label={t("model")}
+                className="pointer-coarse:h-11 h-9 min-w-0 max-w-56 flex-1 gap-1 border-0 bg-muted/50 shadow-none"
+              >
+                <SelectValue
+                  className="min-w-0 truncate"
+                  placeholder={
+                    modelsLoading
+                      ? t("loadingModels")
+                      : modelsError
+                        ? t("modelsUnavailable")
+                        : t("chooseModel")
+                  }
+                >
+                  {models.find((m) => m.publicId === model)?.displayName ?? (model || undefined)}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {models.map((m) => (
+                  <SelectItem
+                    key={m.publicId}
+                    value={m.publicId}
+                    textValue={m.displayName ?? m.publicId}
+                  >
+                    {m.displayName ?? m.publicId}
+                    {m.capabilities.length > 0 && (
+                      <span className="ml-2 text-xs font-normal text-muted-foreground">
+                        {m.capabilities.map((c) => capabilityLabelFor(c)).join(", ")}
+                      </span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {showEffort && (
+              <Select value={effort} onValueChange={setEffort}>
+                <SelectTrigger id="chat-effort" aria-label={t("effort")} className="pointer-coarse:h-11 h-9 w-36">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={EFFORT_UNSET}>{t("effortDefault")}</SelectItem>
+                  {effortOptions.map((e: ReasoningEffort) => (
+                    <SelectItem key={e} value={e}>
+                      {EFFORT_LABELS[e][locale]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
           {error && (
             <Alert
               variant="destructive"
@@ -1591,6 +1634,28 @@ export function ChatPage() {
                 )}
                 <p className="text-xs text-muted-foreground">{t("attachHint")}</p>
                 <p className="text-xs text-muted-foreground">{ATTACHMENT_RETENTION_NOTICE}</p>
+              </div>
+            )}
+            {editing !== null && (
+              <div className="mb-2 space-y-2" role="group" aria-label={t("editMessage")}>
+                <p className="text-sm text-muted-foreground">{t("editWarning")}</p>
+                {messages[editing]?.hadAttachments === true ? (
+                  <p role="alert" className="text-sm text-destructive">{t("editAttachmentRequired")}</p>
+                ) : messages[editing]?.hadAttachments === undefined ? (
+                  <p role="status" className="text-sm text-amber-600">{t("editAttachmentUnknown")}</p>
+                ) : null}
+                <Textarea aria-label={t("editMessage")} value={editText} onChange={(e) => setEditText(e.target.value)} />
+                {!editConfirm ? (
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => { setEditing(null); setEditConfirm(false); }}>{t("cancelEdit")}</Button>
+                    <Button size="sm" onClick={() => setEditConfirm(true)}>{t("confirmEdit")}</Button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <Button variant="destructive" size="sm" disabled={(messages[editing]?.hadAttachments === true && attachments.length === 0) || (!editText.trim() && attachments.length === 0)} onClick={() => void confirmEditAndRegenerate()}>{t("confirmEdit")}</Button>
+                    <Button variant="outline" size="sm" onClick={() => setEditConfirm(false)}>{t("cancelEdit")}</Button>
+                  </div>
+                )}
               </div>
             )}
             <Textarea

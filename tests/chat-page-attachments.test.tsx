@@ -13,6 +13,7 @@ import { test, expect, beforeAll, afterAll, afterEach } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { JSDOM } from "jsdom";
 import { mock } from "bun:test";
+import { clearManagedChatKey } from "../apps/web/src/pages/chat/managed-key";
 
 const GLOBAL_KEYS = [
   "window",
@@ -54,6 +55,9 @@ interface FetchCall {
 let calls: FetchCall[] = [];
 let responder: (call: FetchCall) => Promise<Response> = async () =>
   new Response("{}", { status: 500 });
+let putResponse: ((call: FetchCall) => Response) | null = null;
+let keyResponse: Response | null = null;
+let completionResponse: Response | null = null;
 const mockFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const call: FetchCall = { path: String(input), init };
   calls.push(call);
@@ -165,12 +169,15 @@ const snapshot = (version: number, messages: unknown[], model = "test/model") =>
 
 /** Mount the page with a saved conversation "T" available in history. */
 async function mountPage(historyMessages: unknown[] = []) {
+  putResponse = null;
+  keyResponse = null;
+  completionResponse = null;
   responder = async (call) => {
     const path = call.path;
     if (path === "/api/v1/workspaces/ws1/chats/c1" && (call.init?.method ?? "GET") === "GET")
       return jsonRes(200, snapshot(1, historyMessages));
     if (path === "/api/v1/workspaces/ws1/chats/c1" && call.init?.method === "PUT")
-      return jsonRes(200, snapshot(99, historyMessages));
+      return putResponse?.(call) ?? jsonRes(200, snapshot(99, historyMessages));
     if (path === "/api/v1/workspaces/ws1/chats" || path.startsWith("/api/v1/workspaces/ws1/chats?"))
       return jsonRes(200, {
         data: [
@@ -188,16 +195,16 @@ async function mountPage(historyMessages: unknown[] = []) {
     if (path === "/api/v1/workspaces/ws1/chats/c1" && (call.init?.method ?? "GET") === "GET")
       return jsonRes(200, snapshot(1, historyMessages));
     if (path === "/api/v1/workspaces/ws1/chats/c1" && call.init?.method === "PUT")
-      return jsonRes(200, snapshot(99, historyMessages));
+      return putResponse?.(call) ?? jsonRes(200, snapshot(99, historyMessages));
     if (path === "/api/v1/workspaces/ws1/chat-key")
-      return jsonRes(200, {
+      return keyResponse ?? jsonRes(200, {
         id: "k1",
         plaintext: "sk-hbr-TESTKEY123",
         name: "Chat",
         purpose: "chat",
       });
     if (path === "/v1/chat/completions")
-      return new Response('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\ndata: [DONE]\n\n', {
+      return completionResponse ?? new Response('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\ndata: [DONE]\n\n', {
         status: 200,
         headers: { "content-type": "text/event-stream" },
       });
@@ -420,11 +427,169 @@ test("dropping a file on the composer attaches it like a pick", async () => {
   expect(document.body.textContent).toContain("dropped.txt");
 });
 
-test("clicking a prompt chip focuses the composer", async () => {
-  await mountPage();
-  const chip = buttonByText("Help me write a debounce function in TypeScript.");
-  expect(chip).toBeDefined();
-  click(chip!);
+test("edit is prefilled, cancel leaves transcript unchanged, and confirmation trims before regeneration", async () => {
+  await mountPage([
+    { role: "user", content: "first" },
+    { role: "assistant", content: "reply" },
+    { role: "user", content: "later" },
+    { role: "assistant", content: "later reply" },
+  ]);
+  await openConversation();
+  await pickFiles([pngFile(32)]);
+  expect(chipCount()).toBe(1);
+  const initialEdits = Array.from(document.querySelectorAll('button[aria-label="Edit"]'));
+  expect(initialEdits).toHaveLength(2);
+  click(initialEdits[0]!);
   await flush();
-  expect(document.activeElement?.getAttribute("aria-label")).toBe("Message");
+  const editor = document.querySelector('textarea[aria-label="Edit"]') as HTMLTextAreaElement;
+  expect(editor.value).toBe("first");
+  expect(chipCount()).toBe(1);
+  click(buttonByText("Cancel edit")!);
+  expect(bodyText()).toContain("later reply");
+  expect(chipCount()).toBe(1);
+
+  click(document.querySelectorAll('button[aria-label="Edit"]')[0]!);
+  await flush();
+  setInput(document.querySelector('textarea[aria-label="Edit"]')!, "revised");
+  expect(bodyText()).toContain("old reply and all later turns");
+  expect(calls.filter((c) => c.path === "/v1/chat/completions")).toHaveLength(0);
+  click(buttonByText("Confirm and regenerate")!);
+  await flush();
+  click(buttonByText("Confirm and regenerate")!);
+  await waitFor(() => calls.some((c) => c.path === "/v1/chat/completions"), "replacement request");
+  const puts = calls.filter((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT");
+  expect(puts.length).toBeGreaterThanOrEqual(1);
+  expect(calls.findIndex((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT")).toBeLessThan(calls.findIndex((c) => c.path === "/v1/chat/completions"));
+  const saved = JSON.parse(String(puts[0]?.init?.body)) as { messages: Array<{ content: string }> };
+  expect(saved.messages.map((m) => m.content)).toEqual(["revised"]);
+  const request = calls.find((c) => c.path === "/v1/chat/completions");
+  expect(JSON.parse(String(request?.init?.body)).model).toBe("test/model");
+});
+
+test("edit blocks a known attachment turn until a file is reattached", async () => {
+  await mountPage([{ role: "user", content: "inspect", hadAttachments: true }, { role: "assistant", content: "reply" }]);
+  await openConversation();
+  click(document.querySelector('button[aria-label="Edit"]')!);
+  await flush();
+  expect(bodyText()).toContain("had attachments");
+  click(buttonByText("Confirm and regenerate")!);
+  expect(calls.filter((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT")).toHaveLength(0);
+  expect(calls.filter((c) => c.path === "/v1/chat/completions")).toHaveLength(0);
+});
+
+test("editing a later turn preserves attachments on retained earlier turns", async () => {
+  await mountPage([{ role: "user", content: "inspect" }, { role: "assistant", content: "reply" }]);
+  await openConversation();
+  await pickFiles([pngFile(32)]);
+  setInput(document.querySelector('textarea[aria-label="Message"]')!, "first image");
+  click(buttonByLabel("Send message")!);
+  await waitFor(() => bodyText().includes("Hello"), "first response");
+  setInput(document.querySelector('textarea[aria-label="Message"]')!, "second turn");
+  click(buttonByLabel("Send message")!);
+  await waitFor(() => calls.filter((c) => c.path === "/v1/chat/completions").length === 2, "second response");
+  click(document.querySelectorAll('button[aria-label="Edit"]')[2]!);
+  await flush();
+  setInput(document.querySelector('textarea[aria-label="Edit"]')!, "revised second");
+  click(buttonByText("Confirm and regenerate")!);
+  await flush();
+  click(buttonByText("Confirm and regenerate")!);
+  await waitFor(() => calls.filter((c) => c.path === "/v1/chat/completions").length === 3, "regeneration");
+  const request = JSON.parse(String(calls.filter((c) => c.path === "/v1/chat/completions")[2]?.init?.body)) as { messages: Array<{ role: string; content: unknown }> };
+  expect(JSON.stringify(request.messages[2]?.content)).toContain("image_url");
+});
+
+test("trim conflict blocks key resolution and gateway dispatch", async () => {
+  await mountPage([{ role: "user", content: "inspect" }, { role: "assistant", content: "reply" }]);
+  await openConversation();
+  putResponse = () => jsonRes(409, { error: "conflict", version: 8 });
+  click(buttonByLabel("Edit")!);
+  await flush();
+  setInput(document.querySelector('textarea[aria-label="Edit"]')!, "revised");
+  click(buttonByText("Confirm and regenerate")!);
+  await flush();
+  click(buttonByText("Confirm and regenerate")!);
+  await waitFor(() => bodyText().includes("This conversation changed on another device or tab."), "conflict state");
+  expect(calls.filter((c) => c.path.endsWith("/chat-key"))).toHaveLength(0);
+  expect(calls.filter((c) => c.path === "/v1/chat/completions")).toHaveLength(0);
+});
+
+test("managed-key failure after trim does not restore discarded turns", async () => {
+  await mountPage([{ role: "user", content: "first" }, { role: "assistant", content: "reply" }, { role: "user", content: "later" }, { role: "assistant", content: "later reply" }]);
+  await openConversation();
+  clearManagedChatKey({ userId: "u1", workspaceId: "ws1" });
+  keyResponse = jsonRes(500, {});
+  click(document.querySelector('button[aria-label="Edit"]')!);
+  await flush();
+  setInput(document.querySelector('textarea[aria-label="Edit"]')!, "revised");
+  click(buttonByText("Confirm and regenerate")!);
+  await flush();
+  click(buttonByText("Confirm and regenerate")!);
+  await waitFor(() => calls.some((c) => c.path.endsWith("/chat-key")), "key attempt");
+  await waitFor(() => !bodyText().includes("later reply"), "trim remains");
+  expect(calls.filter((c) => c.path === "/v1/chat/completions")).toHaveLength(0);
+});
+
+test("reattached edit files are sent and saved as attachment-bearing metadata", async () => {
+  await mountPage([{ role: "user", content: "inspect", hadAttachments: true }, { role: "assistant", content: "reply" }]);
+  await openConversation();
+  click(buttonByLabel("Edit")!);
+  await flush();
+  await pickFiles([pngFile(32)]);
+  click(buttonByText("Confirm and regenerate")!);
+  await flush();
+  click(buttonByText("Confirm and regenerate")!);
+  await waitFor(() => calls.some((c) => c.path === "/v1/chat/completions"), "replacement request");
+  const put = calls.find((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT");
+  expect(String(put?.init?.body)).toContain('"hadAttachments":true');
+  expect(JSON.stringify(JSON.parse(String(calls.find((c) => c.path === "/v1/chat/completions")?.init?.body)))).toContain("image_url");
+});
+
+test("attachment-only edit sends the reattached file and persists its marker", async () => {
+  await mountPage([{ role: "user", content: "inspect", hadAttachments: true }, { role: "assistant", content: "reply" }]);
+  await openConversation();
+  click(buttonByLabel("Edit")!);
+  await flush();
+  setInput(document.querySelector('textarea[aria-label="Edit"]')!, "");
+  await pickFiles([pngFile(32)]);
+  click(buttonByText("Confirm and regenerate")!);
+  await flush();
+  click(buttonByText("Confirm and regenerate")!);
+  await waitFor(() => calls.some((c) => c.path === "/v1/chat/completions"), "attachment-only replacement request");
+  const put = calls.find((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT");
+  expect(String(put?.init?.body)).toContain('"hadAttachments":true');
+  expect(JSON.stringify(JSON.parse(String(calls.find((c) => c.path === "/v1/chat/completions")?.init?.body)))).toContain("image_url");
+});
+
+test("unknown attachment metadata warns but permits confirmed edit", async () => {
+  await mountPage([{ role: "user", content: "inspect" }, { role: "assistant", content: "reply" }]);
+  await openConversation();
+  click(buttonByLabel("Edit")!);
+  await flush();
+  expect(bodyText()).toContain("Attachment history is unknown.");
+  setInput(document.querySelector('textarea[aria-label="Edit"]')!, "revised");
+  click(buttonByText("Confirm and regenerate")!);
+  await flush();
+  click(buttonByText("Confirm and regenerate")!);
+  await waitFor(() => calls.some((c) => c.path === "/v1/chat/completions"), "confirmed request");
+});
+
+test("edit 413 recovery leaves the persisted trim intact", async () => {
+  await mountPage([{ role: "user", content: "first" }, { role: "assistant", content: "reply" }, { role: "user", content: "later" }, { role: "assistant", content: "later reply" }]);
+  await openConversation();
+  completionResponse = jsonRes(413, { error: { message: "too large" } });
+  click(document.querySelector('button[aria-label="Edit"]')!);
+  await flush();
+  setInput(document.querySelector('textarea[aria-label="Edit"]')!, "revised");
+  click(buttonByText("Confirm and regenerate")!);
+  await flush();
+  click(buttonByText("Confirm and regenerate")!);
+  await waitFor(() => bodyText().includes("too large"), "413 error");
+  expect(bodyText()).not.toContain("later reply");
+  const put = calls.find((c) => c.path.endsWith("/chats/c1") && c.init?.method === "PUT");
+  expect(String(put?.init?.body)).toContain("revised");
+});
+
+test("empty state has no suggestion prompt controls", async () => {
+  await mountPage();
+  expect(buttonByText("Help me write a debounce function in TypeScript.")).toBeUndefined();
 });

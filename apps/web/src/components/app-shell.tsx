@@ -389,6 +389,19 @@ function UserMenu() {
   );
 }
 
+function AppDestination({ item }: { item: NavItem }) {
+  const Icon = item.icon;
+  const label = useLocaleEntry(item.label);
+  return (
+    <DropdownMenuItem asChild>
+      <Link to={item.to} preload="intent">
+        <Icon className="size-4" />
+        {label}
+      </Link>
+    </DropdownMenuItem>
+  );
+}
+
 function NavLink({
   item,
   active,
@@ -551,8 +564,18 @@ function NavLinks({
   );
 }
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({
+  children,
+  variant = "default",
+}: {
+  children: React.ReactNode;
+  variant?: "default" | "chat";
+}) {
   const st = useShellT();
+  const appDestinationsLabel = useLocaleEntry({
+    en: "App destinations",
+    vi: "Điều hướng ứng dụng",
+  });
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   // Warm main nav route chunks once the app has painted.
   useEffect(() => {
@@ -592,6 +615,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           onMouseLeave={() => setHovered(false)}
           className={cn(
             "hidden shrink-0 flex-col border-r border-border transition-[width] duration-200 ease-in-out md:flex",
+            variant === "chat" && "md:hidden",
             displayCollapsed ? "w-14" : "w-52",
           )}
         >
@@ -642,34 +666,59 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </aside>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background/80 pr-4 pl-[max(1rem,env(safe-area-inset-left))] backdrop-blur">
-            <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-              <SheetTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={st("openNavigation")}
-                  className="size-11 md:hidden"
-                >
-                  <Menu className="size-5" />
-                </Button>
-              </SheetTrigger>
-              {/* SheetContent owns the safe-area insets; no extra padding here. */}
-              <SheetContent side="left">
-                <SheetTitle className="flex items-center gap-2 px-1 text-sm font-semibold">
-                  <Shuffle className="size-4 shrink-0" aria-hidden />
-                  Hoborouter
-                </SheetTitle>
-                <SheetDescription className="sr-only">{st("mainNavigation")}</SheetDescription>
-                <nav className="flex-1 overflow-y-auto p-2 text-sm">
-                  <NavLinks
-                    pathname={pathname}
-                    collapsed={false}
-                    isAdmin={isAdmin}
-                    onNavigate={() => setMobileNavOpen(false)}
-                  />
-                </nav>
-              </SheetContent>
-            </Sheet>
+            {variant === "default" && (
+              <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+                <SheetTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={st("openNavigation")}
+                    className="size-11 md:hidden"
+                  >
+                    <Menu className="size-5" />
+                  </Button>
+                </SheetTrigger>
+                {/* SheetContent owns the safe-area insets; no extra padding here. */}
+                <SheetContent side="left">
+                  <SheetTitle className="flex items-center gap-2 px-1 text-sm font-semibold">
+                    <Shuffle className="size-4 shrink-0" aria-hidden />
+                    Hoborouter
+                  </SheetTitle>
+                  <SheetDescription className="sr-only">{st("mainNavigation")}</SheetDescription>
+                  <nav className="flex-1 overflow-y-auto p-2 text-sm">
+                    <NavLinks
+                      pathname={pathname}
+                      collapsed={false}
+                      isAdmin={isAdmin}
+                      onNavigate={() => setMobileNavOpen(false)}
+                    />
+                  </nav>
+                </SheetContent>
+              </Sheet>
+            )}
+            {variant === "chat" && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={appDestinationsLabel}
+                    className="size-11"
+                  >
+                    <Menu className="size-5" aria-hidden />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" aria-label={st("mainNavigation")}>
+                  {NAV_GROUPS.flatMap((group) => group.items).map((item) => (
+                    <AppDestination key={item.to} item={item} />
+                  ))}
+                  {isAdmin === true &&
+                    ADMIN_GROUPS.flatMap((group) => group.items).map((item) => (
+                      <AppDestination key={item.to} item={item} />
+                    ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             <div className="min-w-0 flex-1 sm:w-44 sm:flex-none">
               <WorkspaceSwitcher />
             </div>

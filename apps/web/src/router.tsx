@@ -6,6 +6,7 @@ import {
   Link,
   Outlet,
   redirect,
+  useRouterState,
 } from "@tanstack/react-router";
 import { AppShell } from "./components/app-shell";
 import { Button } from "./components/ui/button";
@@ -115,10 +116,11 @@ function ProtectedOutlet() {
       <Outlet />
     </Suspense>
   );
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   // session is synchronously cached by beforeLoad for signed-in visitors;
   // anonymous visitors only ever reach the help pages here.
   if (!session) return content;
-  return <AppShell>{content}</AppShell>;
+  return <AppShell variant={pathname === "/chat" ? "chat" : "default"}>{content}</AppShell>;
 }
 
 /** Protected page route (chunk loaded from lib/prefetch). */

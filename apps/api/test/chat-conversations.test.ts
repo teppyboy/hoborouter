@@ -144,14 +144,22 @@ describe("chat conversations routes", () => {
       body: {
         version: 1,
         title: "My chat",
-        messages: [{ role: "user", content: "hi" }],
+        messages: [{ role: "user", content: "hi", hadAttachments: true }],
       },
     });
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.version).toBe(2);
     expect(body.title).toBe("My chat");
-    expect(body.messages).toEqual([{ role: "user", content: "hi" }]);
+    expect(body.messages).toEqual([{ role: "user", content: "hi", hadAttachments: true }]);
+
+    const legacy = await req(app, `/api/v1/workspaces/${A}/chats/${aliceChat}`, {
+      method: "PUT",
+      cookie: alice,
+      body: { version: 2, messages: [{ role: "user", content: "legacy" }] },
+    });
+    expect(legacy.status).toBe(200);
+    expect((await json(legacy)).messages).toEqual([{ role: "user", content: "legacy" }]);
   });
 
   test("PUT with a stale version is 409 and does NOT overwrite", async () => {
@@ -179,6 +187,18 @@ describe("chat conversations routes", () => {
     expect((await put({ version: 2, messages: [{ role: "system", content: "x" }] })).status).toBe(
       400,
     );
+    expect(
+      (
+        await put({
+          version: 2,
+          messages: [{ role: "assistant", content: "x", hadAttachments: true }],
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (await put({ version: 2, messages: [{ role: "user", content: "x", hadAttachments: "yes" }] }))
+        .status,
+    ).toBe(400);
     expect(
       (await put({ version: 2, messages: [{ role: "user", content: "x" }, "nope"] })).status,
     ).toBe(400);

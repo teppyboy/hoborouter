@@ -6,6 +6,7 @@
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  hadAttachments?: boolean;
   reasoning?: string;
   /** Assistant only: the public model ID actually used. */
   model?: string;
