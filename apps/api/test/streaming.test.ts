@@ -304,9 +304,8 @@ describe("gateway streaming through the app boundary", () => {
           new ReadableStream({
             start(c) {
               c.enqueue(enc.encode(chatChunkLine("A")));
-              // Stop only after the response head + first chunk have been read,
-              // otherwise fetch() itself rejects before headers arrive.
-              setTimeout(() => oneShot.stop(true), 20);
+              // Keep the connection open until the client confirms it has
+              // received the response head and this first chunk.
             },
           }),
           { headers: { "content-type": "text/event-stream" } },
@@ -324,6 +323,7 @@ describe("gateway streaming through the app boundary", () => {
       const reader = res.body!.getReader();
       const first = await reader.read();
       expect(dec.decode(first.value!)).toContain('"content":"A"');
+      oneShot.stop(true);
       await expect(reader.read()).rejects.toThrow();
       await waitFor(async () => (await lastCharge()).status === "settled_full_hold");
       expect((await lastRequestStatus()).status).toBe("upstream_error");

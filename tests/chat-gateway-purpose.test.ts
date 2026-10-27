@@ -296,7 +296,7 @@ describe("chat-purpose gateway cap", () => {
     expect(ok.status).toBe(200);
   });
 
-  test("overflow is a function of bounded tokens x price, not body size: no dispatch, no ledger", async () => {
+  test("unaffordable bounded input rejects before dispatch regardless of body size", async () => {
     // Isolated workspace: the rate-limit test above consumed its slot; overflow
     // must be measured before any limiter/reservation activity.
     const now = Date.now();
@@ -314,8 +314,8 @@ describe("chat-purpose gateway cap", () => {
        VALUES ('key-of','ws-of',$1,'sk-hbr-o...','of','enabled',$2,'generic')`,
       [hashApiKey("sk-hbr-gw-of-key"), now] as never[],
     );
-    // context_window 1e6 + price 8e15 µUSD/1M input => bounded maxInputTokens
-    // (1e6, from the 1 MiB body) x fx 2000000 pushes capVnd past maxStoredMoney.
+    // The large body is bounded by the 1e6-token context window; its priced
+    // input alone exceeds this wallet's balance, so admission rejects cleanly.
     await db.$client.unsafe(
       `INSERT INTO models (id, public_id, slug, display_name, provider, context_window, enabled, published, created_at, updated_at)
        VALUES ('mdl-of','openai/of-test','of-test','OF Test','openai',1000000,true,true,$1,$1)`,
@@ -332,8 +332,8 @@ describe("chat-purpose gateway cap", () => {
       [now - 1000] as never[],
     );
     startFakeCpa(() => chatJson());
-    // Inflated fx for the fixture: bounded usdMicro (8e15) x fx 2e6 x markup
-    // pushes capVnd past maxStoredMoney -> estimateCapVnd throws overflow.
+    // Inflated FX makes the bounded input unaffordable even with the output
+    // limit reduced to the maximum this wallet could cover.
     process.env.HBR_USD_VND_RATE = "2000000";
     const walletBefore = (
       (await db.$client.unsafe(`SELECT balance, reserved FROM wallets WHERE id = 'wal-of'`)) as {
@@ -355,8 +355,8 @@ describe("chat-purpose gateway cap", () => {
       "sk-hbr-gw-of-key",
     );
     const text = await res2.text();
-    expect(text, text).toContain("maxStoredMoney");
-    expect(res2.status, text).toBe(400);
+    expect(text, text).toContain('"code":"insufficient_balance"');
+    expect(res2.status, text).toBe(402);
     expect(captured.length).toBe(capturedBefore);
     expect(await ledgerCount()).toBe(ledgerBefore);
     const after = (
